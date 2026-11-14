@@ -2601,7 +2601,7 @@ bool handles_shot_actors(ChrRecord *self, s32 hitpart, coord3d *vector, s32 weap
 
         damageToCause = gunItemGetDestructionAmount(weaponid);
 
-        if (isPlayer && (getPlayerCount() == 1))
+        if (isPlayer && (GE_RULE_SOLO()))
         {
             damageToCause *= g_AiHealthModifier;
         }
@@ -9615,7 +9615,7 @@ void chrlvAllChrTick(void)
 
     for (i=0; i<g_ActiveChrsCount; i++)
     {
-        chrlvActionTick(&g_ActiveChrs[i]);
+        GE_AI_TICK_FRAME(&g_ActiveChrs[i]);
     }
 
     g_SeenBondRecentlyGuardCount = 0;

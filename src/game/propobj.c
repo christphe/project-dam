@@ -4490,7 +4490,7 @@ s32 objTick(struct PropRecord *prop)
 #endif
 			)
 			
-            isSimOwner = projectile->ownerprop == g_CurrentPlayer->prop;
+            isSimOwner = GE_PROJ_SIM_OWNER(projectile->ownerprop == g_CurrentPlayer->prop, projectile->ownerprop, isSimOwner);
 			
 		}
 	}
@@ -10393,7 +10393,7 @@ s32 get_ammo_in_magazine(AmmoCrateRecord *crate)
         case AMMO_DARTS:   qty =  4; break;
     }
 
-    if (qty > 1 && getPlayerCount() == 1)
+    if (qty > 1 && GE_RULE_SOLO())
     {
         qty *= g_SoloAmmoMultiplier;
     }
@@ -10426,7 +10426,7 @@ s32 ammo_collected_from_weapon(WeaponObjRecord *weapon)
         case AMMO_GRENADEROUND: qty =  3; break;
     }
 
-    if (qty > 1 && getPlayerCount() == 1)
+    if (qty > 1 && GE_RULE_SOLO())
     {
         qty *= g_SoloAmmoMultiplier;
     }
@@ -10700,7 +10700,7 @@ TICKOP propPickupByPlayer(PropRecord *prop, bool showstring)
 
                 ammoquantity = multicrate->slots[i].quantity;
 
-                if (getPlayerCount() == 1)
+                if (GE_RULE_SOLO())
                 {
                     ammoquantity *= g_SoloAmmoMultiplier;
                 }
@@ -11145,7 +11145,7 @@ TICKOP objTickPlayer(struct PropRecord* prop)
         {
             ignore = 1;
         } 
-        else if (getPlayerCount() >= 2) 
+        else if (GE_RULE_MULTI()) 
         {
             sp58 = get_scenario();
 
