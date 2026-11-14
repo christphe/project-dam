@@ -22389,6 +22389,18 @@ Maintainer, Deck, 90 fps (2026-10-13): guards and doors smooth.
 | `game/viewport.c:73` | BUDGET | per-viewport memory/render sizing or loop over players |
 | `game/viewport.c:113` | BUDGET | per-viewport memory/render sizing or loop over players |
 | `game/vtxstore.c:86` | BUDGET | per-viewport memory/render sizing or loop over players |
+
+**Console performance and the fog bug (2026-11-14, real Switch, handheld 1280x720, `GE_PERFSTAT=1`, 40 s per run, players standing still at the spawn; `NX_ARGS` + `NX_LINKSTDIO` test build driven by nxlink).** First measurement: Jungle in co-op ran at 17-22 presents/s against 59 solo, with 6x the triangles and batches (10.8k tris / 1188 batches against 1.7k / 184), far beyond the 2x of a second view. Cause: `fogLoadLevelEnvironment` (`bgfog.c`) looks the fog table up with `level_id + players * 100`, so with two players it asks for id 237 (Jungle), which exists in no table, and falls back to the fogless environment (`D176 fog: NO fog_tables match ... -> fogless fallback`, seen on the console with `GE_D176=1`). Co-op therefore lost the level's fog and sky colour, and the engine drew everything the fog would have culled. Fix: that one count goes through `GE_AI_PLAYERS()` (1 in a co-op mission), a one-line hook in `bgfog.c` (plus `#include "player.h"` under `PORT`). The site had been classed 'budget'; it is a rule site (the level data is keyed by the player count). After the fix the log reads `matched fog_tables Id=37 (level_id=37 np=0)`.
+
+| Level | Solo (presents/s, avg) | Co-op before the fix | Co-op after the fix (avg, min) | Display-list pass, co-op after |
+|---|---|---|---|---|
+| Dam | 57.9 | 45.9 | 43.0, 39.0 | 14-20 ms (solo 5-12) |
+| Jungle | 58.9 | 22.4 | 39.3, 37.4 | 21-22 ms (solo 7-10) |
+| Statue | 58.9 | 42.0 | 58.5, 52.2 | 8-12 ms |
+| Surface 1 | 59.4 | not measured | 57.8, 52.1 | 6-11 ms |
+| Surface 2 | 59.2 | not measured | 59.5, 51.9 | 6-7 ms |
+
+The GPU is not the limit (about 5.7 ms per frame everywhere); the cost is the render thread's display-list pass (software RSP + GL submission), which roughly doubles with two views. Dam and Jungle in co-op stay near 40 presents/s. Not measured: moving players, fights, the worst case. Next lever if needed: a shorter draw distance in co-op, or a cheaper pass for the second view.
 ## D961: Switch controls feel laggy when the render thread is slow -- the scheduler starts a submitted frame only at the next retrace; GE_LOWLAT / GE_PRESSLATCH / INPUTLAT added -- BUILT 2026-11-14 (Switch only; port layer only; NOTHING RUN, console A/B owed)
 
 **Symptom.** Real console, 2-player co-op: render thread's display-list pass 14-21 ms, 39-49 presents/s, game thread 0.7-0.9 ms per message, GPU 4-6 ms; controls feel late and short presses are sometimes missed, also with `Video.FpsCap=30`.
