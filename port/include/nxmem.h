@@ -20,6 +20,12 @@
 extern "C" {
 #endif
 
+/* Pick the host base of the N64 address window: a 4 GiB-aligned address
+ * whose cart, DRAM (V1 + KSEG0) and game-stack windows are all unmapped, and
+ * which does not hold the executable image. Sets g_portAddrBase (portaddr.h).
+ * Must run before the first nxMapFixed(). Aborts the boot if no slot is free. */
+void nxChooseAddrBase(void);
+
 /* Map `size` bytes (rounded up to a page) of fresh zeroed memory at exactly
  * `addr`. Returns (void *)addr, or NULL (and logs why). */
 void *nxMapFixed(uintptr_t addr, size_t size);

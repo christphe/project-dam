@@ -136,6 +136,14 @@ void portAllUnlockedApply(void)
 
 int main(int argc, char **argv)
 {
+#if defined(PLATFORM_SWITCH) && defined(NX_LINKSTDIO)
+    /* Test builds only (cmake -DNX_LINKSTDIO=ON): send stdout/stderr (the game
+     * log and the crash dump) back to the PC that uploaded the NRO over nxlink. */
+    {
+        extern void nxLinkStdio(void);   /* port/src/switch/nxmem.c */
+        nxLinkStdio();
+    }
+#endif
 #if defined(PLATFORM_SWITCH)
     /* project-dam: the port finds data/ (ROM, sidecars, ini, saves) relative
      * to the CWD. hbloader starts the NRO in its own folder, but other

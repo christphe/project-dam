@@ -11,6 +11,7 @@
 #include <switch.h>
 
 #include "nxmem.h"
+#include "portaddr.h"
 #include "system.h"
 
 #define NX_PAGE       0x1000ULL
@@ -85,6 +86,98 @@ static const char *nxDescribe(uintptr_t a)
     }
     snprintf(buf, sizeof(buf), "type 0x%x block 0x%010lx+0x%lx", (unsigned)mi.type, mi.addr, mi.size);
     return buf;
+}
+
+uintptr_t g_portAddrBase = 0;
+
+/* The parts of the N64 window the port maps (offsets from the window base;
+ * see portaddr.h). Sizes are the room reserved, not what is used. */
+static const struct {
+    u64 off;
+    u64 size;
+    const char *what;
+} s_windowParts[] = {
+    { 0x10000000ULL, 0x08000000ULL, "cart" },    /* ROM + sidecars (128 MiB room) */
+    { 0x70000000ULL, 0x00800000ULL, "DRAM V1" },
+    { 0x80000000ULL, 0x00800000ULL, "DRAM KSEG0" },
+    { 0xA0000000ULL, 0x20000000ULL, "stacks" },  /* libultra.c PORT_STACK_REGION_* */
+};
+
+void nxChooseAddrBase(void)
+{
+    nxInit();
+    if (g_portAddrBase != 0) {
+        return;
+    }
+    if (s_self == INVALID_HANDLE) {
+        /* No own process handle (Ryujinx, and any launch that is not
+         * hbloader/title takeover): code memory is out of reach, and only the
+         * stack region can be mapped at a chosen address. That region is below
+         * 4 GiB, so the base stays 0 and the cart/DRAM windows sit at their
+         * N64 addresses, as before the variable base. */
+        sysLogPrintf(LOG_NOTE, "nxmem: no own process handle, N64 window base 0 (stack-region mapping only)");
+        return;
+    }
+    u64 aslrBase = 0, aslrSize = 0;
+    svcGetInfo(&aslrBase, InfoType_AslrRegionAddress, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&aslrSize, InfoType_AslrRegionSize, CUR_PROCESS_HANDLE, 0);
+    const u64 aslrEnd = aslrBase + aslrSize;
+    const u64 slot = 1ULL << 32;
+
+    /* The kernel keeps the heap and alias regions for itself inside the ASLR
+     * range: svcQueryMemory reports their free pages as unmapped, but code
+     * memory cannot be mapped there (svcMapProcessCodeMemory fails with
+     * rc=0xd401). Slots that touch them are skipped. */
+    u64 heapBase = 0, heapSize = 0, aliasBase = 0, aliasSize = 0;
+    svcGetInfo(&heapBase, InfoType_HeapRegionAddress, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&heapSize, InfoType_HeapRegionSize, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&aliasBase, InfoType_AliasRegionAddress, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&aliasSize, InfoType_AliasRegionSize, CUR_PROCESS_HANDLE, 0);
+    sysLogPrintf(LOG_NOTE, "nxmem: heap region 0x%010lx+0x%lx, alias region 0x%010lx+0x%lx",
+                 (unsigned long)heapBase, (unsigned long)heapSize, (unsigned long)aliasBase,
+                 (unsigned long)aliasSize);
+
+    /* Slot 0 is skipped on purpose: every launch takes the same code path
+     * (code memory in the ASLR region), instead of one rarely-exercised
+     * fallback. The first free slot from the random start wins. */
+    const u64 image = sysImageBase();
+    /* Slots 1..n fit in the ASLR region. The search starts at a random one and
+     * wraps, so every launch exercises a different base (and the "slot taken,
+     * try the next" path) instead of one slot that never fails. */
+    u64 n = 0;
+    while ((n + 1) * slot + 0xC0000000ULL <= aslrEnd) {
+        n++;
+    }
+    const u64 start = n ? armGetSystemTick() % n : 0;
+    int tried = 0;
+    for (u64 k = 0; k < n; k++) {
+        const u64 h = (1 + (start + k) % n) * slot;
+        if (image - h < slot) {
+            continue;   /* keep the executable outside the window, like on every other host */
+        }
+        int ok = 1;
+        for (size_t i = 0; i < sizeof(s_windowParts) / sizeof(s_windowParts[0]); i++) {
+            uintptr_t a = (uintptr_t)(h + s_windowParts[i].off);
+            const u64 e = a + s_windowParts[i].size;
+            if (a < aslrBase || e > aslrEnd ||
+                (a < heapBase + heapSize && e > heapBase) ||
+                (a < aliasBase + aliasSize && e > aliasBase) ||
+                !nxRangeFree(a, (size_t)s_windowParts[i].size)) {
+                ok = 0;
+                break;
+            }
+        }
+        tried++;
+        if (ok) {
+            g_portAddrBase = (uintptr_t)h;
+            sysLogPrintf(LOG_NOTE, "nxmem: N64 window base 0x%010lx (slot %lu of %lu, %d tried; ASLR 0x%010lx-0x%010lx)",
+                         (unsigned long)h, (unsigned long)(h / slot), (unsigned long)n, tried,
+                         (unsigned long)aslrBase, (unsigned long)aslrEnd);
+            return;
+        }
+    }
+    sysFatalError("nxmem: no free 4 GiB slot for the N64 window (%d tried, ASLR 0x%lx-0x%lx)",
+                  tried, (unsigned long)aslrBase, (unsigned long)aslrEnd);
 }
 
 void *nxMapFixed(uintptr_t addr, size_t size)
@@ -193,6 +286,31 @@ void nxUnmapFixed(uintptr_t addr)
         return;
     }
 }
+
+#ifdef NX_LINKSTDIO
+/* Test builds: libnx's usual pair, sockets first and then the nxlink stream
+ * (stdout + stderr go to the PC that uploaded the NRO). */
+static Thread s_watchdog;
+
+static void nxWatchdog(void *arg)
+{
+    (void)arg;
+    svcSleepThread(30000000000LL);
+    sysLogPrintf(LOG_NOTE, "nxlink test build: 30 s elapsed, exiting");
+    nxExitProcess();
+}
+
+void nxLinkStdio(void)
+{
+    socketInitializeDefault();
+    nxlinkStdio();
+    /* Test builds only: end the run by itself so a series of launches needs no
+     * button presses (the stream closes when the process exits). */
+    if (R_SUCCEEDED(threadCreate(&s_watchdog, nxWatchdog, NULL, NULL, 0x4000, 0x2C, -2))) {
+        threadStart(&s_watchdog);
+    }
+}
+#endif
 
 /* 1 when the console runs handheld (built-in 1280x720 panel), 0 when docked. */
 int nxIsHandheld(void)

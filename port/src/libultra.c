@@ -964,7 +964,7 @@ void osAiSetConvert(u32 convert) { (void)convert; }
  * else is unmapped host memory on PC. */
 static int dramHostAddrValid(uintptr_t addr, u32 size)
 {
-    static const uintptr_t bases[2] = { PORT_DRAM_V1_BASE, PORT_DRAM_K0_BASE };   /* portaddr.h */
+    const uintptr_t bases[2] = { PORT_DRAM_V1_BASE, PORT_DRAM_K0_BASE };   /* portaddr.h; not static: the base is a variable on the Switch */
     for (int i = 0; i < 2; i++) {
         if (addr >= bases[i] && addr + size <= bases[i] + 0x00800000UL)
             return 1;
