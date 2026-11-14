@@ -1731,7 +1731,7 @@ typedef struct {
 } Gwords;
 
 /*
- * PORT: how an address argument is stored in words.w1.
+ * PORT, Switch only: how an address argument is stored in words.w1.
  *
  * A POINTER-typed argument is a host pointer and is stored tagged with
  * GBI_PTR_TAG (bit 62), so the display-list reader can tell it from a 32-bit
@@ -1742,10 +1742,12 @@ typedef struct {
  * addend, so static initializers (gs* forms) stay link-time constants.
  * The N64 build stores the plain value.
  */
-#ifdef PORT
+#if defined(PORT) && defined(__SWITCH__)
 #define GBI_PTR_TAG 0x4000000000000000ULL
 #define GBI_W1(x) (__builtin_classify_type(x) == 5 ? (uintptr_t)(x) + GBI_PTR_TAG : (uintptr_t)(x))
 #else
+/* Every other build (N64, PC): the plain value, no tag (GBI_PTR_TAG is 0). */
+#define GBI_PTR_TAG 0
 #define GBI_W1(x) ((uintptr_t)(x))
 #endif
 

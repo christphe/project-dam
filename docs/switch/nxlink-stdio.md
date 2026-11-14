@@ -1,59 +1,86 @@
-# Tester sur la console avec nxlink et récupérer le log tout seul
+# Testing on the console over nxlink, with the log coming back by itself
 
-Objectif : envoyer un NRO de test à la console par le réseau, le laisser démarrer, et recevoir sur
-le PC son log et son crash dump, sans copier de carte SD ni coller de rapport à la main.
+Goal: send a test NRO to the console over the network, let it start, and get its log and crash dump
+back on the PC, without copying files off the SD card or pasting reports by hand.
 
-## Comment nxlink marche (relevé dans les sources)
+## How nxlink works (read from the sources)
 
-Sources : `switch-tools/src/nxlink.c`, `nx-hbmenu/common/netloader.c`, `libnx/nx/source/runtime/nxlink.c`.
+Sources: `switch-tools/src/nxlink.c`, `nx-hbmenu/common/netloader.c`, `libnx/nx/source/runtime/nxlink.c`.
 
-1. Le PC se connecte en TCP au port **28280** de la console (le netloader de sphaira ou de hbmenu) et
-   envoie : longueur + nom du fichier, taille, le NRO compressé (zlib, blocs de 16 Ko), puis le bloc
-   d'arguments (chaînes terminées par `\0`, précédé de sa longueur). Le netloader lance le NRO aussitôt.
-2. Avec `-s`, le PC écoute ensuite sur le port **28771** (sans délai) : **c'est la Switch qui se
-   connecte au PC**, pas l'inverse. Tout ce que le programme écrit sur stdout/stderr arrive là.
-3. La console connaît l'adresse du PC par le **dernier argument de `argv`**, de la forme
-   `<IPv4 du PC en 8 chiffres hexa>_NXLINK_` (par exemple `0a00a8c0_NXLINK_` pour 192.168.0.10 : les
-   octets de l'adresse lus comme un entier little-endian). `nxlinkSetup()` de libnx le retire de `argv`
-   et le range dans `__nxlink_host`. Le client officiel n'ajoute pas ce marqueur : c'est le netloader
-   de la console qui le fait avec l'adresse de l'expéditeur. Notre client l'ajoute lui-même, au cas où
-   (en double, il ne gêne pas : seul le dernier est lu).
-4. Côté programme, il faut **initialiser les sockets d'abord** : `socketInitializeDefault()` puis
-   `nxlinkStdio()`. Sans les sockets, `nxlinkStdio()` échoue sans bruit et rien n'arrive.
-   `nxlinkStdio()` est une fonction `inline` (elle appelle `nxlinkConnectToHost(true, true)`) : on ne
-   peut pas la déclarer en `extern` (erreur d'édition de liens), il faut passer par `<switch.h>`.
+1. The PC connects over TCP to port **28280** on the console (sphaira's or hbmenu's netloader) and
+   sends: name length + file name, size, the NRO compressed (zlib, 16 KiB chunks), then the argument
+   block (NUL-terminated strings, preceded by their total length). The netloader starts the NRO at once.
+2. With `-s`, the PC then listens on port **28771** (no timeout): **the Switch connects to the PC**,
+   not the other way round. Whatever the program writes to stdout/stderr arrives there.
+3. The console learns the PC's address from the **last `argv` argument**, of the form
+   `<PC IPv4 as 8 hex digits>_NXLINK_` (for example `0a00a8c0_NXLINK_` for 192.168.0.10: the address
+   bytes read as a little-endian integer). libnx's `nxlinkSetup()` removes it from `argv` and stores it
+   in `__nxlink_host`. The official client does not add this marker: the console-side netloader does,
+   with the sender's address. Our client adds it itself, just in case (a duplicate is harmless: only the
+   last one is read).
+4. In the program, **sockets come first**: `socketInitializeDefault()`, then `nxlinkStdio()`. Without
+   sockets, `nxlinkStdio()` fails silently and nothing arrives. `nxlinkStdio()` is an `inline` function
+   (it calls `nxlinkConnectToHost(true, true)`): it cannot be declared `extern` (link error), go through
+   `<switch.h>`.
 
-sphaira ouvre un hôte nxlink automatiquement une fois l'option activée, comme le netloader de
-hbmenu : il n'y a rien à lancer à la main sur la console avant chaque envoi.
+sphaira opens an nxlink host by itself once the option is on, like hbmenu's netloader: nothing has to
+be started by hand on the console before each upload. When the console goes to sleep, uploads get no
+answer.
 
-## Le build de test
+## The test build
 
 `cmake -S . -B build-switch-link -G Ninja -DROMID=ntsc-final -DNX_LINKSTDIO=ON -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake`
-(dossier séparé, comme `build-switch-args` ; l'option est désactivée par défaut et **ce NRO ne se
-distribue pas**). Avec `NX_LINKSTDIO` :
+(a separate build directory, like `build-switch-args`; the option is off by default and **this NRO is
+never shipped**). With `NX_LINKSTDIO`:
 
-- `main()` appelle `nxLinkStdio()` (`port/src/switch/nxmem.c`) en premier : sockets, flux nxlink, et
-  le log du jeu (qui écrit aussi sur stderr) arrive sur le PC ;
-- le crash handler (`nxcrash.c`) écrit aussi le dump (pc, lr, far, registres, backtrace avec les
-  décalages dans le NRO) sur le flux, en plus de `ge007-crash.log` ;
-- un thread ferme le jeu après 30 s (`nxExitProcess`), pour enchaîner des lancements sans toucher la
-  manette. Le flux se ferme à la sortie du processus.
+- `main()` calls `nxLinkStdio()` (`port/src/switch/nxmem.c`) first: sockets, nxlink stream, and the
+  game log (which also goes to stderr) arrives on the PC;
+- the crash handler (`nxcrash.c`) also writes the dump (pc, lr, far, registers, backtrace with offsets
+  into the NRO) to the stream, besides `ge007-crash.log`;
+- a thread asks to quit after 10 s, like "Quit to desktop" (`videoRequestQuit`), so launches follow one
+  another with no one at the controller. The game returns to the launcher (see "Clean exit" below) and
+  the stream closes;
+- before returning, the memory blocks still in a special state are listed on the stream
+  (`nxDumpMemState`), then the sockets are closed.
 
-Résoudre un décalage du crash dump : `aarch64-none-elf-addr2line -f -C -i -e build-switch-link/ge007.aarch64.elf 0x<nro+offset>`
-(dans le conteneur de `compose.yaml`, `--entrypoint sh`).
+Resolving an offset from the crash dump: `aarch64-none-elf-addr2line -f -C -i -e build-switch-link/ge007.aarch64.elf 0x<nro+offset>`
+(in the `compose.yaml` container, `--entrypoint sh`).
 
-## Le client PC
+## The PC client
 
-`python tools/switch/nxlink.py <ip console> <fichier.nro> <chemin sur la SD> <log de sortie> [args...]`
+`python tools/switch/nxlink.py <console ip> <file.nro> <path on the SD> <log out> [args...]`
 
-Il se connecte (en réessayant toutes les 3 s tant que le netloader n'écoute pas), envoie le NRO,
-ouvre le port 28771 **avant** l'envoi, écrit le flux dans le fichier de log et s'arrête quand le jeu
-quitte. Une série de lancements : une boucle shell qui l'appelle avec un fichier de log par essai.
+It connects (retrying every 3 s while the netloader does not listen; `NXLINK_RETRIES` attempts, 100 by
+default), sends the NRO, opens port 28771 **before** the upload, writes the stream to the log file and
+stops when the game quits.
 
-Pièges :
-- un seul client à la fois (le netloader n'accepte qu'une connexion) ; ne pas sonder le port ;
-- le `nxlink` du conteneur Docker ne joint pas le réseau local (NAT de Docker Desktop) : client
-  Python sur Windows ;
-- le client n'attend que 120 s la connexion du jeu après l'envoi ; au-delà, le log n'arrive pas ;
-- si rien n'arrive : le jeu a peut-être planté avant `main()`, ou n'a pas d'adresse d'hôte
-  (marqueur absent) ou pas de sockets.
+Pitfalls:
+- one client at a time (the netloader takes a single connection); do not probe the port;
+- the `nxlink` inside the Docker container cannot reach the local network (Docker Desktop NAT): use
+  the Python client on Windows;
+- the client waits only 120 s for the game to connect after the upload; past that, the log is lost;
+- if nothing arrives: the game may have crashed before `main()`, or has no host address (marker
+  missing) or no sockets.
+
+## Clean exit and the test loop
+
+Since D958 the game returns to the launcher (sphaira, hbmenu) instead of ending the whole application:
+`portAtExit` stops the threads (`portThreadsStop`, the `g_portQuit` flag tested in
+`osRecvMesg`/`osSendMesg`/`osYieldThread`), joins them (libnx keeps a thread's stack mapped until it is
+joined; a stack still mapped made the loader abort with `0xd401` when it unloaded the executable),
+closes audio, `SDL_Quit()`, releases the memory windows, then `exit()` carries on. If a thread has not
+stopped after 4 s: the old exit (`nxExitProcess`). In the memory dump, the locked heap block the size of
+the executable is the loader's buffer behind our code: normal, the loader frees it itself.
+
+Since the launcher is still there after every launch, a test loop runs unattended. Test one change at a
+time: one launch, then a second upload that only checks the launcher survived the return.
+
+```sh
+NXLINK_RETRIES=20 python tools/switch/nxlink.py <ip> build-switch-link/ge007.aarch64.nro \
+    switch/project-dam/project-dam-test.nro run-1.log
+NXLINK_RETRIES=10 python tools/switch/nxlink.py <ip> build-switch-link/ge007.aarch64.nro \
+    switch/project-dam/project-dam-test.nro run-2.log   # connects only if the launcher is alive
+```
+
+`NXLINK_RETRIES` (3 s per attempt) makes an upload fail fast when the launcher no longer answers (it
+crashed on the return). The logs give the memory slot chosen and the end of each launch.

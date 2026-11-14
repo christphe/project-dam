@@ -38,6 +38,9 @@ void *nxMapAlias(uintptr_t view, uintptr_t primary, size_t size);
 /* Undo nxMapFixed()/nxMapAlias() for the block that starts at `addr`. */
 void nxUnmapFixed(uintptr_t addr);
 
+/* Undo every mapping (aliases first). Only once no thread runs on them. */
+void nxReleaseAll(void);
+
 /* Give the calling thread an ideal core (0..2) while allowing the kernel to
  * migrate it across the three application cores. libnx starts every pthread
  * on the process's default core, so without this the game logic, the render

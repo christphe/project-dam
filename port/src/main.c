@@ -103,6 +103,38 @@ static void portAtExit(void)
         }
     }
 #if defined(PLATFORM_SWITCH)
+    /* project-dam: return to the launcher instead of ending the whole
+     * application (which takes sphaira down with the game). Possible only once
+     * nothing of ours still runs: the process goes on as the launcher, and the
+     * next NRO replaces this image. The render thread is already parked (above);
+     * the game threads, the pacemaker and the render worker leave through
+     * portThreadsStop(); then the audio device and our memory windows go. When
+     * a thread does not stop in time, fall back to ending the process. */
+    {
+        extern int portThreadsStop(int timeoutMs);   /* port/src/libultra.c */
+        if (portThreadsStop(4000)) {
+            extern void SDL_Quit(void);
+            mixerDestroy();
+            audioDestroy();
+            inputDestroy();
+            SDL_Quit();   /* the video / audio / joystick subsystems and EGL */
+            nxReleaseAll();
+#ifdef NX_LINKSTDIO
+            {
+                extern void nxDumpMemState(void);    /* port/src/switch/nxmem.c */
+                extern void nxLinkStdioClose(void);
+                nxDumpMemState();
+                sysLogPrintf(LOG_INFO, "nxmem: orderly exit, returning to the launcher");
+                nxLinkStdioClose();
+            }
+#else
+            sysLogPrintf(LOG_INFO, "nxmem: orderly exit, returning to the launcher");
+            fflush(NULL);
+#endif
+            return;   /* exit() carries on: libnx tears down and gives control back to the loader */
+        }
+        sysLogPrintf(LOG_WARNING, "nxmem: orderly exit failed, ending the process");
+    }
     nxExitProcess();   /* project-dam: see nxmem.h */
 #endif
 }

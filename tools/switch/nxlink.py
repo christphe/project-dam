@@ -6,14 +6,17 @@ Uploads <file.nro> to the homebrew menu's netloader (Y), at <sd-path>, with the
 given arguments, then acts as the stdio server (`nxlink -s`): everything the
 program writes after nxlinkStdio() is appended to <log-out>.
 """
-import socket, struct, sys, time, zlib
+import os, socket, struct, sys, time, zlib
 
 SERVER_PORT, CLIENT_PORT, CHUNK = 28280, 28771, 16 * 1024
+# Connection attempts, 3 s apart, before giving up with "no netloader"
+# (NXLINK_RETRIES; a test loop sets it low so a dead launcher shows up fast).
+RETRIES = int(os.environ.get("NXLINK_RETRIES", "100"))
 
 
 def send_nro(ip, path, sdpath, args):
     data = open(path, "rb").read()
-    for attempt in range(100):
+    for attempt in range(RETRIES):
         try:
             s = socket.create_connection((ip, SERVER_PORT), timeout=5)
             break

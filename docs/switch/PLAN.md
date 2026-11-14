@@ -50,35 +50,16 @@ Régions du processus hbloader : heap `0x1a1600000` (8 Gio), alias `0xbd8800000`
 | C. code memory (`svcMapProcessCodeMemory` + RW) → ASLR | OK pour les 3 blocs avec base unique `H = 0x100000000` (11 bases possibles) |
 | **D. disposition PC, H = 0** (A pour cart+dram, C pour les piles) | **OK, 3/3** ; `(u32)ptr` = adresse N64 partout |
 
-**Décision initiale (abandonnée) : `PORT_ADDR_BASE = 0`, disposition identique au PC.** Risque : la
-pile du thread principal est placée au hasard dans la région stack à la création du processus et
-tombe sur cart/dram dans ≈ 2 % des lancements. Un relancement automatique n'est pas possible en
-mode homebrew (`appletRestartProgram` relance sphaira, pas le NRO ; il ne marche que depuis un
-forwarder), d'où le passage à la base variable.
+**Décision : `PORT_ADDR_BASE = 0` sur Switch, disposition identique au PC.**
+- Placement au tout début de `main` (avant tout thread : libnx place les piles de threads au hasard
+  dans la région stack).
+- Risque : la pile du thread principal est déjà dans la région stack, placée au hasard à la création
+  du processus (`0x7596xxxx` lors du test). Collision avec cart/dram ≈ 2 % par lancement du jeu hôte.
+  Détectée au démarrage → message « relancer » au début, puis repli sur la méthode C (base variable)
+  si besoin.
+- À vérifier : lecture de fichier (IPC fs) directement dans ces blocs ; sinon buffer intermédiaire.
 
-**Décision actuelle (implémentée, 2026-11-14) : base variable, toujours** (`g_portAddrBase`,
-`nxChooseAddrBase()` dans `port/src/switch/nxmem.c`).
-- Créneaux de 4 Gio dans la région ASLR, créneau 0 exclu (un seul chemin de code pour tous les
-  lancements : code memory). Le choix part d'un créneau tiré au hasard et boucle.
-- Un créneau est retenu si cart (`+0x10000000`, 128 Mio réservés), DRAM V1 et KSEG0
-  (`+0x70000000`, `+0x80000000`, 8 Mio) et piles (`+0xa0000000`, 512 Mio) sont libres
-  (`svcQueryMemory`), **hors des régions heap et alias** (le noyau y refuse
-  `svcMapProcessCodeMemory`, `rc=0xd401`, alors que `svcQueryMemory` les voit libres) et hors de
-  l'exécutable.
-- Sans handle du propre processus (Ryujinx, lancement hors hbloader) : pas de code memory, la base
-  reste 0 et la région stack sert comme avant.
-- Les labels ROM restent des absolus à leur valeur N64 (`u32` partout) ; les 3 symboles DRAM sont des
-  macros (`PORT_DRAM_SYM`, `portaddr.h`). Lire la ROM par un label (au lieu de `romCopy`) demande
-  `portN64ToHost` : `romdataCartPtr()` dans `romdata.c`.
-- hbloader place l'exécutable où il veut, **parfois sous 4 Gio** (≈ 14 % des lancements observés). Un
-  pointeur du jeu vers ses propres données (display lists statiques) a alors 32 bits et ressemble
-  à une adresse N64. Les macros `gSP*` marquent les arguments de type pointeur (`GBI_W1`, bit 62) ;
-  fast3d (`gfx_w1_is_host`) lit un pointeur marqué comme hôte s'il est ≥ 4 Gio ou dans l'étendue de
-  l'exécutable (`g_portImageEnd`). Voir `docs/dev/findings.md` D958 ; le test sur console passe par nxlink
-(`docs/switch/nxlink-stdio.md`).
-- Mesures console : 22 lancements, créneaux 2 à 15, image au-dessus et au-dessous de 4 Gio.
-
-### Repli : base variable (plan d'origine)
+### Repli : base variable
 
 **Base variable, alignée sur 4 Gio, miroir V2 replié en logiciel.**
 

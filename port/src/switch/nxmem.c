@@ -290,14 +290,84 @@ void nxUnmapFixed(uintptr_t addr)
 #ifdef NX_LINKSTDIO
 /* Test builds: libnx's usual pair, sockets first and then the nxlink stream
  * (stdout + stderr go to the PC that uploaded the NRO). */
+extern void videoRequestQuit(const char *why);   /* port/src/video.c */
+
 static Thread s_watchdog;
+
+extern volatile int g_portQuit;                   /* port/src/libultra.c: orderly exit under way */
 
 static void nxWatchdog(void *arg)
 {
     (void)arg;
-    svcSleepThread(30000000000LL);
-    sysLogPrintf(LOG_NOTE, "nxlink test build: 30 s elapsed, exiting");
+    for (int i = 0; i < 100 && !g_portQuit; i++) {
+        svcSleepThread(100000000LL);
+    }
+    if (g_portQuit) {
+        return;   /* the player quit first */
+    }
+    sysLogPrintf(LOG_NOTE, "nxlink test build: 10 s elapsed, quitting like \"Quit to desktop\"");
+    videoRequestQuit("nxlink test build: 10 s");   /* the host thread then takes the orderly exit */
+    for (int i = 0; i < 100 && !g_portQuit; i++) {
+        svcSleepThread(100000000LL);
+    }
+    if (g_portQuit) {
+        return;
+    }
+    sysLogPrintf(LOG_ERROR, "nxlink test build: still running 10 s after the quit request, hard exit");
     nxExitProcess();
+}
+
+/* Test builds: what is still mapped in a special way just before control goes
+ * back to the launcher. The loader unloads our image and heap afterwards and
+ * aborts (rc=0xd401, InvalidCurrentMemory) when some pages are not in the
+ * plain state it expects (aliases, transfer memory, locked or shared pages):
+ * every block that is neither unmapped nor ordinary heap/code, or has a
+ * reference count, is listed. */
+void nxDumpMemState(void)
+{
+    u64 addr = 0;
+    int shown = 0;
+    sysLogPrintf(LOG_NOTE, "nxmem: memory state before returning to the launcher:");
+    for (int guard = 0; guard < 4096 && shown < 80; guard++) {
+        MemoryInfo mi;
+        u32 pi;
+        if (R_FAILED(svcQueryMemory(&mi, &pi, addr))) {
+            break;
+        }
+        const int plain = mi.type == MemType_Unmapped || mi.type == MemType_Heap ||
+                          mi.type == MemType_CodeStatic || mi.type == MemType_CodeMutable ||
+                          mi.type == MemType_ModuleCodeStatic || mi.type == MemType_ModuleCodeMutable ||
+                          mi.type == MemType_Io || mi.type == MemType_Reserved ||
+                          mi.type == MemType_ThreadLocal;
+        if ((!plain || mi.attr != 0 || mi.ipc_refcount || mi.device_refcount) &&
+            mi.type != MemType_Unmapped) {
+            sysLogPrintf(LOG_NOTE, "  0x%010lx+0x%lx type 0x%x attr 0x%x perm 0x%x ipc %u dev %u",
+                         (unsigned long)mi.addr, (unsigned long)mi.size, (unsigned)mi.type,
+                         (unsigned)mi.attr, (unsigned)mi.perm, (unsigned)mi.ipc_refcount,
+                         (unsigned)mi.device_refcount);
+            shown++;
+        }
+        const u64 next = mi.addr + mi.size;
+        if (next <= addr || next == 0) {
+            break;
+        }
+        addr = next;
+    }
+    sysLogPrintf(LOG_NOTE, "nxmem: end of the memory state (%d special block(s) listed)", shown);
+}
+
+/* Close the nxlink stream (and the sockets): last thing before returning. */
+void nxLinkStdioClose(void)
+{
+    fflush(NULL);
+    socketExit();
+}
+
+/* The watchdog must not outlive the game: control goes back to the launcher. */
+static void nxWatchdogStop(void)
+{
+    threadWaitForExit(&s_watchdog);
+    threadClose(&s_watchdog);
 }
 
 void nxLinkStdio(void)
@@ -311,6 +381,27 @@ void nxLinkStdio(void)
     }
 }
 #endif
+
+/* Release every block (orderly exit, once no thread runs on them any more):
+ * aliases first, they view the code-memory blocks. */
+void nxReleaseAll(void)
+{
+#ifdef NX_LINKSTDIO
+    nxWatchdogStop();
+#endif
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < NX_MAX_BLOCKS; i++) {
+            NxBlock *b = &s_blocks[i];
+            if (b->kind == NX_NONE) {
+                continue;
+            }
+            if ((pass == 0) == (b->kind == NX_ALIAS)) {
+                nxUnmapFixed(b->addr);
+            }
+        }
+    }
+    sysLogPrintf(LOG_NOTE, "nxmem: mapped blocks released");
+}
 
 /* 1 when the console runs handheld (built-in 1280x720 panel), 0 when docked. */
 int nxIsHandheld(void)

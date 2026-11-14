@@ -203,8 +203,12 @@ void portAddrInit(void)
      * and macOS (0x1_00xxxxxx + slide). Relative to the window base, so on
      * the Switch (variable base) it is true unless the image happens to sit
      * inside the chosen 4 GiB slot. */
+#if defined(PLATFORM_SWITCH)
     g_portUseImageRel =
         (g_portImageBase - (uintptr_t)PORT_ADDR_BASE >= (uintptr_t)PORT_ADDR_WINDOW) ? 1 : 0;
+#else
+    g_portUseImageRel = (g_portImageBase >= (uintptr_t)PORT_ADDR_WINDOW) ? 1 : 0;
+#endif
 
 #if PORT_ADDR_BASE != 0
     {

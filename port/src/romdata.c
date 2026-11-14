@@ -142,10 +142,12 @@ static u32 romdataBswap32(u32 v); /* defined below; used by the D55 fixup */
  * macOS build bakes the base into the label) pass through untouched. */
 static const u8 *romdataCartPtr(const void *p)
 {
+#if defined(PLATFORM_SWITCH)
     uintptr_t v = (uintptr_t)p;
     if (v >= 0x10000000u && v < 0x20000000u)
         return (const u8 *)portN64ToHost((u32)v);
-    return (const u8 *)p;
+#endif
+    return (const u8 *)p;   /* every other build: the label is the host address */
 }
 
 /* D230: RAW16 wavetable samples are stored big-endian s16 in the ROM (the
