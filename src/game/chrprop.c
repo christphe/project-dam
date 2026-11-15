@@ -311,6 +311,7 @@ PropRecord* chrpropAllocate(void)
 
 void chrpropFree(PropRecord *prop)
 {
+    GE_PROP_FREED(prop);
     prop->prev = g_FreeProps;
     prop->next = 0x0;
     prop->stan = 0x0;

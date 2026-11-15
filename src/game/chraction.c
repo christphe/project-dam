@@ -6577,7 +6577,7 @@ void chrlvUpdateShotbondsum(ChrRecord *self, s32 *arg1, s32 *arg2, ITEM_IDS item
                 t2 *= 3.0f;
             }
 
-            bondviewCallRecordDamageKills(t2, subroty, -1, 1);
+            GE_NPC_HURT(self, t2, subroty, item);
 
             self->shotbondsum = 0.0f;
 
@@ -10620,7 +10620,7 @@ bool sub_GAME_7F033B38(ChrRecord *self, f32 distance)
     {
         chr = &g_ChrSlots[i];
 
-        if ((chr != self) && chr->model && !chrIsDead(chr))
+        if ((chr != self) && GE_CHR_PICKABLE(chr) && !chrIsDead(chr))
         {
             coord3d *pos = &chr->prop->pos;
 

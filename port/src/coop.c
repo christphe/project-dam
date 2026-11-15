@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 #include <ultra64.h>
 #include "game/chr.h"
@@ -56,6 +57,8 @@ void bondviewFrozenCameraTick(u16 buttons, u16 oldbuttons, struct coord3d *pos, 
 static int s_intent = 0;      /* the mode menu's Co-op entry was chosen (cleared on the mode menu, after a co-op stage) */
 static int s_health  = 1;     /* Game.CoopEnemyHealth: 0 = 100 %, 1 = 150 %, 2 = 200 % */
 static int s_active  = 0;     /* the running stage is a co-op campaign stage */
+static int s_nTaken = 0;   /* per-player pickups taken by one player so far (see coopPickupOp) */
+static struct { struct ChrRecord *chr; int player; } s_stick[96];
 static int s_spawnLogged = 0;
 static int s_sawMp = 0, s_fpDone = 0;   /* the spawn swirl (CAMERAMODE_MP) was seen / the switch to FP was made */
 static int s_cineDriver = -1;   /* the player the running cinematic script belongs to, -1 = none latched */
@@ -97,6 +100,8 @@ s32 coopStageNumPlayers(s32 stage, s32 selected)
     }
     s_active = 0;
     s_cineDriver = -1;
+    memset(s_stick, 0, sizeof(s_stick));
+    s_nTaken = 0;
     s_sawMp = 0;
     s_fpDone = 0;
     s_spawnLogged = 0;
@@ -316,12 +321,12 @@ static int coopNearestLiving(const struct ChrRecord *chr, int fallback)
  * item, and what the script then locks, moves or fades is that player). If nobody satisfies it the original player is
  * back. offset is the interpreter's Offset; the return value is the (possibly rewound) Offset. */
 static int s_inAi;
-static struct { void *list; s32 off; int result; } s_aiLog[8];
+static struct { void *list; s32 off; int result; } s_aiLog[128];
 
 static void coopLogTest(void *list, s32 off, int result, int player)
 {
     int i, slot = -1;
-    for (i = 0; i < 8; i++) {
+    for (i = 0; i < 128; i++) {
         if (s_aiLog[i].list == list && s_aiLog[i].off == off) {
             slot = i;
             break;
@@ -331,7 +336,7 @@ static void coopLogTest(void *list, s32 off, int result, int player)
         }
     }
     if (slot < 0) {
-        slot = 0;
+        return;   /* table full: stay silent rather than flood the log */
     }
     if (s_aiLog[slot].list == list && s_aiLog[slot].off == off && s_aiLog[slot].result == result) {
         return;
@@ -386,6 +391,73 @@ s32 coopAiStep(void *list, s32 offset, s32 isPlayerTest)
     return offset;
 }
 
+/*
+ * Which player is "Bond" for an NPC's tick. Enemies: the nearest living player, as before. An ESCORT (Natalya, the one ally
+ * whose list follows Bond: `if_guard_distance_to_bond_*`, `guard_try_running_to_bond_position`) keeps ONE player while
+ * that player is alive: with two players moving, "the nearest" flips from tick to tick, the distance tests and the run
+ * target then belong to different players and the escort stops or jitters between them. She only switches when the
+ * other player is less than half as far away (or hers is down). The change of the chosen player is logged, at most one
+ * line per second.
+ */
+
+static int coopIsEscort(const struct ChrRecord *chr)
+{
+    return chr->bodynum == BODY_Natalya_Skirt || chr->bodynum == BODY_Natalya_Jungle_Fatigues;
+}
+
+static f32 coopDist2(const struct player *p, const struct ChrRecord *chr)
+{
+    f32 dx = p->prop->pos.f[0] - chr->prop->pos.f[0];
+    f32 dy = p->prop->pos.f[1] - chr->prop->pos.f[1];
+    f32 dz = p->prop->pos.f[2] - chr->prop->pos.f[2];
+    return dx * dx + dy * dy + dz * dz;
+}
+
+static int coopChooseTarget(struct ChrRecord *chr, int save)
+{
+    int nearest = coopNearestLiving(chr, save);
+    int i, slot = -1, prev = -1, chosen = nearest;
+    struct player *pn, *pp;
+    if (chr == NULL || chr->prop == NULL) {
+        return nearest;
+    }
+    for (i = 0; i < 96; i++) {
+        if (s_stick[i].chr == chr) {
+            slot = i;
+            prev = s_stick[i].player;
+            break;
+        }
+        if (slot < 0 && s_stick[i].chr == NULL) {
+            slot = i;
+        }
+    }
+    if (coopIsEscort(chr) && prev >= 0 && prev != nearest) {
+        pp = g_playerPointers[prev];
+        pn = g_playerPointers[nearest];
+        if (pp != NULL && pp->prop != NULL && pp->bonddead == 0 && pn != NULL && pn->prop != NULL &&
+            !(coopDist2(pn, chr) < 0.25f * coopDist2(pp, chr))) {
+            chosen = prev;   /* keep her player */
+        }
+    }
+    if (slot >= 0) {
+        s_stick[slot].chr = chr;
+        s_stick[slot].player = chosen;
+    }
+    if (chosen != prev) {
+        static double last = 0.0;
+        struct timespec ts;
+        double now;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+        if (now - last >= 1.0) {
+            last = now;
+            sysLogPrintf(LOG_NOTE, "coop: chr %d (body %d%s) now follows / targets player %d (was %d)", (int)chr->chrnum,
+                         (int)chr->bodynum, coopIsEscort(chr) ? ", escort" : "", chosen, prev);
+        }
+    }
+    return chosen;
+}
+
 void coopAiTick(struct ChrRecord *chr, s32 perView)
 {
     int save, target;
@@ -398,7 +470,7 @@ void coopAiTick(struct ChrRecord *chr, s32 perView)
     }
     save = get_cur_playernum();
     /* before the tick, which may free the chr; during a cinematic or the level-end wait the driver is "Bond" */
-    target = (gameScriptedCameraActive() || stop_time_flag != 0) ? coopDriver() : coopNearestLiving(chr, save);
+    target = (gameScriptedCameraActive() || stop_time_flag != 0) ? coopDriver() : coopChooseTarget(chr, save);
     if (target != save) {
         set_cur_player(target);
     }
@@ -711,6 +783,213 @@ s32 coopProjSimOwner(s32 ownedByCurrent, struct PropRecord *ownerprop, s32 viewO
         return viewOwner;
     }
     return ownedByCurrent;
+}
+
+/*
+ * A co-op player's body is a real chr (the partner must be visible), with a model, so the engine's "nearest guard"
+ * search (chraction.c sub_GAME_7F033B38, AI command guard_try_setting_chr_preset_to_guard_within_distance) could pick
+ * it. That is how Natalya in the Jungle took a Bond as her target (her "mdk" list, ai_8, fires at that chr preset),
+ * and kept firing at the body after death: a player's chr never reaches ACT_DEAD, so chrIsDead() stays false. In solo
+ * the player's body is removed after the intro (model NULL) and the search never sees it. Hook GE_CHR_PICKABLE.
+ */
+s32 coopChrIsPlayer(struct ChrRecord *chr)
+{
+    return s_active && chr != NULL && chr->prop != NULL && chr->prop->type == PROP_TYPE_VIEWER;
+}
+
+/*
+ * Objectives "collect object" / "deposit object" (objective_status.c) test bondinvHasPropInInv, i.e. g_CurrentPlayer's
+ * inventory, and the status is polled from both players' ticks: with the item in one player's inventory the result
+ * flipped every frame (Bunker 1 on the console: objectives_complete 0/1 thousands of times, and the end-of-mission
+ * exit never completed). In co-op the question is "does either player hold it" (the object is unique, so only one
+ * player can). Hook GE_HAS_PROP_IN_INV. Only g_CurrentPlayer is swapped (bondinvHasPropInInv reads nothing else).
+ */
+extern bool bondinvHasPropInInv(PropRecord *prop);
+s32 coopAnyHasPropInInv(struct PropRecord *prop)
+{
+    struct player *saved = g_CurrentPlayer;
+    int i, has = 0;
+    if (!s_active) {
+        return bondinvHasPropInInv(prop);
+    }
+    for (i = 0; i < 2 && !has; i++) {
+        if (g_playerPointers[i] != NULL && g_playerPointers[i]->ptr_inventory_first_in_cycle != NULL) {
+            g_CurrentPlayer = g_playerPointers[i];
+            has = bondinvHasPropInInv(prop);
+        }
+    }
+    g_CurrentPlayer = saved;
+    return has;
+}
+
+/*
+ * NPC shots at a player (chraction.c chrlvUpdateShotbondsum -> GE_NPC_HURT): logged, at most one line per second,
+ * so a console log shows who hurts whom: "coop: player N hurt by chr C body B ailist P offset O weapon W attacktype T dmg D".
+ */
+void coopNpcHurt(struct ChrRecord *chr, f32 damage, f32 subroty, s32 item)
+{
+    if (s_active) {
+        static double last = 0.0;
+        struct timespec ts;
+        double now;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+        if (now - last >= 1.0) {
+            last = now;
+            sysLogPrintf(LOG_NOTE, "coop: player %d hurt by chr %d body %d ailist %p offset %d weapon %d attacktype %d dmg %.3f",
+                         get_cur_playernum(), (int)chr->chrnum, (int)chr->bodynum, (void *)chr->ailist, (int)chr->aioffset, (int)item,
+                         chr->actiontype == ACT_ATTACK ? (int)chr->act_attack.attacktype : -1, (double)damage);
+        }
+    }
+    bondviewCallRecordDamageKills(damage, subroty, -1, 1);
+}
+
+/*
+ * Per-player pickups. Every collectable that the original code frees on pickup (ammo crates and loose ammo, body armour,
+ * weapons lying in the level and guard-dropped ones: propobj.c propPickupByPlayer, op == TICKOP_FREE) exists once per
+ * player in co-op: the player who collects it gets it exactly as in solo (the item code runs for g_CurrentPlayer), the
+ * prop is NOT freed, it is marked "taken by player N" here; it then disappears from that player's view (objTick:
+ * GE_PICKUP_VISIBLE) and cannot be collected again by that player (objTickPlayer: GE_PICKUP_TAKEN) but stays for the other
+ * one; when the other player collects it too the prop is freed as the original code does. Keys and the other objects
+ * that move into an inventory (TICKOP_GIVETOPLAYER, INV_ITEM_PICKUP: keycards, objective items, tagged props) stay a
+ * single prop, because a world prop can be in only one inventory list and cloning an arbitrary object record is not
+ * possible from here; doors check the keys of EITHER player (GE_HAS_KEY_FLAGS) and the objective code already asks
+ * "either player holds it" (GE_HAS_PROP_IN_INV), so shared objective items stay correct.
+ */
+struct CoopTaken {
+    struct PropRecord *prop;
+    struct ObjectRecord *obj;
+    s32 type, sub;   /* object type and weapon number / amount: a reused prop slot holds a different object */
+    unsigned mask;
+};
+
+/* What identifies a pickup besides its prop and object record. NOT its position: guard-dropped weapons fall and
+ * settle, and a position test made every frame of the fall look like a new pickup (the console log showed one player
+ * taking the same gun 12 and 15 times in a row). */
+static s32 coopPickupSub(struct ObjectRecord *obj)
+{
+    switch (obj->type) {
+        case PROPDEF_COLLECTABLE: return ((struct WeaponObjRecord *)obj)->weaponnum;
+        case PROPDEF_MAGAZINE:    return ((struct AmmoCrateRecord *)obj)->ammoType;
+        case PROPDEF_ARMOUR:      return (s32)((struct BodyArmourRecord *)obj)->amount;
+        default:                  return 0;
+    }
+}
+static struct CoopTaken s_taken[256];
+
+static struct CoopTaken *coopFindTaken(struct PropRecord *prop)
+{
+    int i;
+    for (i = 0; i < s_nTaken; i++) {
+        struct CoopTaken *e = &s_taken[i];
+        if (e->prop == prop) {
+            struct ObjectRecord *obj = prop->obj;
+            /* a freed and reused prop slot is not the same pickup: same object record, type and weapon/amount */
+            if (obj != e->obj || obj == NULL || obj->type != e->type || coopPickupSub(obj) != e->sub) {
+                s_taken[i] = s_taken[--s_nTaken];
+                return NULL;
+            }
+            return e;
+        }
+    }
+    return NULL;
+}
+
+/* chrprop.c chrpropFree: a prop goes back to the pool, so its address may be handed to another object next; forget
+ * any per-player pickup state for it. The table is keyed by the prop's address; the object/type/weapon test in
+ * coopFindTaken stays as a second guard for a free that would not go through chrpropFree. */
+void coopPropFreed(struct PropRecord *prop)
+{
+    int i;
+    for (i = 0; i < s_nTaken; i++) {
+        if (s_taken[i].prop == prop) {
+            s_taken[i] = s_taken[--s_nTaken];
+            return;
+        }
+    }
+}
+
+s32 coopPickupTaken(struct PropRecord *prop)
+{
+    struct CoopTaken *e;
+    int cur;
+    if (!s_active || s_nTaken == 0) {
+        return 0;
+    }
+    cur = get_cur_playernum();
+    if (cur < 0 || cur > 1) {
+        return 0;
+    }
+    e = coopFindTaken(prop);
+    return e != NULL && (e->mask & (1u << cur)) != 0;
+}
+
+/* propobj.c propPickupByPlayer, between the item code and the free: op is what the original code decided. */
+s32 coopPickupOp(struct PropRecord *prop, s32 op)
+{
+    struct ObjectRecord *obj;
+    struct CoopTaken *e;
+    int cur, other;
+    char what[40];
+    if (!s_active || op != TICKOP_FREE || getPlayerCount() != 2) {
+        return op;
+    }
+    obj = prop->obj;
+    if (obj->runtime_bitflags & RUNTIMEBITFLAG_TAGGED) {
+        return op;   /* objective / script props stay single */
+    }
+    cur = get_cur_playernum();
+    if (cur < 0 || cur > 1) {
+        return op;
+    }
+    other = 1 - cur;
+    e = coopFindTaken(prop);
+    if (e == NULL) {
+        if (s_nTaken >= 256) {
+            return op;   /* table full: behave like solo, nothing is doubled */
+        }
+        e = &s_taken[s_nTaken++];
+        e->prop = prop;
+        e->obj = obj;
+        e->type = obj->type;
+        e->sub = coopPickupSub(obj);
+        e->mask = 0;
+    }
+    e->mask |= 1u << cur;
+    switch (obj->type) {
+        case PROPDEF_COLLECTABLE: snprintf(what, sizeof(what), "weapon %d", (int)((struct WeaponObjRecord *)obj)->weaponnum); break;
+        case PROPDEF_MAGAZINE:    snprintf(what, sizeof(what), "ammo crate type %d", (int)((struct AmmoCrateRecord *)obj)->ammoType); break;
+        case PROPDEF_AMMO:        snprintf(what, sizeof(what), "ammo box"); break;
+        case PROPDEF_ARMOUR:      snprintf(what, sizeof(what), "body armour %d", (int)((struct BodyArmourRecord *)obj)->amount); break;
+        default:                  snprintf(what, sizeof(what), "object type %d", (int)obj->type); break;
+    }
+    if (e->mask & (1u << other)) {
+        sysLogPrintf(LOG_NOTE, "coop: player %d took %s @%p (other player: also taken -> removed)", cur, what, (void *)prop);
+        *e = s_taken[--s_nTaken];   /* the prop is freed now: forget it */
+        return op;
+    }
+    sysLogPrintf(LOG_NOTE, "coop: player %d took %s @%p (other player: still available)", cur, what, (void *)prop);
+    return TICKOP_NONE;   /* keep the prop for the other player */
+}
+
+/* propobj.c door key test: the keys of either player open a door. */
+extern bool bondinvCheckHasKeyFlags(u32 wantkeyflags);
+s32 coopHasKeyFlags(u32 flags)
+{
+    int i, save;
+    s32 ret = 0;
+    if (!s_active) {
+        return bondinvCheckHasKeyFlags(flags);
+    }
+    save = get_cur_playernum();
+    for (i = 0; i < 2 && !ret; i++) {
+        if (g_playerPointers[i] != NULL) {
+            set_cur_player(i);
+            ret = bondinvCheckHasKeyFlags(flags) != 0;
+        }
+    }
+    set_cur_player(save);
+    return ret;
 }
 
 s32 coopWatchPad(void)

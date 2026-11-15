@@ -5905,7 +5905,7 @@ s32 objTick(struct PropRecord *prop)
 		var_v1_5 = ((!(obj->runtime_bitflags & RUNTIMEBITFLAG_00000800)) && (!(obj->flags2 & PROPFLAG2_00080000))) ? (posIsOnScreen(prop, &obj->runtime_pos, getinstsize(model), applyFogCull)) : (0);
 	}
 
-	if (var_v1_5 != 0)
+	if (var_v1_5 != 0 && GE_PICKUP_VISIBLE(prop))
 	{
 		if (isSimOwner)
 		{
@@ -10638,6 +10638,8 @@ TICKOP propPickupByPlayer(PropRecord *prop, bool showstring)
         return TICKOP_NONE;
     }
 
+    if (GE_PICKUP_TAKEN(prop)) return TICKOP_NONE;
+
     switch (obj->type)
     {
         case PROPDEF_KEY:
@@ -10918,6 +10920,8 @@ TICKOP propPickupByPlayer(PropRecord *prop, bool showstring)
         }
     }
 
+    op = GE_PICKUP_OP(prop, op);
+
     if ((op == TICKOP_FREE) && ((obj->runtime_bitflags & RUNTIMEBITFLAG_TAGGED) == 0))
     {
         objFree(obj, 0, (obj->state & RUNTIMEBITFLAG_REMOVE));
@@ -10953,6 +10957,8 @@ TICKOP objTickPlayer(struct PropRecord* prop)
     struct ObjectRecord* obj;
 
     obj = prop->obj;
+
+    if (GE_PICKUP_TAKEN(prop)) return TICKOP_NONE;
 
     if ((objIsCollectable(obj) != 0) && (obj->type != PROPDEF_HAT))
     {
@@ -14341,7 +14347,7 @@ TICKOP propdoorInteract(PropRecord* doorprop)
     {
         sp28 = 1;
     }
-    else if (bondinvCheckHasKeyFlags(door->keyflags) != 0)
+    else if (GE_HAS_KEY_FLAGS(door->keyflags) != 0)
     {
         sp28 = 1;
     }

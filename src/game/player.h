@@ -127,6 +127,13 @@ s32 coopStageNumPlayers(s32 stage, s32 selected);
 void coopSpawnOffset(f32 *x, f32 *z, void *pstan, f32 lookx, f32 lookz);
 s32 coopWatchStart(void);
 s32 coopWatchPad(void);
+s32 coopPickupTaken(struct PropRecord *prop);
+s32 coopPickupOp(struct PropRecord *prop, s32 op);
+s32 coopHasKeyFlags(u32 flags);
+void coopPropFreed(struct PropRecord *prop);
+s32 coopAnyHasPropInInv(struct PropRecord *prop);
+s32 coopChrIsPlayer(struct ChrRecord *chr);
+void coopNpcHurt(struct ChrRecord *chr, f32 damage, f32 subroty, s32 item);
 s32 coopAiStep(void *list, s32 offset, s32 isPlayerTest);
 s32 coopBondBody(void);
 s32 coopProjSimOwner(s32 ownedByCurrent, struct PropRecord *ownerprop, s32 viewOwner);
@@ -150,6 +157,14 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 #define GE_WATCH_START()         (getPlayerCount() == 1 || coopWatchStart())
 #define GE_WATCH_LOCK(l)         coopWatchLock(l)
 #define GE_WATCH_PAD()           coopWatchPad()
+#define GE_PICKUP_TAKEN(prop)    coopPickupTaken(prop)
+#define GE_PICKUP_VISIBLE(prop)  (!coopPickupTaken(prop))
+#define GE_PICKUP_OP(prop, op)   coopPickupOp((prop), (op))
+#define GE_HAS_KEY_FLAGS(f)      coopHasKeyFlags(f)
+#define GE_NPC_HURT(chr, dmg, rot, item) coopNpcHurt((chr), (dmg), (rot), (item))
+#define GE_CHR_PICKABLE(chr)     ((chr)->model && !coopChrIsPlayer(chr))
+#define GE_HAS_PROP_IN_INV(prop) coopAnyHasPropInInv(prop)
+#define GE_PROP_FREED(prop)      coopPropFreed(prop)
 /* stage scripts ask "fewer than N players?" to tell a mission from a versus match: a co-op mission is a mission */
 #define GE_AI_PLAYERS()          (coopIsMission() ? 1 : getPlayerCount())
 /* AI commands that test a condition of "Bond" (position, pad distance, room, items): true if ANY living player meets it */
@@ -182,6 +197,14 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 #define GE_SPLIT_GE2()           (getPlayerCount() >= 2)
 #define GE_SPLIT_EQ2()           (getPlayerCount() == 2)
 #define GE_COOP_VIEW_ORDER()
+#define GE_PICKUP_TAKEN(prop)    0
+#define GE_PICKUP_VISIBLE(prop)  1
+#define GE_PICKUP_OP(prop, op)   (op)
+#define GE_HAS_KEY_FLAGS(f)      bondinvCheckHasKeyFlags(f)
+#define GE_NPC_HURT(chr, dmg, rot, item) bondviewCallRecordDamageKills((dmg), (rot), -1, 1)
+#define GE_CHR_PICKABLE(chr)     ((chr)->model)
+#define GE_HAS_PROP_IN_INV(prop) bondinvHasPropInInv(prop)
+#define GE_PROP_FREED(prop)
 #define GE_AI_PLAYERS()          getPlayerCount()
 #define GE_BOND_BODY()           (getPlayerCount() == 1)
 #define GE_PROJ_SIM_OWNER(own, op, view) (own)
