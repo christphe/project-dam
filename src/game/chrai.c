@@ -4243,7 +4243,7 @@ void                   ai(PropDefHeaderRecord *Entityp, PROP_TYPE EntityType)
                     s32 num;
                     for (num = get_numguards() - 1; num >= 0; num--)
                     {
-                        if (g_ChrSlots[num].model != NULL)
+                        if (GE_CHR_HIDEABLE(&g_ChrSlots[num]))
                         {
                             g_ChrSlots[num].chrflags |= CHRFLAG_HIDDEN;
                         }

@@ -38,6 +38,7 @@
 #include "config.h"
 #include "system.h"
 #include "coop.h"
+#include "bondaicommands.h"   /* if_bond_y_pos_less_than_ID */
 
 extern struct player *g_playerPointers[4];
 extern s32 g_ClockTimer;
@@ -381,6 +382,22 @@ s32 coopAiStep(void *list, s32 offset, s32 isPlayerTest)
         s_ai.pending = 0;
     }
     if (isPlayerTest) {
+        /* "Bond fell below height Y" (Dam's jump, then the exit camera): ask the LOWEST living player first. Asked in
+         * player order, a partner standing low on the ground passed it at once, became the cinematic driver, and the
+         * exit camera aimed at him from the jump platform, into the void. */
+        if (((u8 *)list)[offset] == if_bond_y_pos_less_than_ID) {
+            int n, low = -1;
+            for (n = 0; n < 2; n++) {
+                struct player *p = g_playerPointers[n];
+                if (p != NULL && p->prop != NULL && p->bonddead == 0 &&
+                    (low < 0 || p->prop->pos.f[1] < g_playerPointers[low]->prop->pos.f[1])) {
+                    low = n;
+                }
+            }
+            if (low >= 0 && low != get_cur_playernum()) {
+                set_cur_player(low);
+            }
+        }
         s_ai.pending = 1;
         s_ai.rewound = 0;
         s_ai.list = list;
@@ -1104,13 +1121,13 @@ static int coopFullPlayer(void)
             return i;
         }
     }
-    /* Cinematics keep the split unless GE_COOP_CINEFULL=1: the full-screen cinematic view came with the round-3
-     * build in which the end of a mission hung (round 4), and is kept off until that is understood. */
+    /* Cinematics are full screen (the driver's view) unless GE_COOP_CINEFULL=0. It was off after the round-4
+     * end-of-mission hang, whose real causes (the FP switch after the swirl, any-player AI tests) are fixed since. */
     {
         static int cine = -1;
         if (cine < 0) {
             const char *e = getenv("GE_COOP_CINEFULL");
-            cine = (e != NULL && e[0] != 0 && e[0] != '0');
+            cine = !(e != NULL && e[0] == '0');
         }
         return (cine && coopMirrorCamera()) ? coopDriver() : -1;
     }

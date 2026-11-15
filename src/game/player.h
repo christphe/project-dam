@@ -163,6 +163,8 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 #define GE_HAS_KEY_FLAGS(f)      coopHasKeyFlags(f)
 #define GE_NPC_HURT(chr, dmg, rot, item) coopNpcHurt((chr), (dmg), (rot), (item))
 #define GE_CHR_PICKABLE(chr)     ((chr)->model && !coopChrIsPlayer(chr))
+/* AI hide_all_chrs (before the exit camera): a co-op player's body is a chr too, and hiding it hid Bond in the outro */
+#define GE_CHR_HIDEABLE(chr)     ((chr)->model != NULL && !coopChrIsPlayer(chr))
 #define GE_HAS_PROP_IN_INV(prop) coopAnyHasPropInInv(prop)
 #define GE_PROP_FREED(prop)      coopPropFreed(prop)
 /* stage scripts ask "fewer than N players?" to tell a mission from a versus match: a co-op mission is a mission */
@@ -203,6 +205,7 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 #define GE_HAS_KEY_FLAGS(f)      bondinvCheckHasKeyFlags(f)
 #define GE_NPC_HURT(chr, dmg, rot, item) bondviewCallRecordDamageKills((dmg), (rot), -1, 1)
 #define GE_CHR_PICKABLE(chr)     ((chr)->model)
+#define GE_CHR_HIDEABLE(chr)     ((chr)->model != NULL)
 #define GE_HAS_PROP_IN_INV(prop) bondinvHasPropInInv(prop)
 #define GE_PROP_FREED(prop)
 #define GE_AI_PLAYERS()          getPlayerCount()
