@@ -63,7 +63,9 @@ travels on the nxlink command line, with nothing to copy to the SD card:
 Example, a 40 s performance run of the Jungle in co-op with a 150% draw distance:
 
 ```sh
-NXLINK_RETRIES=40 python tools/switch/nxlink.py <ip> build-switch-link/ge007.aarch64.nro     switch/project-dam/project-dam-test.nro run.log     -level_37 -hard0 GE_COOP=1 GE_PERFSTAT=1 NX_TEST_SECS=40 "GE_CFG=Video.DrawDistance=150;Video.LodDistance=150"
+NXLINK_RETRIES=40 python tools/switch/nxlink.py <ip> build-switch-link/ge007.aarch64.nro \
+    switch/project-dam/project-dam-test.nro run.log \
+    -level_37 -hard0 GE_COOP=1 GE_PERFSTAT=1 NX_TEST_SECS=40 "GE_CFG=Video.DrawDistance=150;Video.LodDistance=150"
 ```
 
 If the console is asleep the upload gets no answer: the client gives up after `NXLINK_RETRIES` attempts.
