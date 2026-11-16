@@ -121,6 +121,8 @@ void coopVersusDeathState(void);
 f32 coopDownFade(f32 frac);
 f32 coopDownChrFade(f32 frac);
 s32 coopRespawnButton(s32 pressed);
+void coopSetBondKia(void);
+s32 coopMissionEndOk(void);
 void coopAiTick(struct ChrRecord *chr, s32 perView);
 void coopFrameTick(void);
 s32 coopStageNumPlayers(s32 stage, s32 selected);
@@ -132,7 +134,9 @@ s32 coopPickupOp(struct PropRecord *prop, s32 op);
 s32 coopHasKeyFlags(u32 flags);
 void coopPropFreed(struct PropRecord *prop);
 s32 coopAnyHasPropInInv(struct PropRecord *prop);
+s32 coopAnyCopiedGoldenEye(void);
 s32 coopChrIsPlayer(struct ChrRecord *chr);
+s32 coopAutoAimAtPlayer(void);
 void coopNpcHurt(struct ChrRecord *chr, f32 damage, f32 subroty, s32 item);
 s32 coopAiStep(void *list, s32 offset, s32 isPlayerTest);
 s32 coopBondBody(void);
@@ -145,10 +149,14 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 #define GE_RULE_MULTI()          coopRuleMulti()
 #define GE_DEATH_SOLO()          (getPlayerCount() == 1 || coopDeathFinal())
 #define GE_PVP_ALLOWED()         coopPvpAllowed()
+#define GE_AUTOAIM_AT_PLAYER()   coopAutoAimAtPlayer()
 #define GE_VERSUS_DEATH_STATE()  coopVersusDeathState()
 #define GE_DOWN_FADE(f)          coopDownFade(f)
 #define GE_DOWN_CHRFADE(f)       coopDownChrFade(f)
 #define GE_RESPAWN_BUTTON(x)     coopRespawnButton(x)
+/* co-op: a death is KIA only when final; a player still down at the exit fails the mission (revive first) */
+#define GE_SET_BOND_KIA()        coopSetBondKia()
+#define GE_MISSION_END_OK()      coopMissionEndOk()
 #define GE_SIM_TICKS(x)          (coopSimOwner() ? (x) : 0)
 #define GE_AI_TICK_VIEW(chr)     coopAiTick((chr), 1)
 #define GE_AI_TICK_FRAME(chr)    coopAiTick((chr), 0)
@@ -166,6 +174,7 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 /* AI hide_all_chrs (before the exit camera): a co-op player's body is a chr too, and hiding it hid Bond in the outro */
 #define GE_CHR_HIDEABLE(chr)     ((chr)->model != NULL && !coopChrIsPlayer(chr))
 #define GE_HAS_PROP_IN_INV(prop) coopAnyHasPropInInv(prop)
+#define GE_KEY_COPIED()          coopAnyCopiedGoldenEye()
 #define GE_PROP_FREED(prop)      coopPropFreed(prop)
 /* stage scripts ask "fewer than N players?" to tell a mission from a versus match: a co-op mission is a mission */
 #define GE_AI_PLAYERS()          (coopIsMission() ? 1 : getPlayerCount())
@@ -184,10 +193,13 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 #define GE_RULE_MULTI()          (getPlayerCount() >= 2)
 #define GE_DEATH_SOLO()          (getPlayerCount() == 1)
 #define GE_PVP_ALLOWED()         1
+#define GE_AUTOAIM_AT_PLAYER()   1
 #define GE_VERSUS_DEATH_STATE()  set_missionstate(6)
 #define GE_DOWN_FADE(f)          (f)
 #define GE_DOWN_CHRFADE(f)       (f)
 #define GE_RESPAWN_BUTTON(x)     (x)
+#define GE_SET_BOND_KIA()        (g_isBondKIA = 1)
+#define GE_MISSION_END_OK()      1
 #define GE_SIM_TICKS(x)          (x)
 #define GE_AI_TICK_VIEW(chr)     chrlvActionTick(chr)
 #define GE_AI_TICK_FRAME(chr)    chrlvActionTick(chr)
@@ -207,6 +219,7 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 #define GE_CHR_PICKABLE(chr)     ((chr)->model)
 #define GE_CHR_HIDEABLE(chr)     ((chr)->model != NULL)
 #define GE_HAS_PROP_IN_INV(prop) bondinvHasPropInInv(prop)
+#define GE_KEY_COPIED()          get_keyanalyzer_flag()
 #define GE_PROP_FREED(prop)
 #define GE_AI_PLAYERS()          getPlayerCount()
 #define GE_BOND_BODY()           (getPlayerCount() == 1)

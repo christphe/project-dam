@@ -1,8 +1,9 @@
 # Changelog
 
-## [Unreleased] - minor
+## [0.2.0] - 2026-11-16
 
 ### Added
+- Co-op friendly fire: your shots now hurt your partner (a partner shot down is revived like after any death), and auto-aim no longer locks onto your partner (#21)
 - GE+ sky (Switch, on by default; Video > Sky): the original clouds in three layers at different heights on a curved sky, a sun with a halo on day and dusk levels, stars and a moon on night levels, and a haze band at the horizon that the scenery fades into; Original (or the N64 display mode) restores the game's own sky, and Frigate keeps it
 - Co-op on the mode menu (Switch, between Select Mission and Multiplayer; needs a second controller): player 2 picks a character, then a solo mission starts for two players in split screen; a downed player is revived by the partner standing at the body and pressing A for 10 seconds, and the mission fails when both are down; Start opens that player's own watch in a full-screen view and pauses both players; scripted end-of-mission cameras show player 1's view in both halves; dropped weapons fall and can be picked up; ammo, armour and weapons lying in the level exist once per player, so a pickup one player takes stays for the other; no multiplayer radar; Co-op enemy health (100, 150 or 200 percent) on the Game page makes guards tougher
 - Look ahead (Extended) on the Controller page (Switch; Off, Low, Medium or High speed, High by default): walking forward with the look stick at rest eases the view back to level; the game's own Look ahead never fired with the Extended controls because its walk is digital, and stays on the Game page
@@ -16,6 +17,8 @@
 - Aim sensitivity on the Controller page: how fast the right stick turns while aiming (0.75x by default)
 
 ### Changed
+- 2-player split screen (Switch, versus and co-op): each half no longer sees about 130 degrees across with stretched edges; it uses two thirds of the FOV setting and its own width, about 70 degrees across at 16:9 at the default FOV; the FOV setting still shows 60, solo and 3-4 players are unchanged, and the N64 display mode keeps the original view
+- GE+ sky: Bunker 1 shows Surface 1's sky at its exit and through its windows instead of a flat dark-blue fill (the original game has no sky record for that mission); Original keeps the fill
 - The options entry on the file select screen and the title of the options menu read "Options" instead of "PC Options"
 - The Switch controller defaults are tuned values: both stick deadzones 10%, look sensitivity 0.85x, vertical look inverted, look smoothing 2, trigger threshold 10%, Aim sensitivity 0.75x, Turn acceleration High, Aim zoom 2x, Aim assist High, Look ahead High
 - The Controller page hides the aim rows that need the Centered aim style (Aim zoom, Aim assist, Aim entry, Stop on aim, Look ahead, Look precision, Turn acceleration) while Aim style is Original, and the aim group and these rows with the Original control style: they only work with the Extended controls
@@ -29,10 +32,14 @@
 - Quitting the game on the Switch now returns to the launcher it was started from (sphaira or the homebrew menu) instead of closing the whole application and dropping to Home; if the game's threads do not stop in time it falls back to the old exit
 
 ### Fixed
+- GE+ sky: looking down from a height (Cradle), the view under the horizon showed blue clouds or streaks of earlier frames instead of the sky colour
+- Split-screen uses the whole screen like solo: no black bars at the top and bottom, and no thin band of fog or sky colour on the left and right edges of each view (#25)
+- Co-op: the "copy the GoldenEye key" objective (Bunker 1) no longer flips between completed and not completed every frame once one player has copied the key (#17)
 - Multiplayer and Co-op on the Switch count only the controllers actually connected: four were always counted, so leaving a match asked for Start on four controllers; with one controller Co-op and Multiplayer are greyed out, and plugging or unplugging a controller is picked up at once
 - Docking or undocking the console while the game runs no longer crashes it: the picture is resized at the start of a frame on the render thread, not behind its back
 - Restart Game no longer shows at the bottom of the options menu on the Switch, where it could only quit the game
 - About one launch in fifty no longer stops at boot on the Switch: the game's memory windows used to sit at fixed addresses that the system's own stack could land on, and they now move to a free spot chosen at each launch
+- Co-op: a player who went down and was revived no longer ends the mission "killed in action"; a mission that ends while a player is still down now fails (killed in action, the next mission is not unlocked), so revive your partner before the exit (#20)
 
 ## [0.1.0] - 2026-11-11
 

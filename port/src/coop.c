@@ -47,6 +47,7 @@ extern s32 g_MainStageNum;
 extern int objectiveIsAllComplete(void);
 extern int get_mission_state(void);   /* MISSION_STATE_ID (mp_music.c) */
 extern int gameScriptedCameraActive(void);
+extern s32 get_keyanalyzer_flag(void);
 void bondviewFrozenCameraTick(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct coord3d *pos2, struct coord3d *offset, struct StandTile **stan, struct coord3d *arg6);
 
 #define COOP_REVIVE_TICKS   600     /* 10 s at 60 ticks per second */
@@ -164,7 +165,17 @@ s32 coopRuleMulti(void)
     return getPlayerCount() >= 2 && !s_active;
 }
 
+/* Friendly fire: in co-op a player's bullets hit the partner (chrprop.c, GE_PVP_ALLOWED), and the hit goes through the
+ * versus damage path (chraction.c: record_damage_kills on the partner); a partner shot down is revived as after any
+ * death. Explosions already hurt both players. Auto-aim never picks the partner: coopAutoAimAtPlayer. */
 s32 coopPvpAllowed(void)
+{
+    return 1;
+}
+
+/* chrprop.c chrpropUpdateAutoaimTarget: the auto-aim takes another player's body as a target in versus; in co-op the
+ * crosshair locked onto the partner (a body holding a weapon). Hook GE_AUTOAIM_AT_PLAYER. */
+s32 coopAutoAimAtPlayer(void)
 {
     return !s_active;
 }
@@ -179,6 +190,43 @@ static int coopPartnerDown(void)
 s32 coopDeathFinal(void)
 {
     return s_active && coopPartnerDown();
+}
+
+/*
+ * bondviewKillCurrentPlayer (bondview2.c) sets g_isBondKIA on every player death, and the debrief
+ * (front.c frontCompleteAllObjectivesAliveSuccess / constructor_menu0C_missionfailed) reads it as "the mission was
+ * lost". In co-op a down player can be revived, so a death counts only when it is final (the partner is already
+ * down); before this a revived run ended on "KILLED IN ACTION" while bossReturnTitleStage still unlocked the stage.
+ * Hook GE_SET_BOND_KIA. Solo and versus set the flag as the original does.
+ */
+void coopSetBondKia(void)
+{
+    if (!s_active || coopPartnerDown()) {
+        g_isBondKIA = TRUE;
+    }
+}
+
+/*
+ * End of a mission (boss.c bossReturnTitleStage: the exit, before the unlock). In co-op a player still down at that
+ * moment fails the mission: the partner has to be revived before the exit. Sets g_isBondKIA (debrief "KILLED IN
+ * ACTION", no next-stage) and returns 0 so the stage is not unlocked. Hook GE_MISSION_END_OK; solo and versus: 1.
+ */
+s32 coopMissionEndOk(void)
+{
+    int i, down = 0;
+    if (!s_active) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        if (g_playerPointers[i] != NULL && g_playerPointers[i]->bonddead != 0) {
+            down = 1;
+        }
+    }
+    sysLogPrintf(LOG_NOTE, "coop: mission end, player down=%d -> %s", down, down ? "killed in action" : "ok");
+    if (down) {
+        g_isBondKIA = TRUE;
+    }
+    return !down;
 }
 
 void coopVersusDeathState(void)
@@ -837,6 +885,27 @@ s32 coopAnyHasPropInInv(struct PropRecord *prop)
     }
     g_CurrentPlayer = saved;
     return has;
+}
+
+/*
+ * Objective "copy item" (objective_status.c, PROPDEF_OBJECTIVE_COPY_ITEM) asks get_keyanalyzer_flag(), i.e.
+ * g_CurrentPlayer->copiedgoldeneye, set on the player who used the key analyzer (gunfire.c analyzeGEKey). Polled from
+ * both players' ticks it flipped every frame once the key was copied (Bunker 1 on the console, issue #17), as the
+ * collect / deposit objectives did (above). In co-op the key is copied when either player copied it. Hook
+ * GE_KEY_COPIED.
+ */
+s32 coopAnyCopiedGoldenEye(void)
+{
+    int i;
+    if (!s_active) {
+        return get_keyanalyzer_flag();
+    }
+    for (i = 0; i < 2; i++) {
+        if (g_playerPointers[i] != NULL && g_playerPointers[i]->copiedgoldeneye) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /*
