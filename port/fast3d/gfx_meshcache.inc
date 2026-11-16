@@ -998,21 +998,24 @@ static void mc_apply_exit(const McEntry* e) {
 static int mc_gpu_on(void) {
     static int on = -1;
     if (on < 0) {
+        /* default: on where the backend vets mesh programs (deko3d); GL keeps
+         * it opt-in (D972: a mesh draw costs ~25 us on the Switch GL driver) */
         const char* e = getenv("GE_MESHGPU");
-        on = (e && e[0] && e[0] != '0') ? 1 : 0;
+        on = (e && e[0]) ? (e[0] != '0') : (gfx_rapi->mesh_supported != nullptr);
         if (on) sysLogPrintf(LOG_NOTE, "GE_MESHGPU: cached lists drawn with the vertex transform on the GPU (issue #10, step B)");
     }
     return on && gfx_fog_vertex;   /* GE_FOGPIXEL (fog * w attribute) is not handled */
 }
 
-/* GE_MESHGPU_FULL=1 (measurement only): skip the near/far-plane box test and
- * let the GPU clip those meshes too (not the N64's CPU clip/reject rules). */
+/* GE_MESHGPU_FULL (default on, =0 to disable): skip the near/far-plane box
+ * test and let the GPU clip those meshes too (not the N64's CPU clip/reject
+ * rules). */
 static int mc_gpu_full(void) {
     static int on = -1;
     if (on < 0) {
         const char* e = getenv("GE_MESHGPU_FULL");
-        on = (e && e[0] && e[0] != '0') ? 1 : 0;
-        if (on) sysLogPrintf(LOG_NOTE, "GE_MESHGPU_FULL: near/far-plane meshes also drawn on the GPU (measurement)");
+        on = (e && e[0]) ? (e[0] != '0') : 1;
+        if (on) sysLogPrintf(LOG_NOTE, "GE_MESHGPU_FULL: near/far-plane meshes also drawn on the GPU (GE_MESHGPU_FULL=0: CPU clip as on the N64)");
     }
     return on;
 }

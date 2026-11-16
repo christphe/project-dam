@@ -432,7 +432,7 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
     if (cc_features.opt_fog) {
         if (mesh) {
             append_line(vs_buf, &vs_len, "    float fw = abs(mp.w) < 0.001 ? 0.001 : mp.w;");
-            append_line(vs_buf, &vs_len, "    vFog = vec4(uMeshFogColor.rgb, uMeshFog.z > 0.5 ? floor(clamp(mp.z / fw * uMeshFog.x + uMeshFog.y, 0.0, 255.0)) / 255.0 : aFog.a);");
+            append_line(vs_buf, &vs_len, "    vFog = vec4(uMeshFogColor.rgb, uMeshFog.z > 0.5 ? floor(clamp(mp.z / fw * uMeshFog.x + uMeshFog.y, 0.0, 255.0)) / 255.0 : uMeshFogColor.a);");
         } else {
             append_line(vs_buf, &vs_len, "    vFog = aFog;");
         }

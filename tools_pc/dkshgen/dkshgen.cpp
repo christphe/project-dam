@@ -179,7 +179,7 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
     if (f.opt_fog) {
         if (mesh) {
             vs += "    float fw = abs(mp.w) < 0.001 ? 0.001 : mp.w;\n"
-                  "    vFog = vec4(fog_color.rgb, fog_from_z != 0 ? floor(clamp(mp.z / fw * fog_mul + fog_off, 0.0, 255.0)) / 255.0 : aFog.a);\n";
+                  "    vFog = vec4(fog_color.rgb, fog_from_z != 0 ? floor(clamp(mp.z / fw * fog_mul + fog_off, 0.0, 255.0)) / 255.0 : fog_color.a);\n";
         } else {
             vs += "    vFog = aFog;\n";
         }
