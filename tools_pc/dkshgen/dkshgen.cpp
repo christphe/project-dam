@@ -145,6 +145,7 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
     if (f.opt_fog) {
         vs += fmt("layout(location = %d) in vec4 aFog;\n", DK_ATTR_FOG);
         vs += fmt("layout(location = %d) %sout vec4 vFog;\n", DK_ATTR_FOG, fogq);
+        vs += fmt("layout(location = %d) out float vFogW;\n", DK_VAR_FOGW);   /* per-pixel fog (fog * w) */
     }
     if (f.opt_grayscale) {
         vs += fmt("layout(location = %d) in vec4 aGrayscaleColor;\n", DK_ATTR_GRAY);
@@ -179,9 +180,11 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
     if (f.opt_fog) {
         if (mesh) {
             vs += "    float fw = abs(mp.w) < 0.001 ? 0.001 : mp.w;\n"
-                  "    vFog = vec4(fog_color.rgb, fog_from_z != 0 ? floor(clamp(mp.z / fw * fog_mul + fog_off, 0.0, 255.0)) / 255.0 : fog_color.a);\n";
+                  "    vFog = vec4(fog_color.rgb, fog_from_z != 0 ? floor(clamp(mp.z / fw * fog_mul + fog_off, 0.0, 255.0)) / 255.0 : fog_color.a);\n"
+                  "    vFogW = fog_from_z != 0 ? (mp.z * fog_mul + mp.w * fog_off) / 255.0 : fog_color.a * mp.w;\n";
         } else {
-            vs += "    vFog = aFog;\n";
+            vs += "    vFog = aFog;\n"
+                  "    vFogW = aFog.a;\n";   /* the CPU sends fog * w when fog_pixel is set */
         }
     }
     if (f.opt_grayscale) vs += "    vGrayscaleColor = aGrayscaleColor;\n";
@@ -208,6 +211,7 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
         }
     }
     if (f.opt_fog) fs += fmt("layout(location = %d) %sin vec4 vFog;\n", DK_ATTR_FOG, fogq);
+    if (f.opt_fog) fs += fmt("layout(location = %d) in float vFogW;\n", DK_VAR_FOGW);
     if (f.opt_grayscale) fs += fmt("layout(location = %d) in vec4 vGrayscaleColor;\n", DK_ATTR_GRAY);
     for (int i = 0; i < f.num_inputs; i++) {
         fs += fmt("layout(location = %d) %sin vec%d vInput%d;\n", DK_ATTR_IN1 + i, shadeq, nin, i + 1);
@@ -221,6 +225,7 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
           "    int three_point_filter1;\n"
           "    int flip_v0;\n"
           "    int flip_v1;\n"
+          "    int fog_pixel;\n"
           "};\n";
     fs += "float random(in vec3 value) {\n"
           "    float random = dot(sin(value), vec3(12.9898, 78.233, 37.719));\n"
@@ -293,7 +298,7 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
     fs += "    texel = WRAP(texel, -0.51, 1.51);\n";
     fs += "    texel = clamp(texel, 0.0, 1.0);\n";
     if (f.opt_fog) {
-        fs += "    float fogA = clamp(vFog.a, 0.0, 1.0);\n";
+        fs += "    float fogA = fog_pixel != 0 ? clamp(vFogW * gl_FragCoord.w, 0.0, 1.0) : clamp(vFog.a, 0.0, 1.0);\n";
         fs += f.opt_alpha ? "    texel = vec4(mix(texel.rgb, vFog.rgb, fogA), texel.a);\n"
                           : "    texel = mix(texel, vFog.rgb, fogA);\n";
     }

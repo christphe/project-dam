@@ -22879,6 +22879,13 @@ Console (same command, 40 s, 8 reports): 218-290 GPU replays per frame (5300-690
 
 **Fix: prop fog factor frozen at bake time.** Props set their distance tint through the fog colour register: `modelApplyRenderModeType3` emits `gDPSetFogColor` with the tint strength in its alpha and `G_RM_FOG_PRIM_A` (fog colour weighted by fog-register alpha), with `G_FOG` off, so fast3d's per-vertex fog is `rdp.fog_color.a` (`gfx_pc.cpp` vertex load). The mesh twins took that factor from the baked `aFog.a`, while the fog colour had left the bake key: a prop baked deep in fog kept full fog tint up close (seen on Surface's dish, black underside / solid fog colour; correct with `GE_MESHGPU=0`). Both twins now read `fog_color.a` live when `fog_from_z` is 0 (`uMeshFogColor.a` on GL, `fog_color.a` in `DkMeshUniforms` on deko3d), as the CPU path does. Ryujinx: the dish keeps its colours up close with the cache on.
 
+**Per-pixel fog option (`Video.FogPixel`, 2026-11-16, maintainer).** D543 made per-vertex fog the default (as the N64) and `GE_FOGPIXEL` (D540) the per-pixel A/B; step B required per-vertex fog. Now a setting: on by default on the Switch, off in the Original N64 preset, toggled in Custom, read when the renderer starts (restart row); off by default on PC; `GE_FOGPIXEL=0/1` still overrides.
+- *GL:* the existing D540 path (fog * w attribute, divided by w in the fragment shader); the mesh twin writes `mp.z * fog_mul + mp.w * fog_off` (or `fog_color.a * mp.w` without `G_FOG`) / 255 in that mode.
+- *deko3d:* the pack carries both forms: `vFog` (noperspective, per vertex) and a new perspective varying `vFogW` (fog * w, location 16); `Draw.fog_pixel` (the former pad) picks one in the fragment shader (generated combiners and the uber-shader). No second pack. Pack 413 -> 422 KiB.
+- *Mesh cache:* `mc_gpu_on` no longer requires per-vertex fog.
+- Under `GE_MESHGPU_FULL` per-pixel fog is also the consistent choice: the GPU clips near-plane triangles, where per-vertex fog would be interpolated unlike the RSP. Trade-off as in D543: the lighter ground near Bond on Surface 2 comes back with it, hence the N64 preset.
+- Checked: Ryujinx Jungle (`DK: fog per-pixel`, 245-297 GPU replays per frame, image right), console Surface 1 (maintainer by eye, clean exit, walk ~1.2 ms per frame); Switch NROs and Linux build.
+
 **Open.** Fog colour is read after the list's ops walk, so a list that sets fog colour mid-list would draw with its last value (not seen in the census). Near/far-plane objects stay on the CPU path.
 
 **Not a port bug (checked while testing).** Jungle fern leaves drawn over leaves in front of them: same picture in v0.1.0, v0.2.0 and in ares v148 on the original ROM (an N64 accuracy reference). N64 behaviour, kept.

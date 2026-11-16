@@ -67,6 +67,7 @@ extern "C" void* nwindowGetDefault(void);
 extern bool gfx_framebuffers_enabled;   /* gfx_pc.cpp */
 extern int gfx_rdp_affine;              /* gfx_pc.cpp (D540) */
 extern int gfx_fog_vertex;              /* gfx_pc.cpp (D543) */
+extern "C" int portFogPixel;           /* port/src/video.c: Video.FogPixel */
 extern "C" volatile int gfx_skyplus_failed;   /* gfx_opengl.cpp */
 extern "C" int nxIsHandheld(void);      /* port/src/switch/nxmem.c */
 extern "C" const uint8_t ge007_dksh_pack[], ge007_dksh_pack_end[];
@@ -1239,8 +1240,15 @@ void dk_init(void) {
         s_submit_every = e ? (uint32_t)atoi(e) : 64;
         sysLogPrintf(LOG_NOTE, "DK: submit every %u draws (GE_DKSUBMIT; 0 = once per frame)", s_submit_every);
     }
-    gfx_rdp_affine = 1;   /* the pack is built with noperspective shade and per-vertex fog */
-    gfx_fog_vertex = 1;
+    gfx_rdp_affine = 1;   /* the pack is built with noperspective shade */
+    /* Fog: the pack carries both forms (vFog.a per vertex, vFogW = fog * w);
+     * Draw.fog_pixel picks one. Video.FogPixel, GE_FOGPIXEL=0/1 overrides. */
+    {
+        const char* fp = getenv("GE_FOGPIXEL");
+        gfx_fog_vertex = (fp && fp[0]) ? (fp[0] != '1') : !portFogPixel;
+        s_uni.fog_pixel = gfx_fog_vertex ? 0 : 1;
+        sysLogPrintf(LOG_NOTE, "DK: fog %s", gfx_fog_vertex ? "per-vertex (N64)" : "per-pixel");
+    }
 
     DkDeviceMaker dm;
     dkDeviceMakerDefaults(&dm);

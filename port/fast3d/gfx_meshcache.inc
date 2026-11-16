@@ -1004,7 +1004,7 @@ static int mc_gpu_on(void) {
         on = (e && e[0]) ? (e[0] != '0') : (gfx_rapi->mesh_supported != nullptr);
         if (on) sysLogPrintf(LOG_NOTE, "GE_MESHGPU: cached lists drawn with the vertex transform on the GPU (issue #10, step B)");
     }
-    return on && gfx_fog_vertex;   /* GE_FOGPIXEL (fog * w attribute) is not handled */
+    return on;   /* both fog forms: the twins also write fog * w (Video.FogPixel) */
 }
 
 /* GE_MESHGPU_FULL (default on, =0 to disable): skip the near/far-plane box

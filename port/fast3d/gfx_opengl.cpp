@@ -82,6 +82,7 @@ static GLenum gl_mirror_clamp = GL_MIRROR_CLAMP_TO_EDGE;
 static bool gl_es = false;
 extern int gfx_rdp_affine;   /* D540: defined in gfx_pc.cpp */
 extern int gfx_fog_vertex;   /* D540: defined in gfx_pc.cpp */
+extern "C" int portFogPixel; /* port/src/video.c: Video.FogPixel */
 static bool gl_core_profile = false;
 
 static int gfx_opengl_get_max_texture_size() {
@@ -432,7 +433,9 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
     if (cc_features.opt_fog) {
         if (mesh) {
             append_line(vs_buf, &vs_len, "    float fw = abs(mp.w) < 0.001 ? 0.001 : mp.w;");
-            append_line(vs_buf, &vs_len, "    vFog = vec4(uMeshFogColor.rgb, uMeshFog.z > 0.5 ? floor(clamp(mp.z / fw * uMeshFog.x + uMeshFog.y, 0.0, 255.0)) / 255.0 : uMeshFogColor.a);");
+            append_line(vs_buf, &vs_len, gfx_fog_vertex
+                ? "    vFog = vec4(uMeshFogColor.rgb, uMeshFog.z > 0.5 ? floor(clamp(mp.z / fw * uMeshFog.x + uMeshFog.y, 0.0, 255.0)) / 255.0 : uMeshFogColor.a);"
+                : "    vFog = vec4(uMeshFogColor.rgb, uMeshFog.z > 0.5 ? (mp.z * uMeshFog.x + mp.w * uMeshFog.y) / 255.0 : uMeshFogColor.a * mp.w);");   /* fog * w */
         } else {
             append_line(vs_buf, &vs_len, "    vFog = aFog;");
         }
@@ -1796,7 +1799,9 @@ static void gfx_opengl_init(void) {
     {
         const char *sp = getenv("GE_SHADEPERSP"), *fp = getenv("GE_FOGPIXEL");
         gfx_rdp_affine = (!gl_es && gl_glsl_version >= 130 && !(sp && sp[0] == '1')) ? 1 : 0;
-        gfx_fog_vertex = (fp && fp[0] == '1') ? 0 : 1;   /* D543: per-vertex RSP fog by default */
+        /* D543: per-vertex RSP fog unless Video.FogPixel (Switch default);
+         * GE_FOGPIXEL=0/1 overrides the setting. */
+        gfx_fog_vertex = (fp && fp[0]) ? (fp[0] != '1') : !portFogPixel;
     }
     sysLogPrintf(LOG_NOTE, "GL: shade %s, fog %s", gfx_rdp_affine ? "affine (RDP)" : "perspective",
                  gfx_fog_vertex ? "per-vertex" : "per-pixel");

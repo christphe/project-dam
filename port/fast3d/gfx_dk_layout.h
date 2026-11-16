@@ -31,7 +31,8 @@ enum {
     DK_ATTR_FOG = 7,
     DK_ATTR_GRAY = 8,
     DK_ATTR_IN1 = 9, /* .. IN7 = 15 */
-    DK_ATTR_COUNT = 16
+    DK_ATTR_COUNT = 16,
+    DK_VAR_FOGW = 16  /* varying only: fog * w, perspective-interpolated (per-pixel fog) */
 };
 
 /* The vertex layout of a program: count attributes, loc/size/offset in floats. */
@@ -87,7 +88,8 @@ struct DkDrawUniforms {
     int32_t three_point1;
     int32_t flip_v0;   /* unit samples a rendered image (stored top-down): t' = 1 - t */
     int32_t flip_v1;
-    int32_t pad[2];
+    int32_t fog_pixel; /* Video.FogPixel: fragment fog from vFogW (fog * w), else the per-vertex vFog.a */
+    int32_t pad;
 };
 
 /* Vertex-stage data for GE_MESHGPU.  The baked position is model-space xyz
