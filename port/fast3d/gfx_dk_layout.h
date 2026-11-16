@@ -90,6 +90,18 @@ struct DkDrawUniforms {
     int32_t pad[2];
 };
 
+/* Vertex-stage data for GE_MESHGPU.  The baked position is model-space xyz
+ * plus the index of the entry's live matrix.  This is deliberately a separate
+ * UBO from Draw: Draw is fragment-only and changes for every classic batch. */
+struct DkMeshUniforms {
+    float mtx[32][16];
+    float fog_color[4];
+    float fog_mul, fog_off;
+    int32_t fog_from_z;
+    int32_t pad0;
+    float lod_mask[8][4];
+};
+
 /* Uniform block `Comb` (std140, binding 1, fragment stage) of the uber-shader.
  * sel[c][k]: cycle c, channel k (0 rgb, 1 alpha), four 8-bit sources a, b, c, d
  * (SHADER_* of gfx_cc.h) at bits 0, 8, 16, 24. flags: DK_CF_* below. pad:
@@ -171,7 +183,8 @@ struct DkPackEntry {
     uint32_t vert_len;
     uint32_t frag_off;
     uint32_t frag_len;
-    uint32_t pad;
+    uint32_t mesh_vert_off; /* GE_MESHGPU vertex twin (absent for named entries) */
+    uint32_t mesh_vert_len;
 };
 enum {
     DK_PACK_UBER = 1,       /* uber vert + frag */

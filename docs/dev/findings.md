@@ -897,6 +897,7 @@ covers D24–D69; the log continues in §H (D32 procedure, D70–D121).
 | D972 | **Mesh cache step B tried and parked (issue #10, `GE_MESHGPU`): cached lists baked into static GPU meshes (model-space positions + matrix slot) drawn with a GPU-transform twin of the combiner program; on the Switch GL driver each mesh draw costs about 25 us, so it is slower than step A; kept on branch `feat/mesh_cache-gpu` for a deko3d backend** -- full `## D972` entry at file tail | PARKED 2026-11-15 (console Jungle co-op: decoder walk 9.6-9.8 ms vs 7.1-8.1 with step A alone; not merged) |
 | D973 | **deko3d backend, step 1 of issue #12 (Switch default; `GE_RENDERER=gl` selects GL): `GfxRenderingAPI` on deko3d replaying GfxFrame as GL does; combiners prebuilt into a DKSH pack from a `GE_CCLOG` census (76 ids, uber-shader + `DKSH miss` log for the rest); SDL without a window; fence-guarded rings/heap; GL coordinates mirrored at the boundary (deko3d renders top-down)** -- full `## D973` entry at file tail | BUILT + MEASURED 2026-11-15 (console: replay 7.30 -> 1.96 ms/f Jungle co-op, 1.55 -> 0.47 Surface 1, decoder no longer waits; latency equal at a like-for-like stamp; Ryujinx A/B same image on Dam, Surface 1, co-op, dock toggle; overlay settings toggle and PC goldens not run, 60 s Bunker 1 soak in Ryujinx only) |
 | D974 | **Switch controllers: SDL lists one joystick per npad (No1..No8) whatever is attached, so the game seated four players (START on four pads to leave a match): only npads with a controller are seated now (`nxPadConnectedMask`), the PC keyboard-as-player-1 routing is off on the Switch, `GE_PADS=<1..4>` forces N for tests.** | FIXED + CONSOLE-VERIFIED 2026-11-15 |
+| D975 | **Mesh cache step B on deko3d (issue #10 after #12, `GE_MESHGPU`, still off by default): D972's static GPU meshes drawn by the deko3d backend; a GPU-transform vertex twin per combiner in the DKSH pack; fog RGB a draw uniform instead of a bake key; combiners outside the pack refused at bake time (`mesh_supported`); GL's front-face rule kept; vertex uniforms pushed in two pieces (one 2208-byte push crashed Ryujinx)** -- full `## D975` entry at file tail | BUILT + MEASURED 2026-11-16 (console Jungle co-op: decoder walk about 0.8 ms/frame lower than without it, runs not frame-identical; Ryujinx image checked; still rebakes at the 6/frame budget) |
 
 Phase 2 replaced the Phase-1 demo loop with the real `mainproc()` on real OS
 threads, compiled GE's real `src/sched.c`, and brought in PD's fast3d software
@@ -22805,3 +22806,23 @@ Reading: the replay thread's cost drops 3.3x (Surface 1) to 3.7x (Jungle co-op: 
 **Verification.** Console over nxlink (`GE_PERFSTAT=1`, title screen): one controller -> `1 controller(s)`, mask 0x1; plugging a second, third and fourth controller seated them one by one within a second (mask 0x3, 0x7, 0xf), unplugging dropped them back (0x7, 0x3); no detach/reopen loop. A first build that filtered only indices 0..3 looped (devices 4..7 detached and reopened every rescan): the driver has eight devices, not four.
 
 **Confidence.** High (direct console log of each step).
+
+## D975: Mesh cache step B on the deko3d backend (issue #10 after #12; GE_MESHGPU, off by default) -- BUILT + MEASURED 2026-11-16 (build-switch-link console over nxlink, Ryujinx; build-switch and build-linux compile)
+
+**Why.** D972 parked step B because a mesh draw cost about 25 us on the Switch GL driver. D973 made deko3d the Switch default (about 1 us per draw), which is what D972 was waiting for.
+
+**Design (port layer only).**
+- *Shaders.* `dkshgen` writes a second vertex shader per combiner (`<id>.mesh.vert`): `mtx[32]`, fog colour, fog multiplier/offset/mode and LOD masks in a vertex-stage uniform block (binding 2, `DkMeshUniforms` in `gfx_dk_layout.h`, std140); same transform, fog and LOD formulas as the GL twin. The pack entry's spare word became `mesh_vert_off/len` (named entries carry `-`).
+- *Buffers.* One immutable memory block per mesh; deletion deferred to the submission serial that last referenced it (retired with the rings).
+- *Fog colour.* A live draw uniform on both backends; the bake key no longer hashes `G_SETFOGCOLOR`, which changes every frame in Jungle (the rebake storm D972 described).
+- *No twin, no bake.* A combiner outside the pack is drawn by the uber-shader, which has no twin; `dk_mesh_draw` would draw nothing. New `GfxRenderingAPI::mesh_supported(id0, id1)` (null on GL = all), passed through the frame recorder unwrapped (pure, reads the NRO-embedded pack); `mc_bake_tri` refuses with `no-mesh-shader`.
+- *Culling.* GL's rule unchanged (`invert_y ? CW : CCW`). The deko3d header's "winding is mirrored" reasoning predicted the opposite; the mirrored rule showed object insides on the console, the GL rule renders correctly in Ryujinx. The header comment now says so.
+- *Uniform upload.* Two pushes per mesh draw: the tail (fog, LOD, 160 bytes) and only the `nmtx` matrices the mesh indexes. A single 2208-byte `dkCmdBufPushConstants` crashed Ryujinx (`ConstantBufferUpdater.Update: Destination is too short`; its inline cache holds 512 words); the console accepted it.
+
+**Console (docked, Jungle co-op `-level_37 -hard0 GE_COOP=1 GE_PADS=2 GE_PERFSTAT=1`, 40 s, 8 reports).** 133-194 GPU replays per frame (3200-4700 triangles, 0.6-0.9 ms of decoder time), `uber_draws=0`, 59-60 fps, clean exit. Decoder walk 5.1-6.8 ms per report against 5.8-8.3 ms in a run without `GE_MESHGPU`; on the two reports where both runs saw the same scene, 7.22/8.27 -> 6.42/7.44 ms. The runs drift apart after that (not frame-deterministic, D117), so read the gain as about 0.8 ms, not a precise figure.
+
+**Open.** Bakes stay at the budget (6 per frame, 1800 per report) for the whole run: entries keep rebaking. CPU replays by reason per frame: env colour change 25-72, near plane 35-63, far plane 19-30, not baked 20-50. Env colour is the next candidate for a draw uniform, as fog was.
+
+**Not a port bug (checked while testing).** Jungle fern leaves drawn over leaves in front of them: same picture in v0.1.0, v0.2.0 and in ares v148 on the original ROM (an N64 accuracy reference). N64 behaviour, kept.
+
+**Confidence.** High that it renders correctly (Ryujinx image, console run without errors). Medium on the gain (two runs, scenes diverge).

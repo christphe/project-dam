@@ -33,6 +33,7 @@ struct GfxMeshDraw {
     uint8_t cull;              /* 0 none, 1 back, 2 front (N64 sense, y up) */
     bool invert_y;             /* the target is drawn y-flipped: front faces are clockwise */
     bool fog_from_z;           /* fog alpha from clip z/w (RSP G_FOG) instead of the attribute */
+    float fog_color[4];        /* live RDP fog RGB (kept out of the baked vertices) */
     float fog_mul, fog_off;
     float lod_mask[GFX_MESH_MAX_INPUTS][4];   /* 1: that input component is the LOD fraction (from w) */
     uint32_t frame_count;      /* uniform values latched with the program (as load_shader_with) */
@@ -104,6 +105,10 @@ struct GfxRenderingAPI {
     uint32_t (*mesh_create)(const float* data, size_t nfloats);
     void (*mesh_delete)(uint32_t name);
     void (*mesh_draw)(uint32_t name, const struct GfxMeshDraw* d);
+    /* Whether the program (id0, id1) has a GPU-transform twin. Pure and safe
+     * from the decoder thread (the frame recorder passes it through). Null:
+     * every program does (GL compiles the twin on demand). */
+    bool (*mesh_supported)(uint64_t id0, uint32_t id1);
 };
 
 #endif

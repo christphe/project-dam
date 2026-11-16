@@ -46,7 +46,7 @@ struct ShaderProgram {
     GLuint ring_vao;   /* D965: VAO of this shader's vertex layout (GE_GLSTREAM), 0 = not resolved */
     /* issue #10 step B: GPU-transform twin (same fragment shader) */
     struct ShaderProgram* twin;
-    GLint mesh_mtx_location, mesh_fog_location, mesh_lod_location;
+    GLint mesh_mtx_location, mesh_fog_location, mesh_fog_color_location, mesh_lod_location;
     uint64_t id0;
     uint32_t id1;
 };
@@ -407,6 +407,7 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
          * gfx_tri_emit compute them on the CPU. */
         vs_len += sprintf(vs_buf + vs_len, "uniform mat4 uMeshMtx[%d];\n", GFX_MESH_MAX_MTX);
         append_line(vs_buf, &vs_len, "uniform vec4 uMeshFog;");
+        append_line(vs_buf, &vs_len, "uniform vec4 uMeshFogColor;");
         vs_len += sprintf(vs_buf + vs_len, "uniform vec4 uMeshLod[%d];\n", GFX_MESH_MAX_INPUTS);
     }
     append_line(vs_buf, &vs_len, "void main() {");
@@ -428,7 +429,7 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
     if (cc_features.opt_fog) {
         if (mesh) {
             append_line(vs_buf, &vs_len, "    float fw = abs(mp.w) < 0.001 ? 0.001 : mp.w;");
-            append_line(vs_buf, &vs_len, "    vFog = vec4(aFog.rgb, uMeshFog.z > 0.5 ? floor(clamp(mp.z / fw * uMeshFog.x + uMeshFog.y, 0.0, 255.0)) / 255.0 : aFog.a);");
+            append_line(vs_buf, &vs_len, "    vFog = vec4(uMeshFogColor.rgb, uMeshFog.z > 0.5 ? floor(clamp(mp.z / fw * uMeshFog.x + uMeshFog.y, 0.0, 255.0)) / 255.0 : aFog.a);");
         } else {
             append_line(vs_buf, &vs_len, "    vFog = aFog;");
         }
@@ -839,6 +840,7 @@ static void gfx_opengl_compile_program(uint64_t shader_id0, uint32_t shader_id1,
     prg->three_point_filter_locations[1] = glGetUniformLocation(shader_program, "three_point_filter1");
     prg->mesh_mtx_location = mesh ? glGetUniformLocation(shader_program, "uMeshMtx") : -1;
     prg->mesh_fog_location = mesh ? glGetUniformLocation(shader_program, "uMeshFog") : -1;
+    prg->mesh_fog_color_location = mesh ? glGetUniformLocation(shader_program, "uMeshFogColor") : -1;
     prg->mesh_lod_location = mesh ? glGetUniformLocation(shader_program, "uMeshLod") : -1;
     prg->ring_vao = 0;
 }
@@ -1365,6 +1367,7 @@ static void gfx_opengl_mesh_draw(uint32_t name, const struct GfxMeshDraw* d) {
     gfx_opengl_set_uniform_values(tw, d->frame_count, d->noise_scale, d->tpf0, d->tpf1);
     glUniformMatrix4fv(tw->mesh_mtx_location, (GLsizei)d->nmtx, GL_FALSE, &d->mtx[0][0]);
     glUniform4f(tw->mesh_fog_location, d->fog_mul, d->fog_off, d->fog_from_z ? 1.0f : 0.0f, 0.0f);
+    glUniform4fv(tw->mesh_fog_color_location, 1, d->fog_color);
     if (tw->mesh_lod_location >= 0) {
         glUniform4fv(tw->mesh_lod_location, GFX_MESH_MAX_INPUTS, &d->lod_mask[0][0]);
     }
@@ -2687,5 +2690,6 @@ struct GfxRenderingAPI gfx_opengl_api = {
     gfx_opengl_load_shader_with,
     gfx_opengl_mesh_create,
     gfx_opengl_mesh_delete,
-    gfx_opengl_mesh_draw
+    gfx_opengl_mesh_draw,
+    nullptr,   /* mesh_supported: every program */
 };

@@ -1037,7 +1037,7 @@ static void mc_gpu_prepass(const McEntry* e, uint64_t* key, uint64_t* sig, uint6
     uint64_t k = 1469598103934665603ULL, pk = k;
     uint64_t sg[MCS_N];
     for (int i = 0; i < MCS_N; i++) sg[i] = 1469598103934665603ULL;
-    struct RGBA env = rdp.env_color, prim = rdp.prim_color, fog = rdp.fog_color, gray = rdp.grayscale_color;
+    struct RGBA env = rdp.env_color, prim = rdp.prim_color, gray = rdp.grayscale_color;
     uint8_t lodf = rdp.prim_lod_fraction;
     uint64_t g = 1469598103934665603ULL;
     /* the vertex-pipeline state a G_VTX bakes in (lighting / fog / texgen
@@ -1077,7 +1077,8 @@ static void mc_gpu_prepass(const McEntry* e, uint64_t* key, uint64_t* sig, uint6
                 sg[MCS_SEG] = mc_mix(sg[MCS_SEG], (uint64_t)seg);
                 if (cu & MC_CU_PRIM) sg[MCS_PRIM] = mc_mix(sg[MCS_PRIM], mc_rgba(prim));
                 if (cu & MC_CU_ENV) sg[MCS_ENV] = mc_mix(sg[MCS_ENV], mc_rgba(env));
-                if (cu & MC_CU_FOG) sg[MCS_FOG] = mc_mix(sg[MCS_FOG], mc_rgba(fog));
+                /* Fog RGB is a draw uniform (GE_MESHGPU): it changes every
+                 * Jungle frame and must not invalidate the static mesh. */
                 if (cu & MC_CU_GRAY) sg[MCS_GRAY] = mc_mix(sg[MCS_GRAY], mc_rgba(gray));
                 if (cu & MC_CU_LODF) sg[MCS_LODF] = mc_mix(sg[MCS_LODF], lodf);
                 dirty = false;
@@ -1093,8 +1094,7 @@ static void mc_gpu_prepass(const McEntry* e, uint64_t* key, uint64_t* sig, uint6
                     prim = { (uint8_t)C1(24, 8), (uint8_t)C1(16, 8), (uint8_t)C1(8, 8), (uint8_t)C1(0, 8) };
                     break;
                 case G_SETFOGCOLOR:
-                    fog = { (uint8_t)C1(24, 8), (uint8_t)C1(16, 8), (uint8_t)C1(8, 8), (uint8_t)C1(0, 8) };
-                    break;
+                    break;  /* live mesh draw uniform, intentionally not in its bake key */
                 case G_SETINTENSITY_EXT:
                     gray = { (uint8_t)C1(24, 8), (uint8_t)C1(16, 8), (uint8_t)C1(8, 8), (uint8_t)C1(0, 8) };
                     break;
@@ -1141,6 +1141,15 @@ static void mc_bake_tri(const McEntry* e, McBake* bk, int seg, uint8_t i1, uint8
     const uint8_t cull = gm == G_CULL_BOTH ? 3 : gm == G_CULL_BACK ? 1 : gm == G_CULL_FRONT ? 2 : 0;
     if (bk->runs.empty() || bk->runs.back().seg != seg || bk->runs.back().cull != cull ||
         bk->runs.back().fog_from_z != fogz) {
+        /* deko3d: a combiner outside the shader pack is drawn by the uber-shader,
+         * which has no GPU-transform twin; its runs stay on the CPU path. */
+        if (gfx_rapi->mesh_supported != nullptr &&
+            (sg.ts.comb == nullptr ||
+             !gfx_rapi->mesh_supported(sg.ts.comb->shader_id0,
+                                       sg.ts.comb->shader_id1 | (sg.ts.tm * SHADER_OPT_TEXEL0_CLAMP_S)))) {
+            bk->bad = "no-mesh-shader";
+            return;
+        }
         McRun r;
         memset(&r, 0, sizeof(r));
         r.seg = (uint16_t)seg;
@@ -1389,6 +1398,10 @@ static bool mc_replay_gpu(McEntry* e) {
         d.nverts = r.nverts;
         d.cull = r.cull;
         d.fog_from_z = r.fog_from_z;
+        d.fog_color[0] = rdp.fog_color.r / 255.0f;
+        d.fog_color[1] = rdp.fog_color.g / 255.0f;
+        d.fog_color[2] = rdp.fog_color.b / 255.0f;
+        d.fog_color[3] = rdp.fog_color.a / 255.0f;
         memcpy(d.lod_mask, r.lod_mask, sizeof(d.lod_mask));
         gfx_rapi->mesh_draw(g->mesh_id, &d);
         s_mc_g_runs++;
