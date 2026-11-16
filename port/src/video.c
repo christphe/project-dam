@@ -82,6 +82,7 @@ static int cfgFXAA          = 0;
 static int cfgMSAA          = 2;   /* 1/2/4/8/16 samples; 2x default is lighter on low-end GPUs */
 #endif
 extern int portSkyPlus;   /* port/src/skyplus.c: Video.SkyPlus */
+extern int portLandmarks; /* port/src/drawdistgameplay.c: Video.Landmarks (D979) */
 static int cfgTexFilter     = 1;   /* 0 = nearest, 1 = bilinear (default), 2 = N64 3-point + trilinear, 3 = trilinear (Trilinear option, playtest 2026-10-03) */
 static int cfgFixMipTex     = 1;   /* RC2: clip mip-contaminated texture uploads to base height */
 static int cfgDetailBaseTile = 1;  /* D236: TEXTURETYPE_DETAIL -> sample the base image, not the detail tile */
@@ -655,6 +656,7 @@ PD_CONSTRUCTOR static void videoConfigInit(void)
     configRegisterInt("Video.FpsCap",        &cfgFpsCap,    -1, 1000);
     configRegisterInt("Video.FXAA",          &cfgFXAA,       0, 1);
     configRegisterInt("Video.SkyPlus",       &portSkyPlus,   0, 1);   /* GE+ sky (skyplus.c) */
+    configRegisterInt("Video.Landmarks",     &portLandmarks, 0, 1);   /* D979 (drawdistgameplay.c) */
     configRegisterInt("Video.MSAA",          &cfgMSAA,       1, 16);   /* D443: 16x added */
 #ifdef __SWITCH__
     configRegisterInt("Video.MSAAHandheld",  &cfgMSAAHandheld, 1, 16);
@@ -901,6 +903,7 @@ static const struct { const char *key; double n64, port; } kVideoPresets[] = {
     { "Video.DrawDistance",        100, 200 },   /* authored far clip (D218); D546 2.0x */
     { "Video.FogDistance",         100, 100 },   /* D540: N64 fog in both presets */
     { "Video.LodDistance",         100, 200 },   /* authored LOD switch distances (D249); D546 2.0x */
+    { "Video.Landmarks",             0,   1 },   /* D979: landmarks hidden by the room system, as the N64 */
     { "Video.DrawDistanceAutoFov",   0,   0 },   /* legacy coupling: off = identity */
     { "Video.LodDistanceAutoFov",    0,   0 },
     { "Video.FovScale",            100, 100 },   /* stock FOV (D211) */
