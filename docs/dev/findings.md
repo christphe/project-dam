@@ -22828,6 +22828,8 @@ Reading: the replay thread's cost drops 3.3x (Surface 1) to 3.7x (Jungle co-op: 
 
 Console (same command, 40 s, 8 reports): 218-290 GPU replays per frame (5300-6900 triangles, 1.2-1.5 ms), bakes 25-169 per report (new content as the players move, not churn), `changed:env` and `not-baked` gone (not-baked 0-3 per frame). CPU replays left: near plane 36-64 and far plane 22-33 per frame. Decoder walk 4.7-5.8 ms per report (first pass 5.1-6.8, no `GE_MESHGPU` 5.8-8.3), 58-60 fps, `uber_draws=0`, clean exit. Ryujinx (`-level_41`): image unchanged, bakes 0, 258 GPU replays per frame.
 
+**`GE_MESHGPU_FULL=1` (measurement switch, off).** Skips the near/far-plane box test in `mc_replay_gpu`, so those meshes are clipped by the GPU instead of the N64's CPU near clip and whole-triangle far reject. Console, same command: decoder walk 2.5-3.9 ms per report (4.7-5.8 without it), 250-351 GPU replays per frame (7200-10400 triangles), almost no CPU replays left (not-baked 0-3 per frame), GPU time unchanged (2.4 ms per frame), 58-60 fps, clean exit. Not checked by eye: GPU clipping differs from the N64's at the far plane (mostly in fog) and near the camera.
+
 **Open.** Fog colour is read after the list's ops walk, so a list that sets fog colour mid-list would draw with its last value (not seen in the census). Near/far-plane objects stay on the CPU path.
 
 **Not a port bug (checked while testing).** Jungle fern leaves drawn over leaves in front of them: same picture in v0.1.0, v0.2.0 and in ares v148 on the original ROM (an N64 accuracy reference). N64 behaviour, kept.

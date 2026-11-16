@@ -1005,6 +1005,18 @@ static int mc_gpu_on(void) {
     return on && gfx_fog_vertex;   /* GE_FOGPIXEL (fog * w attribute) is not handled */
 }
 
+/* GE_MESHGPU_FULL=1 (measurement only): skip the near/far-plane box test and
+ * let the GPU clip those meshes too (not the N64's CPU clip/reject rules). */
+static int mc_gpu_full(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char* e = getenv("GE_MESHGPU_FULL");
+        on = (e && e[0] && e[0] != '0') ? 1 : 0;
+        if (on) sysLogPrintf(LOG_NOTE, "GE_MESHGPU_FULL: near/far-plane meshes also drawn on the GPU (measurement)");
+    }
+    return on;
+}
+
 static void mc_gpu_why(const char* why) {
     if (gfx_perfstat_on()) s_mc_g_why[why]++;
 }
@@ -1312,7 +1324,7 @@ static bool mc_replay_gpu(McEntry* e) {
         return false;
     }
     /* the matrices this replay will load, simulated: is any part near the camera? */
-    {
+    if (!mc_gpu_full()) {
         static float mv[11][4][4];
         int mvsize = rsp.modelview_matrix_stack_size;
         if (mvsize < 1) { mc_gpu_why("matrix-stack"); return false; }
