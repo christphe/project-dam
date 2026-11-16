@@ -1183,9 +1183,11 @@ void dk_mesh_draw(uint32_t name, const struct GfxMeshDraw* d) {
     u.fog_off = d->fog_off;
     u.fog_from_z = d->fog_from_z;
     memcpy(u.lod_mask, d->lod_mask, sizeof u.lod_mask);
+    memcpy(u.env_in, d->env_in, sizeof u.env_in);
+    memcpy(u.env_mask, d->env_mask, sizeof u.env_mask);
     DkBufExtents ub = { s_ubo.gpu + 512, (uint32_t)sizeof u };
     dkCmdBufBindUniformBuffers(s_cmd, DkStage_Vertex, 2, &ub, 1);
-    /* Two pushes: the tail (fog, LOD masks), then only the nmtx matrices the
+    /* Two pushes: the tail (fog, LOD and env), then only the nmtx matrices the
      * mesh indexes. One 2208-byte push crashed Ryujinx (its inline constant
      * buffer cache holds 512 words), and most lists use a few matrices. */
     const uint32_t tail = (uint32_t)offsetof(DkMeshUniforms, fog_color);

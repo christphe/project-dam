@@ -47,6 +47,7 @@ struct ShaderProgram {
     /* issue #10 step B: GPU-transform twin (same fragment shader) */
     struct ShaderProgram* twin;
     GLint mesh_mtx_location, mesh_fog_location, mesh_fog_color_location, mesh_lod_location;
+    GLint mesh_env_location, mesh_env_mask_location;
     uint64_t id0;
     uint32_t id1;
 };
@@ -409,6 +410,8 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
         append_line(vs_buf, &vs_len, "uniform vec4 uMeshFog;");
         append_line(vs_buf, &vs_len, "uniform vec4 uMeshFogColor;");
         vs_len += sprintf(vs_buf + vs_len, "uniform vec4 uMeshLod[%d];\n", GFX_MESH_MAX_INPUTS);
+        vs_len += sprintf(vs_buf + vs_len, "uniform vec4 uMeshEnv[%d];\n", GFX_MESH_MAX_INPUTS);
+        vs_len += sprintf(vs_buf + vs_len, "uniform vec4 uMeshEnvMask[%d];\n", GFX_MESH_MAX_INPUTS);
     }
     append_line(vs_buf, &vs_len, "void main() {");
     if (mesh) {
@@ -440,9 +443,13 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
     for (int i = 0; i < cc_features.num_inputs; i++) {
         if (mesh && i < GFX_MESH_MAX_INPUTS) {
             if (cc_features.opt_alpha) {
-                vs_len += sprintf(vs_buf + vs_len, "    vInput%d = mix(aInput%d, vec4(lodv), uMeshLod[%d]);\n", i + 1, i + 1, i);
+                vs_len += sprintf(vs_buf + vs_len,
+                                  "    vInput%d = mix(mix(aInput%d, vec4(lodv), uMeshLod[%d]), uMeshEnv[%d], uMeshEnvMask[%d]);\n",
+                                  i + 1, i + 1, i, i, i);
             } else {
-                vs_len += sprintf(vs_buf + vs_len, "    vInput%d = mix(aInput%d, vec3(lodv), uMeshLod[%d].xyz);\n", i + 1, i + 1, i);
+                vs_len += sprintf(vs_buf + vs_len,
+                                  "    vInput%d = mix(mix(aInput%d, vec3(lodv), uMeshLod[%d].xyz), uMeshEnv[%d].xyz, uMeshEnvMask[%d].xyz);\n",
+                                  i + 1, i + 1, i, i, i);
             }
         } else {
             vs_len += sprintf(vs_buf + vs_len, "    vInput%d = aInput%d;\n", i + 1, i + 1);
@@ -842,6 +849,8 @@ static void gfx_opengl_compile_program(uint64_t shader_id0, uint32_t shader_id1,
     prg->mesh_fog_location = mesh ? glGetUniformLocation(shader_program, "uMeshFog") : -1;
     prg->mesh_fog_color_location = mesh ? glGetUniformLocation(shader_program, "uMeshFogColor") : -1;
     prg->mesh_lod_location = mesh ? glGetUniformLocation(shader_program, "uMeshLod") : -1;
+    prg->mesh_env_location = mesh ? glGetUniformLocation(shader_program, "uMeshEnv") : -1;
+    prg->mesh_env_mask_location = mesh ? glGetUniformLocation(shader_program, "uMeshEnvMask") : -1;
     prg->ring_vao = 0;
 }
 
@@ -1370,6 +1379,12 @@ static void gfx_opengl_mesh_draw(uint32_t name, const struct GfxMeshDraw* d) {
     glUniform4fv(tw->mesh_fog_color_location, 1, d->fog_color);
     if (tw->mesh_lod_location >= 0) {
         glUniform4fv(tw->mesh_lod_location, GFX_MESH_MAX_INPUTS, &d->lod_mask[0][0]);
+    }
+    if (tw->mesh_env_location >= 0) {
+        glUniform4fv(tw->mesh_env_location, GFX_MESH_MAX_INPUTS, &d->env_in[0][0]);
+    }
+    if (tw->mesh_env_mask_location >= 0) {
+        glUniform4fv(tw->mesh_env_mask_location, GFX_MESH_MAX_INPUTS, &d->env_mask[0][0]);
     }
     glBindVertexArray(s_mesh_vao);
     glBindBuffer(GL_ARRAY_BUFFER, name);

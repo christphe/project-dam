@@ -160,6 +160,8 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
               "    vec4 fog_color;\n"
               "    float fog_mul; float fog_off; int fog_from_z;\n"
               "    vec4 lod_mask[8];\n"
+              "    vec4 env_in[8];\n"
+              "    vec4 env_mask[8];\n"
               "};\n";
     }
     vs += "void main() {\n";
@@ -184,8 +186,11 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
     }
     if (f.opt_grayscale) vs += "    vGrayscaleColor = aGrayscaleColor;\n";
     for (int i = 0; i < f.num_inputs; i++) {
-        if (mesh) vs += fmt("    vInput%d = mix(aInput%d, vec%d(lodv), lod_mask[%d]%s);\n", i + 1, i + 1, nin, i,
-                            nin == 3 ? ".xyz" : "");
+        if (mesh) {
+            const char* sw = nin == 3 ? ".xyz" : "";
+            vs += fmt("    vInput%d = mix(mix(aInput%d, vec%d(lodv), lod_mask[%d]%s), env_in[%d]%s, env_mask[%d]%s);\n",
+                      i + 1, i + 1, nin, i, sw, i, sw, i, sw);
+        }
         else vs += fmt("    vInput%d = aInput%d;\n", i + 1, i + 1);
     }
     vs += mesh ? "    gl_Position = mp;\n" : "    gl_Position = aVtxPos;\n";

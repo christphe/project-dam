@@ -182,7 +182,11 @@ struct McRun {                /* consecutive triangles drawn with one segment's 
     uint32_t byte_offset;     /* in the mesh buffer */
     uint32_t nverts;
     float lod_mask[GFX_MESH_MAX_INPUTS][4];
+    /* per input, which components read the env colour live at the list's entry
+     * (MC_ENV_*); 0 once the list sets its own env colour (then it is baked) */
+    uint8_t env_sel[GFX_MESH_MAX_INPUTS];
 };
+enum { MC_ENV_RGB = 1, MC_ENV_AAA = 2, MC_ENV_A = 4 };
 
 struct McGpu {
     uint64_t key;             /* vertex source pointers + bytes */
@@ -1015,6 +1019,8 @@ struct McBake {
     McBakeSrc src[MAX_VERTICES];
     int slot;
     const char* bad;
+    bool env_in_list;   /* a G_SETENVCOLOR of the list has run: env is baked from here on */
+    bool new_run;       /* start a run at the next triangle */
     std::vector<float> data;
     std::vector<McRun> runs;
     float box[GFX_MESH_MAX_MTX][6];
@@ -1047,6 +1053,7 @@ static void mc_gpu_prepass(const McEntry* e, uint64_t* key, uint64_t* sig, uint6
     uint64_t lastv = ~0ULL;
     /* only the colours a triangle actually reads (its segment's combiner), in order */
     bool dirty = true;
+    bool env_list = false;   /* env colour set by the list itself (baked); before that it is a draw uniform */
     int seg = -1;
     for (const McOp& op : e->ops) {
         if (op.k == MCO_GEOM) {
@@ -1076,7 +1083,9 @@ static void mc_gpu_prepass(const McEntry* e, uint64_t* key, uint64_t* sig, uint6
                 const uint8_t cu = e->segs[seg].colour_use;
                 sg[MCS_SEG] = mc_mix(sg[MCS_SEG], (uint64_t)seg);
                 if (cu & MC_CU_PRIM) sg[MCS_PRIM] = mc_mix(sg[MCS_PRIM], mc_rgba(prim));
-                if (cu & MC_CU_ENV) sg[MCS_ENV] = mc_mix(sg[MCS_ENV], mc_rgba(env));
+                /* the entry env colour is a draw uniform (GE_MESHGPU): objects
+                 * set it per instance (fades, tints) before calling the list */
+                if ((cu & MC_CU_ENV) && env_list) sg[MCS_ENV] = mc_mix(sg[MCS_ENV], mc_rgba(env));
                 /* Fog RGB is a draw uniform (GE_MESHGPU): it changes every
                  * Jungle frame and must not invalidate the static mesh. */
                 if (cu & MC_CU_GRAY) sg[MCS_GRAY] = mc_mix(sg[MCS_GRAY], mc_rgba(gray));
@@ -1088,6 +1097,7 @@ static void mc_gpu_prepass(const McEntry* e, uint64_t* key, uint64_t* sig, uint6
             switch (op.a) {
                 case G_SETENVCOLOR:
                     env = { (uint8_t)C1(24, 8), (uint8_t)C1(16, 8), (uint8_t)C1(8, 8), (uint8_t)C1(0, 8) };
+                    env_list = true;
                     break;
                 case G_SETPRIMCOLOR:
                     lodf = (uint8_t)C0(0, 8);
@@ -1139,7 +1149,7 @@ static void mc_bake_tri(const McEntry* e, McBake* bk, int seg, uint8_t i1, uint8
     }
     const uint32_t gm = rsp.geometry_mode & G_CULL_BOTH;
     const uint8_t cull = gm == G_CULL_BOTH ? 3 : gm == G_CULL_BACK ? 1 : gm == G_CULL_FRONT ? 2 : 0;
-    if (bk->runs.empty() || bk->runs.back().seg != seg || bk->runs.back().cull != cull ||
+    if (bk->runs.empty() || bk->new_run || bk->runs.back().seg != seg || bk->runs.back().cull != cull ||
         bk->runs.back().fog_from_z != fogz) {
         /* deko3d: a combiner outside the shader pack is drawn by the uber-shader,
          * which has no GPU-transform twin; its runs stay on the CPU path. */
@@ -1156,6 +1166,18 @@ static void mc_bake_tri(const McEntry* e, McBake* bk, int seg, uint8_t i1, uint8
         r.cull = cull;
         r.fog_from_z = fogz;
         r.byte_offset = (uint32_t)(bk->data.size() * sizeof(float));
+        /* inputs that read the entry env colour (as mc_emit_vertex does):
+         * k = 0 writes rgb, k = 1 (use_alpha) writes a */
+        if (!bk->env_in_list && sg.ts.comb != nullptr) {
+            for (int j = 0; j < sg.ts.num_inputs && j < GFX_MESH_MAX_INPUTS; j++) {
+                const uint8_t m0 = sg.ts.comb->shader_input_mapping[0][j];
+                if (m0 == G_CCMUX_ENVIRONMENT) r.env_sel[j] |= MC_ENV_RGB;
+                else if (m0 == G_CCMUX_ENV_ALPHA) r.env_sel[j] |= MC_ENV_AAA;
+                if (sg.ts.use_alpha && sg.ts.comb->shader_input_mapping[1][j] == G_CCMUX_ENVIRONMENT)
+                    r.env_sel[j] |= MC_ENV_A;
+            }
+        }
+        bk->new_run = false;
         bk->runs.push_back(r);
     }
     McRun& run = bk->runs.back();
@@ -1321,6 +1343,7 @@ static bool mc_replay_gpu(McEntry* e) {
     static struct GfxMeshDraw d;
     float pal[GFX_MESH_MAX_MTX][4][4];
     int slot = 0;
+    const struct RGBA env0 = rdp.env_color;   /* entry value: runs with env_sel read it, the walk below may change it */
     memcpy(pal[0], rsp.MP_matrix, sizeof(pal[0]));
     for (const McOp& op : e->ops) {
         switch (op.k) {
@@ -1403,6 +1426,23 @@ static bool mc_replay_gpu(McEntry* e) {
         d.fog_color[2] = rdp.fog_color.b / 255.0f;
         d.fog_color[3] = rdp.fog_color.a / 255.0f;
         memcpy(d.lod_mask, r.lod_mask, sizeof(d.lod_mask));
+        {
+            const float* L = s_mc_lut255;   /* the values mc_emit_vertex would have baked */
+            for (int j = 0; j < GFX_MESH_MAX_INPUTS; j++) {
+                const uint8_t es = r.env_sel[j];
+                const float rgb = (es & (MC_ENV_RGB | MC_ENV_AAA)) ? 1.0f : 0.0f;
+                d.env_mask[j][0] = d.env_mask[j][1] = d.env_mask[j][2] = rgb;
+                d.env_mask[j][3] = es & MC_ENV_A ? 1.0f : 0.0f;
+                if (es & MC_ENV_AAA) {
+                    d.env_in[j][0] = d.env_in[j][1] = d.env_in[j][2] = L[env0.a];
+                } else {
+                    d.env_in[j][0] = L[env0.r];
+                    d.env_in[j][1] = L[env0.g];
+                    d.env_in[j][2] = L[env0.b];
+                }
+                d.env_in[j][3] = L[env0.a];
+            }
+        }
         gfx_rapi->mesh_draw(g->mesh_id, &d);
         s_mc_g_runs++;
         s_mc_g_tris += r.nverts / 3;
@@ -1516,6 +1556,10 @@ static void mc_replay(McEntry* e, McBake* bk = nullptr) {
                 switch (op.a) {
                     case G_SETENVCOLOR:
                         gfx_dp_set_env_color(C1(24, 8), C1(16, 8), C1(8, 8), C1(0, 8));
+                        if (bk != nullptr) {   /* the list's own env colour: baked from here on */
+                            bk->env_in_list = true;
+                            bk->new_run = true;
+                        }
                         break;
                     case G_SETPRIMCOLOR:
                         gfx_dp_set_prim_color(C0(8, 8), C0(0, 8), C1(24, 8), C1(16, 8), C1(8, 8), C1(0, 8));
@@ -1757,6 +1801,8 @@ static bool mc_try(Gfx* dl) {
                 memset(bk.src, 0, sizeof(bk.src));
                 bk.slot = 0;
                 bk.bad = nullptr;
+                bk.env_in_list = false;
+                bk.new_run = false;
                 bk.data.clear();
                 bk.runs.clear();
                 for (int k = 0; k < GFX_MESH_MAX_MTX; k++) {

@@ -36,6 +36,8 @@ struct GfxMeshDraw {
     float fog_color[4];        /* live RDP fog RGB (kept out of the baked vertices) */
     float fog_mul, fog_off;
     float lod_mask[GFX_MESH_MAX_INPUTS][4];   /* 1: that input component is the LOD fraction (from w) */
+    float env_in[GFX_MESH_MAX_INPUTS][4];     /* live RDP env colour as each input reads it ... */
+    float env_mask[GFX_MESH_MAX_INPUTS][4];   /* ... and 1 where that component comes from it */
     uint32_t frame_count;      /* uniform values latched with the program (as load_shader_with) */
     float noise_scale;
     bool tpf0, tpf1;

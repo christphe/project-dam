@@ -100,6 +100,8 @@ struct DkMeshUniforms {
     int32_t fog_from_z;
     int32_t pad0;
     float lod_mask[8][4];
+    float env_in[8][4];     /* live env colour per input (GE_MESHGPU) */
+    float env_mask[8][4];
 };
 
 /* Uniform block `Comb` (std140, binding 1, fragment stage) of the uber-shader.
