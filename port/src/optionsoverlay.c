@@ -283,6 +283,7 @@ static struct Row rows[] = {
     { .key="Video.MSAA", .label="Anti-aliasing", .kind=ROW_MSAA, .restart=1 },
 #endif
     { .key="Video.SkyPlus", .label="Sky", .kind=ROW_ENUM, .step=1, .names=kSkyPlus },   /* GE+ sky */
+    { .key="Video.FogPixel", .label="Per-pixel fog", .kind=ROW_TOGGLE, .step=1, .names=kOnOff, .restart=1 },
     SEP(V2),
     { .key="Video.VSync", .label="VSync", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
     { .key="Video.FpsCap", .label="Frame rate cap", .kind=ROW_FPSCAP },
@@ -1151,7 +1152,7 @@ static int rowPlatformOk(const struct Row *r)
     /* Display mode Switch / N64 only shows Show FPS; Custom shows the rest. */
     static const char *const kCustomOnly[] = {
         "Video.AspectMode", "Video.NativeWidescreen", "Video.WidescreenAuto",
-        "Video.MSAAHandheld", "Video.MSAA", "Video.FXAA", "Video.SkyPlus",
+        "Video.MSAAHandheld", "Video.MSAA", "Video.FXAA", "Video.SkyPlus", "Video.FogPixel",
         "__SepV2", "Video.VSync", "Video.FpsCap",
         "__SepV3", "Video.TextureFilter", "Video.Anisotropy",
         "__SepV4", "Video.SafeAreaCrop",
@@ -2276,6 +2277,11 @@ static const struct { const char *key; double def; } kResetDefaults[] = {
 #if defined(__SWITCH__)
     { "Video.MSAAHandheld",         2 },   /* project-dam */
     { "Video.FXAA",                 1 },   /* project-dam: on */
+#endif
+#if defined(__SWITCH__)
+    { "Video.FogPixel",             1 },   /* = 1 (per-pixel) */
+#else
+    { "Video.FogPixel",             0 },   /* = 0 (N64 per-vertex) */
 #endif
 #if defined(__SWITCH__)
     { "Video.SkyPlus",              1 },   /* = 1 (GE+) */
@@ -4067,6 +4073,7 @@ static const struct { const char *key, *help; } kRowHelp[] = {
     { "Video.MSAAHandheld", "Smooths jagged edges in handheld mode. Higher is cleaner but slower." },
     { "Video.FXAA", "A final pass that smooths edges without blurring flat textures." },
     { "Video.Landmarks", "Huge landmarks (Surface's satellite dish) stay drawn when the room system would hide them." },
+    { "Video.FogPixel", "Exact fog for every pixel. Off: per-vertex fog as the N64 draws it." },
     { "Video.SkyPlus", "GE+ adds cloud layers, sun, stars and moon to the original sky." },
     { "Input.CrosshairCursor", "Uses the crosshair as the mouse pointer in this menu." },
     { "Input.ControlScheme", "Choose the port's modern controls or the original game's." },
