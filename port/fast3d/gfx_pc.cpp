@@ -44,7 +44,7 @@
 #include "gfx_rendering_api.h"
 #include "gfx_screen_config.h"
 #include "gfx_frame.h"   /* D968: decoder -> frame -> replay */
-#ifdef __SWITCH__
+#if defined(__SWITCH__) || defined(GE_VULKAN)
 #include "gfx_opengl.h"   /* gfx_opengl_fxaa_pass */
 #endif
 
@@ -432,8 +432,13 @@ void gfx_opengl_frame_count_rewind(void);
  * slots, frame-counter rewind, PERFSTAT) belong to the backend: on the Switch
  * the table is pointed at the deko3d ones in gfx_init when that backend is in
  * use (the Switch default; GE_RENDERER=gl keeps GL); elsewhere they are the GL ones. */
+#if defined(__SWITCH__) || defined(GE_VULKAN)
 #ifdef __SWITCH__
 #include "gfx_deko3d.h"
+#endif
+#ifdef GE_VULKAN
+#include "gfx_vulkan.h"   /* issue #44 */
+#endif
 static struct {
     void (*fxaa)(int);
     int (*sky_stage)(const PortSkyPlus*, const int[4], float, float);
@@ -443,7 +448,13 @@ static struct {
     void (*isync)(void);
     void (*rewind)(void);
     void (*perf)(double);
-} s_extra = { gfx_opengl_fxaa_pass, gfx_opengl_skyplus_stage, gfx_opengl_skyplus_pass, gfx_opengl_interp_store,
+} s_extra = {
+#ifdef __SWITCH__
+              gfx_opengl_fxaa_pass,
+#else
+              nullptr,   /* FXAA is Switch-only (project-dam) */
+#endif
+              gfx_opengl_skyplus_stage, gfx_opengl_skyplus_pass, gfx_opengl_interp_store,
               gfx_opengl_interp_show, gfx_opengl_interp_sync, gfx_opengl_frame_count_rewind, gfx_opengl_perf_report };
 #define GFX_X_FXAA s_extra.fxaa
 #define GFX_X_SKY_STAGE s_extra.sky_stage
@@ -6644,6 +6655,18 @@ extern "C" void gfx_init(const GfxInitSettings *settings) {
         s_extra.isync = gfx_deko3d_interp_sync;
         s_extra.rewind = gfx_deko3d_frame_count_rewind;
         s_extra.perf = gfx_deko3d_perf_report;
+    }
+#endif
+#ifdef GE_VULKAN
+    if (settings->rapi == &gfx_vulkan_api) {   /* issue #44 */
+        s_extra.fxaa = gfx_vulkan_fxaa_pass;
+        s_extra.sky_stage = gfx_vulkan_skyplus_stage;
+        s_extra.sky_pass = gfx_vulkan_skyplus_pass;
+        s_extra.istore = gfx_vulkan_interp_store;
+        s_extra.ishow = gfx_vulkan_interp_show;
+        s_extra.isync = gfx_vulkan_interp_sync;
+        s_extra.rewind = gfx_vulkan_frame_count_rewind;
+        s_extra.perf = gfx_vulkan_perf_report;
     }
 #endif
     gfx_rapi = gfx_frame_install(settings->rapi);   /* D968: the decoder talks to the frame recorder */

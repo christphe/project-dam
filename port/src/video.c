@@ -44,7 +44,11 @@ extern void exit(int status);
 extern void gfx_sdl_set_external_present(void (*present)(void), void (*dims)(uint32_t *, uint32_t *), void (*park)(void));
 extern void gfx_sdl_set_external_swap_interval(void (*set_interval)(int));
 #endif
+#include "../fast3d/gfx_vulkan.h"   /* issue #44: Vulkan on PC with GE_RENDERER=vk */
 #include "../fast3d/gfx_frame.h"   /* D969: replay thread */
+#ifdef GE_VULKAN
+static int s_vulkanActive = 0;   /* issue #44: the Vulkan backend was selected */
+#endif
 
 /* GE's internal resolution before the game's first osViSetMode (which then
  * sets the real CFB size): NTSC 640x480; PAL is taller, not shorter -- the EU
@@ -861,6 +865,9 @@ static void videoApplyLowEndDefaults(void)
 #ifdef __SWITCH__
     if (gfx_deko3d_wanted()) r = gfx_deko3d_renderer_string();   /* D973 */
 #endif
+#ifdef GE_VULKAN
+    if (s_vulkanActive) r = gfx_vulkan_renderer_string();   /* issue #44 */
+#endif
     const char *why = "";
     const char *fake = getenv("GE_FAKE_LOWEND");
     int low;
@@ -1331,6 +1338,21 @@ int videoInit(void)
         sysLogPrintf(LOG_NOTE, "video: renderer deko3d (default; GE_RENDERER=gl selects GL)");
     }
 #endif
+#ifdef GE_VULKAN
+    /* issue #44: Vulkan backend, opt-in until it matches GL; no usable driver -> GL */
+    if (gfx_vulkan_wanted()) {
+        if (gfx_vulkan_probe()) {
+            renderingAPI = &gfx_vulkan_api;
+            gfx_sdl_set_vulkan_window(true);
+            gfx_sdl_set_external_present(gfx_vulkan_present, gfx_vulkan_get_dimensions, gfx_vulkan_park);
+            gfx_sdl_set_external_swap_interval(gfx_vulkan_set_swap_interval);
+            s_vulkanActive = 1;
+            sysLogPrintf(LOG_NOTE, "video: renderer Vulkan (GE_RENDERER=vk)");
+        } else {
+            sysLogPrintf(LOG_WARNING, "video: GE_RENDERER=vk but no usable Vulkan 1.3 driver; using OpenGL");
+        }
+    }
+#endif
 
     gfx_current_native_viewport.width = GE_NATIVE_W;
     gfx_current_native_viewport.height = GE_NATIVE_H;
@@ -1513,7 +1535,7 @@ void videoTeardownForExit(void)
         return;
     }
     gfx_sdl_teardown_for_exit();
-    sysLogPrintf(LOG_INFO, "video: GL context and window destroyed");
+    sysLogPrintf(LOG_INFO, s_vulkanActive ? "video: window destroyed" : "video: GL context and window destroyed");
 }
 
 /* Host thread: exit once the render thread is out of the GL driver. */
@@ -1800,6 +1822,17 @@ void videoSubmitCommands(Gfx *cmds)
  * the swap is undefined on buffer-exchange drivers (Mesa/WSLg) -> black. */
 static void videoPreSwapCapture(void)
 {
+#ifdef GE_VULKAN
+    if (s_vulkanActive) {   /* issue #44: no readback of the presented image yet */
+        static int warned = 0;
+        if (!warned && (configGetFrameDump() || screenshotReq)) {
+            warned = 1;
+            sysLogPrintf(LOG_WARNING, "video: GE_PCDUMP / screenshots are not implemented under Vulkan yet");
+        }
+        screenshotReq = 0;
+        return;
+    }
+#endif
     /* GE_PCDUMP="first-last" / "first-last:step" -> ./ppm/frame_NNNNNN.ppm.
      * Also honours [Debug] FrameDump in ge007.ini (env var wins). */
     const char *pcdump = configGetFrameDump();
