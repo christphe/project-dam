@@ -58,6 +58,7 @@ layout(std140, binding = 1) uniform Comb {
 #define CF_CLAMP_T0  (1u << 12)
 #define CF_CLAMP_S1  (1u << 13)
 #define CF_CLAMP_T1  (1u << 14)
+#define CF_A2C       (1u << 15)   // D984: alpha-to-coverage draw
 
 #define WRAP(x, low, high) mod((x)-(low), (high)-(low)) + (low)
 #define TEX_OFFSET(tex, uv, texSize, off) texture(tex, uv - (off)/texSize)
@@ -193,7 +194,9 @@ void main() {
         texel.rgb = mix(texel.rgb, vFog.rgb, fogA);
     }
     if (A && (flags & CF_TEXEDGE) != 0u) {
-        if ((flags & CF_NOISE) != 0u) {
+        if ((flags & CF_A2C) != 0u && (flags & CF_ATHRESH) == 0u) {
+            texel.a = clamp((texel.a - 0.5) / max(fwidth(texel.a), 1.0 / 1024.0) + 0.5, 0.0, 1.0);
+        } else if ((flags & CF_NOISE) != 0u) {
             if (texel.a < noiseVal) discard;
         } else if ((flags & CF_ATHRESH) != 0u) {
             if (texel.a < 1.0 / 256.0) discard;
@@ -212,6 +215,7 @@ void main() {
     if (A) {
         if ((flags & CF_ATHRESH) != 0u && texel.a < 8.0 / 256.0) discard;
         if ((flags & CF_INVISIBLE) != 0u) texel.a = 0.0;
+        if ((flags & CF_A2C) != 0u && texel.a < 1.0 / 256.0) discard;
         outColor = texel;
     } else {
         outColor = vec4(texel.rgb, 1.0);

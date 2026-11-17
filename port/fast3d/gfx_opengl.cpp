@@ -186,6 +186,16 @@ static size_t s_cur_stride = 0;   /* bytes per vertex of the bound shader */
 
 static struct ShaderProgram* s_cur_classic = nullptr;   /* issue #10: the program the last load bound */
 
+/* D984: alpha-to-coverage follows the bound program (SHADER_OPT_A2C); the
+ * FXAA and sky passes turn it off around their draw. */
+static bool s_a2c_on = false;
+static void gfx_opengl_set_a2c(bool on) {
+    if (on == s_a2c_on) return;
+    if (on) glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    else glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    s_a2c_on = on;
+}
+
 static void gfx_opengl_load_shader(struct ShaderProgram* new_prg) {
     // if (!new_prg) return;
     s_cur_classic = new_prg;
@@ -194,6 +204,7 @@ static void gfx_opengl_load_shader(struct ShaderProgram* new_prg) {
     s_vbo_stride = s_cur_stride;
 #endif
     glUseProgram(new_prg->opengl_program_id);
+    gfx_opengl_set_a2c((new_prg->id1 & SHADER_OPT_A2C) != 0);
     const uint64_t t0 = gl_perf_on() ? gl_now_ns() : 0;
     if (s_stream_active) {
         glBindVertexArray(gfx_opengl_ring_vao_for(new_prg));   /* D965: no per-attribute setup */
@@ -215,6 +226,7 @@ static void gfx_opengl_load_shader_with(struct ShaderProgram* new_prg, uint32_t 
     s_vbo_stride = s_cur_stride;
 #endif
     glUseProgram(new_prg->opengl_program_id);
+    gfx_opengl_set_a2c((new_prg->id1 & SHADER_OPT_A2C) != 0);
     const uint64_t t0 = gl_perf_on() ? gl_now_ns() : 0;
     if (s_stream_active) {
         glBindVertexArray(gfx_opengl_ring_vao_for(new_prg));   /* D965: no per-attribute setup */
@@ -685,7 +697,11 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
      * their alpha for blending. (AC_DECAL never sets SHADER_OPT_TEXTURE_EDGE,
      * see gfx_pc.cpp.) */
     if (cc_features.opt_texture_edge && cc_features.opt_alpha) {
-        if (cc_features.opt_noise) {
+        if (cc_features.opt_a2c && !cc_features.opt_alpha_threshold) {
+            /* D984: alpha-to-coverage cut-out: the edge sharpened to about a pixel */
+            append_line(fs_buf, &fs_len,
+                        "    texel.a = clamp((texel.a - 0.5) / max(fwidth(texel.a), 1.0 / 1024.0) + 0.5, 0.0, 1.0);");
+        } else if (cc_features.opt_noise) {
             append_line(fs_buf, &fs_len,
                         "    if (texel.a < ((random(vec3(floor(gl_FragCoord.xy * noise_scale), float(frame_count))) + 1.0) / 2.0)) discard;");
         } else if (cc_features.opt_alpha_threshold) {
@@ -713,6 +729,10 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
         }
         if (cc_features.opt_invisible) {
             append_line(fs_buf, &fs_len, "    texel.a = 0.0;");
+        }
+        if (cc_features.opt_a2c) {
+            /* D984: no depth where nothing is drawn */
+            append_line(fs_buf, &fs_len, "    if (texel.a < 1.0 / 256.0) discard;");
         }
 
         append_line(fs_buf, &fs_len, "    OUTPUT_COLOR = texel;");
@@ -2266,6 +2286,8 @@ void main() {
     glDisable(GL_CULL_FACE);
     glDisable(GL_SCISSOR_TEST);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    const bool prev_a2c = s_a2c_on;
+    gfx_opengl_set_a2c(false);
     glUseProgram(s_fxaa_prog);
     glUniform1i(s_fxaa_loc_tex, 7);
     glUniform2f(s_fxaa_loc_inv, 1.0f / (float)src.width, 1.0f / (float)src.height);
@@ -2279,6 +2301,7 @@ void main() {
 
     glBindVertexArray((GLuint)prev_vao);
     glUseProgram((GLuint)prev_prog);
+    gfx_opengl_set_a2c(prev_a2c);
     glActiveTexture((GLenum)prev_unit);
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
     glColorMask(prev_cm[0], prev_cm[1], prev_cm[2], prev_cm[3]);
@@ -2530,6 +2553,8 @@ extern "C" void gfx_opengl_skyplus_pass(int slot) {
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    const bool prev_a2c = s_a2c_on;
+    gfx_opengl_set_a2c(false);
     glUseProgram(s_skyplus_prog);
     glUniform4f(s_sp_loc[SPL_VP], (float)d.vp[0], (float)d.vp[1], (float)d.vp[2], (float)d.vp[3]);
     glUniform2f(s_sp_loc[SPL_ASP], d.aspA, d.aspB);
@@ -2556,6 +2581,7 @@ extern "C" void gfx_opengl_skyplus_pass(int slot) {
     glBindTexture(GL_TEXTURE_2D, (GLuint)prev_tex7);
     glBindVertexArray((GLuint)prev_vao);
     glUseProgram((GLuint)prev_prog);
+    gfx_opengl_set_a2c(prev_a2c);
     glActiveTexture((GLenum)prev_unit);
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
     glScissor(prev_sc[0], prev_sc[1], prev_sc[2], prev_sc[3]);

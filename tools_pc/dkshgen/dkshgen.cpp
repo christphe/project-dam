@@ -306,7 +306,10 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
                           : "    texel = mix(texel, vFog.rgb, fogA);\n";
     }
     if (f.opt_texture_edge && f.opt_alpha) {
-        if (f.opt_noise) {
+        if (f.opt_a2c && !f.opt_alpha_threshold) {
+            /* D984: alpha-to-coverage cut-out: the edge sharpened to about a pixel */
+            fs += "    texel.a = clamp((texel.a - 0.5) / max(fwidth(texel.a), 1.0 / 1024.0) + 0.5, 0.0, 1.0);\n";
+        } else if (f.opt_noise) {
             fs += "    if (texel.a < ((random(vec3(floor(gl_FragCoord.xy * noise_scale), float(frame_count))) + 1.0) / 2.0)) discard;\n";
         } else if (f.opt_alpha_threshold) {
             fs += "    if (texel.a < 1.0 / 256.0) discard;\n";
@@ -325,6 +328,7 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
     if (f.opt_alpha) {
         if (f.opt_alpha_threshold) fs += "    if (texel.a < 8.0 / 256.0) discard;\n";
         if (f.opt_invisible) fs += "    texel.a = 0.0;\n";
+        if (f.opt_a2c) fs += "    if (texel.a < 1.0 / 256.0) discard;\n";   /* D984: no depth where nothing is drawn */
         fs += "    outColor = texel;\n";
     } else {
         fs += "    outColor = vec4(texel, 1.0);\n";

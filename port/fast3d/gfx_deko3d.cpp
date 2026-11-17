@@ -386,6 +386,8 @@ int s_cur_fb = 0;
 bool s_target_dirty = true;
 int s_bound_fb = -2;
 DkMsMode s_bound_ms = DkMsMode_1x;
+bool s_bound_a2c = false;   /* D984: alpha-to-coverage in the bound multisample state */
+bool s_want_a2c = false;    /* D984: the bound program is an A2C draw (DK_CF_A2C) */
 float s_noise_scale = 1.0f;
 uint32_t s_frame_count = 0;
 
@@ -636,6 +638,21 @@ DkMsMode ms_mode(uint32_t msaa) {
     return msaa >= 8 ? DkMsMode_8x : msaa >= 4 ? DkMsMode_4x : msaa >= 2 ? DkMsMode_2x : DkMsMode_1x;
 }
 
+/* D984: the multisample state, with alpha-to-coverage for an A2C program
+ * (the fragment alpha becomes the covered-sample mask; dithered across
+ * neighbouring pixels so 2x/4x give more than 2/4 levels). */
+void bind_multisample(DkMsMode ms, bool a2c) {
+    DkMultisampleState m;
+    dkMultisampleStateDefaults(&m);
+    m.mode = ms;
+    m.rasterizerMode = ms;
+    m.alphaToCoverageEnable = a2c ? 1 : 0;
+    m.alphaToCoverageDither = a2c ? 1 : 0;
+    dkCmdBufBindMultisampleState(s_cmd, &m);
+    s_bound_ms = ms;
+    s_bound_a2c = a2c;
+}
+
 void bind_target(void) {
     const int fb = s_cur_fb;
     if (s_bound_fb != -2) {
@@ -662,13 +679,8 @@ void bind_target(void) {
     }
     const DkImageView* cvs[1] = { &cv };
     dkCmdBufBindRenderTargets(s_cmd, cvs, 1, depth ? &dv : nullptr);
-    if (ms != s_bound_ms || s_bound_fb == -2) {
-        DkMultisampleState m;
-        dkMultisampleStateDefaults(&m);
-        m.mode = ms;
-        m.rasterizerMode = ms;
-        dkCmdBufBindMultisampleState(s_cmd, &m);
-        s_bound_ms = ms;
+    if (ms != s_bound_ms || s_want_a2c != s_bound_a2c || s_bound_fb == -2) {
+        bind_multisample(ms, s_want_a2c);
     }
     s_bound_fb = fb;
     s_target_dirty = false;
@@ -714,6 +726,11 @@ void prepare_draw(void) {
 }
 
 void bind_program(ShaderProgram* p) {
+    const bool a2c = (p->params.flags & DK_CF_A2C) != 0;
+    s_want_a2c = a2c;
+    if (a2c != s_bound_a2c && !s_target_dirty) {
+        bind_multisample(s_bound_ms, a2c);   /* else bind_target applies it */
+    }
     const DkShader* sh[2] = { &p->vert, &p->frag };
     dkCmdBufBindShaders(s_cmd, DkStageFlag_GraphicsMask, sh, 2);
     dkCmdBufBindVtxAttribState(s_cmd, p->attribs, DK_ATTR_COUNT);
@@ -1596,6 +1613,9 @@ int s_sky_gen = -1;
 struct DkSkyUniforms { float v[14][4]; };
 
 void draw_fullscreen(const DkShader* frag, const void* uni, uint32_t uni_size, DkResHandle tex) {
+    if (s_bound_a2c) {
+        bind_multisample(s_bound_ms, false);   /* D984: restore_state re-applies the program's */
+    }
     const DkShader* sh[2] = { &s_fs_vert, frag };
     dkCmdBufBindShaders(s_cmd, DkStageFlag_GraphicsMask, sh, 2);
     dkCmdBufBindVtxAttribState(s_cmd, nullptr, 0);

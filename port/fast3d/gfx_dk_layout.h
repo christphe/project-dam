@@ -135,6 +135,7 @@ enum {
     DK_CF_CLAMP_T0 = 1u << 12,
     DK_CF_CLAMP_S1 = 1u << 13,
     DK_CF_CLAMP_T1 = 1u << 14,
+    DK_CF_A2C = 1u << 15,        /* D984: alpha-to-coverage draw */
     DK_CF_NUM_INPUTS_SHIFT = 16, /* 3 bits */
     DK_CF_DO_SHIFT = 20          /* 12 bits: (c*2+k)*3 + {single, multiply, mix} */
 };
@@ -170,6 +171,7 @@ static inline void dk_combiner_params(const struct CCFeatures* f, struct DkCombi
     if (f->clamp[0][1]) out->flags |= DK_CF_CLAMP_T0;
     if (f->clamp[1][0]) out->flags |= DK_CF_CLAMP_S1;
     if (f->clamp[1][1]) out->flags |= DK_CF_CLAMP_T1;
+    if (f->opt_a2c) out->flags |= DK_CF_A2C;
     out->flags |= ((uint32_t)f->num_inputs & 7u) << DK_CF_NUM_INPUTS_SHIFT;
 }
 
