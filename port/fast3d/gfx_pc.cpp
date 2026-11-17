@@ -352,12 +352,8 @@ extern "C" void gfx_get_output_rect(int32_t *outX, int32_t *outY, int32_t *outW,
 }
 
 uint32_t gfx_msaa_level = 1;
-#ifdef __SWITCH__
-bool gfx_fxaa_on = false;
+bool gfx_fxaa_on = false;   /* Video.FXAA, set by video.c */
 #define GFX_FXAA (gfx_fxaa_on)
-#else
-#define GFX_FXAA false
-#endif
 #ifdef __SWITCH__
 uint32_t gfx_msaa_docked = 1;
 uint32_t gfx_msaa_handheld = 1;
@@ -449,11 +445,7 @@ static struct {
     void (*rewind)(void);
     void (*perf)(double);
 } s_extra = {
-#ifdef __SWITCH__
               gfx_opengl_fxaa_pass,
-#else
-              nullptr,   /* FXAA is Switch-only (project-dam) */
-#endif
               gfx_opengl_skyplus_stage, gfx_opengl_skyplus_pass, gfx_opengl_interp_store,
               gfx_opengl_interp_show, gfx_opengl_interp_sync, gfx_opengl_frame_count_rewind, gfx_opengl_perf_report };
 #define GFX_X_FXAA s_extra.fxaa
@@ -6821,14 +6813,12 @@ extern "C" void gfx_start_frame(void) {
             gfx_rapi->update_framebuffer_parameters(game_framebuffer_msaa_resolved, gfx_current_dimensions.width,
                                                     gfx_current_dimensions.height, 1, false, false, false, false);
         }
-#ifdef __SWITCH__
         else if (gfx_msaa_level > 1 && gfx_fxaa_on) {
             /* project-dam: window-sized single-sample target the MSAA image is
              * resolved into before the FXAA pass (gfx_frame_body). */
             gfx_rapi->update_framebuffer_parameters(game_framebuffer_msaa_resolved, gfx_current_window_dimensions.width,
                                                     gfx_current_window_dimensions.height, 1, false, false, false, false);
         }
-#endif
     } else {
         game_renders_to_framebuffer = false;
     }
@@ -6988,7 +6978,6 @@ static void gfx_frame_body(Gfx* commands, bool emit_overlay, Gfx** overlay_io, u
                 gfx_rapi->resolve_msaa_color_buffer(game_framebuffer_msaa_resolved, game_framebuffer);
                 gfxFramebuffer = (uintptr_t)gfx_rapi->get_framebuffer_texture_id(game_framebuffer_msaa_resolved);
             } else {
-#ifdef __SWITCH__
                 if (gfx_fxaa_on) {
                     /* project-dam: FXAA reads a single-sample texture, so resolve
                      * into one first, then draw it to the window anti-aliased. */
@@ -6997,16 +6986,11 @@ static void gfx_frame_body(Gfx* commands, bool emit_overlay, Gfx** overlay_io, u
                 } else {
                     gfx_rapi->resolve_msaa_color_buffer(0, game_framebuffer);
                 }
-#else
-                gfx_rapi->resolve_msaa_color_buffer(0, game_framebuffer);
-#endif
             }
         } else {
-#ifdef __SWITCH__
             if (gfx_fxaa_on) {
                 gfx_frame_call(GFX_X_FXAA, game_framebuffer);   /* project-dam: FXAA without MSAA */
             } else
-#endif
             gfxFramebuffer = (uintptr_t)gfx_rapi->get_framebuffer_texture_id(game_framebuffer);
         }
     }

@@ -34,7 +34,21 @@ ${_uo}${_ue}")
   set(_pack "")
   _vk_spv(vert "${VK_SRC}/port/switch/shaders/uber.vert.glsl" "${VK_OUT}/glsl/uber.vert.spv")
   _vk_spv(frag "${VK_SRC}/port/switch/shaders/uber.frag.glsl" "${VK_OUT}/glsl/uber.frag.spv")
+  # Vulkan GLSL names the vertex index gl_VertexIndex (uam takes gl_VertexID)
+  file(READ "${VK_SRC}/port/switch/shaders/fullscreen.vert.glsl" _fs)
+  string(REPLACE "gl_VertexID" "gl_VertexIndex" _fs "${_fs}")
+  file(WRITE "${VK_OUT}/glsl/fullscreen.vk.vert.glsl" "${_fs}")
+  _vk_spv(vert "${VK_OUT}/glsl/fullscreen.vk.vert.glsl" "${VK_OUT}/glsl/fullscreen.vert.spv")
+  _vk_spv(frag "${VK_SRC}/port/switch/shaders/fxaa.frag.glsl" "${VK_OUT}/glsl/fxaa.frag.spv")
+  _vk_spv(frag "${VK_SRC}/port/switch/shaders/skyplus.frag.glsl" "${VK_OUT}/glsl/skyplus.frag.spv")
   string(APPEND _pack "0 1 ${VK_OUT}/glsl/uber.vert.spv ${VK_OUT}/glsl/uber.frag.spv -
+")
+  # the post passes (gfx_dk_layout.h DK_PACK_FULLSCREEN / FXAA / SKYPLUS)
+  string(APPEND _pack "0 2 ${VK_OUT}/glsl/fullscreen.vert.spv - -
+")
+  string(APPEND _pack "0 3 - ${VK_OUT}/glsl/fxaa.frag.spv -
+")
+  string(APPEND _pack "0 4 - ${VK_OUT}/glsl/skyplus.frag.spv -
 ")
   file(STRINGS "${VK_OUT}/glsl/list.txt" _lines)
   set(_n 0)

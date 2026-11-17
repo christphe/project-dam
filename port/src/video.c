@@ -1365,9 +1365,9 @@ int videoInit(void)
      * one that matches the current mode and applies menu edits live. */
     gfx_msaa_docked = NX_MSAA_LVL(cfgMSAA);
     gfx_msaa_handheld = NX_MSAA_LVL(cfgMSAAHandheld);
-    gfx_fxaa_on = cfgFXAA != 0;
     gfx_msaa_level = 1;
 #endif
+    gfx_fxaa_on = cfgFXAA != 0;
 
     int winW = cfgWinW > 0 ? cfgWinW : 0;   /* 0 -> gfx_sdl2 auto-fits to the desktop */
     int winH = cfgWinH > 0 ? cfgWinH : 0;
@@ -1647,8 +1647,8 @@ void videoStartFrame(void)
             videoApplyVisuals();
             gfx_set_fog_pixel(portDisplayFixes);
         }
-#ifdef __SWITCH__
         if (dirty & VCFG_FXAA) gfx_fxaa_on = cfgFXAA != 0;   /* project-dam */
+#ifdef __SWITCH__
         if (dirty & VCFG_MSAA) {   /* project-dam: picked up by gfx_start_frame */
             gfx_msaa_docked = NX_MSAA_LVL(cfgMSAA);
             gfx_msaa_handheld = NX_MSAA_LVL(cfgMSAAHandheld);

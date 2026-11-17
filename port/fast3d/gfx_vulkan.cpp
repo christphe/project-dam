@@ -52,10 +52,14 @@
  * not yet readable). Copies are blits with GL's rectangles mirrored on both
  * sides, as in deko3d.
  *
- * Status (step 3 of the issue): drawing, textures, depth, off-screen
- * framebuffers, MSAA, copies and clear-region. Not yet: FXAA, the GE+ sky and
- * the D578 present slots (step 4), the mesh path (step 5), the on-disk
- * pipeline cache (step 6), a readback for GE_PCDUMP. */
+ * Post passes: FXAA and the GE+ sky draw the pack's fullscreen triangle with
+ * their own pipelines; the D578 present slots are image copies of the window
+ * in the swapchain's format.
+ *
+ * Status (step 4 of the issue): drawing, textures, depth, off-screen
+ * framebuffers, MSAA, copies, clear-region, FXAA, the GE+ sky, present slots.
+ * Not yet: the mesh path (step 5), the on-disk pipeline cache (step 6), a
+ * readback for GE_PCDUMP. */
 
 #ifdef GE_VULKAN
 
@@ -91,6 +95,7 @@
 #include "gfx_sdl.h"
 #include "gfx_dk_layout.h"
 #include "gfx_dk_heap.h"
+#include "skyplus.h"
 
 extern bool gfx_framebuffers_enabled;           /* gfx_pc.cpp */
 extern int gfx_rdp_affine;                      /* gfx_pc.cpp (D540) */
@@ -166,6 +171,7 @@ int s_swap_interval = 1;
 int s_acq = -1;                              /* acquired swapchain image this frame, -1 = none */
 bool s_acq_failed = false;                   /* this frame cannot reach the window (minimised) */
 VkImageLayout s_sc_layout = VK_IMAGE_LAYOUT_UNDEFINED;   /* of the acquired image */
+bool s_sc_readable = false;                               /* swapchain images are transfer sources */
 
 struct Frame {
     VkCommandPool pool;
@@ -835,6 +841,7 @@ bool create_swapchain(void) {
         /* transfer src: GE_PCDUMP / screenshot readback; transfer dst: blits and clears */
         ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                         (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+        s_sc_readable = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
         ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         ci.preTransform = caps.currentTransform;
         ci.compositeAlpha = (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
@@ -928,6 +935,7 @@ std::map<std::pair<uint64_t, uint32_t>, ShaderProgram*> s_progs;
 std::map<std::pair<uint64_t, uint32_t>, bool> s_missed;
 std::map<uint32_t, VkShaderModule> s_modules;   /* by blob offset in the pack */
 VkShaderModule s_uber_vert = VK_NULL_HANDLE, s_uber_frag = VK_NULL_HANDLE;
+VkShaderModule s_fs_vert = VK_NULL_HANDLE, s_fxaa_frag = VK_NULL_HANDLE, s_sky_frag = VK_NULL_HANDLE;
 
 int pack_find(uint64_t id0, uint32_t id1) {
     int lo = 0, hi = (int)s_pack_count - 1;
@@ -972,6 +980,13 @@ void load_pack(void) {
     s_uber_frag = pack_module(uber, 1);
     if (s_uber_vert == VK_NULL_HANDLE || s_uber_frag == VK_NULL_HANDLE) {
         sysFatalError("Vulkan: uber-shader missing from the SPIR-V shader pack");
+    }
+    s_fs_vert = pack_module(pack_find(0, DK_PACK_FULLSCREEN), 0);
+    s_fxaa_frag = pack_module(pack_find(0, DK_PACK_FXAA), 1);
+    s_sky_frag = pack_module(pack_find(0, DK_PACK_SKYPLUS), 1);
+    if (!s_fs_vert || !s_fxaa_frag || !s_sky_frag) {
+        sysLogPrintf(LOG_WARNING, "VK: post-pass shaders missing from the pack (FXAA %d, GE+ sky %d)",
+                     s_fs_vert && s_fxaa_frag, s_fs_vert && s_sky_frag);
     }
     int combiners = 0;
     for (uint32_t i = 0; i < s_pack_count; i++) combiners += (s_pack[i].id0 != 0 || s_pack[i].id1 >= DK_PACK_NAMED_MAX);
@@ -1163,6 +1178,90 @@ VkPipeline get_pipeline(const PipeKey& k) {
     VkPipeline p = create_pipeline(k);
     s_pipes[k] = p;
     return p;
+}
+
+/* Post passes (FXAA, GE+ sky): the fullscreen triangle, no vertex input, no
+ * blending, every channel written; same layout and dynamic state as the game's
+ * pipelines. Not dropped by clear_shaders (they name no program). */
+typedef std::tuple<VkShaderModule, VkFormat, VkFormat, uint8_t> FsKey;
+std::map<FsKey, VkPipeline> s_fs_pipes;
+
+VkPipeline get_fs_pipeline(VkShaderModule frag, VkFormat color, VkFormat depth, uint8_t samples) {
+    const FsKey key(frag, color, depth, samples);
+    auto it = s_fs_pipes.find(key);
+    if (it != s_fs_pipes.end()) return it->second;
+    VkPipelineShaderStageCreateInfo st[2] = {};
+    st[0].sType = st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    st[0].module = s_fs_vert;
+    st[0].pName = "main";
+    st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    st[1].module = frag;
+    st[1].pName = "main";
+    VkPipelineVertexInputStateCreateInfo vi = {};
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    VkPipelineInputAssemblyStateCreateInfo ia = {};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportDepthClipControlCreateInfoEXT clip = {};
+    clip.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_DEPTH_CLIP_CONTROL_CREATE_INFO_EXT;
+    clip.negativeOneToOne = VK_TRUE;
+    VkPipelineViewportStateCreateInfo vp = {};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.pNext = s_clip_control ? &clip : nullptr;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+    VkPipelineRasterizationStateCreateInfo rs = {};
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.depthClampEnable = s_depth_clamp ? VK_TRUE : VK_FALSE;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.lineWidth = 1.0f;
+    VkPipelineMultisampleStateCreateInfo ms = {};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = (VkSampleCountFlagBits)samples;
+    VkPipelineDepthStencilStateCreateInfo ds = {};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    VkPipelineColorBlendAttachmentState ba = {};
+    ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                        VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo cb = {};
+    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &ba;
+    static const VkDynamicState dyn[] = {
+        VK_DYNAMIC_STATE_VIEWPORT,           VK_DYNAMIC_STATE_SCISSOR,           VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE, VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,  VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_BIAS,         VK_DYNAMIC_STATE_CULL_MODE,         VK_DYNAMIC_STATE_FRONT_FACE,
+    };
+    VkPipelineDynamicStateCreateInfo dy = {};
+    dy.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dy.dynamicStateCount = (uint32_t)(sizeof dyn / sizeof dyn[0]);
+    dy.pDynamicStates = dyn;
+    VkPipelineRenderingCreateInfo ri = {};
+    ri.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachmentFormats = &color;
+    ri.depthAttachmentFormat = depth;
+    VkGraphicsPipelineCreateInfo ci = {};
+    ci.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    ci.pNext = &ri;
+    ci.stageCount = 2;
+    ci.pStages = st;
+    ci.pVertexInputState = &vi;
+    ci.pInputAssemblyState = &ia;
+    ci.pViewportState = &vp;
+    ci.pRasterizationState = &rs;
+    ci.pMultisampleState = &ms;
+    ci.pDepthStencilState = &ds;
+    ci.pColorBlendState = &cb;
+    ci.pDynamicState = &dy;
+    ci.layout = s_pipe_layout;
+    VkPipeline pipe = VK_NULL_HANDLE;
+    VK_CHECK(vkCreateGraphicsPipelines(s_dev, s_pipe_cache, 1, &ci, nullptr, &pipe));
+    s_st_pipelines++;
+    s_fs_pipes[key] = pipe;
+    return pipe;
 }
 
 /* ---------------- textures, samplers ---------------- */
@@ -1965,7 +2064,6 @@ void vk_init(void) {
     }
     create_swapchain();
     s_fbs.resize(1);   /* fb 0 = the window, as gfx_opengl_init */
-    gfx_skyplus_failed = 1;   /* no GE+ sky pass yet: skyplus.c draws GE's own sky */
 }
 
 void vk_on_resize(void) {}
@@ -2205,6 +2303,78 @@ void vk_mesh_delete(uint32_t) {}
 void vk_mesh_draw(uint32_t, const struct GfxMeshDraw*) {}
 bool vk_mesh_supported(uint64_t, uint32_t) { return false; }
 
+/* ---------------- post passes (FXAA, GE+ sky) and present slots ---------------- */
+
+/* The fullscreen triangle into the current target with the GL rects vp / sc
+ * (bottom-up), the fragment shader reading `view` at binding 0 and `uni` at
+ * binding 4; GL's draw state is re-applied by the next draw. The sampled
+ * image must already be SHADER_READ_ONLY. */
+void draw_fullscreen(VkShaderModule frag, const void* uni, uint32_t uni_size, VkImageView view, VkSampler smp,
+                     const int vp[4], const int sc[4]) {
+    if (!begin_rendering()) return;
+    VkCommandBuffer c = main_cmd();
+    bind_pipeline(get_fs_pipeline(frag, target_color_format(),
+                                  target_has_depth() ? target_depth_format() : VK_FORMAT_UNDEFINED, target_samples()));
+    const int H = (int)fb_height(s_cur_fb);
+    VkViewport v = { (float)vp[0], (float)(H - vp[1]), (float)vp[2], -(float)vp[3], s_znear, s_zfar };
+    vkCmdSetViewport(c, 0, 1, &v);
+    set_scissor_rect(sc[0], sc[1], sc[2], sc[3]);
+    vkCmdSetDepthTestEnable(c, VK_FALSE);
+    vkCmdSetDepthWriteEnable(c, VK_FALSE);
+    vkCmdSetDepthBiasEnable(c, VK_FALSE);
+    VkBuffer ub;
+    VkDeviceSize uo;
+    uint8_t* up = ring_alloc(uni_size, (uint32_t)s_ubo_align, &ub, &uo);
+    memcpy(up, uni, uni_size);
+    VkDescriptorImageInfo ii = { smp, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    VkDescriptorBufferInfo bi = { ub, uo, uni_size };
+    VkWriteDescriptorSet w[2] = {};
+    w[0].sType = w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[0].descriptorCount = w[1].descriptorCount = 1;
+    w[0].dstBinding = 0;
+    w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[0].pImageInfo = &ii;
+    w[1].dstBinding = 4;
+    w[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    w[1].pBufferInfo = &bi;
+    vkCmdPushDescriptorSetKHR(c, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe_layout, 0, 2, w);
+    vkCmdDraw(c, 3, 1, 0, 0);
+    s_st_draws++;
+    s_vp_dirty = s_sc_dirty_rect = s_depth_dirty = s_desc_dirty = true;   /* GL's state again at the next draw */
+}
+
+struct SkyPlusDraw {
+    PortSkyPlus p;
+    int vp[4];
+    float aspA, aspB;
+};
+#define SKYPLUS_RING 64
+SkyPlusDraw s_sky_ring[SKYPLUS_RING];
+unsigned s_sky_next = 0;
+Img s_sky_img;
+int s_sky_gen = -1;
+struct SkyUniforms { float v[14][4]; };   /* skyplus.frag.glsl's Sky block */
+
+/* D578 present slots: copies of the window image, in the swapchain's format */
+struct ISlot {
+    Img img;
+    uint32_t w = 0, h = 0;
+    VkFormat fmt = VK_FORMAT_UNDEFINED;
+    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+};
+ISlot s_islot[GFX_INTERP_SLOTS];
+
+void copy_color(VkImage src, VkImageLayout& sl, VkImage dst, VkImageLayout& dl, uint32_t w, uint32_t h) {
+    VkCommandBuffer c = main_cmd();
+    layout_to(c, src, VK_IMAGE_ASPECT_COLOR_BIT, sl, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    layout_to(c, dst, VK_IMAGE_ASPECT_COLOR_BIT, dl, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkImageCopy r = {};
+    r.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    r.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    r.extent = { w, h, 1 };
+    vkCmdCopyImage(c, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
+}
+
 } // namespace
 
 struct GfxRenderingAPI gfx_vulkan_api = {
@@ -2387,6 +2557,13 @@ void gfx_vulkan_park(void) {
     s_pipes.clear();
     for (auto& d : s_dead_pipes) vkDestroyPipeline(s_dev, d.first, nullptr);
     s_dead_pipes.clear();
+    for (auto& kv : s_fs_pipes) vkDestroyPipeline(s_dev, kv.second, nullptr);
+    s_fs_pipes.clear();
+    destroy_image_now(s_sky_img);
+    for (ISlot& sl : s_islot) {
+        destroy_image_now(sl.img);
+        sl = ISlot();
+    }
     for (auto& kv : s_modules) vkDestroyShaderModule(s_dev, kv.second, nullptr);
     s_modules.clear();
     for (auto& kv : s_samplers) vkDestroySampler(s_dev, kv.second, nullptr);
@@ -2435,13 +2612,134 @@ void gfx_vulkan_park(void) {
                  s_validation_warnings);
 }
 
-/* Passes outside the rendering API: not drawn yet (step 4 of the issue). */
-void gfx_vulkan_fxaa_pass(int) {}
-int gfx_vulkan_skyplus_stage(const struct PortSkyPlus*, const int[4], float, float) { return 0; }
-void gfx_vulkan_skyplus_pass(int) {}
-void gfx_vulkan_interp_store(int, uint32_t, uint32_t) {}
-void gfx_vulkan_interp_show(int) {}
-void gfx_vulkan_interp_sync(void) {}
+/* FXAA (gfx_opengl_fxaa_pass, gfx_deko3d_fxaa_pass): src_fb_id's colour
+ * drawn into the window at its own size, anti-aliased. */
+void gfx_vulkan_fxaa_pass(int src_fb_id) {
+    if (!s_up || s_parked || !s_fxaa_frag || !s_fs_vert || !gfx_framebuffers_enabled || src_fb_id <= 0 ||
+        src_fb_id >= (int)s_fbs.size()) {
+        return;
+    }
+    Fb& src = s_fbs[src_fb_id];
+    if (!src.created) return;
+    ensure_frame();
+    end_rendering();
+    src.smp.ws = src.smp.wt = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;   /* GL sets these on the texture and leaves them */
+    layout_to(main_cmd(), src.color.img, VK_IMAGE_ASPECT_COLOR_BIT, src.l_color, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    const int prev_fb = s_cur_fb;
+    s_cur_fb = 0;
+    const float u[4] = { 1.0f / (float)src.w, 1.0f / (float)src.h, 0.0f, 0.0f };
+    const int vp[4] = { 0, 0, (int)src.w, (int)src.h };
+    const int sc[4] = { 0, 0, (int)s_sc_extent.width, (int)s_sc_extent.height };
+    draw_fullscreen(s_fxaa_frag, u, sizeof u, src.color.view_a1, get_sampler(src.smp), vp, sc);
+    s_cur_fb = prev_fb;
+}
+
+int gfx_vulkan_skyplus_stage(const struct PortSkyPlus* p, const int vp[4], float aspA, float aspB) {
+    const int slot = (int)(s_sky_next++ % SKYPLUS_RING);
+    SkyPlusDraw& d = s_sky_ring[slot];
+    d.p = *p;
+    for (int i = 0; i < 4; i++) d.vp[i] = vp[i];
+    d.aspA = aspA;
+    d.aspB = aspB;
+    return slot;
+}
+
+/* GE+ sky (gfx_opengl_skyplus_pass): the sky shader over GL viewport vp of the
+ * current target, no depth test or write, no blending. */
+void gfx_vulkan_skyplus_pass(int slot) {
+    if (!s_up || s_parked || slot < 0 || slot >= SKYPLUS_RING) return;
+    if (!s_sky_frag || !s_fs_vert) {
+        gfx_skyplus_failed = 1;   /* skyplus.c draws GE's sky from the next frame on */
+        return;
+    }
+    const SkyPlusDraw& d = s_sky_ring[slot];
+    const PortSkyPlus& p = d.p;
+    if (d.vp[2] <= 0 || d.vp[3] <= 0 || (d.aspA < 0.0f ? -d.aspA : d.aspA) < 1e-6f || !p.tex) return;
+    if (!is_window(s_cur_fb) && !s_fbs[s_cur_fb].created) return;
+    ensure_frame();
+    if (p.texGen != s_sky_gen || !s_sky_img.img) {
+        /* RGBA8 with the intensity in every channel (GL: R8 read as .r) and the
+         * box mip chain (GL: glGenerateMipmap; the plane is seen at grazing angles) */
+        static std::vector<uint8_t> buf, mips;
+        buf.resize((size_t)SKYPLUS_TEX_W * SKYPLUS_TEX_H * 4);
+        for (int i = 0; i < SKYPLUS_TEX_W * SKYPLUS_TEX_H; i++) {
+            buf[i * 4 + 0] = buf[i * 4 + 1] = buf[i * 4 + 2] = buf[i * 4 + 3] = p.tex[i];
+        }
+        std::vector<uint32_t> offs;
+        uint32_t levels = 1;
+        build_mips(buf.data(), SKYPLUS_TEX_W, SKYPLUS_TEX_H, mips, offs, &levels);
+        if (s_sky_img.img) destroy_image_later(s_sky_img);
+        if (!upload_image(&s_sky_img, mips.data(), offs, SKYPLUS_TEX_W, SKYPLUS_TEX_H, levels, mips.size())) return;
+        s_sky_gen = p.texGen;
+    }
+    SkyUniforms u;
+    memset(&u, 0, sizeof u);
+    auto v3 = [&](int i, const float* a, float w) { u.v[i][0] = a[0]; u.v[i][1] = a[1]; u.v[i][2] = a[2]; u.v[i][3] = w; };
+    u.v[0][0] = (float)d.vp[0]; u.v[0][1] = (float)d.vp[1]; u.v[0][2] = (float)d.vp[2]; u.v[0][3] = (float)d.vp[3];
+    u.v[1][0] = d.aspA; u.v[1][1] = d.aspB;
+    for (int i = 0; i < 4; i++) v3(2 + i, p.corner[i], 0.0f);
+    v3(6, p.eye, p.cloudY);
+    v3(7, p.sky, p.gain);
+    v3(8, p.cloud, p.texScale);
+    u.v[9][0] = p.layerOfs[0][0]; u.v[9][1] = p.layerOfs[0][1]; u.v[9][2] = p.layerOfs[1][0]; u.v[9][3] = p.layerOfs[1][1];
+    u.v[10][0] = p.layerOfs[2][0]; u.v[10][1] = p.layerOfs[2][1]; u.v[10][2] = p.sunGlow; u.v[10][3] = p.night ? 1.0f : 0.0f;
+    v3(11, p.sunDir, 0.0f);
+    v3(12, p.sunCol, 0.0f);
+    v3(13, p.moonDir, 0.0f);
+    const SmpKey k = { VK_FILTER_LINEAR, VK_FILTER_LINEAR, MIP_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                       VK_SAMPLER_ADDRESS_MODE_REPEAT, 1 };
+    draw_fullscreen(s_sky_frag, &u, sizeof u, s_sky_img.view, get_sampler(k), d.vp, d.vp);
+}
+
+/* D578: copy the window image (this pass's picture) into present slot `slot` */
+void gfx_vulkan_interp_store(int slot, uint32_t width, uint32_t height) {
+    if (!s_up || s_parked || slot < 0 || slot >= GFX_INTERP_SLOTS || width == 0 || height == 0 || !s_sc_readable) return;
+    ensure_frame();
+    end_rendering();
+    if (!ensure_acquired()) return;
+    ISlot& sl = s_islot[slot];
+    if (width != sl.w || height != sl.h || sl.fmt != s_sc_format) {
+        /* sized on its first store at a new window size (D583): slots a mode never uses take no memory */
+        if (sl.img.img) destroy_image_later(sl.img);
+        sl.w = sl.h = 0;
+        if (!create_image(&sl.img, s_sc_format, width, height, 1,
+                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                              VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                          VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) {
+            return;
+        }
+        sl.w = width;
+        sl.h = height;
+        sl.fmt = s_sc_format;
+        sl.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+    const uint32_t w = width < s_sc_extent.width ? width : s_sc_extent.width;
+    const uint32_t h = height < s_sc_extent.height ? height : s_sc_extent.height;
+    copy_color(s_sc_images[s_acq], s_sc_layout, sl.img.img, sl.layout, w, h);
+}
+
+/* D578: present slot `slot` into the window image the next present shows */
+void gfx_vulkan_interp_show(int slot) {
+    if (!s_up || s_parked || slot < 0 || slot >= GFX_INTERP_SLOTS || s_islot[slot].w == 0) return;
+    ensure_frame();
+    end_rendering();
+    if (!ensure_acquired()) return;
+    ISlot& sl = s_islot[slot];
+    if (sl.fmt != s_sc_format) return;   /* stored before the swapchain changed format */
+    /* the slot's own size: one stored before a window resize can still be pending (D583 ring) */
+    const uint32_t w = sl.w < s_sc_extent.width ? sl.w : s_sc_extent.width;
+    const uint32_t h = sl.h < s_sc_extent.height ? sl.h : s_sc_extent.height;
+    copy_color(sl.img.img, sl.layout, s_sc_images[s_acq], s_sc_layout, w, h);
+}
+
+/* D578: block until the queue (and so a VSync'd present) completes, so the
+ * render worker's present clock learns the display's real refresh timing */
+void gfx_vulkan_interp_sync(void) {
+    if (!s_up || s_parked) return;
+    vkQueueWaitIdle(s_queue);
+    retire();
+}
+
 void gfx_vulkan_frame_count_rewind(void) { s_frame_count--; }
 
 void gfx_vulkan_perf_report(double frames) {
