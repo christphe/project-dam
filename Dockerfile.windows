@@ -32,6 +32,7 @@ RUN dnf -y install --setopt=install_weak_deps=False \
         mingw64-zlib \
         glslang \
         vulkan-headers \
+        gcc-c++ \
     && dnf clean all
 
 # Issue #44: the Vulkan backend needs the headers only (volk loads

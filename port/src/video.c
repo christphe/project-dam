@@ -46,9 +46,7 @@ extern void gfx_sdl_set_external_swap_interval(void (*set_interval)(int));
 #endif
 #include "../fast3d/gfx_vulkan.h"   /* issue #44: Vulkan on PC with GE_RENDERER=vk */
 #include "../fast3d/gfx_frame.h"   /* D969: replay thread */
-#ifdef GE_VULKAN
-static int s_vulkanActive = 0;   /* issue #44: the Vulkan backend was selected */
-#endif
+static int s_vulkanActive = 0;   /* issue #44: the Vulkan backend was selected (0 without GE_VULKAN) */
 
 /* GE's internal resolution before the game's first osViSetMode (which then
  * sets the real CFB size): NTSC 640x480; PAL is taller, not shorter -- the EU
