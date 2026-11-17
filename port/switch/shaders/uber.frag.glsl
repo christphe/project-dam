@@ -35,6 +35,7 @@ layout(std140, binding = 0) uniform Draw {
     int flip_v0;
     int flip_v1;
     int fog_pixel;
+    int zpass;      // D987: the depth-only pass of a CF_ZCUT draw
 };
 
 layout(std140, binding = 1) uniform Comb {
@@ -59,6 +60,7 @@ layout(std140, binding = 1) uniform Comb {
 #define CF_CLAMP_S1  (1u << 13)
 #define CF_CLAMP_T1  (1u << 14)
 #define CF_A2C       (1u << 15)   // D984: alpha-to-coverage draw
+#define CF_ZCUT      (1u << 19)   // D987: blended draw with a depth-only pass
 
 #define WRAP(x, low, high) mod((x)-(low), (high)-(low)) + (low)
 #define TEX_OFFSET(tex, uv, texSize, off) texture(tex, uv - (off)/texSize)
@@ -216,6 +218,7 @@ void main() {
         if ((flags & CF_ATHRESH) != 0u && texel.a < 8.0 / 256.0) discard;
         if ((flags & CF_INVISIBLE) != 0u) texel.a = 0.0;
         if ((flags & CF_A2C) != 0u && texel.a < 1.0 / 256.0) discard;
+        if ((flags & CF_ZCUT) != 0u && zpass != 0 && texel.a < 0.98) discard;
         outColor = texel;
     } else {
         outColor = vec4(texel.rgb, 1.0);

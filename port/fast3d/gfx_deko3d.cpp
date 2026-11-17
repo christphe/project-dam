@@ -1142,6 +1142,34 @@ void dk_set_use_alpha(bool use_alpha, bool modulate) {
     s_cmd_pending = true;
 }
 
+/* D987: after the blended draw of a DK_CF_ZCUT program, the same vertices
+ * again with colour writes off and depth writes on; the shader (Draw.zpass)
+ * discards every fragment whose final alpha is below 0.98, so only the
+ * opaque part writes depth. Same depth test as the blended pass. */
+void zcut_pass(uint32_t nverts) {
+    if ((s_prg->params.flags & DK_CF_ZCUT) == 0 || !s_depth_test) return;
+    DkColorWriteState cw;
+    dkColorWriteStateDefaults(&cw);
+    dkColorWriteStateSetMask(&cw, 0, 0);
+    dkCmdBufBindColorWriteState(s_cmd, &cw);
+    DkDepthStencilState d;
+    dkDepthStencilStateDefaults(&d);
+    d.depthTestEnable = 1;
+    d.depthWriteEnable = 1;
+    d.depthCompareOp = s_depth_func;
+    dkCmdBufBindDepthStencilState(s_cmd, &d);
+    s_uni.zpass = 1;
+    dkCmdBufPushConstants(s_cmd, s_ubo.gpu, 256, 0, sizeof(s_uni), &s_uni);
+    dkCmdBufDraw(s_cmd, DkPrimitive_Triangles, nverts, 1, 0, 0);
+    s_uni.zpass = 0;
+    dkCmdBufPushConstants(s_cmd, s_ubo.gpu, 256, 0, sizeof(s_uni), &s_uni);
+    dkColorWriteStateDefaults(&cw);
+    dkCmdBufBindColorWriteState(s_cmd, &cw);
+    bind_depth();
+    s_st_draws++;
+    s_st_pushes += 2;
+}
+
 float* dk_stream_begin(size_t max_floats) {
     if (!s_up) return nullptr;
     s_stream_ptr = (float*)ring_alloc(s_dataRing, s_dataBlocks, (uint32_t)(max_floats * 4), 64, &s_stream_gpu);
@@ -1163,6 +1191,7 @@ void dk_draw_triangles(float buf[], size_t len, size_t ntris) {
     dkCmdBufBindVtxBuffer(s_cmd, 0, addr, bytes);
     dkCmdBufDraw(s_cmd, DkPrimitive_Triangles, (uint32_t)(3 * ntris), 1, 0, 0);
     s_st_draws++;
+    zcut_pass((uint32_t)(3 * ntris));   /* D987 */
     if (s_submit_every && ++s_draws_since_submit >= s_submit_every) {
         submit();   /* the GPU starts on this part while the rest is recorded */
     }
@@ -1235,6 +1264,7 @@ void dk_mesh_draw(uint32_t name, const struct GfxMeshDraw* d) {
     }
     dkCmdBufDraw(s_cmd, DkPrimitive_Triangles, d->nverts, 1, 0, 0);
     s_st_draws++;
+    zcut_pass(d->nverts);   /* D987 */
     if (d->cull != 0) bind_rasterizer();
     bind_program(s_prg);       /* later same-state classic batches need their original vertex shader */
     s_cmd_pending = true;

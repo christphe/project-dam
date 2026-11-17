@@ -4304,6 +4304,13 @@ static bool gfx_a2c_draw(bool depth_test, bool depth_update, bool depth_compare,
     return true;
 }
 
+/* D987: Video.Visuals >= Fixed; GE_ZCUT=0 turns the depth-only pass off for
+ * the run (A/B). Needs no MSAA. */
+static int gfx_zcut_gate(void) {
+    static const int off = [] { const char* e = getenv("GE_ZCUT"); return e && e[0] == '0'; }();
+    return portDisplayFixes && !off ? 1 : 0;
+}
+
 static inline void gfx_tri_state(TriState& ts) {
     bool depth_test = ((rsp.geometry_mode & G_ZBUFFER) == G_ZBUFFER || (rdp.other_mode_l & G_ZS_PRIM) == G_ZS_PRIM) &&
                       ((rdp.other_mode_h & G_CYC_1CYCLE) == G_CYC_1CYCLE || (rdp.other_mode_h & G_CYC_2CYCLE) == G_CYC_2CYCLE);
@@ -4311,6 +4318,7 @@ static inline void gfx_tri_state(TriState& ts) {
     bool depth_compare = (rdp.other_mode_l & Z_CMP) == Z_CMP;
     bool depth_source_prim = (rdp.other_mode_l & G_ZS_PRIM) == G_ZS_PRIM /* && gDP.primDepth.z == 1.0f */;
     uint16_t zmode = rdp.other_mode_l & ZMODE_DEC;
+    const bool depth_update_n64 = depth_update;
     ts.a2c = gfx_a2c_draw(depth_test, depth_update, depth_compare, depth_source_prim, zmode);
     if (ts.a2c) {
         depth_update = true;   /* the covered samples hide what is drawn behind them later */
@@ -4376,6 +4384,18 @@ static inline void gfx_tri_state(TriState& ts) {
         cc_options |= (uint64_t)SHADER_OPT_A2C;
     }
     ts.blend = ts.use_alpha && !ts.a2c;
+    /* D987: a blended surface that writes no depth (XLU) also writes depth
+     * where its final alpha is opaque, in a second depth-only pass: its
+     * opaque part (a plank, a frame) then hides what is drawn behind it later
+     * (vines), while its translucent texels stay blended. Not for decals,
+     * prim-depth draws, modulate or invisible blends. */
+    /* Not for smoke / explosions (G_RM_ZB_CLD_SURF, CVG_DST_SAVE): their
+     * opaque cores would cut the sprites drawn after them. */
+    const bool cld_surf = (rdp.other_mode_l & (3U << 8)) == CVG_DST_SAVE;
+    if (ts.blend && !depth_update_n64 && depth_test && depth_compare && !depth_source_prim && zmode != ZMODE_DEC &&
+        !invisible && !ts.use_modulate && !cld_surf && gfx_zcut_gate()) {
+        cc_options |= (uint64_t)SHADER_OPT_ZCUT;
+    }
 
     // If we are not using alpha, clear the alpha components of the combiner as they have no effect
     if (!ts.use_alpha) {
@@ -6901,7 +6921,7 @@ static void gfx_frame_body(Gfx* commands, bool emit_overlay, Gfx** overlay_io, u
     {
         /* D984: baked mesh segments carry the A2C decision; drop them when it changes */
         static int s_a2c_prev = -1;
-        const int g = gfx_a2c_gate();
+        const int g = gfx_a2c_gate() | gfx_zcut_gate() << 1;   /* D984 / D987 */
         if (g != s_a2c_prev) {
             if (s_a2c_prev >= 0) mc_clear_all();
             s_a2c_prev = g;

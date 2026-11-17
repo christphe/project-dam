@@ -229,6 +229,7 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
           "    int flip_v0;\n"
           "    int flip_v1;\n"
           "    int fog_pixel;\n"
+          "    int zpass;\n"   /* D987: the depth-only pass of an SHADER_OPT_ZCUT draw */
           "};\n";
     fs += "float random(in vec3 value) {\n"
           "    float random = dot(sin(value), vec3(12.9898, 78.233, 37.719));\n"
@@ -329,6 +330,7 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
         if (f.opt_alpha_threshold) fs += "    if (texel.a < 8.0 / 256.0) discard;\n";
         if (f.opt_invisible) fs += "    texel.a = 0.0;\n";
         if (f.opt_a2c) fs += "    if (texel.a < 1.0 / 256.0) discard;\n";   /* D984: no depth where nothing is drawn */
+        if (f.opt_zcut) fs += "    if (zpass != 0 && texel.a < 0.98) discard;\n";   /* D987: depth only where opaque */
         fs += "    outColor = texel;\n";
     } else {
         fs += "    outColor = vec4(texel, 1.0);\n";
