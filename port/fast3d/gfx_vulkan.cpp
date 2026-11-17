@@ -44,10 +44,18 @@
  * unless GE_VKVALIDATE=0; every message goes to the log and the counts are
  * reported at exit.
  *
- * Status (step 2 of the issue): drawing into the window with the pack's
- * combiners or the uber-shader, textures and samplers, depth. Off-screen
- * framebuffers (step 3) are not there yet: framebuffer effects are switched
- * off, as GL does when the driver lacks them. */
+ * Framebuffers: an off-screen fb is a single-sample colour image (sampled with
+ * alpha forced to 1, copied, resolved into), a multisample colour image it
+ * renders into under MSAA, and depth at the rendering's sample count. Each
+ * image's layout is tracked; transitions, copies and resolves happen between
+ * rendering passes (a pass is ended when a draw samples a framebuffer that is
+ * not yet readable). Copies are blits with GL's rectangles mirrored on both
+ * sides, as in deko3d.
+ *
+ * Status (step 3 of the issue): drawing, textures, depth, off-screen
+ * framebuffers, MSAA, copies and clear-region. Not yet: FXAA, the GE+ sky and
+ * the D578 present slots (step 4), the mesh path (step 5), the on-disk
+ * pipeline cache (step 6), a readback for GE_PCDUMP. */
 
 #ifdef GE_VULKAN
 
@@ -141,6 +149,7 @@ bool s_depth_clamp = false;
 float s_max_aniso = 1.0f;        /* 1 = no anisotropic filtering */
 VkDeviceSize s_ubo_align = 256;
 uint32_t s_max_tex = 8192;
+VkSampleCountFlags s_sample_counts = VK_SAMPLE_COUNT_1_BIT;   /* colour and depth targets */
 VkPhysicalDeviceMemoryProperties s_memprops;
 
 /* ---------------- swapchain, frames ---------------- */
@@ -193,6 +202,7 @@ std::map<uint32_t, ImgHeap> s_img_heaps;   /* by memory type */
 struct Img {
     VkImage img = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
+    VkImageView view_a1 = VK_NULL_HANDLE;   /* framebuffer colour sampled as a texture: alpha reads 1 */
     uint32_t memtype = 0;
     DkHeapBlock blk = {};
 };
@@ -473,6 +483,7 @@ void create_device(void) {
     s_ubo_align = props.limits.minUniformBufferOffsetAlignment;
     if (s_ubo_align < 16) s_ubo_align = 16;
     s_max_tex = props.limits.maxImageDimension2D;
+    s_sample_counts = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts;
     vkGetPhysicalDeviceMemoryProperties(s_phys, &s_memprops);
     sysLogPrintf(LOG_NOTE, "VK: depth clip control %s, mirror-clamp %s, depth clamp %s, anisotropy up to %.0fx",
                  s_clip_control ? "on (GL clip z)" : "off (0..1 clip z from the CPU)", s_mirror_clamp ? "on" : "off",
@@ -592,6 +603,7 @@ bool create_image(Img* out, VkFormat fmt, uint32_t w, uint32_t h, uint32_t level
 
 void destroy_image_now(Img& i) {
     if (i.view) vkDestroyImageView(s_dev, i.view, nullptr);
+    if (i.view_a1) vkDestroyImageView(s_dev, i.view_a1, nullptr);
     if (i.img) {
         vkDestroyImage(s_dev, i.img, nullptr);
         s_img_heaps[i.memtype].heap.free_after(i.blk, 0);
@@ -651,6 +663,16 @@ void image_barrier(VkCommandBuffer cmd, VkImage img, VkImageAspectFlags aspect, 
     vkCmdPipelineBarrier2(cmd, &di);
 }
 
+/* Move an image (one level) to `to`, ordered after everything before it.
+ * Conservative masks: these happen a few times per frame (target switches,
+ * copies), never per draw. Read-only to read-only needs no barrier. */
+void layout_to(VkCommandBuffer cmd, VkImage img, VkImageAspectFlags aspect, VkImageLayout& cur, VkImageLayout to) {
+    if (cur == to && to == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) return;
+    image_barrier(cmd, img, aspect, 1, cur, to, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
+                  VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    cur = to;
+}
+
 /* ---------------- frames ---------------- */
 
 /* dynamic state to re-send (a new command buffer starts with none) */
@@ -659,7 +681,6 @@ bool s_static_dyn_set = false;   /* cull mode, front face, depth bias values */
 VkPipeline s_bound_pipe = VK_NULL_HANDLE;
 bool s_rendering = false;
 int s_render_fb = -1;
-bool s_depth_synced = false;     /* this frame's first use of the window depth waited for the last frame's */
 
 void begin_frame(void) {
     Frame& f = s_frames[s_frame_idx];
@@ -682,7 +703,6 @@ void begin_frame(void) {
     s_bound_pipe = VK_NULL_HANDLE;
     s_vp_dirty = s_sc_dirty_rect = s_depth_dirty = s_desc_dirty = s_uni_dirty = true;
     s_static_dyn_set = false;
-    s_depth_synced = false;
 }
 
 void ensure_frame(void) {
@@ -722,7 +742,7 @@ void create_frames(void) {
 VkFormat s_depth_fmt = VK_FORMAT_D32_SFLOAT;
 VkImageAspectFlags s_depth_aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
 Img s_win_depth;
-bool s_win_depth_init = false;   /* in DEPTH_ATTACHMENT_OPTIMAL */
+VkImageLayout s_win_depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 
 void pick_depth_format(void) {
     /* 24-bit fixed point first: GL's default depth buffer (depth bias units match) */
@@ -853,7 +873,7 @@ bool create_swapchain(void) {
                       VK_SAMPLE_COUNT_1_BIT, s_depth_aspect)) {
         sysFatalError("Vulkan: could not create the %ux%u window depth buffer", ext.width, ext.height);
     }
-    s_win_depth_init = false;
+    s_win_depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     s_sc_extent = ext;
     s_sc_dirty = false;
     static const char* const mode_names[] = { "IMMEDIATE", "MAILBOX", "FIFO", "FIFO_RELAXED" };
@@ -1313,17 +1333,83 @@ SmpKey sampler_key(bool linear_filter, uint32_t cms, uint32_t cmt, bool mipmaps)
     return k;
 }
 
-/* ---------------- framebuffers (step 2: the window only) ---------------- */
+/* ---------------- framebuffers ---------------- */
 
+/* fb 0 is the window (swapchain image + s_win_depth). An off-screen fb has a
+ * single-sample colour image (sampled, copied, resolved into), plus a
+ * multisample colour image it renders into when MSAA is on, plus depth with
+ * the rendering's sample count (gfx_deko3d.cpp's layout). */
 struct Fb {
     uint32_t w = 1, h = 1, msaa = 1;
     bool has_depth = false, invert_y = false;
+    bool created = false;
+    Img color, color_ms, depth;
+    VkImageLayout l_color = VK_IMAGE_LAYOUT_UNDEFINED, l_ms = VK_IMAGE_LAYOUT_UNDEFINED,
+                  l_depth = VK_IMAGE_LAYOUT_UNDEFINED;
+    bool has_ms = false, has_depth_img = false;
+    uint32_t samples = 1;
+    SmpKey smp;   /* the colour texture's sampling state (GL: LINEAR, REPEAT) */
 };
 std::vector<Fb> s_fbs;
 
 bool is_window(int fb) { return fb == 0; }
 uint32_t fb_height(int fb) { return is_window(fb) ? s_sc_extent.height : s_fbs[fb].h; }
 uint32_t fb_width(int fb) { return is_window(fb) ? s_sc_extent.width : s_fbs[fb].w; }
+
+/* the highest supported sample count <= msaa */
+uint32_t pick_samples(uint32_t msaa) {
+    uint32_t s = 1;
+    for (uint32_t c = 2; c <= 64 && c <= msaa; c <<= 1) {
+        if (s_sample_counts & c) s = c;
+    }
+    return s;
+}
+
+void destroy_fb_images(Fb& f) {
+    destroy_image_later(f.color);
+    destroy_image_later(f.color_ms);
+    destroy_image_later(f.depth);
+    f.has_ms = f.has_depth_img = false;
+    f.created = false;
+}
+
+void build_fb_images(Fb& f) {
+    f.samples = pick_samples(f.msaa);
+    const VkSampleCountFlagBits ms = (VkSampleCountFlagBits)f.samples;
+    bool ok = create_image(&f.color, VK_FORMAT_R8G8B8A8_UNORM, f.w, f.h, 1,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                           VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    if (ok) {   /* GL's framebuffer textures are RGB8: alpha reads 1 */
+        VkImageViewCreateInfo vi = {};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = f.color.img;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+        vi.components.a = VK_COMPONENT_SWIZZLE_ONE;
+        vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        vi.subresourceRange.levelCount = 1;
+        vi.subresourceRange.layerCount = 1;
+        VK_CHECK(vkCreateImageView(s_dev, &vi, nullptr, &f.color.view_a1));
+    }
+    if (ok && f.samples > 1) {
+        ok = create_image(&f.color_ms, VK_FORMAT_R8G8B8A8_UNORM, f.w, f.h, 1,
+                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, ms,
+                          VK_IMAGE_ASPECT_COLOR_BIT);
+        f.has_ms = ok;
+    }
+    if (ok && f.has_depth) {
+        ok = create_image(&f.depth, s_depth_fmt, f.w, f.h, 1, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, ms, s_depth_aspect);
+        f.has_depth_img = ok;
+    }
+    f.l_color = f.l_ms = f.l_depth = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (!ok) {
+        sysLogPrintf(LOG_ERROR, "VK: framebuffer %ux%u x%u: could not create its images", f.w, f.h, f.msaa);
+        destroy_fb_images(f);
+        return;
+    }
+    f.created = true;
+}
 
 /* ---------------- render state (GL's, as last set) ---------------- */
 
@@ -1361,56 +1447,70 @@ bool begin_rendering(void) {
     if (s_rendering && s_render_fb == s_cur_fb) return true;
     ensure_frame();
     end_rendering();
-    if (!is_window(s_cur_fb)) return false;   /* off-screen framebuffers: step 3 */
-    if (!ensure_acquired()) return false;
     VkCommandBuffer c = main_cmd();
-    if (s_sc_layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-        image_barrier(c, s_sc_images[s_acq], VK_IMAGE_ASPECT_COLOR_BIT, 1, VK_IMAGE_LAYOUT_UNDEFINED,
-                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
-                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                      VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-        s_sc_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    }
-    if (!s_win_depth_init || !s_depth_synced) {
-        /* first use: undefined -> attachment; later frames: after the last frame's depth writes */
-        const VkPipelineStageFlags2 ds = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-        image_barrier(c, s_win_depth.img, s_depth_aspect, 1,
-                      s_win_depth_init ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
-                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, ds, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, ds,
-                      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-        s_win_depth_init = true;
-        s_depth_synced = true;
-    }
     VkRenderingAttachmentInfo ca = {};
     ca.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    ca.imageView = s_sc_views[s_acq];
     ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     VkRenderingAttachmentInfo da = {};
     da.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    da.imageView = s_win_depth.view;
     da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     da.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     da.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     VkRenderingInfo ri = {};
     ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    ri.renderArea.extent = s_sc_extent;
     ri.layerCount = 1;
     ri.colorAttachmentCount = 1;
     ri.pColorAttachments = &ca;
-    ri.pDepthAttachment = &da;
+    if (is_window(s_cur_fb)) {
+        if (!ensure_acquired()) return false;
+        layout_to(c, s_sc_images[s_acq], VK_IMAGE_ASPECT_COLOR_BIT, s_sc_layout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        layout_to(c, s_win_depth.img, s_depth_aspect, s_win_depth_layout, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        ca.imageView = s_sc_views[s_acq];
+        da.imageView = s_win_depth.view;
+        ri.pDepthAttachment = &da;
+        ri.renderArea.extent = s_sc_extent;
+    } else {
+        Fb& f = s_fbs[s_cur_fb];
+        if (!f.created) return false;
+        if (f.has_ms) {
+            layout_to(c, f.color_ms.img, VK_IMAGE_ASPECT_COLOR_BIT, f.l_ms, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            ca.imageView = f.color_ms.view;
+        } else {
+            layout_to(c, f.color.img, VK_IMAGE_ASPECT_COLOR_BIT, f.l_color, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            ca.imageView = f.color.view;
+        }
+        if (f.has_depth && f.has_depth_img) {
+            layout_to(c, f.depth.img, s_depth_aspect, f.l_depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            da.imageView = f.depth.view;
+            ri.pDepthAttachment = &da;
+        }
+        ri.renderArea.extent = { f.w, f.h };
+    }
     vkCmdBeginRendering(c, &ri);
     s_rendering = true;
     s_render_fb = s_cur_fb;
-    s_vp_dirty = s_sc_dirty_rect = true;
+    s_vp_dirty = s_sc_dirty_rect = s_depth_dirty = true;
     return true;
 }
 
-bool target_has_depth(void) { return is_window(s_cur_fb); }
-VkFormat target_color_format(void) { return s_sc_format; }
+bool target_has_depth(void) {
+    return is_window(s_cur_fb) || (s_fbs[s_cur_fb].has_depth && s_fbs[s_cur_fb].has_depth_img);
+}
+VkFormat target_color_format(void) { return is_window(s_cur_fb) ? s_sc_format : VK_FORMAT_R8G8B8A8_UNORM; }
 VkFormat target_depth_format(void) { return s_depth_fmt; }
-uint8_t target_samples(void) { return 1; }
+uint8_t target_samples(void) {
+    return (uint8_t)(is_window(s_cur_fb) || !s_fbs[s_cur_fb].has_ms ? 1 : s_fbs[s_cur_fb].samples);
+}
+
+/* A framebuffer a unit samples: valid, built, and not the target being drawn. */
+Fb* sampled_fb(int u) {
+    const Unit& un = s_unit[u];
+    if (un.kind != 2 || un.id == 0 || (int)un.id >= (int)s_fbs.size() || (int)un.id == s_cur_fb) return nullptr;
+    Fb& f = s_fbs[un.id];
+    return f.created ? &f : nullptr;
+}
 
 void set_scissor_rect(int x, int y, int w, int h) {
     const int H = (int)fb_height(s_cur_fb), W = (int)fb_width(s_cur_fb);
@@ -1476,7 +1576,12 @@ void unit_image(int u, VkImageView* view, VkSampler* smp) {
         *smp = get_sampler(s_tex[un.id].smp);
         return;
     }
-    *view = s_dummy.view;   /* unbound, or a framebuffer (step 3) */
+    if (Fb* f = sampled_fb(u)) {
+        *view = f->color.view_a1;
+        *smp = get_sampler(f->smp);
+        return;
+    }
+    *view = s_dummy.view;   /* unbound */
     *smp = get_sampler(default_tex_sampler());
 }
 
@@ -1533,6 +1638,21 @@ void bind_pipeline(VkPipeline p) {
 bool prepare_draw(void) {
     if (!s_up || s_prg == nullptr) return false;
     ensure_frame();
+    for (int u = 0; u < 2; u++) {   /* a sampled framebuffer is made readable outside the pass */
+        Fb* f = sampled_fb(u);
+        if (f && f->l_color != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            end_rendering();
+            layout_to(main_cmd(), f->color.img, VK_IMAGE_ASPECT_COLOR_BIT, f->l_color, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
+    }
+    {   /* a rendered image is stored top-down, GL's bottom-up: the shader mirrors t */
+        const int32_t f0 = sampled_fb(0) != nullptr, f1 = sampled_fb(1) != nullptr;
+        if (f0 != s_uni.flip_v0 || f1 != s_uni.flip_v1) {
+            s_uni.flip_v0 = f0;
+            s_uni.flip_v1 = f1;
+            s_uni_dirty = true;
+        }
+    }
     if (!begin_rendering()) return false;
     bind_pipeline(get_pipeline(current_key(true)));
     if (s_uni_dirty) update_uniforms();
@@ -1722,6 +1842,8 @@ void vk_set_sampler_parameters(int tile, bool linear_filter, uint32_t cms, uint3
     const Unit& un = s_unit[tile];
     if (un.kind == 1 && un.id < s_tex.size() && s_tex[un.id].alive) {
         s_tex[un.id].smp = k;
+    } else if (un.kind == 2 && (int)un.id < (int)s_fbs.size()) {
+        s_fbs[un.id].smp = k;
     }
     s_desc_dirty = true;
 }
@@ -1843,10 +1965,6 @@ void vk_init(void) {
     }
     create_swapchain();
     s_fbs.resize(1);   /* fb 0 = the window, as gfx_opengl_init */
-    /* Step 2: no off-screen targets yet. GL takes the same path when the
-     * driver has no framebuffer objects (gfx_opengl_init). */
-    gfx_framebuffers_enabled = false;
-    sysLogPrintf(LOG_WARNING, "VK: framebuffer effects disabled (off-screen targets: issue #44 step 3)");
     gfx_skyplus_failed = 1;   /* no GE+ sky pass yet: skyplus.c draws GE's own sky */
 }
 
@@ -1861,15 +1979,37 @@ void vk_finish_render(void) {}
 int vk_create_framebuffer(void) {
     const int i = (int)s_fbs.size();
     s_fbs.resize(i + 1);
+    Fb& f = s_fbs[i];
+    f.smp = SmpKey{ VK_FILTER_LINEAR, VK_FILTER_LINEAR, MIP_NONE, VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT, 1 };
+    if (s_up && gfx_framebuffers_enabled) build_fb_images(f);   /* 1x1 until sized, as GL */
     return i;
 }
 
 void vk_update_framebuffer_parameters(int fb_id, uint32_t width, uint32_t height, uint32_t msaa_level, bool invert_y,
-                                      bool, bool has_depth_buffer, bool) {
+                                      bool render_target, bool has_depth_buffer, bool can_extract_depth) {
+    (void)render_target;
+    (void)can_extract_depth;
     if (fb_id < 0 || fb_id >= (int)s_fbs.size()) return;
     Fb& f = s_fbs[fb_id];
-    f.w = width < 1 ? 1 : width;
-    f.h = height < 1 ? 1 : height;
+    width = width < 1 ? 1 : width;
+    height = height < 1 ? 1 : height;
+    if (!gfx_framebuffers_enabled) has_depth_buffer = false;
+    if (fb_id != 0 && gfx_framebuffers_enabled) {
+        const bool depth_missing = has_depth_buffer && !f.has_depth_img;
+        if (f.w != width || f.h != height || f.msaa != msaa_level || depth_missing || !f.created) {
+            if (s_render_fb == fb_id) end_rendering();
+            destroy_fb_images(f);
+            f.w = width;
+            f.h = height;
+            f.msaa = msaa_level;
+            f.has_depth = has_depth_buffer;
+            build_fb_images(f);
+            s_desc_dirty = true;
+        }
+    }
+    f.w = width;
+    f.h = height;
     f.msaa = msaa_level;
     f.has_depth = has_depth_buffer;
     f.invert_y = invert_y;
@@ -1879,7 +2019,7 @@ bool vk_start_draw_to_framebuffer(int fb_id, float noise_scale) {
     if (gfx_framebuffers_enabled && fb_id < (int)s_fbs.size()) {
         if (noise_scale != 0.0f) s_noise_scale = 1.0f / noise_scale;
         if (fb_id != s_cur_fb) {
-            s_vp_dirty = s_sc_dirty_rect = s_depth_dirty = true;
+            s_vp_dirty = s_sc_dirty_rect = s_depth_dirty = s_desc_dirty = true;   /* the old target may be sampled now */
         }
         s_cur_fb = fb_id;
         return true;
@@ -1927,8 +2067,133 @@ void vk_clear_region(bool color, bool depth, int x, int y, int w, int h) {
     clear_rect(color, depth, x0, y0, x1 - x0, y1 - y0);
 }
 
-void vk_copy_framebuffer(int, int, int, int, bool, bool) {}        /* step 3 */
-void vk_resolve_msaa_color_buffer(int, int) {}                     /* step 3 */
+/* The single-sample image holding fb's picture (resolving its MSAA image
+ * first). Outside a rendering pass. */
+bool readable_image(int fb, VkImage* img, VkImageLayout** layout) {
+    VkCommandBuffer c = main_cmd();
+    if (is_window(fb)) {
+        if (!ensure_acquired()) return false;
+        *img = s_sc_images[s_acq];
+        *layout = &s_sc_layout;
+        return true;
+    }
+    Fb& f = s_fbs[fb];
+    if (!f.created) return false;
+    if (f.has_ms) {
+        layout_to(c, f.color_ms.img, VK_IMAGE_ASPECT_COLOR_BIT, f.l_ms, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        layout_to(c, f.color.img, VK_IMAGE_ASPECT_COLOR_BIT, f.l_color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImageResolve r = {};
+        r.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        r.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        r.extent = { f.w, f.h, 1 };
+        vkCmdResolveImage(c, f.color_ms.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, f.color.img,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
+    }
+    *img = f.color.img;
+    *layout = &f.l_color;
+    return true;
+}
+
+bool writable_image(int fb, VkImage* img, VkImageLayout** layout) {
+    if (is_window(fb)) {
+        if (!ensure_acquired()) return false;
+        *img = s_sc_images[s_acq];
+        *layout = &s_sc_layout;
+        return true;
+    }
+    Fb& f = s_fbs[fb];
+    if (!f.created) return false;
+    *img = f.color.img;
+    *layout = &f.l_color;
+    return true;
+}
+
+/* blit a GL-coordinate rect between two framebuffers (both stored top-down) */
+void blit_gl(int fb_src, int sx0, int sy0, int sx1, int sy1, int fb_dst, int dx0, int dy0, int dx1, int dy1, bool linear) {
+    ensure_frame();
+    end_rendering();
+    VkImage si, di;
+    VkImageLayout *sl, *dl;
+    if (!readable_image(fb_src, &si, &sl) || !writable_image(fb_dst, &di, &dl) || si == di) return;
+    bool flip = false;
+    if (sy1 < sy0) { std::swap(sy0, sy1); flip = !flip; }
+    if (dy1 < dy0) { std::swap(dy0, dy1); flip = !flip; }
+    {   /* GL bottom-up rows -> top-down memory rows, both sides (relative orientation kept) */
+        const int hs = (int)fb_height(fb_src), hd = (int)fb_height(fb_dst);
+        int a = hs - sy1, b = hs - sy0;
+        sy0 = a; sy1 = b;
+        a = hd - dy1; b = hd - dy0;
+        dy0 = a; dy1 = b;
+    }
+    const int sw = (int)fb_width(fb_src), sh = (int)fb_height(fb_src);
+    const int dw = (int)fb_width(fb_dst), dh = (int)fb_height(fb_dst);
+    if (sx0 < 0) sx0 = 0;
+    if (sy0 < 0) sy0 = 0;
+    if (sx1 > sw) sx1 = sw;
+    if (sy1 > sh) sy1 = sh;
+    if (dx0 < 0) dx0 = 0;
+    if (dy0 < 0) dy0 = 0;
+    if (dx1 > dw) dx1 = dw;
+    if (dy1 > dh) dy1 = dh;
+    if (sx1 <= sx0 || sy1 <= sy0 || dx1 <= dx0 || dy1 <= dy0) return;
+    VkCommandBuffer c = main_cmd();
+    layout_to(c, si, VK_IMAGE_ASPECT_COLOR_BIT, *sl, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    layout_to(c, di, VK_IMAGE_ASPECT_COLOR_BIT, *dl, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkImageBlit r = {};
+    r.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    r.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    r.srcOffsets[0] = { sx0, sy0, 0 };
+    r.srcOffsets[1] = { sx1, sy1, 1 };
+    r.dstOffsets[0] = { dx0, flip ? dy1 : dy0, 0 };
+    r.dstOffsets[1] = { dx1, flip ? dy0 : dy1, 1 };
+    vkCmdBlitImage(c, si, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, di, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r,
+                   linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+}
+
+void vk_copy_framebuffer(int fb_dst, int fb_src, int left, int top, bool flip_y, bool use_back) {
+    (void)use_back;   /* the image being drawn is read (GL: GL_BACK) */
+    if (!s_up || !gfx_framebuffers_enabled || fb_dst >= (int)s_fbs.size() || fb_src >= (int)s_fbs.size()) return;
+    const int dw = (int)fb_width(fb_dst), dh = (int)fb_height(fb_dst);
+    int sx0, sy0, sx1, sy1;
+    if (left >= 0 && top >= 0) {
+        sx0 = left; sy0 = top; sx1 = left + dw; sy1 = top + dh;
+    } else {
+        sx0 = 0; sy0 = 0; sx1 = (int)fb_width(fb_src); sy1 = (int)fb_height(fb_src);
+    }
+    int dy0 = 0, dy1 = dh;
+    if (flip_y) std::swap(dy0, dy1);
+    blit_gl(fb_src, sx0, sy0, sx1, sy1, fb_dst, 0, dy0, dw, dy1, false);
+    s_desc_dirty = true;
+}
+
+void vk_resolve_msaa_color_buffer(int fb_target, int fb_source) {
+    if (!s_up || !gfx_framebuffers_enabled || fb_source <= 0 || fb_source >= (int)s_fbs.size() ||
+        fb_target >= (int)s_fbs.size()) {
+        return;
+    }
+    Fb& src = s_fbs[fb_source];
+    if (!src.created) return;
+    ensure_frame();
+    end_rendering();
+    if (!is_window(fb_target) && src.has_ms && s_fbs[fb_target].created && s_fbs[fb_target].w == src.w &&
+        s_fbs[fb_target].h == src.h) {
+        Fb& dst = s_fbs[fb_target];
+        VkCommandBuffer c = main_cmd();
+        layout_to(c, src.color_ms.img, VK_IMAGE_ASPECT_COLOR_BIT, src.l_ms, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        layout_to(c, dst.color.img, VK_IMAGE_ASPECT_COLOR_BIT, dst.l_color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImageResolve r = {};
+        r.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        r.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        r.extent = { src.w, src.h, 1 };
+        vkCmdResolveImage(c, src.color_ms.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.color.img,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
+    } else {
+        blit_gl(fb_source, 0, 0, (int)src.w, (int)src.h, fb_target, 0, 0, (int)fb_width(fb_target),
+                (int)fb_height(fb_target), false);
+    }
+    s_desc_dirty = true;
+}
+
 void* vk_get_framebuffer_texture_id(int fb_id) { return (void*)(uintptr_t)fb_id; }
 void vk_set_texture_filter(enum FilteringMode mode) { s_filter = mode; }
 enum FilteringMode vk_get_texture_filter(void) { return s_filter; }
@@ -2057,7 +2322,7 @@ void gfx_vulkan_present(void) {
     const bool present = s_acq >= 0;
     if (present) {
         image_barrier(f.cmd, s_sc_images[s_acq], VK_IMAGE_ASPECT_COLOR_BIT, 1, s_sc_layout, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                      VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,   /* drawn, or a blit / resolve target */
                       VK_PIPELINE_STAGE_2_NONE, 0);
     }
     VK_CHECK(vkEndCommandBuffer(f.pre));
@@ -2130,6 +2395,12 @@ void gfx_vulkan_park(void) {
         if (t.has_img) destroy_image_now(t.img);
     }
     s_tex.clear();
+    for (Fb& f : s_fbs) {
+        destroy_image_now(f.color);
+        destroy_image_now(f.color_ms);
+        destroy_image_now(f.depth);
+    }
+    s_fbs.clear();
     destroy_image_now(s_dummy);
     destroy_image_now(s_win_depth);
     for (auto& d : s_dead_imgs) destroy_image_now(d.i);
