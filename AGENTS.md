@@ -45,13 +45,19 @@ The repo is public, MIT-licensed and forked, so these apply to anything tracked 
 
 ## Build
 
+All three targets build in Docker. No ROM is needed to build: the ROM-asset symbols are pre-generated and the game reads the user's ROM at run time.
+
 ```sh
-./build-pc.sh ntsc-final   # or pal-final / jpn-final
+docker compose build                    # once: Dockerfile.build (devkitA64 + Linux host libs)
+docker compose run --rm switch          # -> build-switch/ge007.aarch64.nro (what CI ships)
+docker compose run --rm linux           # -> build-linux/ge007.x86_64
+docker compose build windows            # once: Dockerfile.windows (MinGW-w64)
+docker compose run --rm windows         # -> build-win/ge007.x86_64.exe + DLLs
 ```
 
-Needs CMake, SDL2, zlib and OpenGL, run from the MSYS2 MINGW64 shell. The ROM goes in `./data/` (not distributed) and assets are extracted from it first (`docs/building.md`).
+The Switch build is the reference: `.github/workflows/switch.yml` builds it in the same pinned devkitA64 image and is the only workflow that runs on this fork. Linux and Windows check that the PC port still compiles. SD-card layout, nxlink test builds and release packaging: `docs/building.md` §Nintendo Switch.
 
-The three recurring Windows failures, to check in this order:
+A native Windows build (`./build-pc.sh ntsc-final` from the MSYS2 MINGW64 shell, upstream's reference) still works. Its three recurring failures, to check in this order:
 
 1. **`Cannot create temporary file in C:\Windows\`** at link: TMP is lost in a non-login shell. `build-pc.sh` re-runs itself under PowerShell to fix this. By hand, run cmake/ninja from cmd or PowerShell with `C:\msys64\mingw64\bin` on PATH.
 2. **`cannot open output file ge007.x86_64.exe: Permission denied`**: the game is running. Never kill the user's game process to make a link succeed.
@@ -61,7 +67,7 @@ Details and the history of the re-run fixes (D515 and earlier): `docs/building.m
 
 ## Verification ritual (after any build-affecting change)
 
-Run `/linkcheck`. Every symbol the compiled set references (`CMakeLists.txt` `SRC_*` lists) is defined exactly once, in the compiled set or in `port/`. Symbols from excluded files (`libultra/io|os`, `libultrare/io|os` except `vitbl.c`, `sched.c`, `rmon.c`, `vi.c`, `src/*.s`) come from `port/src/libultra.c`, `n64stubs.c`, `random.c` or `ucode.c`. No duplicates (watch `sp_*` stacks, `rmon*`, `os*` shims, segment markers). Every touched file parses; `./build-pc.sh` is the final word. Record new findings in `docs/dev/findings.md` under the next free `Dxx` label and add it to the §F index.
+Run `/linkcheck`. Every symbol the compiled set references (`CMakeLists.txt` `SRC_*` lists) is defined exactly once, in the compiled set or in `port/`. Symbols from excluded files (`libultra/io|os`, `libultrare/io|os` except `vitbl.c`, `sched.c`, `rmon.c`, `vi.c`, `src/*.s`) come from `port/src/libultra.c`, `n64stubs.c`, `random.c` or `ucode.c`. No duplicates (watch `sp_*` stacks, `rmon*`, `os*` shims, segment markers). Every touched file parses; `docker compose run --rm switch` (plus `linux` / `windows` when shared PC code changed) is the final word. Record new findings in `docs/dev/findings.md` under the next free `Dxx` label and add it to the §F index.
 
 ## Phase status
 

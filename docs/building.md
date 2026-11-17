@@ -27,8 +27,11 @@ for accepted versions and hashes.
 
 ### Port build
 
-> **The Windows (MSYS2 MINGW64) path is the primary one.** Linux is compiled
-> by CI and ships in the release bundle. **macOS on Apple Silicon is
+> **This fork (Project Dam) builds in Docker**: the Nintendo Switch NRO is
+> what it ships, and the Linux and Windows builds come from the same compose
+> file (§3, "Docker builds"). The dependency tables below are for native
+> builds. **Upstream's primary path is Windows (MSYS2 MINGW64)**; upstream CI
+> also compiles Linux and ships it in its release bundle. **macOS on Apple Silicon is
 > experimental as of v0.6.0**: the release has a `macos-arm64` download
 > (`scripts/package-macos.sh` makes it on a Mac; CI runs it) that is not
 > notarized, so clear the quarantine flag once before the first launch with
@@ -128,10 +131,56 @@ python3 scripts/gen_romassets.py j     # JP    -> port/src/romassets_j.s
 The executable lands at `build-pc/ge007.x86_64` (`.exe` on Windows). PAL/JP
 builds are named `ge007.pal-final.x86_64` / `ge007.jpn-final.x86_64`.
 
-### Windows build from Docker (cross-compilation)
+### Docker builds
 
-A Windows x86_64 executable can also be built without MSYS2, from any
-machine with Docker (Linux, WSL, macOS, or Windows itself):
+`compose.yaml` builds every target this fork cares about, from any
+machine with Docker (Linux, WSL, macOS or Windows). The repository is
+bind-mounted at `/src`, so a source change needs no image rebuild. No ROM is
+needed to build. The PAL/JP symbol files of §3 are still needed for those
+regions.
+
+| Service | Image | Output |
+|---|---|---|
+| `switch` | `Dockerfile.build` (pinned devkitA64, libnx, Switch portlibs) | `build-switch/ge007.aarch64.nro` |
+| `linux` | `Dockerfile.build` (same image, host SDL2/GL/zlib) | `build-linux/ge007.x86_64` |
+| `windows` | `Dockerfile.windows` (Fedora 43, MinGW-w64) | `build-win/ge007.x86_64.exe` + DLLs |
+| `shell` | `Dockerfile.build` | interactive bash in the toolchain |
+
+```sh
+docker compose build             # once: Dockerfile.build (switch, linux, shell)
+docker compose run --rm switch
+docker compose run --rm linux
+```
+
+(The repository's `Dockerfile` and `docker-compose.yml` (service `ge007`) are
+upstream's N64 matching-build environment, unrelated to these. When both
+files are present, `docker compose` reads `compose.yaml`.)
+
+#### Nintendo Switch
+
+`.github/workflows/switch.yml` runs the same build in the same pinned image on
+every push and pull request, and it is the only workflow that runs on this
+fork. A `project-dam-vX.Y.Z` tag also publishes a release.
+
+- **SD card for a test install:** after the build, from the `shell` service,
+  `tools/switch/make_sd.sh <rom.z64> [out_dir]` (default `build-switch/sd`)
+  assembles `switch/project-dam/` with the NRO, a copy of the ROM and the
+  converted sidecars (§4). Copy its `switch/` folder to the root of the SD
+  card.
+- **Release archive:** `tools/switch/package_release.sh <version> [out_dir]`
+  (default `dist`) zips the NRO, the `prepare-assets` converter, `README.txt`,
+  `LICENSE` and `NOTICE`. It ships no game content. CI passes
+  `-DPROJECT_DAM_VERSION=<version>` to the build; a local build shows
+  `dev-<hash>` in the homebrew menu.
+- **Test builds over nxlink:** a separate build directory (`build-switch-link`)
+  configured with `-DNX_LINKSTDIO=ON -DNX_ARGS=ON` sends the log and crash dump
+  back to the PC and reads `data/ge007.args`. These NROs are never shipped.
+  Procedure and client: `docs/switch/nxlink-stdio.md`. Address model:
+  `docs/switch/address-model.md`.
+
+#### Windows (cross-compilation)
+
+A Windows x86_64 executable builds without MSYS2:
 
 ```sh
 docker compose build windows                      # once: the toolchain image
@@ -149,8 +198,9 @@ The image (`Dockerfile.windows`) is Fedora 43 with its MinGW-w64 packages
 (GCC 15, mingw-w64 13, zlib) and libsdl.org's prebuilt SDL2 MinGW package;
 the base image and the SDL2 archive are pinned. Fedora 43 is the minimum:
 older mingw-w64 headers define `sprintf`/`snprintf` as `static inline`,
-which clashes with the decomp's own prototypes. The MSYS2 build above stays
-the reference and the one CI ships. CMake handles three differences of the
+which clashes with the decomp's own prototypes. The MSYS2 build above is
+upstream's reference and the one upstream CI ships; this fork uses the
+Docker build to check that the PC port still compiles. CMake handles three differences of the
 cross toolchain, only when cross-compiling with MinGW (the MSYS2 build is
 unchanged):
 
