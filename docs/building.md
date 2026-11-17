@@ -237,3 +237,85 @@ runtime. `ge007.ini` is written under `data/` on first launch.
 
 More diagnostic switches are cataloged in
 [`dev/GE-ENV-PROBES.md`](https://github.com/jkdansereau/goldeneye-pc-port/blob/main/docs/dev/GE-ENV-PROBES.md).
+
+## Windows build environment troubleshooting
+
+Moved from `AGENTS.md`, which keeps a one-line summary of each.
+Three recurring failure modes; diagnose in this order.
+
+1. **`Cannot create temporary file in C:\Windows\: Permission denied`** at the
+   link step. The PE toolchain (ninja → cmd → gcc/ld) needs a writable
+   TMP/TEMP; the msys→native env conversion drops it in non-login shells
+   (agent harnesses; the `C:/msys64` tree here was built for a relocated MSYS2
+   root — `<msys>` in the placeholder legend — so its path conversion is
+   unreliable). `build-pc.sh` now **self-heals**: it
+   probes a native child's TMP (via a file — piped `cmd.exe` stdout is
+   unreliable under msys console emulation) and, if broken, re-runs
+   cmake+build under PowerShell with `TMP`/`TEMP` set natively (the
+   native→native boundary passes env through intact; only msys→native is
+   broken). If you run cmake/ninja *by hand* from a broken shell: run them
+   from cmd/PowerShell with `C:\msys64\mingw64\bin` on PATH.
+   **Guard revision (2026-09-28):** the re-exec writes a self-contained
+   `.ps1` to a temp file and runs `powershell -File` with plain path/word
+   args only (the msys→native argv conversion mangles `$`-bearing
+   `-Command` strings; a file write is conversion-free). Inside: PATH is
+   built explicitly (never trust the inherited value); TMP is chosen from
+   writable candidates (`%LocalAppData%\Temp` first —
+   `[System.IO.Path]::GetTempPath()` honours the inherited *broken* TMP,
+   observed as `C:\Windows\`); every native step self-logs to
+   `build-pc/ge007-native-reexec-{diag,cmake,build}.log`; a null
+   `$LASTEXITCODE` ("did not execute") is a distinct failure (exit 2/3) —
+   in PS 5.1 a piped native command errors out non-terminating and never
+   sets it, so an unguarded `if ($LASTEXITCODE -ne 0)` passes vacuously.
+   In `.ps1`, `-DROMID=$Var` is a literal (bare tokens don't expand) — it
+   must be `"-DROMID=$Var"`. Launch powershell plainly — `env -i` before it
+   breaks the nested cmake launch (verified 2026-09-28).
+   **FIXED 2026-09-30 (`fix/build-pc-tmp-reexec`):** the heredoc `.ps1`
+   was byte-identical to a hand-extracted copy — not line endings. Three
+   real bugs: (a) the TMP probe's inline `cmd //c "... \"path\" ..."` never
+   ran (msys re-escapes embedded quotes as `\"`, which cmd rejects), so
+   *every* build took the re-exec, and it only tested that TMP existed;
+   (b) the `.ps1`'s toolchain dirs were derived from `command -v cmake`,
+   which in Git Bash/agent shells is a pip cmake (no MSYS2 toolchain) —
+   the hand-run worked because it passed explicit `C:\msys64\...` paths;
+   (c) `/tmp` + `cygpath` disagree when Git Bash and MSYS2 `usr/bin` are
+   both on PATH, so the `.ps1` could be written to one `/tmp` and
+   powershell pointed at the other (it then exits 0 having done nothing).
+   Now: the MSYS2 `mingw64/bin` is located and validated (override:
+   `GE_MSYS2_ROOT`) and prepended to PATH; the probe is a `.cmd` file that
+   tests TMP *writability*; all native-facing files live in the build dir
+   with paths from bash's own `pwd -W`. Verified from an agent Git Bash
+   shell: fresh + incremental builds, both on the direct path and with a
+   forced unwritable TMP (`TMP=C:\Windows\`) through the re-exec.
+   **FIXED 2026-09-30 (`fix/build-pc-reexec-noop`): the re-exec exited rc=2
+   with the diag log ending `cmake ran LASTEXITCODE=[]`.** From a shell with
+   MSYS2 `usr/bin` first on PATH, powershell inherits a stripped ~13-var env
+   with `PATHEXT=.CPL` and no ComSpec/TMP/TEMP, so `& cmake.exe` silently
+   launches nothing. The `.ps1` now restores PATHEXT and ComSpec. In that
+   shell the re-exec itself is legitimately needed (no TMP), so the probe
+   is correct. Verified: MSYS2-PATH shell, forced `TMP=C:\Windows\`, and a
+   no-change incremental run all exit 0 with a fresh exe.
+   **FIXED 2026-10-04 (`fix/build-arch-tag`, D515):** a FRESH build dir
+   configured through the re-exec cached `CMAKE_HOST_SYSTEM_PROCESSOR ""` /
+   `CMAKE_SYSTEM_PROCESSOR ""` (the stripped env also drops
+   `PROCESSOR_ARCHITECTURE`, which CMake reads for the host processor — same
+   class as PATHEXT/ComSpec), so `cmake/TargetArch.cmake` produced an empty
+   arch tag: `Target arch:  (64bit=FALSE)`, binary named `ge007..exe`
+   (a correct 64-bit build; only the name was wrong — found during T7, D513).
+   The `.ps1` now restores `PROCESSOR_ARCHITECTURE` from the machine
+   environment (fallback `AMD64`; `SystemRoot`/`windir` likewise) and logs
+   the four vars to the diag log; `cmake/TargetArch.cmake` falls back to
+   `${CMAKE_C_COMPILER} -dumpmachine` when `CMAKE_SYSTEM_PROCESSOR` is empty
+   and FATAL_ERRORs instead of emitting an untagged binary. Existing build
+   dirs are unaffected (value already cached); a dir configured before the
+   fix picks up x86_64 on its next in-place reconfigure.
+2. **`cannot open output file ge007.x86_64.exe: Permission denied`.** A
+   **running** `ge007.x86_64.exe` locks the output file (Windows rule; you
+   can't relink over a live PE). Check with `Get-Process | Where-Object {
+   $_.ProcessName -like '*ge007*' }` and close the game before rebuilding.
+   An agent must not kill the user's game process to make a link succeed.
+3. **`cc1.exe: ... libmpfr-6.dll: cannot open shared object file`.** The
+   calling PATH lacks `C:\msys64\mingw64\bin` (the gcc driver finds cc1 via
+   its own directory, but the child needs the mingw DLL dir on PATH). In an
+   msys shell: `export PATH="/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"`
+   before building.
