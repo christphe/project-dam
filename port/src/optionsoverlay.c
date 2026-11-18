@@ -116,12 +116,12 @@ static const char *const kOrigStyle[] = { "1.1 Honey", "1.2 Solitaire", "1.3 Kis
                                           "2.1 Plenty", "2.2 Galore", "2.3 Domino", "2.4 Goodhead", NULL };
 static int s_padSeat = 0;   /* D469: seat edited by the Controller page rows */
 static const char *const kControlScheme[] = { "Extended", "Original", NULL };   /* D513/D554: display text only (index = stored value) */
+static const char *const kCoopHealth[] = { "100%", "150%", "200%", NULL };   /* project-dam: coop.c */
 #if defined(__SWITCH__)
 static const char *const kAimMode[]   = { "Original", "Centered", NULL };   /* D337; project-dam: the weapon sway is part of Centered */
 static const char *const kTurnAccel[] = { "Off", "Low", "High", NULL };   /* project-dam */
 static const char *const kAimZoom[]   = { "Off", "1.5x", "2x", NULL };    /* project-dam */
 static const char *const kAimAssist[] = { "Off", "Low", "High", NULL };   /* project-dam */
-static const char *const kCoopHealth[] = { "100%", "150%", "200%", NULL };   /* project-dam: coop.c */
 static const char *const kAimEntry[]  = { "Off", "Move view", "Centre crosshair", NULL };   /* project-dam */
 static const char *const kLookAhead[] = { "Off", "Low", "Medium", "High", NULL };   /* project-dam */
 #else
@@ -490,12 +490,10 @@ static struct Row rows[] = {
     /* D606 (#144): PD-style always-visible mission timer; drawn top-right
      * (under the FPS readout when both are on) while a stage is active. */
     { .key="Game.MissionTimer", .label="Mission timer", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
-#if defined(__SWITCH__)
     /* project-dam: red puff on a guard hit instead of the wall puff (nxgame.c). */
     { .key="Game.BloodOnHit", .label="Blood on hit", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
     /* project-dam: 2-player split-screen co-op campaign (coop.c). */
     { .key="Game.CoopEnemyHealth", .label="Co-op enemy health", .kind=ROW_ENUM, .step=1, .names=kCoopHealth },
-#endif
     SEP(G4),
     /* D551: opt-in update check; the action row appears only once a newer release is known. */
     { .key="Game.CheckUpdates", .label="Check for updates", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
@@ -1725,12 +1723,10 @@ static void rowSetCommit(struct Row *r, double v, int commit)
         extern void portAllUnlockedApply(void);
         portAllUnlockedApply();
     }
-#if defined(__SWITCH__)
     if (strcmp(r->key, "Game.BloodOnHit") == 0) {   /* project-dam */
         extern void nxGameApply(void);
         nxGameApply();
     }
-#endif
 
     /* Linked aim/turn sensitivity (Input.SensLink, default on): moving either
      * knob scales the other to hold the stock default ratio -- AimModeSens 38
@@ -2296,8 +2292,10 @@ static const struct { const char *key; double def; } kResetDefaults[] = {
     { "Game.MissionTimer", 0 },  /* = 0 (off, D606) */
 #if defined(__SWITCH__)
     { "Game.BloodOnHit", 1 },    /* project-dam: = on */
-    { "Game.CoopEnemyHealth", 1 },/* project-dam: = 150% */
+#else
+    { "Game.BloodOnHit", 0 },    /* off: the game's own puff */
 #endif
+    { "Game.CoopEnemyHealth", 1 },/* project-dam: = 150% (coop.c) */
     { "Game.NoHitFlash",  0 },   /* = 0 */
     { "Game.AllUnlocked", 0 },   /* = 0 -- D257's "default ON" note was stale */
     { "Game.HudScale",   100 },  /* = 100 (D226) */
