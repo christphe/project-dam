@@ -281,6 +281,7 @@ static struct Row rows[] = {
     { .key="Video.FXAA", .label="FXAA", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
 #else
     { .key="Video.MSAA", .label="Anti-aliasing", .kind=ROW_MSAA, .restart=1 },
+    { .key="Video.FXAA", .label="FXAA", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },   /* project-dam: now on PC too */
 #endif
     { .key="Video.Visuals", .label="Visuals", .kind=ROW_ENUM, .step=1, .names=kVisuals },   /* D982 */
     SEP(V2),
@@ -2264,6 +2265,8 @@ static const struct { const char *key; double def; } kResetDefaults[] = {
 #if defined(__SWITCH__)
     { "Video.MSAAHandheld",         2 },   /* project-dam */
     { "Video.FXAA",                 1 },   /* project-dam: on */
+#else
+    { "Video.FXAA",                 0 },   /* off: the picture as rendered */
 #endif
 #if defined(__SWITCH__)
     { "Video.Visuals",              2 },   /* D982: Enhanced */

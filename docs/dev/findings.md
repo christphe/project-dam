@@ -23110,3 +23110,7 @@ Console (same command, 40 s, 8 reports): 218-290 GPU replays per frame (5300-690
 **Next (issue #44 step 5).** The mesh path (`GE_MESHGPU`: `mesh_create` / `mesh_draw` / `mesh_supported`, uniform block 6, the clip-control extension is then required).
 
 **Confidence.** High for the sky and the slots on Windows / NVIDIA; medium for FXAA (visual check on GL and Vulkan, no pixel diff; the Switch path was only compiled). Linux runtime, AMD / Intel and MoltenVK were not run.
+
+## D992: FXAA row in the PC Video menu -- BUILT + RUN 2026-11-18 (Windows cross-build; maintainer request)
+
+`Video.FXAA` (the pass itself and its PC enablement are D991) gets a row on the PC Video page after Anti-aliasing: live, default 0 (the Switch preset keeps 1), restored by the VIDEO reset. The key was already read on every platform; before D991 only the Switch acted on it. Verified: Windows, Linux and Switch build; the key is written to the ini and FXAA draws on GL and Vulkan (D991). The menu row itself was not opened (no scripted key input).
