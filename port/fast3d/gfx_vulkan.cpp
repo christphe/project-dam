@@ -56,10 +56,13 @@
  * their own pipelines; the D578 present slots are image copies of the window
  * in the swapchain's format.
  *
- * Status (step 4 of the issue): drawing, textures, depth, off-screen
- * framebuffers, MSAA, copies, clear-region, FXAA, the GE+ sky, present slots.
- * Not yet: the mesh path (step 5), the on-disk pipeline cache (step 6), a
- * readback for GE_PCDUMP. */
+ * Mesh path (GE_MESHCACHE=1 on PC): static vertex buffers drawn with the pack's
+ * GPU-transform vertex shader (uniform block 6), culling as dynamic state.
+ *
+ * Status (step 5 of the issue): drawing, textures, depth, off-screen
+ * framebuffers, MSAA, copies, clear-region, FXAA, the GE+ sky, present slots,
+ * the mesh path. Not yet: the on-disk pipeline cache (step 6), a readback for
+ * GE_PCDUMP. */
 
 #ifdef GE_VULKAN
 
@@ -215,9 +218,14 @@ struct Img {
 struct DeadImg { Img i; uint64_t serial; };
 std::vector<DeadImg> s_dead_imgs;
 std::vector<std::pair<VkPipeline, uint64_t>> s_dead_pipes;
+/* GE_MESHGPU: static vertex buffers (host-visible for now), freed once the
+ * submissions that may read them have completed */
+struct VkMesh { HostChunk chunk; uint32_t bytes = 0; };
+std::vector<VkMesh> s_meshes(1);
+std::vector<std::pair<HostChunk, uint64_t>> s_dead_meshes;
 
 /* PERFSTAT counters */
-uint64_t s_st_draws, s_st_uber_draws, s_st_uploads, s_st_pipelines;
+uint64_t s_st_draws, s_st_uber_draws, s_st_uploads, s_st_pipelines, s_st_mesh_draws, s_st_mesh_total;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBitsEXT sev, VkDebugUtilsMessageTypeFlagsEXT,
                                         const VkDebugUtilsMessengerCallbackDataEXT* data, void*) {
@@ -640,6 +648,12 @@ void retire(void) {
         else s_dead_pipes[w++] = s_dead_pipes[i];
     }
     s_dead_pipes.resize(w);
+    w = 0;
+    for (size_t i = 0; i < s_dead_meshes.size(); i++) {
+        if (s_dead_meshes[i].second <= s_completed) free_host_chunk(s_dead_meshes[i].first);
+        else s_dead_meshes[w++] = s_dead_meshes[i];
+    }
+    s_dead_meshes.resize(w);
     for (auto& kv : s_img_heaps) kv.second.heap.retire(s_completed);
     s_ring.retire(s_completed);
 }
@@ -1004,11 +1018,11 @@ enum { BLEND_OFF = 0, BLEND_ALPHA = 1, BLEND_MODULATE = 2 };
 
 struct PipeKey {
     const ShaderProgram* prg;
-    uint8_t blend, cwrite, a2c, samples;
+    uint8_t blend, cwrite, a2c, samples, mesh;   /* mesh: the program's GPU-transform vertex shader */
     VkFormat color, depth;
     bool operator<(const PipeKey& o) const {
-        return std::tie(prg, blend, cwrite, a2c, samples, color, depth) <
-               std::tie(o.prg, o.blend, o.cwrite, o.a2c, o.samples, o.color, o.depth);
+        return std::tie(prg, blend, cwrite, a2c, samples, mesh, color, depth) <
+               std::tie(o.prg, o.blend, o.cwrite, o.a2c, o.samples, o.mesh, o.color, o.depth);
     }
 };
 std::map<PipeKey, VkPipeline> s_pipes;
@@ -1043,7 +1057,7 @@ VkPipeline create_pipeline(const PipeKey& k) {
     VkPipelineShaderStageCreateInfo st[2] = {};
     st[0].sType = st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    st[0].module = p->vert;
+    st[0].module = k.mesh ? p->mesh_vert : p->vert;
     st[0].pName = "main";
     st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     st[1].module = p->frag;
@@ -1527,6 +1541,9 @@ ShaderProgram* s_prg = nullptr;
 struct DkDrawUniforms s_uni = {};
 VkBuffer s_ubo_buf = VK_NULL_HANDLE;
 VkDeviceSize s_ubo_off = 0;
+bool s_mesh_mode = false;   /* the draw being prepared is a mesh draw (mesh pipeline, Mesh uniforms) */
+VkBuffer s_mesh_ubo_buf = VK_NULL_HANDLE;
+VkDeviceSize s_mesh_ubo_off = 0;
 
 /* streaming (stream_begin) */
 float* s_stream_ptr = nullptr;
@@ -1694,11 +1711,12 @@ void push_descriptors(void) {
         { s_ubo_buf, s_ubo_off, sizeof(DkDrawUniforms) },
         { s_ubo_buf, s_ubo_off + UBO_COMB_OFF, sizeof(DkCombinerParams) },
     };
-    VkWriteDescriptorSet w[4] = {};
-    for (int i = 0; i < 4; i++) {
+    VkWriteDescriptorSet w[5] = {};
+    for (int i = 0; i < 5; i++) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].descriptorCount = 1;
     }
+    VkDescriptorBufferInfo mi = { s_mesh_ubo_buf, s_mesh_ubo_off, sizeof(DkMeshUniforms) };
     w[0].dstBinding = 0;
     w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w[0].pImageInfo = &ii[0];
@@ -1711,7 +1729,10 @@ void push_descriptors(void) {
     w[3].dstBinding = 5;
     w[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     w[3].pBufferInfo = &bi[1];
-    vkCmdPushDescriptorSetKHR(main_cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe_layout, 0, 4, w);
+    w[4].dstBinding = 6;
+    w[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    w[4].pBufferInfo = &mi;
+    vkCmdPushDescriptorSetKHR(main_cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe_layout, 0, s_mesh_mode ? 5 : 4, w);
     s_desc_dirty = false;
 }
 
@@ -1721,6 +1742,7 @@ PipeKey current_key(bool cwrite) {
     k.blend = s_blend ? (s_modulate ? BLEND_MODULATE : BLEND_ALPHA) : BLEND_OFF;
     k.cwrite = cwrite ? 1 : 0;
     k.samples = target_samples();
+    k.mesh = s_mesh_mode ? 1 : 0;
     k.a2c = (s_prg->params.flags & DK_CF_A2C) != 0 && k.samples > 1;
     k.color = target_color_format();
     k.depth = target_has_depth() ? target_depth_format() : VK_FORMAT_UNDEFINED;
@@ -2298,10 +2320,80 @@ enum FilteringMode vk_get_texture_filter(void) { return s_filter; }
 void vk_set_mipmap_filter(enum MipmapFilteringMode mode) { s_mipfilter = mode; }
 void vk_set_anisotropy_level(int level) { s_aniso = level < 1 ? 1 : level > 16 ? 16 : level; }
 int vk_get_max_anisotropy_level(void) { return (int)s_max_aniso; }
-uint32_t vk_mesh_create(const float*, size_t) { return 0; }        /* step 5 */
-void vk_mesh_delete(uint32_t) {}
-void vk_mesh_draw(uint32_t, const struct GfxMeshDraw*) {}
-bool vk_mesh_supported(uint64_t, uint32_t) { return false; }
+uint32_t vk_mesh_create(const float* data, size_t nfloats) {
+    const uint64_t n64 = (uint64_t)nfloats * sizeof(float);
+    if (!s_up || n64 == 0 || n64 > UINT32_MAX) return 0;
+    VkMesh m;
+    m.chunk = make_host_chunk(n64, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    m.bytes = (uint32_t)n64;
+    memcpy(m.chunk.cpu, data, m.bytes);
+    s_meshes.push_back(m);
+    return (uint32_t)s_meshes.size() - 1;
+}
+
+void vk_mesh_delete(uint32_t name) {
+    if (name == 0 || name >= s_meshes.size() || !s_meshes[name].chunk.buf) return;
+    s_dead_meshes.push_back(std::make_pair(s_meshes[name].chunk, s_serial));
+    s_meshes[name] = VkMesh();
+}
+
+/* One run of a static mesh with the program's GPU-transform twin. The twin's
+ * vertex shader writes GL's clip z, so it needs VK_EXT_depth_clip_control
+ * (vk_mesh_supported). Culling is a dynamic state set around the draw (Fast3D
+ * culls on the CPU otherwise); GL's front-face rule as in gfx_deko3d.cpp. */
+void vk_mesh_draw(uint32_t name, const struct GfxMeshDraw* d) {
+    if (!s_up || d == nullptr || s_prg == nullptr || s_prg->uber || s_prg->mesh_vert == VK_NULL_HANDLE ||
+        !s_clip_control || name == 0 || name >= s_meshes.size()) {
+        return;
+    }
+    const VkMesh& m = s_meshes[name];
+    if (!m.chunk.buf || d->nverts == 0 || d->nmtx == 0) return;
+    if ((uint64_t)d->byte_offset + (uint64_t)d->nverts * s_prg->stride > m.bytes) return;
+    ensure_frame();
+
+    const uint32_t nmtx = d->nmtx < GFX_MESH_MAX_MTX ? d->nmtx : GFX_MESH_MAX_MTX;
+    DkMeshUniforms* u = (DkMeshUniforms*)ring_alloc((uint32_t)sizeof(DkMeshUniforms), (uint32_t)s_ubo_align,
+                                                    &s_mesh_ubo_buf, &s_mesh_ubo_off);
+    memset(u, 0, offsetof(DkMeshUniforms, mtx));
+    memcpy(u->mtx, d->mtx, (size_t)nmtx * sizeof u->mtx[0]);
+    memcpy(u->fog_color, d->fog_color, sizeof u->fog_color);
+    u->fog_mul = d->fog_mul;
+    u->fog_off = d->fog_off;
+    u->fog_from_z = d->fog_from_z;
+    memcpy(u->lod_mask, d->lod_mask, sizeof u->lod_mask);
+    memcpy(u->env_in, d->env_in, sizeof u->env_in);
+    memcpy(u->env_mask, d->env_mask, sizeof u->env_mask);
+
+    s_mesh_mode = true;
+    s_desc_dirty = true;   /* the Mesh block is part of the push */
+    const bool ok = prepare_draw();
+    if (ok) {
+        VkCommandBuffer c = main_cmd();
+        if (d->cull != 0) {
+            vkCmdSetCullMode(c, d->cull == 1 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_FRONT_BIT);
+            vkCmdSetFrontFace(c, d->invert_y ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE);
+        }
+        const VkDeviceSize off = d->byte_offset;
+        vkCmdBindVertexBuffers(c, 0, 1, &m.chunk.buf, &off);
+        vkCmdDraw(c, d->nverts, 1, 0, 0);
+        s_st_draws++;
+        s_st_mesh_draws++;
+        s_st_mesh_total++;
+        zcut_pass(d->nverts);   /* D987 */
+        if (d->cull != 0) {
+            vkCmdSetCullMode(c, VK_CULL_MODE_NONE);
+            vkCmdSetFrontFace(c, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+        }
+    }
+    s_mesh_mode = false;
+    s_desc_dirty = true;   /* the next classic draw pushes without the Mesh block */
+}
+
+bool vk_mesh_supported(uint64_t id0, uint32_t id1) {
+    if (!s_clip_control) return false;
+    const int e = pack_find(id0, id1);
+    return e >= 0 && s_pack[e].vert_len != 0 && s_pack[e].frag_len != 0 && s_pack[e].mesh_vert_len != 0;
+}
 
 /* ---------------- post passes (FXAA, GE+ sky) and present slots ---------------- */
 
@@ -2578,6 +2670,10 @@ void gfx_vulkan_park(void) {
         destroy_image_now(f.depth);
     }
     s_fbs.clear();
+    for (VkMesh& m : s_meshes) free_host_chunk(m.chunk);
+    s_meshes.clear();
+    for (auto& d : s_dead_meshes) free_host_chunk(d.first);
+    s_dead_meshes.clear();
     destroy_image_now(s_dummy);
     destroy_image_now(s_win_depth);
     for (auto& d : s_dead_imgs) destroy_image_now(d.i);
@@ -2608,8 +2704,8 @@ void gfx_vulkan_park(void) {
     s_instance = VK_NULL_HANDLE;
     s_up = false;
     sysLogPrintf(LOG_NOTE, "VK: backend parked (device idle, everything destroyed); %llu pipelines built; "
-                 "validation: %d error(s), %d warning(s)", (unsigned long long)s_st_pipelines, s_validation_errors,
-                 s_validation_warnings);
+                 "%llu mesh draws; validation: %d error(s), %d warning(s)", (unsigned long long)s_st_pipelines,
+                 (unsigned long long)s_st_mesh_total, s_validation_errors, s_validation_warnings);
 }
 
 /* FXAA (gfx_opengl_fxaa_pass, gfx_deko3d_fxaa_pass): src_fb_id's colour
@@ -2744,10 +2840,10 @@ void gfx_vulkan_frame_count_rewind(void) { s_frame_count--; }
 
 void gfx_vulkan_perf_report(double frames) {
     if (frames <= 0 || getenv("GE_PERFSTAT") == NULL) return;
-    fprintf(stderr, "PERFSTAT vk draws=%llu uber_draws=%llu uploads=%llu pipelines=%llu (per %.0f frames) | host chunks %u\n",
-            (unsigned long long)s_st_draws, (unsigned long long)s_st_uber_draws, (unsigned long long)s_st_uploads,
-            (unsigned long long)s_st_pipelines, frames, s_ring.chunks());
-    s_st_draws = s_st_uber_draws = s_st_uploads = 0;
+    fprintf(stderr, "PERFSTAT vk draws=%llu uber_draws=%llu mesh_draws=%llu uploads=%llu pipelines=%llu (per %.0f frames) | host chunks %u\n",
+            (unsigned long long)s_st_draws, (unsigned long long)s_st_uber_draws, (unsigned long long)s_st_mesh_draws,
+            (unsigned long long)s_st_uploads, (unsigned long long)s_st_pipelines, frames, s_ring.chunks());
+    s_st_draws = s_st_uber_draws = s_st_mesh_draws = s_st_uploads = 0;
 }
 
 } // extern "C"
