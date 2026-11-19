@@ -1239,6 +1239,10 @@ static int padLookSensX    = NX_LOOK_SENS;             /* right-stick look: hori
 static int padLookSensY    = NX_LOOK_SENS;             /* right-stick look: vertical (pitch) sensitivity, % */
 #if defined(PLATFORM_SWITCH)
 static int padAimLookSens  = 75;
+#else
+static int padAimLookSens  = 100;   /* right stick while aiming (Centered), % */
+#endif
+#if defined(PLATFORM_SWITCH)
 static int padLookCurve    = 200;            /* project-dam: Centred stick curve exponent x100 (game: 200) */
 static int padTurnAccel    = 2;              /* project-dam: 0 off, 1 low (1.5x), 2 high (2x) */             /* project-dam: right stick while aiming (game aim mode), % */
 #endif
@@ -3207,7 +3211,6 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
             int rys = -scaleAxis(ry, padDeadzoneR);   /* SDL up = negative -> N64 up = positive */
             if (padLookSensX != 100 && rxs) rxs = rxs * padLookSensX / 100;
             if (padLookSensY != 100 && rys) rys = rys * padLookSensY / 100;
-#if defined(PLATFORM_SWITCH)
             /* project-dam: aim sensitivity, a multiplier on the stick while the
              * game is in aim mode (ZL held, or Toggle), like a shooter's ADS
              * sensitivity: camera turn speed in Centered, crosshair speed in
@@ -3217,7 +3220,6 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                 rxs = nxAimStickP(rxs, padAimLookSens, idx);
                 rys = nxAimStickP(rys, padAimLookSens, idx);
             }
-#endif
             if (rxs >  STICK_MAX) rxs =  STICK_MAX; else if (rxs < -STICK_MAX) rxs = -STICK_MAX;
             if (rys >  STICK_MAX) rys =  STICK_MAX; else if (rys < -STICK_MAX) rys = -STICK_MAX;
             if (idx == 0 && (rxs || rys)) s_aimDevMouse = 0;   /* D337: pad aim active */
@@ -3230,7 +3232,6 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
             }
             if (padLookInvertY) rys = -rys;
             if (idx == 0) { s_recPadDX = rxs; s_recPadDY = rys; s_recPadDirect = 0; }
-#if defined(PLATFORM_SWITCH)
             if (idx >= 0) {   /* Game.AimEntry (nxgame.c): the view follows the crosshair into the aim (D960: every slot, state per player) */
                 extern void nxAimEntryStep(struct player *p);
                 nxAimEntryStep(slotPlayer());
@@ -3238,10 +3239,11 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                 nxAimStopStep(slotPlayer(), ly < -RSTICK_THRESHOLD || ly > RSTICK_THRESHOLD ||
                                             lx < -RSTICK_THRESHOLD || lx > RSTICK_THRESHOLD ||
                                             gameScriptedCameraActive() || g_PlayerIsInTank == 1);
+#if defined(PLATFORM_SWITCH)
                 extern void nxLookAheadStep(struct player *p, int walkingForward, int lookIdle);   /* Look ahead, Extended controls */
                 nxLookAheadStep(slotPlayer(), ly < -RSTICK_THRESHOLD, rxs == 0 && rys == 0);
-            }
 #endif
+            }
             if (aimModeGet() == AIMMODE_CENTRED && !(idx == 0 && s_replayActive) &&
                 padDirectCompute(rxs, rys)) {
                 if (idx == 0) s_recPadDirect = 1;
@@ -4079,7 +4081,6 @@ static int hipDirectCompute(double dxPx, double dyLook)
  * stick). With the verbatim curve, full-stick Centred turns at exactly
  * the N64 path's top rate -- switching modes changes the crosshair
  * behaviour, not the feel. */
-#if defined(PLATFORM_SWITCH)
 /* project-dam: weapon sway for "Centered + sway". Off aim, the game itself
  * swings the weapon with the turn: bondview2.c feeds speedtheta * 0.3 and
  * -speedverta * 0.1 into the crosshair and weapon integrators every tick
@@ -4099,7 +4100,6 @@ static void padAimSway(struct player *p, double speedTheta, double speedVerta)
     p->gun_azimuth_angle   -= (f32)(speedTheta * 0.3);    /* trails the turn */
     p->gun_azimuth_turning -= (f32)(-speedVerta * 0.1);
 }
-#endif
 
 #if defined(PLATFORM_SWITCH)
 /* project-dam: the Centred stick response. padLookCurveRadial(): |m|^(Input.
@@ -4199,9 +4199,7 @@ static int padDirectCompute(int dx, int dy)
     p->vv_verta -= (f32) (v * k * 3.5);   /* game: speedverta = -v\u00b7(fov/60) */
     if (p->vv_verta >  90.0f) p->vv_verta =  90.0f;
     if (p->vv_verta < -90.0f) p->vv_verta = -90.0f;
-#if defined(PLATFORM_SWITCH)
     padAimSway(p, speedTheta, speedVerta);
-#endif
 
     if (configGetInputLog()) {
         sysLogPrintf(LOG_NOTE,
@@ -4573,8 +4571,8 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
     configRegisterInt("Input.DefaultsRev", &inputDefaultsRev, 0, 1);   /* D546 */
     configRegisterInt("Input.PadLookSensX", &padLookSensX, 25, 200);   /* Wave A: look horizontal sensitivity (%) */
     configRegisterInt("Input.PadLookSensY", &padLookSensY, 25, 200);
-#if defined(PLATFORM_SWITCH)
     configRegisterInt("Input.PadAimLookSens", &padAimLookSens, 25, 200);   /* project-dam */
+#if defined(PLATFORM_SWITCH)
     configRegisterInt("Input.PadLookCurve", &padLookCurve, 100, 400);      /* project-dam */
     configRegisterInt("Input.PadTurnAccel", &padTurnAccel, 0, 2);          /* project-dam */
 #endif   /* Wave A: look vertical (pitch) sensitivity (%) */

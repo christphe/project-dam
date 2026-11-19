@@ -117,12 +117,12 @@ static const char *const kOrigStyle[] = { "1.1 Honey", "1.2 Solitaire", "1.3 Kis
 static int s_padSeat = 0;   /* D469: seat edited by the Controller page rows */
 static const char *const kControlScheme[] = { "Extended", "Original", NULL };   /* D513/D554: display text only (index = stored value) */
 static const char *const kCoopHealth[] = { "100%", "150%", "200%", NULL };   /* project-dam: coop.c */
+static const char *const kAimAssist[] = { "Off", "Low", "High", NULL };   /* project-dam: nxgame.c */
+static const char *const kAimEntry[]  = { "Off", "Move view", "Centre crosshair", NULL };   /* project-dam: nxgame.c */
 #if defined(__SWITCH__)
 static const char *const kAimMode[]   = { "Original", "Centered", NULL };   /* D337; project-dam: the weapon sway is part of Centered */
 static const char *const kTurnAccel[] = { "Off", "Low", "High", NULL };   /* project-dam */
 static const char *const kAimZoom[]   = { "Off", "1.5x", "2x", NULL };    /* project-dam */
-static const char *const kAimAssist[] = { "Off", "Low", "High", NULL };   /* project-dam */
-static const char *const kAimEntry[]  = { "Off", "Move view", "Centre crosshair", NULL };   /* project-dam */
 static const char *const kLookAhead[] = { "Off", "Low", "Medium", "High", NULL };   /* project-dam */
 #else
 static const char *const kAimMode[]   = { "Original", "Centered", NULL };   /* D337 */
@@ -385,6 +385,12 @@ static struct Row rows[] = {
     { .key="Game.AimEntry", .label="Aim entry", .kind=ROW_ENUM, .step=1, .names=kAimEntry, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },           /* project-dam: nxgame.c */
     { .key="Game.AimStop", .label="Stop on aim", .kind=ROW_TOGGLE, .step=1, .names=kOnOff, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },           /* project-dam: nxgame.c */
     { .key="__SepC2", .label="", .kind=ROW_ACTION, .schemeOnly=1 },
+#else
+    /* The pad's Centered aim helpers (nxgame.c), shown while the aim style is Centered. */
+    { .key="Input.PadAimLookSens", .label="Aim sensitivity", .kind=ROW_SLIDER, .step=5, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },
+    { .key="Game.AimAssist", .label="Aim assist", .kind=ROW_ENUM, .step=1, .names=kAimAssist, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },
+    { .key="Game.AimEntry", .label="Aim entry", .kind=ROW_ENUM, .step=1, .names=kAimEntry, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },
+    { .key="Game.AimStop", .label="Stop on aim", .kind=ROW_TOGGLE, .step=1, .names=kOnOff, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },
 #endif
     { .key="Input.PadLookInvertY", .label="Invert look", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
     /* Wave A: per-stick deadzone + right-stick (natural-pitch) feel options. */
@@ -2233,6 +2239,11 @@ static const struct { const char *key; double def; } kResetDefaults[] = {
     { "Game.LookAhead",           3 },  /* project-dam: = High */
     { "Input.PadLookCurve",     200 },  /* project-dam: = 2.0 (the game's own) */
     { "Input.PadTurnAccel",       2 },  /* project-dam: = High */
+#else
+    { "Input.PadAimLookSens",   100 },  /* = native */
+    { "Game.AimAssist",           2 },  /* project-dam: = High */
+    { "Game.AimEntry",            1 },  /* project-dam: = Move view */
+    { "Game.AimStop",             1 },  /* project-dam: = on */
 #endif
 #if defined(__SWITCH__)
     { "Input.PadLookSmooth",      2 },  /* project-dam: = NX_LOOK_SMOOTH */
