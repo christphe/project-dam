@@ -2271,7 +2271,11 @@ static const struct { const char *key; double def; } kResetDefaults[] = {
     { "Video.FXAA",                 1 },   /* project-dam: on */
 #else
     { "Video.FXAA",                 0 },   /* off: the picture as rendered */
-    { "Video.Renderer",             0 },   /* issue #44: OpenGL */
+    #if defined(GE_VULKAN)
+    { "Video.Renderer",             1 },   /* issue #44: Vulkan */
+#else
+    { "Video.Renderer",             0 },
+#endif
 #endif
 #if defined(__SWITCH__)
     { "Video.Visuals",              2 },   /* D982: Enhanced */
@@ -4047,7 +4051,7 @@ static const struct { const char *key, *help; } kRowHelp[] = {
     { "Input.PadTurnAccel", "Speeds up the turn when the stick is held at the edge." },
     { "Game.BloodOnHit", "A hit on a guard shows a dark-red puff, not the yellow wall puff." },
     { "Game.CoopEnemyHealth", "How tough guards are in co-op. Higher takes more shots to kill." },
-    { "Video.Renderer", "OpenGL is the default. Vulkan is newer: try it if it runs better on your GPU." },
+    { "Video.Renderer", "Vulkan is the default; OpenGL is the fallback if it misbehaves on your GPU." },
     { "Video.MSAA", "Smooths jagged edges while docked. Higher is cleaner but slower." },
     { "Video.MSAAHandheld", "Smooths jagged edges in handheld mode. Higher is cleaner but slower." },
     { "Video.FXAA", "A final pass that smooths edges without blurring flat textures." },

@@ -69,7 +69,11 @@ static int initDone = 0;
  */
 static int cfgVSync         = 1;   /* swap interval: 0 = off, 1 = on            */
 static int cfgFpsCap        = -1;  /* frame cap in fps; -1 = Auto (match display refresh, up to 4x the VI rate), 0 = uncapped (vsync); menu: Auto/30/60, and 90/120/144/165/240 = D578 interpolation */
-static int cfgRenderer      = 0;   /* Video.Renderer (PC): 0 OpenGL, 1 Vulkan; GE_RENDERER overrides */
+#ifdef GE_VULKAN
+static int cfgRenderer      = 1;   /* Video.Renderer (PC): 0 OpenGL, 1 Vulkan (default); GE_RENDERER overrides */
+#else
+static int cfgRenderer      = 0;
+#endif
 #ifdef __SWITCH__
 /* project-dam: the Switch display mode (see video.h): MSAA per docked/handheld
  * state, FXAA on. SwitchPresetRev makes the preset values land once on an ini
@@ -1339,9 +1343,9 @@ int videoInit(void)
     }
 #endif
 #ifdef GE_VULKAN
-    /* issue #44: Vulkan backend, opt-in (Video.Renderer; GE_RENDERER=vk / gl overrides it);
-     * no usable driver -> GL */
-    if (getenv("GE_RENDERER") != NULL ? gfx_vulkan_wanted() : cfgRenderer == 1) {
+    /* issue #44: Vulkan backend, the PC default (Video.Renderer; GE_RENDERER=vk / gl overrides it);
+     * no usable driver -> GL. A frame dump (GE_PCDUMP) reads GL's back buffer, so it keeps GL. */
+    if (getenv("GE_RENDERER") != NULL ? gfx_vulkan_wanted() : (cfgRenderer == 1 && configGetFrameDump() == NULL)) {
         if (gfx_vulkan_probe()) {
             renderingAPI = &gfx_vulkan_api;
             gfx_sdl_set_vulkan_window(true);
