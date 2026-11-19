@@ -903,12 +903,14 @@ int cv_run_d43(CvCtx *c, const char *out_dir)
     memset(&sc, 0, sizeof sc);
     for (int i = 0; i < cv_table_count; i++) {
         CvBuf comp = {0};
+        cv_progress(0, i, cv_table_count);
         if (!is_model_name(cv_table_names[i])) continue;
         nmodels++;
         if (process(c, cv_table_names[i], &comp) == 0)
             cv_sc_emit(&sc, cv_table_names[i], comp.p, comp.len);
         cv_buf_free(&comp);
     }
+    cv_progress(0, cv_table_count, cv_table_count);
     printf("files converted: %d / %d\n", sc.n, nmodels);
     if (c->nerrors) { cv_sc_free(&sc); return -1; }
     /* pcmodels.bin is padded to a 16-byte multiple (python wrote the tail pad) */

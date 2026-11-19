@@ -285,6 +285,7 @@ int cv_run_d69(CvCtx *c, const char *out_dir)
         const CvFileRow *row;
         CvBuf out = {0};
 
+        cv_progress(1, i, cv_table_count);
         if (!strncmp(name, "bg/", 3) && len > 4 && !strcmp(name + len - 4, ".seg")) {
             char base[128];
             const char *slash = strrchr(name, '/');
@@ -321,6 +322,7 @@ int cv_run_d69(CvCtx *c, const char *out_dir)
         cv_buf_free(&out);
     }
 
+    cv_progress(1, cv_table_count, cv_table_count);
     printf("converted: %d bg/*.seg + %d Tbg_*_stanZ files\n", n_seg, n_stan);
     if (c->nerrors) rc = -1;
     else if (cv_sc_write(&sc, out_dir, "pccg.bin")) { fprintf(stderr, "cannot write %s\n", out_dir); rc = -1; }

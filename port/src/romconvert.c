@@ -32,6 +32,7 @@ extern int snprintf(char *str, size_t maxsize, const char *format, ...);
 
 #include "system.h"
 #include "fs.h"
+#include "bootscreen.h"
 
 /* Same countryâ†’region map as pcmodels.c / pccg.c (finding: plan Q3). */
 static const char *rcRegionForCountry(unsigned char country)
@@ -64,7 +65,33 @@ static int rcSidecarsPresent(const char *region)
 /* port/convert/conv_main.c (CV_STEP_ALL == 7). Declared here, not via
  * convert.h: this TU sees the decomp include path. */
 extern int cv_convert_rom(const char *rom_path, const char *region, const char *out_root, int steps);
-static int rcConvert(const char *rom, const char *out) { return cv_convert_rom(rom, NULL, out, 7); }
+typedef void (*CvProgressFn)(void *user, int stage, int done, int total);
+extern void cv_set_progress(CvProgressFn fn, void *user);
+
+/* Stages match convert.h (CV_NSTAGES == 3), weighted equally on the bar. */
+static void rcProgress(void *user, int stage, int done, int total)
+{
+    static const char *const labels[3] = {
+        "Models", "Stage backgrounds", "Stage setups"
+    };
+    float frac = total > 0 ? (float)done / (float)total : 0.f;
+    (void)user;
+    if (stage < 0 || stage > 2) return;
+    bootscreenProgress(labels[stage], ((float)stage + frac) / 3.f);
+}
+
+static int rcConvert(const char *rom, const char *out)
+{
+    int code;
+    bootscreenProgress("Starting", 0.f);
+    cv_set_progress(rcProgress, NULL);
+    code = cv_convert_rom(rom, NULL, out, 7);
+    cv_set_progress(NULL, NULL);
+    if (code == 0)
+        bootscreenDone();
+    bootscreenClose();
+    return code;
+}
 
 int romConvertEnsureSidecars(const unsigned char *romImg, const char *romRelPath)
 {
@@ -85,17 +112,22 @@ int romConvertEnsureSidecars(const unsigned char *romImg, const char *romRelPath
     snprintf(outDir, sizeof(outDir), "%s", exedir[0] ? exedir : ".");
 
     sysLogPrintf(LOG_INFO,
-        "romconvert: sidecars missing — converting the ROM (one-time, a few seconds)…");
+        "romconvert: sidecars missing - converting the ROM (one-time, a few seconds)...");
     int code = rcConvert(romPath, outDir);
     if (code != 0)
         sysLogPrintf(LOG_ERROR,
-            "romconvert: conversion failed (code %d) — a non-retail or "
+            "romconvert: conversion failed (code %d) - a non-retail or "
             "byte-swapped ROM will fail here", code);
 
     if (!rcSidecarsPresent(region)) {
         sysLogPrintf(LOG_ERROR,
             "romconvert: data/pcmodels-%s/ and data/pccg-%s/ are still "
             "missing â€” cannot continue", region, region);
+        bootscreenMessage("Conversion failed",
+            "The game data could not be generated from your ROM.\n"
+            "Use an unmodified retail GoldenEye 007 ROM in big-endian .z64 format\n"
+            "(byte-swapped .n64 / .v64 dumps are not supported).\n"
+            "The log has the details.");
         return -1;
     }
     sysLogPrintf(LOG_INFO, "romconvert: sidecars generated â€” continuing boot");

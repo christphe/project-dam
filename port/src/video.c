@@ -141,6 +141,18 @@ static int cfgWinX   = -1;
 static int cfgWinY   = -1;
 static int cfgWinMax = 0;
 
+/* The boot/conversion screen (bootscreen.c) opens before videoInit(); it takes
+ * the window the game will open: the ini's size/position (0/-1 = auto) and
+ * whether it starts fullscreen. */
+void videoBootWindowGeometry(int *w, int *h, int *x, int *y, int *fullscreen)
+{
+    *w = cfgWinW;
+    *h = cfgWinH;
+    *x = cfgWinX;
+    *y = cfgWinY;
+    *fullscreen = cfgFullscreen;
+}
+
 /*
  * [Game] gameplay-cosmetic knobs (route-(b) hooks in src/, findings D181).
  * portScreenShakeScale multiplies every viShake() amplitude (src/fr.c).
