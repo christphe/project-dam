@@ -48,6 +48,7 @@ extern int snprintf(char *str, size_t maxsize, const char *format, ...);
 #include "pcmodels.h"
 #include "pccg.h"
 #include "romconvert.h"
+#include "bootscreen.h"
 #include "portaddr.h"
 
 /* D50: struct font/fontchar layouts for the font-segment re-layout. Order
@@ -324,6 +325,7 @@ static int romdataFinishCartMap(const char *tok, u8 *img,
 int romdataInit(void)
 {
     char err[128] = "";
+    char rejected[160] = "";   /* last ROM file whose header was refused */
     const char *list = romFileCandidates();
     char listBuf[512];
     strcpy(listBuf, list);
@@ -373,6 +375,7 @@ int romdataInit(void)
         if (romSize < 0x40 || !romHeaderValid(img, err, sizeof(err))) {
             sysLogPrintf(LOG_WARNING, "romdataInit: %s rejected: %s",
                          tok, err);
+            snprintf(rejected, sizeof(rejected), "%s: %s", tok, err);
             free(img);
             continue;
         }
@@ -490,6 +493,28 @@ int romdataInit(void)
 
     sysLogPrintf(LOG_ERROR, "romdataInit: no ROM found (tried %s in data/ "
                  "and exe dir)", list);
+    {
+        char msg[768];
+        const char *exedir = sysGetExeDir();
+        char first[160];
+        const char *bar = strchr(list, '|');
+        snprintf(first, sizeof(first), "%.*s", bar ? (int)(bar - list) : (int)strlen(list), list);
+        if (rejected[0])
+            snprintf(msg, sizeof(msg),
+                     "The ROM was found but is not a usable retail GoldenEye 007 ROM:\n%s\n\n"
+                     "Use an unmodified big-endian .z64 dump (byte-swapped .n64 / .v64 files "
+                     "must be converted to .z64 first).", rejected);
+        else
+            snprintf(msg, sizeof(msg),
+                     "No GoldenEye 007 ROM found.\n\nCopy your own ROM, named\n  %s\n"
+                     "into the folder\n  %s/data/\nthen start the game again.",
+                     first, exedir && exedir[0] ? exedir : ".");
+        {   /* one separator style in the message */
+            char *q;
+            for (q = msg; *q; q++) if (*q == '\\') *q = '/';
+        }
+        bootscreenMessage("ROM not found", msg);
+    }
     return -1;
 }
 

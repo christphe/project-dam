@@ -66,6 +66,16 @@ It does NOT cover:
     assets -- textures, audio, models, level geometry, in-game text -- are
     NOT included and are extracted from your own ROM at build time.
 
+THIRD-PARTY FONT
+--------------------------------------------------
+
+port/include/bootfont.h (the boot/progress screen's 8x16 bitmap font) holds
+glyph bitmaps rasterized by tools_pc/gen_bootfont.py from DejaVu Sans Mono
+Bold. Copyright (c) 2003 Bitstream, Inc.; DejaVu changes are public domain.
+The Bitstream Vera / DejaVu license permits embedding and redistributing the
+font and derivatives, provided this notice is kept
+(https://dejavu-fonts.github.io/License.html).
+
 NO ROM DATA OR ORIGINAL ASSETS ARE DISTRIBUTED HERE
 --------------------------------------------------
 

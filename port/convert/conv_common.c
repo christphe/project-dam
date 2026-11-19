@@ -7,6 +7,15 @@
 #include <string.h>
 #include <zlib.h>
 
+/* ---------------------------------------------------------- progress ---- */
+static CvProgressFn g_progress;
+static void *g_progress_user;
+void cv_set_progress(CvProgressFn fn, void *user) { g_progress = fn; g_progress_user = user; }
+void cv_progress(int stage, int done, int total)
+{
+    if (g_progress) g_progress(g_progress_user, stage, done, total);
+}
+
 /* ------------------------------------------------------------- CvBuf ---- */
 void cv_buf_free(CvBuf *b) { free(b->p); b->p = NULL; b->len = b->cap = 0; }
 

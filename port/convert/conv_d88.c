@@ -565,6 +565,7 @@ int cv_run_d88(CvCtx *c, const char *out_dir)
     for (int i = 0; i < nnames; i++) {
         const CvFileRow *row = cv_find_row(c->rd, names[i]);
         CvBuf dec = {0}, out = {0}, comp = {0};
+        cv_progress(2, i, nnames);
         if (!row || row->size == 0) continue;
         if ((size_t)row->off + row->size > c->rom_size) { cv_err(c, "%s: past end of ROM", names[i]); continue; }
         if (row->size < 2 || c->rom[row->off] != 0x11 || c->rom[row->off + 1] != 0x72) { cv_err(c, "%s: bad RZ magic", names[i]); continue; }
@@ -575,6 +576,7 @@ int cv_run_d88(CvCtx *c, const char *out_dir)
         }
         cv_buf_free(&dec); cv_buf_free(&out); cv_buf_free(&comp);
     }
+    cv_progress(2, nnames, nnames);
     printf("converted: %d/%d setup*Z files (solo + MP)\n", n_ok, nnames);
     free(names);
 

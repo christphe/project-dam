@@ -75,6 +75,15 @@ int cv_run_d88(CvCtx *c, const char *out_dir);
 #define CV_STEP_D88 4
 #define CV_STEP_ALL 7
 
+/* ---- progress reporting (optional) ----
+ * stage: 0 = models (d43), 1 = stage bg/stan (d69), 2 = stage setups (d88);
+ * done/total count the items of that stage. The callback runs on the
+ * converting thread and must be cheap. NULL (the default) disables it. */
+#define CV_NSTAGES 3
+typedef void (*CvProgressFn)(void *user, int stage, int done, int total);
+void cv_set_progress(CvProgressFn fn, void *user);
+void cv_progress(int stage, int done, int total);
+
 /* Whole pipeline. Region comes from `region` or, when NULL, the ROM header's
  * country byte. Writes <out_root>/data/pcmodels-<region>/ and
  * <out_root>/data/pccg-<region>/. Prints progress to stdout; returns 0 on
