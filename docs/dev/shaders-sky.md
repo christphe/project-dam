@@ -30,9 +30,9 @@ A fullscreen pass drawn behind the level. Every pixel casts a ray (`skyRay(u, v)
 
 The far sea no longer uses this reflection at all (it reflects the horizon colour only, see the sea note); only the near, live sea does.
 
-## Drawn after the opaque scenery (deko3d)
+## Draw order
 
-The final sky pass is drawn after the opaque rooms and props and before the translucent ones (`src/game/bg.c` `#ifdef PORT` hook, `skyPlusRenderDeferred`), at the far plane with the depth test on, so the GPU drops the pixels the scenery hides. The reflections, the bake and the sea target stay at `skyRender`'s place: moving them after the scenery cost the console ~3 ms. Other backends keep GE's order.
+Drawing the sky after the opaque rooms and props, depth-tested at the far plane (a `src/game/bg.c` hook), was tried and dropped: once the sky and sea are drawn at half size, only the enlarging composite (one texture read per pixel) could be skipped behind the scenery, so it saved nothing worth a `src/game` edit. The sky is drawn at `skyRender`'s place, as GE does. Drawing only where the sky can show (a coarse mask) is a separate issue.
 
 On deko3d the final pass is drawn at **half size** and enlarged (see the sea note, "Half scale").
 
