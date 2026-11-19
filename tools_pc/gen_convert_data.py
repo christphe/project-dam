@@ -11,7 +11,8 @@ Embedded (dev-time only; the output is committed):
   * MODELFILEHEADER(name, ..., NS, ..., NT) values from every
     assets/**/modelFileHeader.inc.c
 
-Usage: python tools_pc/gen_convert_data.py   (from the repo root)
+Usage: python tools_pc/gen_convert_data.py [--check]   (from the repo root)
+  --check  write nothing; exit 1 if the committed file is out of date (CI).
 """
 import csv, os, re, sys
 
@@ -47,7 +48,8 @@ def table_names():
 def nsnt():
     d = {}
     for root, dirs, files in os.walk("assets"):
-        for fn in files:
+        dirs.sort()          # fixed walk order: duplicate names resolve the
+        for fn in sorted(files):   # same way on every OS (last one wins)
             if fn.lower().endswith("modelfileheader.inc.c"):
                 for line in open(os.path.join(root, fn)):
                     m = re.search(r"MODELFILEHEADER\((.*)\)\s*;?\s*$", line)
@@ -98,9 +100,16 @@ def main():
         w.append("    {%s, %d, %d}," % (cstr(k), d[k][0], d[k][1]))
     w.append("};")
     w.append("const int cv_nsnt_count = %d;" % len(d))
+    text = "\n".join(w) + "\n"
+    if "--check" in sys.argv[1:]:
+        cur = open(OUT, newline="").read().replace("\r\n", "\n") if os.path.exists(OUT) else ""
+        if cur != text:
+            sys.exit("%s is out of date: run `python tools_pc/gen_convert_data.py` and commit it" % OUT)
+        print("%s is current" % OUT)
+        return
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", newline="\n") as f:
-        f.write("\n".join(w) + "\n")
+        f.write(text)
     print("wrote %s (%d table names, %d nsnt)" % (OUT, len(names), len(d)))
 
 

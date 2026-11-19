@@ -137,6 +137,7 @@ jobs:
         run: |
           python3 tools_pc/gen_findings_index.py --check
           python3 tools_pc/gen_env_probes.py --check
+          python3 tools_pc/gen_convert_data.py --check
 
       # Docs budget guardrail (ctx-opt P2): warn, don't fail. The §F index
       # table should stay one-liners; fat cell content belongs in `## Dxx`
