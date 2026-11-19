@@ -69,6 +69,7 @@ static int initDone = 0;
  */
 static int cfgVSync         = 1;   /* swap interval: 0 = off, 1 = on            */
 static int cfgFpsCap        = -1;  /* frame cap in fps; -1 = Auto (match display refresh, up to 4x the VI rate), 0 = uncapped (vsync); menu: Auto/30/60, and 90/120/144/165/240 = D578 interpolation */
+static int cfgRenderer      = 0;   /* Video.Renderer (PC): 0 OpenGL, 1 Vulkan; GE_RENDERER overrides */
 #ifdef __SWITCH__
 /* project-dam: the Switch display mode (see video.h): MSAA per docked/handheld
  * state, FXAA on. SwitchPresetRev makes the preset values land once on an ini
@@ -672,6 +673,7 @@ PD_CONSTRUCTOR static void videoConfigInit(void)
     configRegisterInt("Video.VSync",         &cfgVSync,      0, 1);
     configRegisterInt("Video.FpsCap",        &cfgFpsCap,    -1, 1000);
     configRegisterInt("Video.FXAA",          &cfgFXAA,       0, 1);
+    configRegisterInt("Video.Renderer",      &cfgRenderer,   0, 1);   /* issue #44: 0 OpenGL, 1 Vulkan; read at launch */
     configRegisterInt("Video.Visuals",       &portVisuals,   0, 2);   /* D982: Original / Fixed / Enhanced */
     configRegisterInt("Video.MSAA",          &cfgMSAA,       1, 16);   /* D443: 16x added */
     configRegisterInt("Video.DisplayMode",   &cfgDisplayMode, 0, 2);
@@ -1337,17 +1339,18 @@ int videoInit(void)
     }
 #endif
 #ifdef GE_VULKAN
-    /* issue #44: Vulkan backend, opt-in until it matches GL; no usable driver -> GL */
-    if (gfx_vulkan_wanted()) {
+    /* issue #44: Vulkan backend, opt-in (Video.Renderer; GE_RENDERER=vk / gl overrides it);
+     * no usable driver -> GL */
+    if (getenv("GE_RENDERER") != NULL ? gfx_vulkan_wanted() : cfgRenderer == 1) {
         if (gfx_vulkan_probe()) {
             renderingAPI = &gfx_vulkan_api;
             gfx_sdl_set_vulkan_window(true);
             gfx_sdl_set_external_present(gfx_vulkan_present, gfx_vulkan_get_dimensions, gfx_vulkan_park);
             gfx_sdl_set_external_swap_interval(gfx_vulkan_set_swap_interval);
             s_vulkanActive = 1;
-            sysLogPrintf(LOG_NOTE, "video: renderer Vulkan (GE_RENDERER=vk)");
+            sysLogPrintf(LOG_NOTE, "video: renderer Vulkan");
         } else {
-            sysLogPrintf(LOG_WARNING, "video: GE_RENDERER=vk but no usable Vulkan 1.3 driver; using OpenGL");
+            sysLogPrintf(LOG_WARNING, "video: Vulkan selected but no usable Vulkan 1.3 driver; using OpenGL");
         }
     }
 #endif

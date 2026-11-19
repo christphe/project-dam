@@ -72,7 +72,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <chrono>
 #include <map>
+#include <string>
 #include <tuple>
 #include <vector>
 #include <utility>
@@ -226,6 +228,7 @@ std::vector<std::pair<HostChunk, uint64_t>> s_dead_meshes;
 
 /* PERFSTAT counters */
 uint64_t s_st_draws, s_st_uber_draws, s_st_uploads, s_st_pipelines, s_st_mesh_draws, s_st_mesh_total;
+double s_st_pipe_ms, s_st_pipe_ms_max;   /* time inside vkCreateGraphicsPipelines (a pipeline-cache hit is fast) */
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBitsEXT sev, VkDebugUtilsMessageTypeFlagsEXT,
                                         const VkDebugUtilsMessengerCallbackDataEXT* data, void*) {
@@ -1014,6 +1017,74 @@ VkDescriptorSetLayout s_set_layout = VK_NULL_HANDLE;
 VkPipelineLayout s_pipe_layout = VK_NULL_HANDLE;
 VkPipelineCache s_pipe_cache = VK_NULL_HANDLE;
 
+/* The driver's pipeline cache lives in $S/ge007.vkcache between runs: the first
+ * run pays for every pipeline, later ones read the compiled code back. The
+ * driver validates the blob itself (header: vendor, device, cache UUID), so a
+ * file from another GPU or driver is simply ignored; GE_NOSHADERWARM=1 skips it
+ * as it does the GL shader list. */
+std::string pipeline_cache_path(void) {
+    return sysResolvePath("$S/ge007.vkcache");
+}
+
+void pipeline_cache_load(void) {
+    std::vector<uint8_t> blob;
+    if (getenv("GE_NOSHADERWARM") == NULL) {
+        if (FILE* f = fopen(pipeline_cache_path().c_str(), "rb")) {
+            fseek(f, 0, SEEK_END);
+            const long n = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (n > 0 && n < (256l << 20)) {
+                blob.resize((size_t)n);
+                if (fread(blob.data(), 1, blob.size(), f) != blob.size()) blob.clear();
+            }
+            fclose(f);
+        }
+    }
+    VkPipelineCacheCreateInfo pc = {};
+    pc.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    pc.initialDataSize = blob.size();
+    pc.pInitialData = blob.empty() ? nullptr : blob.data();
+    VK_CHECK(vkCreatePipelineCache(s_dev, &pc, nullptr, &s_pipe_cache));
+    sysLogPrintf(LOG_NOTE, "VK: pipeline cache, %zu KiB read from disk", blob.size() >> 10);
+}
+
+/* Write the cache back (to a temporary file first, so a crash never leaves half a cache). */
+void pipeline_cache_save(void) {
+    if (s_pipe_cache == VK_NULL_HANDLE || getenv("GE_NOSHADERWARM") != NULL) return;
+    size_t n = 0;
+    if (vkGetPipelineCacheData(s_dev, s_pipe_cache, &n, nullptr) != VK_SUCCESS || n == 0) return;
+    std::vector<uint8_t> blob(n);
+    if (vkGetPipelineCacheData(s_dev, s_pipe_cache, &n, blob.data()) != VK_SUCCESS) return;
+    const std::string path = pipeline_cache_path();
+    const std::string tmp = path + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "wb");
+    if (f == NULL) return;
+    const bool ok = fwrite(blob.data(), 1, n, f) == n;
+    fclose(f);
+    if (!ok || rename(tmp.c_str(), path.c_str()) != 0) {
+#ifdef _WIN32
+        remove(path.c_str());   /* rename does not overwrite there */
+        if (!ok || rename(tmp.c_str(), path.c_str()) != 0) remove(tmp.c_str());
+#else
+        remove(tmp.c_str());
+#endif
+        return;
+    }
+    sysLogPrintf(LOG_NOTE, "VK: pipeline cache, %zu KiB written", n >> 10);
+}
+
+/* vkCreateGraphicsPipelines through the cache, timed for the park log */
+VkPipeline build_pipeline(const VkGraphicsPipelineCreateInfo& ci) {
+    VkPipeline pipe = VK_NULL_HANDLE;
+    const auto t0 = std::chrono::steady_clock::now();
+    VK_CHECK(vkCreateGraphicsPipelines(s_dev, s_pipe_cache, 1, &ci, nullptr, &pipe));
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    s_st_pipe_ms += ms;
+    if (ms > s_st_pipe_ms_max) s_st_pipe_ms_max = ms;
+    s_st_pipelines++;
+    return pipe;
+}
+
 enum { BLEND_OFF = 0, BLEND_ALPHA = 1, BLEND_MODULATE = 2 };
 
 struct PipeKey {
@@ -1047,9 +1118,7 @@ void create_layouts(void) {
     pl.setLayoutCount = 1;
     pl.pSetLayouts = &s_set_layout;
     VK_CHECK(vkCreatePipelineLayout(s_dev, &pl, nullptr, &s_pipe_layout));
-    VkPipelineCacheCreateInfo pc = {};
-    pc.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-    VK_CHECK(vkCreatePipelineCache(s_dev, &pc, nullptr, &s_pipe_cache));
+    pipeline_cache_load();
 }
 
 VkPipeline create_pipeline(const PipeKey& k) {
@@ -1180,10 +1249,7 @@ VkPipeline create_pipeline(const PipeKey& k) {
     ci.pColorBlendState = &cb;
     ci.pDynamicState = &dy;
     ci.layout = s_pipe_layout;
-    VkPipeline pipe = VK_NULL_HANDLE;
-    VK_CHECK(vkCreateGraphicsPipelines(s_dev, s_pipe_cache, 1, &ci, nullptr, &pipe));
-    s_st_pipelines++;
-    return pipe;
+    return build_pipeline(ci);
 }
 
 VkPipeline get_pipeline(const PipeKey& k) {
@@ -1271,9 +1337,7 @@ VkPipeline get_fs_pipeline(VkShaderModule frag, VkFormat color, VkFormat depth, 
     ci.pColorBlendState = &cb;
     ci.pDynamicState = &dy;
     ci.layout = s_pipe_layout;
-    VkPipeline pipe = VK_NULL_HANDLE;
-    VK_CHECK(vkCreateGraphicsPipelines(s_dev, s_pipe_cache, 1, &ci, nullptr, &pipe));
-    s_st_pipelines++;
+    VkPipeline pipe = build_pipeline(ci);
     s_fs_pipes[key] = pipe;
     return pipe;
 }
@@ -2685,6 +2749,7 @@ void gfx_vulkan_park(void) {
     for (auto& c : s_ring_chunks) free_host_chunk(c);
     s_ring_chunks.clear();
     free_host_chunk(s_zero);
+    pipeline_cache_save();
     vkDestroyPipelineCache(s_dev, s_pipe_cache, nullptr);
     vkDestroyPipelineLayout(s_dev, s_pipe_layout, nullptr);
     vkDestroyDescriptorSetLayout(s_dev, s_set_layout, nullptr);
@@ -2703,8 +2768,9 @@ void gfx_vulkan_park(void) {
     vkDestroyInstance(s_instance, nullptr);
     s_instance = VK_NULL_HANDLE;
     s_up = false;
-    sysLogPrintf(LOG_NOTE, "VK: backend parked (device idle, everything destroyed); %llu pipelines built; "
-                 "%llu mesh draws; validation: %d error(s), %d warning(s)", (unsigned long long)s_st_pipelines,
+    sysLogPrintf(LOG_NOTE, "VK: backend parked (device idle, everything destroyed); %llu pipelines built in %.0f ms "
+                 "(longest %.1f ms); %llu mesh draws; validation: %d error(s), %d warning(s)", (unsigned long long)s_st_pipelines,
+                 s_st_pipe_ms, s_st_pipe_ms_max,
                  (unsigned long long)s_st_mesh_total, s_validation_errors, s_validation_warnings);
 }
 

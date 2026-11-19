@@ -23130,3 +23130,15 @@ Console (same command, 40 s, 8 reports): 218-290 GPU replays per frame (5300-690
 **Next (issue #44 step 6).** On-disk pipeline cache and measurements against GL.
 
 **Confidence.** High on NVIDIA / Windows for the draw and the culling rule; the performance side is unmeasured.
+
+## D996: Vulkan backend for the PC build, steps 6 and 8 (issue #44) -- on-disk pipeline cache, CPU timings against GL, the Renderer menu row -- BUILT + RUN 2026-11-19 (Windows cross-build, RTX 5070)
+
+**Pipeline cache.** The `VkPipelineCache` is read from `$S/ge007.vkcache` at start-up and written back when the backend parks (temporary file, then rename, so a crash never leaves half a cache). The driver validates the blob itself (vendor, device, cache UUID), so a file from another GPU or driver is ignored. `GE_NOSHADERWARM=1` skips it, as it skips the GL shader list. The park log now reports the pipelines built, the time spent in `vkCreateGraphicsPipelines` and the longest one.
+
+**Selection (step 8).** `Video.Renderer` (0 OpenGL, 1 Vulkan, default 0) is a Display-page row on PC builds that include the backend ("Renderer", restart needed). `GE_RENDERER=vk` / `gl` still overrides the setting. No usable Vulkan 1.3 driver -> OpenGL with a log line. The Switch keeps deko3d and has no row.
+
+**Verified.** Cold cache (file removed): 0 KiB read, 35 pipelines in 25 ms, 673 KiB written; next run: 673 KiB read, 44 pipelines in 15 ms (the NVIDIA driver also keeps its own cache, so the gain here is small; it is larger on drivers without one). `Video.Renderer = 1` with no environment variable starts Vulkan; with `GE_RENDERER=gl` it starts GL. **CPU timings** (`GE_PERFSTAT=1`, `GE_MESHCACHE=1`, first ~3000 frames of the level, not a gameplay measurement): the display-list replay costs 0.44 ms/frame on GL and 0.15 ms/frame on Vulkan on level 09, 0.36 against 0.15 on level 36. GPU time and frame rate were not measured.
+
+**Not done / owed.** GPU-side timings and a play-through comparison; a device-local copy of the mesh vertex buffers (they stay host-visible); the pixel comparison against GL (no readback); Linux run; AMD / Intel; MoltenVK (step 7, later).
+
+**Confidence.** High that the cache and the selection work on NVIDIA / Windows; the performance numbers are CPU-only and early-level.
