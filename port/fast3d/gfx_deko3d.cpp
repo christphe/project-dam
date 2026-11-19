@@ -438,6 +438,8 @@ int s_hsea_fb = -1;
 #define SEAPANO_W 4096
 #define SEAPANO_H 512
 int s_pano_fb = -1;
+int s_skyr_fb = -1;   /* the final sky pass drawn at half size (each axis), enlarged onto the screen by uPass 5 */
+#define SKY_HALF_SCALE 1   /* 0: the final sky pass at full size */
 bool s_pano_valid = false;
 int s_pano_bakes = 0;   /* how many bakes so far (the log) */
 float s_pano_eyey = 0.0f, s_pano_ex = 0.0f, s_pano_ez = 0.0f;
@@ -2103,7 +2105,10 @@ void gfx_deko3d_skyplus_pass(int slot) {
     if (sea && lut && hdiv >= 2 && d.vp[2] / hdiv >= 16) {
         /* a target of exactly the sea's size: it is written and read whole, so no texel is ever read unwritten
          * (a larger target with a sub-rectangle read black bands on the console) */
-        const int hw = d.vp[2] / hdiv, hh = d.vp[3];
+        /* with the half-scale final pass the sea target is halved on both axes too (it feeds a half-size image): the waves are the
+         * heavy part, so this is where most of the saving is (seaview's Scale menu does the same) */
+        const int sdiv = (SKY_HALF_SCALE && d.vp[2] / 2 >= 16 && d.vp[3] / 2 >= 16) ? 2 : 1;
+        const int hw = d.vp[2] / sdiv / hdiv, hh = d.vp[3] / sdiv;
         if (s_hsea_fb < 0) {
             s_hsea_fb = dk_create_framebuffer();
             s_fbs[s_hsea_fb].smp = SmpKey{ DkFilter_Linear, DkFilter_Linear, DkMipFilter_None, DkWrapMode_ClampToEdge, DkWrapMode_ClampToEdge, 1 };
@@ -2138,6 +2143,35 @@ void gfx_deko3d_skyplus_pass(int slot) {
     }
     {   /* drawn after the opaque scenery (skyplus.c portSkyPlusDeferOk): at the far plane, behind the depth test, so the GPU
          * drops the hidden pixels before the shader runs */
+        /* the final pass at half size: the sky and the sea (whose heavy part is already behind us) are smooth, so they are drawn into a
+         * target of a quarter of the pixels, then enlarged by the composite (uPass 5), which is the part that is depth-tested */
+        const bool reduce = SKY_HALF_SCALE && d.vp[2] / 2 >= 16 && d.vp[3] / 2 >= 16;
+        if (reduce) {
+            const int rw = d.vp[2] / 2, rh = d.vp[3] / 2;
+            if (s_skyr_fb < 0) {
+                s_skyr_fb = dk_create_framebuffer();
+                s_fbs[s_skyr_fb].smp = SmpKey{ DkFilter_Linear, DkFilter_Linear, DkMipFilter_None, DkWrapMode_ClampToEdge, DkWrapMode_ClampToEdge, 1 };
+            }
+            if (s_fbs[s_skyr_fb].w != (uint32_t)rw || s_fbs[s_skyr_fb].h != (uint32_t)rh || !s_fbs[s_skyr_fb].created)
+                dk_update_framebuffer_parameters(s_skyr_fb, rw, rh, 1, false, true, false, false);
+            if (s_fbs[s_skyr_fb].created) {
+                const int prevr = s_cur_fb;
+                s_cur_fb = s_skyr_fb;
+                bind_target();
+                DkViewport rv = { 0.0f, 0.0f, (float)rw, (float)rh, s_znear, s_zfar };
+                dkCmdBufSetViewports(s_cmd, 0, &rv, 1);
+                set_scissor_rect(0, 0, rw, rh);
+                draw_fullscreen(&s_sky_frag, &u, sizeof u, dkMakeTextureHandle(s_sky_slot, smp));   /* uPass is 2 (or 0): the whole sky and sea */
+                s_cur_fb = prevr;
+                bind_target();
+                dkCmdBufSetViewports(s_cmd, 0, &v, 1);
+                set_scissor_rect(d.vp[0], d.vp[1], d.vp[2], d.vp[3]);
+                const DkResHandle rh3 = dkMakeTextureHandle(s_fbs[s_skyr_fb].color_slot, sampler_slot(s_fbs[s_skyr_fb].smp));
+                dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 3, &rh3, 1);
+                s_sf.h[3] = rh3;
+                u.v[2][3] = 5.0f;   /* the composite */
+            }
+        }
         if (d.phase == 1) {   /* the final draw comes later (phase 2): keep what it needs */
             memcpy(s_sf.u, &u, sizeof s_sf.u);
             s_sf.smp = smp;

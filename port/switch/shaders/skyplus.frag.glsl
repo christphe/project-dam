@@ -27,7 +27,8 @@ layout(std140, binding = 0) uniform Sky {
     vec4 uWave4;
 };
 layout(binding = 3) uniform sampler2D uHalfSea;  /* the sea drawn at half width (pass 1), read by pass 2 */
-#define uPass uC0_.w   /* 0: one pass, 1: sea only, into the reduced-width target, 2: read it, 4: bake the far sea into the panorama */
+#define uPass uC0_.w   /* 0: one pass, 1: sea only, into the reduced-width target, 2: read it, 4: bake the far sea into the panorama,
+                        * 5: enlarge the half-size sky target onto the screen */
 layout(binding = 4) uniform sampler2D uSeaPano;   /* the far sea, baked (pass 4): u = azimuth, v = sqrt(elevation) / panoMax */
 layout(location = 0) out vec4 o;
 
@@ -46,6 +47,10 @@ float panoMax(float h) { return 0.8; }
 
 void main() {
     vec2 f = vUV;                             /* 0..1, y up */
+    if (uPass > 4.5) {   /* 5: the half-size sky target (uHalfSea slot) enlarged onto the screen */
+        o = vec4(textureLod(uHalfSea, vec2(f.x, 1.0 - f.y), 0.0).rgb, 1.0);
+        return;
+    }
     if (uPass > 3.5) {
         /* the far sea, baked: the still waves and the reflection along each direction under the horizon, filtered by the
          * panorama's own texel footprint. Drawn when the sun, the eye height or the sea level change, or the player has
