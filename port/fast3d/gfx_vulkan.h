@@ -31,6 +31,8 @@ void gfx_vulkan_park(void);
 /* Drawable size of the Vulkan window (the swapchain's once it exists). */
 void gfx_vulkan_get_dimensions(uint32_t* w, uint32_t* h);
 void gfx_vulkan_set_swap_interval(int interval);
+/* GE_PCDUMP / screenshots: the next present writes the window to this PPM (before it returns). */
+bool gfx_vulkan_dump_window(const char* path);
 const char* gfx_vulkan_renderer_string(void);
 
 /* Passes outside the rendering API (gfx_pc.cpp picks these or the GL ones). */

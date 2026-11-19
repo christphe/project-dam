@@ -1043,7 +1043,7 @@ void pipeline_cache_load(void) {
     pc.initialDataSize = blob.size();
     pc.pInitialData = blob.empty() ? nullptr : blob.data();
     VK_CHECK(vkCreatePipelineCache(s_dev, &pc, nullptr, &s_pipe_cache));
-    sysLogPrintf(LOG_NOTE, "VK: pipeline cache, %zu KiB read from disk", blob.size() >> 10);
+    sysLogPrintf(LOG_NOTE, "VK: pipeline cache, %u KiB read from disk", (unsigned)(blob.size() >> 10));
 }
 
 /* Write the cache back (to a temporary file first, so a crash never leaves half a cache). */
@@ -1068,7 +1068,7 @@ void pipeline_cache_save(void) {
 #endif
         return;
     }
-    sysLogPrintf(LOG_NOTE, "VK: pipeline cache, %zu KiB written", n >> 10);
+    sysLogPrintf(LOG_NOTE, "VK: pipeline cache, %u KiB written", (unsigned)(n >> 10));
 }
 
 /* vkCreateGraphicsPipelines through the cache, timed for the park log */
@@ -2638,12 +2638,48 @@ void gfx_vulkan_set_swap_interval(int interval) {
     }
 }
 
+/* GE_PCDUMP / screenshots: the path of the PPM the next present writes, empty for none. */
+std::string s_dump_path;
+
+/* The just-presented image, copied to host memory in the same submission (at
+ * the head of the PRESENT transition) and written as a P6 PPM, top row first,
+ * as gfx_opengl_dump_bound_fbo does. Called after the present, queue idle. */
+void write_dump(const HostChunk& hc, uint32_t w, uint32_t h, const std::string& path) {
+    FILE* f = fopen(path.c_str(), "wb");
+    if (f == nullptr) return;
+    const bool bgr = s_sc_format == VK_FORMAT_B8G8R8A8_UNORM || s_sc_format == VK_FORMAT_B8G8R8A8_SRGB;
+    std::vector<uint8_t> row((size_t)w * 3);
+    fprintf(f, "P6\n%u %u\n255\n", w, h);
+    for (uint32_t y = 0; y < h; y++) {
+        const uint8_t* src = hc.cpu + (size_t)y * w * 4;
+        for (uint32_t x = 0; x < w; x++) {
+            row[x * 3 + 0] = src[x * 4 + (bgr ? 2 : 0)];
+            row[x * 3 + 1] = src[x * 4 + 1];
+            row[x * 3 + 2] = src[x * 4 + (bgr ? 0 : 2)];
+        }
+        fwrite(row.data(), 1, row.size(), f);
+    }
+    fclose(f);
+}
+
 /* Submit the frame's two command buffers; present when the window was drawn. */
 void gfx_vulkan_present(void) {
     if (!s_up || s_parked || !s_frame_open) return;
     Frame& f = s_frames[s_frame_idx];
     end_rendering();
     const bool present = s_acq >= 0;
+    HostChunk dump;
+    const uint32_t dw = s_sc_extent.width, dh = s_sc_extent.height;
+    const std::string dump_path = s_dump_path;
+    s_dump_path.clear();
+    if (present && !dump_path.empty() && s_sc_readable && dw && dh) {
+        dump = make_host_chunk((VkDeviceSize)dw * dh * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        layout_to(f.cmd, s_sc_images[s_acq], VK_IMAGE_ASPECT_COLOR_BIT, s_sc_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        VkBufferImageCopy r = {};
+        r.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        r.imageExtent = { dw, dh, 1 };
+        vkCmdCopyImageToBuffer(f.cmd, s_sc_images[s_acq], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dump.buf, 1, &r);
+    }
     if (present) {
         image_barrier(f.cmd, s_sc_images[s_acq], VK_IMAGE_ASPECT_COLOR_BIT, 1, s_sc_layout, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                       VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,   /* drawn, or a blit / resolve target */
@@ -2694,6 +2730,11 @@ void gfx_vulkan_present(void) {
     }
     s_acq = -1;
     s_frame_idx = (s_frame_idx + 1) % FRAMES_IN_FLIGHT;
+    if (dump.buf) {   /* a capture is rare and may stall: wait for the copy, then write the file */
+        vkQueueWaitIdle(s_queue);
+        write_dump(dump, dw, dh, dump_path);
+        free_host_chunk(dump);
+    }
 }
 
 void gfx_vulkan_park(void) {
@@ -2901,6 +2942,14 @@ void gfx_vulkan_interp_sync(void) {
 }
 
 void gfx_vulkan_frame_count_rewind(void) { s_frame_count--; }
+
+/* GE_PCDUMP / screenshots: have the next present write the window to `path`
+ * (a PPM). false: the swapchain cannot be read back. */
+bool gfx_vulkan_dump_window(const char* path) {
+    if (!s_up || s_parked || !s_sc_readable || path == nullptr) return false;
+    s_dump_path = path;
+    return true;
+}
 
 void gfx_vulkan_perf_report(double frames) {
     if (frames <= 0 || getenv("GE_PERFSTAT") == NULL) return;

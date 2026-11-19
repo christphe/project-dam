@@ -1344,8 +1344,8 @@ int videoInit(void)
 #endif
 #ifdef GE_VULKAN
     /* issue #44: Vulkan backend, the PC default (Video.Renderer; GE_RENDERER=vk / gl overrides it);
-     * no usable driver -> GL. A frame dump (GE_PCDUMP) reads GL's back buffer, so it keeps GL. */
-    if (getenv("GE_RENDERER") != NULL ? gfx_vulkan_wanted() : (cfgRenderer == 1 && configGetFrameDump() == NULL)) {
+     * no usable driver -> GL. */
+    if (getenv("GE_RENDERER") != NULL ? gfx_vulkan_wanted() : cfgRenderer == 1) {
         if (gfx_vulkan_probe()) {
             renderingAPI = &gfx_vulkan_api;
             gfx_sdl_set_vulkan_window(true);
@@ -1825,19 +1825,20 @@ void videoSubmitCommands(Gfx *cmds)
 /* Runs from gfx_sdl_swap_buffers_begin with the composited frame still in the
  * back buffer, just before SDL_GL_SwapWindow. Reading the back buffer after
  * the swap is undefined on buffer-exchange drivers (Mesa/WSLg) -> black. */
-static void videoPreSwapCapture(void)
+/* The window as a PPM: GL reads its back buffer now; Vulkan writes it in the present that follows (issue #44). */
+static int videoDumpWindow(const char *path)
 {
 #ifdef GE_VULKAN
-    if (s_vulkanActive) {   /* issue #44: no readback of the presented image yet */
-        static int warned = 0;
-        if (!warned && (configGetFrameDump() || screenshotReq)) {
-            warned = 1;
-            sysLogPrintf(LOG_WARNING, "video: GE_PCDUMP / screenshots are not implemented under Vulkan yet");
-        }
-        screenshotReq = 0;
-        return;
+    if (s_vulkanActive) {
+        return gfx_vulkan_dump_window(path);
     }
 #endif
+    return gfx_opengl_dump_bound_fbo((uint32_t)gfx_current_window_dimensions.width,
+                                     (uint32_t)gfx_current_window_dimensions.height, path);
+}
+
+static void videoPreSwapCapture(void)
+{
     /* GE_PCDUMP="first-last" / "first-last:step" -> ./ppm/frame_NNNNNN.ppm.
      * Also honours [Debug] FrameDump in ge007.ini (env var wins). */
     const char *pcdump = configGetFrameDump();
@@ -1860,8 +1861,7 @@ static void videoPreSwapCapture(void)
                 snprintf(path, sizeof(path), "ppm/frame_%06d_p%d.ppm", fr, s_dumpSlot);
             else
                 snprintf(path, sizeof(path), "ppm/frame_%06d.ppm", fr);
-            gfx_opengl_dump_bound_fbo((uint32_t)gfx_current_window_dimensions.width,
-                                      (uint32_t)gfx_current_window_dimensions.height, path);   /* D447: whole window, bars included */
+            videoDumpWindow(path);   /* D447: whole window, bars included */
         }
     }
 
@@ -1871,8 +1871,7 @@ static void videoPreSwapCapture(void)
         char path[128];
         GE_MKDIR("ppm");
         snprintf(path, sizeof(path), "ppm/shot_%03d.ppm", shotNum++);
-        if (gfx_opengl_dump_bound_fbo((uint32_t)gfx_current_window_dimensions.width,
-                                      (uint32_t)gfx_current_window_dimensions.height, path)) {
+        if (videoDumpWindow(path)) {
             sysLogPrintf(LOG_INFO, "video: screenshot -> %s "
                          "(view with tools_pc/ppm2bmp.py)", path);
         } else {
