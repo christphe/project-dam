@@ -22,6 +22,9 @@ The look target: realistic but stylised, a fine busy grain that tightens toward 
 - 1: the sea into a **half-width target of exactly the viewport's size** (above-horizon pixels write `horizonColor` so the bilinear read at the horizon does not blend in black).
 - 2: the full-resolution pass reads that target below the horizon (`uHalfSea`, binding 3) and draws the sky above it. On deko3d this final draw comes later, after the opaque rooms and props (see the sky note).
 - 4: **bake** the far sea into `uSeaPano` (binding 4).
+- 5: enlarge the half-size final image onto the screen (half scale, below).
+
+**Half scale** (deko3d, `SKY_HALF_SCALE`): the sea target is a quarter of the viewport's width and half its height, and the final pass (pass 2) is drawn into a half-size target (`s_skyr_fb`); pass 5 enlarges it onto the screen at the far plane, depth-tested, after the opaque scenery. Halving only the final pass gained ~1 ms on the console (12.4 -> 11.4 ms): the waves in the sea target are the heavy part, so the sea target has to follow the scale too. Both together: 12.4 -> **6.2 ms** median per frame (console, Frigate, handheld).
 
 ## The far sea (the part that took a week)
 
@@ -61,7 +64,7 @@ Coverage limit: the panorama goes down to sin(elevation) 0.64 from the bake eye,
 
 ## Open items
 
-- The half-scale final pass in the game (the sky and sea drawn at half size and enlarged: 8.6 -> 2.8 ms in the console viewer, handheld). Works in both viewers; the first game attempt read the wrong texture.
+- Ryubing shows the half-scale image wrong (an enlarged sea; a test gradient drawn into the half-size target read back as one flat colour) where the console is right: not explained, judge half scale on the console.
 - The first-frame black bake's cause.
 - Looks owed: docked, co-op (two viewports share one panorama), Dam (legacy `gSeaMode 0`), Caverns, Complex.
 - Judge this sea on Ryubing or the console only: the old Ryujinx (r.49574a9) draws bright streaks, arcs and blocks in the far sea that neither shows.

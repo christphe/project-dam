@@ -34,6 +34,8 @@ The far sea no longer uses this reflection at all (it reflects the horizon colou
 
 The final sky pass is drawn after the opaque rooms and props and before the translucent ones (`src/game/bg.c` `#ifdef PORT` hook, `skyPlusRenderDeferred`), at the far plane with the depth test on, so the GPU drops the pixels the scenery hides. The reflections, the bake and the sea target stay at `skyRender`'s place: moving them after the scenery cost the console ~3 ms. Other backends keep GE's order.
 
+On deko3d the final pass is drawn at **half size** and enlarged (see the sea note, "Half scale").
+
 ## Clouds and the sun
 
 A low or set sun no longer lights the clouds overhead: they fall back to the sky's colour, and only the side of the sky toward the sun (or the moon) stays bright (`PRM(14)` minimum light, `PRM(15)` sun side). A level with neither keeps GE's shading.
@@ -45,7 +47,6 @@ Whole frame 4.4-4.6 ms; skipping `skyColor` above the horizon saved about **1.2 
 ## Ideas on the table (not done, not investigated)
 
 - **Bake the sky too**, as for the far sea: a panorama redrawn only when the sky's inputs change, with the sun halo and the cloud drift as small per-pixel overlays. The sun is fixed in the world in the current levels, so the expensive part (three cloud layers) would be static except for the scrolling offsets; scrolling clouds mean a bake keyed on `ofsOf(i)` would re-bake continuously, so the clouds would have to be sampled live from the baked layer maps rather than baked into colour. Open question: whether the scrolling can be reproduced by shifting a baked image.
-- The pass is full-screen at full resolution above the horizon; the sky is smooth, so a reduced-resolution sky (as the sea has) is plausible. A reduced-resolution sky was tried earlier in the work and reverted; the reason was not recorded, so treat it as an open question rather than a known failure.
 
 ## Pitfalls seen
 
