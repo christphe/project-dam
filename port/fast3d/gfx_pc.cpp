@@ -2,7 +2,6 @@
 
 #include "floatvtx.h" /* D245 */
 #include "skyplus.h"  /* GE+ sky: G_SKYPLUS_EXT */
-extern "C" { int gfx_skyplus_phase = 0; }
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -6372,7 +6371,6 @@ static void gfx_run_dl(Gfx* cmd) {
                     break;
                 }
                 gfx_flush();   /* everything before the sky is drawn first */
-                gfx_skyplus_phase = (int)C0(0, 8);
                 const int vp[4] = { rdp.viewport.x, rdp.viewport.y, (int)rdp.viewport.width, (int)rdp.viewport.height };
                 /* clip x as the sky's own float vertices get it (gfx_adjust_x_for_aspect_ratio) */
                 const float aspA = gfx_adjust_x_for_aspect_ratio(1.0f, 0.0f);

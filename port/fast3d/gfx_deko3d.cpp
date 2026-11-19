@@ -521,7 +521,6 @@ void load_pack(void) {
     s_sky_ok = fs && pack_shader(pack_find(0, DK_PACK_SKYPLUS), 1, &s_sky_frag);
     s_water_ok = pack_shader(pack_find(0, DK_PACK_WATER), 1, &s_water_frag);
     s_lut_ok = fs && pack_shader(pack_find(0, DK_PACK_SKYLUT), 1, &s_lut_frag);
-    portSkyPlusDeferOk = s_sky_ok ? 1 : 0;   /* the sky after the opaque scenery, depth-tested (skyplus.c, bg.c) */
     int combiners = 0;
     for (uint32_t i = 0; i < s_pack_count; i++) combiners += (s_pack[i].id0 != 0 || s_pack[i].id1 >= DK_PACK_NAMED_MAX);
     sysLogPrintf(LOG_NOTE, "DK: shader pack: %d combiners + uber, %u KiB of code", combiners, (unsigned)(total >> 10));
@@ -1680,11 +1679,7 @@ struct SkyPlusDraw {
     PortSkyPlus p;
     int vp[4];
     float aspA, aspB;
-    int phase;   /* 0 whole pass, 1 all but the final draw, 2 the final draw (what phase 1 kept: s_sf) */
 };
-/* what a phase-1 pass keeps for the phase-2 final draw */
-struct SkyFinal { bool valid; float u[16][4]; int smp; int vp[4]; DkViewport v; DkResHandle h[5]; };
-SkyFinal s_sf;
 #define SKYPLUS_RING 64
 SkyPlusDraw s_sky_ring[SKYPLUS_RING];
 unsigned s_sky_next;
@@ -1698,7 +1693,6 @@ DkImage s_wtex_img;
 DkHeapBlock s_wtex_blk;
 int s_wtex_gen = -1;
 
-bool s_fs_far = false;   /* draw_fullscreen at the far plane, depth-tested (the GE+ sky's final pass, after the opaque scenery) */
 void draw_fullscreen(const DkShader* frag, const void* uni, uint32_t uni_size, DkResHandle tex) {
     if (s_bound_a2c) {
         bind_multisample(s_bound_ms, false);   /* D984: restore_state re-applies the program's */
@@ -1715,7 +1709,7 @@ void draw_fullscreen(const DkShader* frag, const void* uni, uint32_t uni_size, D
     dkCmdBufBindRasterizerState(s_cmd, &r);
     DkDepthStencilState d;
     dkDepthStencilStateDefaults(&d);
-    d.depthTestEnable = s_fs_far ? 1 : 0;
+    d.depthTestEnable = 0;
     d.depthWriteEnable = 0;
     d.depthCompareOp = DkCompareOp_Lequal;
     dkCmdBufBindDepthStencilState(s_cmd, &d);
@@ -1882,7 +1876,6 @@ int gfx_deko3d_skyplus_stage(const struct PortSkyPlus* p, const int vp[4], float
     for (int i = 0; i < 4; i++) d.vp[i] = vp[i];
     d.aspA = aspA;
     d.aspB = aspB;
-    d.phase = gfx_skyplus_phase;
     return slot;
 }
 
@@ -1893,22 +1886,6 @@ void gfx_deko3d_skyplus_pass(int slot) {
         return;
     }
     const SkyPlusDraw& d = s_sky_ring[slot];
-    if (d.phase == 2) {   /* the final draw, after the opaque scenery: at the far plane, depth-tested, so the GPU drops the
-                           * pixels the scenery hides before the shader runs */
-        if (!s_sf.valid) return;
-        s_sf.valid = false;
-        if (s_target_dirty) bind_target();
-        DkViewport vf = s_sf.v;
-        vf.near = 1.0f; vf.far = 1.0f;
-        dkCmdBufSetViewports(s_cmd, 0, &vf, 1);
-        set_scissor_rect(s_sf.vp[0], s_sf.vp[1], s_sf.vp[2], s_sf.vp[3]);
-        for (int b = 1; b <= 4; b++) dkCmdBufBindTextures(s_cmd, DkStage_Fragment, b, &s_sf.h[b], 1);
-        s_fs_far = true;
-        draw_fullscreen(&s_sky_frag, &s_sf.u, sizeof s_sf.u, s_sf.h[0]);
-        s_fs_far = false;
-        restore_state();
-        return;
-    }
     const PortSkyPlus& p = d.p;
     if (d.vp[2] <= 0 || d.vp[3] <= 0 || (d.aspA < 0.0f ? -d.aspA : d.aspA) < 1e-6f || !p.tex) return;
     if (p.texGen != s_sky_gen || s_sky_slot < 0) {
@@ -1993,7 +1970,6 @@ void gfx_deko3d_skyplus_pass(int slot) {
                                               DkWrapMode_Repeat, DkWrapMode_Repeat, 2 });   /* 8 cost the console ~7 ms */
         const DkResHandle wh = dkMakeTextureHandle(sea ? s_wtex_slot : s_dummy_slot, wsmp);
         dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 1, &wh, 1);   /* restore_state rebinds the game's */
-        s_sf.h[1] = wh;
     }
     /* the reflection sky, once per pass, into its small panorama; the sea reads it */
     bool lut = false;
@@ -2018,7 +1994,6 @@ void gfx_deko3d_skyplus_pass(int slot) {
             const DkResHandle lh = dkMakeTextureHandle(
                 s_fbs[s_lut_fb].color_slot, sampler_slot(s_fbs[s_lut_fb].smp));
             dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 2, &lh, 1);
-            s_sf.h[2] = lh;
             lut = true;
         }
     }
@@ -2026,7 +2001,6 @@ void gfx_deko3d_skyplus_pass(int slot) {
         /* no panorama (framebuffers off, or the pack lacks it): the sea would read an unbound texture */
         const DkResHandle dh = dkMakeTextureHandle(s_dummy_slot, 0);
         dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 2, &dh, 1);
-        s_sf.h[2] = dh;
     }
     /* the far sea, baked into its panorama when the sun (or the level's sky and water) changes */
     bool pano = false;
@@ -2089,14 +2063,12 @@ void gfx_deko3d_skyplus_pass(int slot) {
             else { u.v[3][3] = 0.0f; u.v[4][3] = 0.0f; u.v[5][3] = 0.0f; }   /* not baked yet: the shader draws the whole sea live */
             const DkResHandle ph = dkMakeTextureHandle(s_fbs[s_pano_fb].color_slot, sampler_slot(s_fbs[s_pano_fb].smp));
             dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 4, &ph, 1);
-            s_sf.h[4] = ph;
             pano = true;
         }
     }
     if (!pano) {
         const DkResHandle dh = dkMakeTextureHandle(s_dummy_slot, 0);
         dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 4, &dh, 1);
-        s_sf.h[4] = dh;
     }
     /* the sea at half width: its heavy per-pixel work (the waves) runs on half
      * the pixels into a small target, the sky pass then reads it bilinearly */
@@ -2132,19 +2104,15 @@ void gfx_deko3d_skyplus_pass(int slot) {
             const DkResHandle hhd = dkMakeTextureHandle(
                 s_fbs[s_hsea_fb].color_slot, sampler_slot(s_fbs[s_hsea_fb].smp));
             dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 3, &hhd, 1);
-            s_sf.h[3] = hhd;
             half = true;
         }
     }
     if (!half) {
         const DkResHandle dh = dkMakeTextureHandle(s_dummy_slot, 0);
         dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 3, &dh, 1);
-        s_sf.h[3] = dh;
     }
-    {   /* drawn after the opaque scenery (skyplus.c portSkyPlusDeferOk): at the far plane, behind the depth test, so the GPU
-         * drops the hidden pixels before the shader runs */
-        /* the final pass at half size: the sky and the sea (whose heavy part is already behind us) are smooth, so they are drawn into a
-         * target of a quarter of the pixels, then enlarged by the composite (uPass 5), which is the part that is depth-tested */
+    {   /* the final pass at half size: the sky and the sea (whose heavy part is already behind us) are smooth, so they are drawn into
+         * a target of a quarter of the pixels, then enlarged onto the screen by the composite (uPass 5) */
         const bool reduce = SKY_HALF_SCALE && d.vp[2] / 2 >= 16 && d.vp[3] / 2 >= 16;
         if (reduce) {
             const int rw = d.vp[2] / 2, rh = d.vp[3] / 2;
@@ -2168,20 +2136,10 @@ void gfx_deko3d_skyplus_pass(int slot) {
                 set_scissor_rect(d.vp[0], d.vp[1], d.vp[2], d.vp[3]);
                 const DkResHandle rh3 = dkMakeTextureHandle(s_fbs[s_skyr_fb].color_slot, sampler_slot(s_fbs[s_skyr_fb].smp));
                 dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 3, &rh3, 1);
-                s_sf.h[3] = rh3;
                 u.v[2][3] = 5.0f;   /* the composite */
             }
         }
-        if (d.phase == 1) {   /* the final draw comes later (phase 2): keep what it needs */
-            memcpy(s_sf.u, &u, sizeof s_sf.u);
-            s_sf.smp = smp;
-            for (int i = 0; i < 4; i++) s_sf.vp[i] = d.vp[i];
-            s_sf.v = v;
-            s_sf.h[0] = dkMakeTextureHandle(s_sky_slot, smp);
-            s_sf.valid = true;
-        } else {
-            draw_fullscreen(&s_sky_frag, &u, sizeof u, dkMakeTextureHandle(s_sky_slot, smp));
-        }
+        draw_fullscreen(&s_sky_frag, &u, sizeof u, dkMakeTextureHandle(s_sky_slot, smp));
     }
     restore_state();
 }

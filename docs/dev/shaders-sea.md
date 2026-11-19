@@ -20,11 +20,11 @@ The look target: realistic but stylised, a fine busy grain that tightens toward 
 
 - 0: one pass (no reduced target).
 - 1: the sea into a **half-width target of exactly the viewport's size** (above-horizon pixels write `horizonColor` so the bilinear read at the horizon does not blend in black).
-- 2: the full-resolution pass reads that target below the horizon (`uHalfSea`, binding 3) and draws the sky above it. On deko3d this final draw comes later, after the opaque rooms and props (see the sky note).
+- 2: the full-resolution pass reads that target below the horizon (`uHalfSea`, binding 3) and draws the sky above it.
 - 4: **bake** the far sea into `uSeaPano` (binding 4).
 - 5: enlarge the half-size final image onto the screen (half scale, below).
 
-**Half scale** (deko3d, `SKY_HALF_SCALE`): the sea target is a quarter of the viewport's width and half its height, and the final pass (pass 2) is drawn into a half-size target (`s_skyr_fb`); pass 5 enlarges it onto the screen at the far plane, depth-tested, after the opaque scenery. Halving only the final pass gained ~1 ms on the console (12.4 -> 11.4 ms): the waves in the sea target are the heavy part, so the sea target has to follow the scale too. Both together: 12.4 -> **6.2 ms** median per frame (console, Frigate, handheld).
+**Half scale** (deko3d, `SKY_HALF_SCALE`): the sea target is a quarter of the viewport's width and half its height, and the final pass (pass 2) is drawn into a half-size target (`s_skyr_fb`); pass 5 enlarges it onto the screen. Halving only the final pass gained ~1 ms on the console (12.4 -> 11.4 ms): the waves in the sea target are the heavy part, so the sea target has to follow the scale too. Both together: 12.4 -> **6.2 ms** median per frame (console, Frigate, handheld).
 
 ## The far sea (the part that took a week)
 

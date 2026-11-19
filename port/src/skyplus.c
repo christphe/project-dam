@@ -32,12 +32,6 @@
 #include "system.h"
 
 int portSkyPlus = 0;
-/* the backend can draw the sky after the opaque scenery, against the depth buffer (gfx_deko3d.cpp sets it): skyRender then only
- * prepares the sky, and the room render emits it between the opaque and the translucent rooms (bg.c), so the GPU skips the sky's
- * hidden pixels before running its shader */
-int portSkyPlusDeferOk = 0;
-static PortSkyPlus *s_skyPending;
-static int s_skyDeferBroken;   /* = Video.Visuals >= Enhanced (set by video.c, D982) */
 
 extern s32 g_SkyStageNum;
 
@@ -499,7 +493,6 @@ Gfx *skyPlusRender(Gfx *gdl)
     }
 #endif
 
-    p->defer = portSkyPlusDeferOk && !s_skyDeferBroken;
     {   /* the far sea is baked on the level's first frame, before its sky, from the player's eye at the start (set when the level is
          * set up, before the intro): so no image is ever shown without it, and the intro's flying camera is not where it is baked from */
         extern enum CAMERAMODE g_CameraMode;
@@ -510,26 +503,6 @@ Gfx *skyPlusRender(Gfx *gdl)
         prev = g_CameraMode;
         p->bakeEye[0] = start->x; p->bakeEye[1] = start->y; p->bakeEye[2] = start->z;
     }
-    if (p->defer) {
-        if (s_skyPending == NULL) {
-            s_skyPending = p;   /* the final draw is emitted by skyPlusRenderDeferred */
-            gSPSkyPlusExtPhase(gdl++, p, 1);   /* the reflections, the bake and the sea now, as before */
-            return gdl;
-        }
-        /* the room render did not take the last one (a path without the hook): draw it here from now on */
-        s_skyDeferBroken = 1;
-        s_skyPending = NULL;
-    }
     gSPSkyPlusExt(gdl++, p);
-    return gdl;
-}
-
-/* bg.c, after the opaque rooms and props, before the translucent ones: the sky skyRender prepared */
-Gfx *skyPlusRenderDeferred(Gfx *gdl)
-{
-    if (s_skyPending != NULL) {
-        gSPSkyPlusExtPhase(gdl++, s_skyPending, 2);
-        s_skyPending = NULL;
-    }
     return gdl;
 }

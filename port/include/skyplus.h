@@ -52,7 +52,6 @@ typedef struct PortSkyPlus {
     float water[3];       /* WaterRed/Green/Blue, 0..1 */
     float time;           /* wave time, seconds of game time */
     float swell, chop, speed;   /* the level's water settings (skyplus.c, $S/water/<level>.ini) */
-    int defer;            /* 1: the sky is drawn after the opaque scenery, depth-tested (skyplus.c decides per frame) */
     int bakeReady;        /* 1: a level is running: the far sea may be baked */
     int bakeReset;        /* 1 on the first frame of a level's intro (a new level, a restart): the bake is redone */
     float bakeEye[3];     /* where the far sea is baked from: the player's eye at the start (not the intro's flying camera) */
@@ -64,15 +63,6 @@ typedef struct PortSkyPlus {
     do {                                                              \
         Gfx *_g = (Gfx *)(pkt);                                       \
         _g->words.w0 = ((uintptr_t)G_SKYPLUS_EXT << 24);              \
-        _g->words.w1 = GBI_W1(ptr);                                   \
-    } while (0)
-
-/* the same command with a phase in its low byte: 0 the whole pass, 1 everything but the final draw, 2 the final draw only (the
- * backend keeps what phase 1 prepared). skyplus.c splits the pass when the backend can depth-test the final draw */
-#define gSPSkyPlusExtPhase(pkt, ptr, ph)                              \
-    do {                                                              \
-        Gfx *_g = (Gfx *)(pkt);                                       \
-        _g->words.w0 = ((uintptr_t)G_SKYPLUS_EXT << 24) | (uintptr_t)(ph); \
         _g->words.w1 = GBI_W1(ptr);                                   \
     } while (0)
 
@@ -96,8 +86,6 @@ int gfx_opengl_skyplus_stage(const PortSkyPlus *p, const int vp[4], float aspA, 
 void gfx_opengl_skyplus_pass(int slot);
 /* Set by the GL thread when the GE+ program fails to build: GE's sky is drawn instead. */
 extern volatile int gfx_skyplus_failed;
-extern int gfx_skyplus_phase;     /* gfx_pc.cpp sets it from the command before the backend's stage call */
-extern int portSkyPlusDeferOk;   /* skyplus.c: the backend draws the sky after the opaque scenery, depth-tested */
 
 #ifdef __cplusplus
 }
