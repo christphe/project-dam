@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [Unreleased] - minor
+
+### Added
+- First launch converts your ROM by itself and shows it: a Project Dam screen with a progress bar (models, stage backgrounds, stage setups) that waits for A when it is done, instead of a black screen; a missing or refused ROM shows a message with the file name and the folder to put it in
 
 ### Changed
 - Display mode is Enhanced, Original or Custom on the Switch and on PC (it was Switch / N64 / Custom on the Switch and Modern / Original N64 / Custom on PC); on the Switch only the names change; on PC the mode is now remembered, Enhanced gives the same picture as the Switch (Visuals Enhanced, GE+ sky included) and leaves the hardware settings (anti-aliasing, FXAA, anisotropic filtering, VSync, frame cap, resolution) to the player, who sees them in every mode; Original no longer changes the aim settings
