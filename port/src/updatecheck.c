@@ -8,6 +8,8 @@
  * WinHTTP, LoadLibrary'd at runtime (never linked); elsewhere `curl` is run
  * through popen() (skipped if missing).
  * No telemetry: the request carries only a fixed User-Agent.
+ * Checks this fork's releases (christphe/project-dam-nx) against
+ * GE007_UPDATE_VERSION; a release without a PC asset is ignored.
  */
 
 #include <stdio.h>
@@ -30,10 +32,10 @@
 #define UC_HOST      "api.github.com"
 /* /releases/latest deliberately excludes drafts and pre-releases (maintainer
  * decision): a pre-release never prompts anyone to update. */
-#define UC_PATH      "/repos/jkdansereau/goldeneye-pc-port/releases/latest"
+#define UC_PATH      "/repos/christphe/project-dam-nx/releases/latest"
 #define UC_URL       "https://" UC_HOST UC_PATH
-#define UC_RELEASES  "https://github.com/jkdansereau/goldeneye-pc-port/releases"
-#define UC_UA        "ge007-pc-port"
+#define UC_RELEASES  "https://github.com/christphe/project-dam-nx/releases"
+#define UC_UA        "project-dam"
 #define UC_BODY_MAX  (256 * 1024)
 
 static int cfgCheckUpdates = 0;        /* Game.CheckUpdates, default OFF */
@@ -152,14 +154,17 @@ static int updateCheckThread(void *unused)
     static char body[UC_BODY_MAX];   /* the thread runs at most once per launch */
     char tag[32];
     if (fetchLatest(body, UC_BODY_MAX) && extractTag(body, tag, sizeof(tag))) {
-        if (versionNewer(tag, GE007_VERSION)) {
+        if (!hasPcAsset(body)) {
+            /* The latest release can be Switch-only; nothing to offer here. */
+            sysLogPrintf(LOG_INFO, "update check: latest %s has no PC build", tag);
+        } else if (versionNewer(tag, GE007_UPDATE_VERSION)) {
             snprintf(s_tag, sizeof(s_tag), "%s", tag);
             SDL_AtomicSet(&s_ready, 1);   /* full barrier: s_tag visible first */
             sysLogPrintf(LOG_INFO, "update check: %s is available (running v%s); %s",
-                         tag, GE007_VERSION, UC_RELEASES);
+                         tag, GE007_UPDATE_VERSION, UC_RELEASES);
         } else {
             sysLogPrintf(LOG_INFO, "update check: up to date (latest %s, running v%s)",
-                         tag, GE007_VERSION);
+                         tag, GE007_UPDATE_VERSION);
         }
     } else {
         sysLogPrintf(LOG_INFO, "update check: no result (offline or unavailable)");
