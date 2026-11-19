@@ -4,12 +4,16 @@
 
 ### Added
 - First launch converts your ROM by itself and shows it: a Project Dam screen with a progress bar (models, stage backgrounds, stage setups) that waits for A when it is done, instead of a black screen; a missing or refused ROM shows a message with the file name and the folder to put it in
+- Frigate gets the GE+ sky and a sea (Visuals: Enhanced): near you the waves move and reflect the sky, and the distant sea is a still panorama of it; the GE+ sky used to leave water levels on the original sky (#38)
 
 ### Changed
-- Display mode is Enhanced, Original or Custom on the Switch and on PC (it was Switch / N64 / Custom on the Switch and Modern / Original N64 / Custom on PC); on the Switch only the names change; on PC the mode is now remembered, Enhanced gives the same picture as the Switch (Visuals Enhanced, GE+ sky included) and leaves the hardware settings (anti-aliasing, FXAA, anisotropic filtering, VSync, frame cap, resolution) to the player, who sees them in every mode; Original no longer changes the aim settings
-- Visuals on the Video page replaces the Sky option (Custom display mode): Original is the game's own picture, Fixed corrects the original game's display flaws listed under Fixed and draws exact per-pixel fog, Enhanced also adds the GE+ sky (Enhanced in the Switch mode, Original in the N64 mode); it takes effect at once, no restart
+- Faster rendering on the Switch: models and rooms that do not change are now also moved, fogged and clipped on the GPU instead of the CPU, which takes the renderer's busiest stage from about 6-8 ms to about 2.5-4 ms per frame in Jungle co-op (docked); same picture
+- The download no longer carries a separate ROM converter: the game converts the ROM's models and levels itself on first launch
+- Display mode is Enhanced, Original or Custom (it was Switch, N64 or Custom); only the names change
+- Visuals on the Video page replaces the Sky option (Custom display mode): Original is the game's own picture, Fixed corrects the original game's display flaws listed under Fixed and draws exact per-pixel fog, Enhanced also adds the GE+ sky (Enhanced in the Enhanced display mode, Original in the Original one); it takes effect at once, no restart
 
 ### Fixed
+- GE+ sky: the clouds overhead are no longer lit by a sun that is low or below the horizon
 - Leaves, fences and other cut-out textures now hide one another in the right order and get smooth edges, with anti-aliasing on (Visuals: Fixed): the Jungle plant walls and trees no longer show the leaves behind them, and the Jungle bridge planks now hide the vines behind them
 - Jungle: the crashed plane at the start no longer loses a wing, and nothing else in the level is cut off at a room boundary any more; the port never applied the level's rule that every room is drawn in full
 - Jungle: far fern and palm leaves no longer show through the leaves in front of them; the plants' leaves now hide what is behind them (Visuals: Fixed) (#35)
