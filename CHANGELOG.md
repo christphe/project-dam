@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] - minor
+## [0.3.0] - 2026-11-19
 
 ### Added
 - First launch converts your ROM by itself and shows it: a Project Dam screen with a progress bar (models, stage backgrounds, stage setups) that waits for A when it is done, instead of a black screen; a missing or refused ROM shows a message with the file name and the folder to put it in
