@@ -2355,7 +2355,7 @@ static SkyPlusDraw s_skyplus_ring[SKYPLUS_RING];
 static unsigned s_skyplus_next;
 static GLuint s_skyplus_prog, s_skyplus_vao, s_skyplus_tex;
 static int s_skyplus_tex_gen = -1;
-extern "C" { volatile int gfx_skyplus_failed = 0; }
+extern "C" { volatile int gfx_skyplus_failed = 0; volatile int gfx_skyplus_sea = 0; }
 enum { SPL_VP, SPL_ASP, SPL_C0, SPL_C1, SPL_C2, SPL_C3, SPL_EYE, SPL_CLOUDY, SPL_SKY, SPL_CLOUD, SPL_OFS,
        SPL_GAIN, SPL_TEXSCALE, SPL_SUNDIR, SPL_SUNCOL, SPL_SUNGLOW, SPL_MOONDIR, SPL_NIGHT, SPL_TEX, SPL_COUNT };
 static GLint s_sp_loc[SPL_COUNT];
