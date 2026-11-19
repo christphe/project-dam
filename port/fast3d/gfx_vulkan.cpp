@@ -327,13 +327,12 @@ int usable_queue_family(VkPhysicalDevice pd, VkSurfaceKHR surface) {
     return -1;
 }
 
-/* Discrete over integrated over the rest; GE_VKDEVICE=<index> forces one. */
+/* Discrete over integrated over the rest. */
 VkPhysicalDevice pick_device(VkInstance inst, VkSurfaceKHR surface, uint32_t* qfam) {
     uint32_t n = 0;
     vkEnumeratePhysicalDevices(inst, &n, nullptr);
     std::vector<VkPhysicalDevice> v(n);
     vkEnumeratePhysicalDevices(inst, &n, v.data());
-    const char* force = getenv("GE_VKDEVICE");
     VkPhysicalDevice best = VK_NULL_HANDLE;
     int best_score = -1;
     for (uint32_t i = 0; i < n; i++) {
@@ -348,7 +347,6 @@ VkPhysicalDevice pick_device(VkInstance inst, VkSurfaceKHR surface, uint32_t* qf
         if (fam < 0) continue;
         int score = props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 3
                   : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 2 : 1;
-        if (force && force[0] && atoi(force) == (int)i) score = 100;
         if (score > best_score) {
             best_score = score;
             best = v[i];
