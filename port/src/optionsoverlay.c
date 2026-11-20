@@ -1230,7 +1230,6 @@ static int rowPlatformOk(const struct Row *r)
     static const char *const kDesktopOnly[] = {
         "Video.Fullscreen", "Video.FullscreenMode", "__CenterWindow", "__Resolution",
         "__RestartGame",   /* no self-relaunch on Switch (sysRelaunchSelf) */
-        "Game.CheckUpdates", "__UpdateOpen",   /* update check is stubbed out */
         NULL,
     };
     /* Display mode Switch / N64 only shows Show FPS; Custom shows the rest. */
@@ -1711,7 +1710,11 @@ static void overlayInit(void)
 /* D516: scheme-conditional rows (see Row.schemeOnly). */
 static int rowSchemeOk(const struct Row *r)
 {
-    if (!strcmp(r->key, "__UpdateOpen")) return updateCheckAvailable() != NULL;   /* D551 */
+    if (!strcmp(r->key, "__UpdateOpen")) {   /* D551 */
+        if (updateCheckAvailable() == NULL) return 0;
+        ((struct Row *)r)->label = updateInstallStatus();   /* the row text follows the install (Switch) */
+        return 1;
+    }
     if (!r->schemeOnly || !r->schemePtr) return 1;
     return (*r->schemePtr != 0) == (r->schemeOnly == 2);
 }
@@ -2012,7 +2015,7 @@ static void rowAdjust(struct Row *r, int dir)
          * The quit row is the only non-reset ROW_ACTION left. */
         if (isArmRow(r)) { rowActivateReset(r); break; }
         if (!strcmp(r->key, "__UpdateOpen")) {   /* D551 */
-            if (dir > 0) updateCheckOpenReleases();
+            if (dir > 0) updateInstall();   /* Switch: download and replace the NRO; PC: open the page */
             break;
         }
         if (!strcmp(r->key, "__CenterWindow")) {   /* D511: host thread does the SDL call */
@@ -2304,9 +2307,21 @@ static int displayModeNow(void)
 static const char *const kDisplayModeName[3] = { "Enhanced", "Original", "Custom" };
 
 
+/* Switch: the in-game update asks for the same second press before it
+ * downloads anything (PC just opens the releases page on one press). */
+static int isUpdateRow(const struct Row *r)
+{
+#ifdef __SWITCH__
+    return r->kind == ROW_ACTION && !strcmp(r->key, "__UpdateOpen");
+#else
+    (void)r;
+    return 0;
+#endif
+}
+
 static int isArmRow(const struct Row *r)
 {
-    return isResetRow(r) || isPresetRow(r);
+    return isResetRow(r) || isPresetRow(r) || isUpdateRow(r);
 }
 
 int optionsRowIsReset(int i)
@@ -2531,10 +2546,15 @@ static void rowResetSection(int iReset)
 static void rowActivateReset(struct Row *r)
 {
     if (!isArmRow(r)) return;
+    if (isUpdateRow(r) && !updateInstallIdle()) return;   /* downloading or done: nothing to confirm */
     uint64_t now = sysGetMicroseconds();
     int i = (int)(r - rows);
     if (s_resetArmedRow == i && now - s_resetArmedUs <= RESET_ARM_US) {
         s_resetArmedRow = -1;
+        if (isUpdateRow(r)) {
+            updateInstall();
+            return;
+        }
         if (isPresetRow(r)) {
             /* D440: ini keys only (live-applied; persisted on
              * close like any ini edit). Never window/resolution, bindings,
@@ -2549,7 +2569,7 @@ static void rowActivateReset(struct Row *r)
     s_resetArmedUs = now;
     int h = i - 1;
     while (h >= 0 && rows[h].kind != ROW_HEADER) h--;
-    if (isPresetRow(r))
+    if (isPresetRow(r) || isUpdateRow(r))
         sysLogPrintf(LOG_INFO, "optionsoverlay: '%s' armed (confirm within 3 s)", r->label);
     else
         sysLogPrintf(LOG_INFO, "optionsoverlay: section reset '%s' armed (confirm within 3 s)",
@@ -3238,7 +3258,7 @@ static void valueText(int i, char *out, int n)
             /* D356: the label is the button; the value column shows the
              * armed state so the confirm step is discoverable. */
             snprintf(out, n, s_resetArmedRow == i ? "Confirm" : "");
-        } else if (isPresetRow(r)) {
+        } else if (isPresetRow(r) || isUpdateRow(r)) {
             /* D440: same arm/confirm cue, plus "Active" while every
              * preset key already holds that preset's value. */
             snprintf(out, n, "%s", s_resetArmedRow == i ? "Confirm" : "");

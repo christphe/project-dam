@@ -28,6 +28,11 @@ their own licenses; each license text ships in the download's licenses/ folder:
 
   * SDL2 (all platforms) and SDL3 (macOS, loaded by sdl2-compat) - zlib license.
   * zlib - zlib license.
+  * Switch: libcurl (curl license) and mbedtls (Apache-2.0 / GPL-2.0-or-later,
+    used under Apache-2.0) from devkitPro's portlibs, for the in-game update.
+  * Switch: the Mozilla CA certificate bundle (MPL-2.0, from the build image's
+    ca-certificates package) is linked into the NRO so the update can verify
+    GitHub's TLS certificate.
   * Windows: the MinGW-w64 runtime (libwinpthread, libgcc, libstdc++).
   * macOS: the GCC runtime (libgcc_s, libstdc++) - GPL-3.0 with the GCC
     Runtime Library Exception 3.1. The GPL-3.0 text the macOS package ships

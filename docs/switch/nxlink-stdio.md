@@ -104,7 +104,10 @@ Since D958 the game returns to the launcher (sphaira, hbmenu) instead of ending 
 `osRecvMesg`/`osSendMesg`/`osYieldThread`), joins them (libnx keeps a thread's stack mapped until it is
 joined; a stack still mapped made the loader abort with `0xd401` when it unloaded the executable),
 closes audio, `SDL_Quit()`, releases the memory windows, then `exit()` carries on. If a thread has not
-stopped after 4 s: the old exit (`nxExitProcess`). In the memory dump, the locked heap block the size of
+stopped after 4 s: the old exit (`nxExitProcess`). The same goes for any other thread: never
+`SDL_DetachThread` on the Switch, keep the handle and `SDL_WaitThread` it on the exit path (the update
+check's detached thread brought the `0xd401` back, crash in `hbl` once the game had quit;
+`updateCheckShutdown`). In the memory dump, the locked heap block the size of
 the executable is the loader's buffer behind our code: normal, the loader frees it itself.
 
 Since the launcher is still there after every launch, a test loop runs unattended. Test one change at a

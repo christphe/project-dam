@@ -118,6 +118,7 @@ static void portAtExit(void)
             mixerDestroy();
             audioDestroy();
             inputDestroy();
+            updateCheckShutdown();   /* join the update threads: no stack left mapped */
             SDL_Quit();   /* the video / audio / joystick subsystems and EGL */
             nxReleaseAll();
 #ifdef NX_LINKSTDIO

@@ -28,6 +28,9 @@
 #include "versioninfo.h"
 #include "updatecheck.h"
 #include "updatecheck_parse.h"
+#ifdef __SWITCH__
+#include "nxupdate.h"
+#endif
 
 #define UC_HOST      "api.github.com"
 /* /releases/latest deliberately excludes drafts and pre-releases (maintainer
@@ -38,6 +41,12 @@
 #define UC_UA        "project-dam"
 #define UC_BODY_MAX  (256 * 1024)
 
+#define UC_NRO_ASSET "project-dam.nro"
+
+static char s_assetUrl[512];           /* Switch: the NRO asset of the latest release */
+static char s_assetSha[65];
+static SDL_Thread *s_checkThread;      /* Switch: joined on quit (updateCheckShutdown) */
+static SDL_Thread *s_instThread;
 static int cfgCheckUpdates = 0;        /* Game.CheckUpdates, default OFF */
 static SDL_atomic_t s_ready;           /* 1 once s_tag is published */
 static char s_tag[32];
@@ -123,9 +132,13 @@ static int fetchLatest(char *buf, size_t cap)
     buf[len] = 0;
     return ok;
 #elif defined(__SWITCH__)
-    /* project-dam: no curl / popen on the console; no update check. */
-    (void)buf; (void)cap; (void)len;
-    return 0;
+    /* No curl binary or popen on the console: libcurl over the console's sockets. */
+    (void)len;
+    if (!nxOnline()) {
+        sysLogPrintf(LOG_INFO, "update check: console offline, skipped");
+        return 0;
+    }
+    return nxHttpGet(UC_URL, buf, cap);
 #else
     FILE *f = popen("curl -q -fsS --proto =https --max-time 5 -A '" UC_UA "' '" UC_URL "' 2>/dev/null", "r");
     if (!f) return 0;
@@ -154,10 +167,18 @@ static int updateCheckThread(void *unused)
     static char body[UC_BODY_MAX];   /* the thread runs at most once per launch */
     char tag[32];
     if (fetchLatest(body, UC_BODY_MAX) && extractTag(body, tag, sizeof(tag))) {
+#ifdef __SWITCH__
+        /* The Switch installs the NRO asset, with the sha256 GitHub lists for it. */
+        if (!findAsset(body, UC_NRO_ASSET, s_assetUrl, sizeof(s_assetUrl), s_assetSha, sizeof(s_assetSha))) {
+            sysLogPrintf(LOG_INFO, "update check: latest %s has no %s asset", tag, UC_NRO_ASSET);
+        } else
+#else
         if (!hasPcAsset(body)) {
             /* The latest release can be Switch-only; nothing to offer here. */
             sysLogPrintf(LOG_INFO, "update check: latest %s has no PC build", tag);
-        } else if (versionNewer(tag, GE007_UPDATE_VERSION)) {
+        } else
+#endif
+        if (versionNewer(tag, GE007_UPDATE_VERSION)) {
             snprintf(s_tag, sizeof(s_tag), "%s", tag);
             SDL_AtomicSet(&s_ready, 1);   /* full barrier: s_tag visible first */
             sysLogPrintf(LOG_INFO, "update check: %s is available (running v%s); %s",
@@ -176,8 +197,15 @@ void updateCheckStart(void)
 {
     if (!cfgCheckUpdates) return;   /* OFF by default: no thread, no network, no init */
     SDL_Thread *t = SDL_CreateThread(updateCheckThread, "ge007-updatecheck", NULL);
-    if (t) SDL_DetachThread(t);
-    else sysLogPrintf(LOG_INFO, "update check: could not start thread");
+    if (!t) { sysLogPrintf(LOG_INFO, "update check: could not start thread"); return; }
+#ifdef __SWITCH__
+    /* Joined by updateCheckShutdown: libnx keeps a thread's stack mapped until
+     * it is joined, and the loader aborts (0xd401) on a stack left mapped when
+     * the game returns to the launcher (D958). */
+    s_checkThread = t;
+#else
+    SDL_DetachThread(t);
+#endif
 }
 
 const char *updateCheckAvailable(void)
@@ -190,3 +218,97 @@ void updateCheckOpenReleases(void)
     if (SDL_OpenURL(UC_RELEASES) != 0)
         sysLogPrintf(LOG_INFO, "update check: could not open browser: %s", SDL_GetError());
 }
+
+#ifdef __SWITCH__
+/* ---- Switch: in-game install ------------------------------------------
+ * Download project-dam.nro to <nro>.new, check its sha256 against GitHub's
+ * digest, then replace the running NRO (loaded in memory, so the file can be
+ * replaced; the new version starts on the next launch). FAT32 has no atomic
+ * replace-over-existing rename: the old file is removed, then .new renamed. */
+enum { INST_IDLE, INST_RUN, INST_DONE, INST_FAIL };
+static volatile int s_inst = INST_IDLE;
+static volatile int s_instPct;
+static char s_instMsg[48];             /* written before s_inst changes */
+static char s_instPath[512];
+
+static void instFail(const char *why)
+{
+    snprintf(s_instMsg, sizeof(s_instMsg), "Update failed: %s", why);
+    sysLogPrintf(LOG_INFO, "update: %s", s_instMsg);
+    s_inst = INST_FAIL;
+}
+
+static int updateInstallThread(void *unused)
+{
+    (void)unused;
+    char tmp[sizeof(s_instPath) + 8], sha[65];
+    int pct;
+    if (!nxOnline()) { instFail("offline"); return 0; }
+    if (!nxBatteryOk(5, &pct)) {
+        snprintf(s_instMsg, sizeof(s_instMsg), "Battery too low (%d%%): plug in", pct < 0 ? 0 : pct);
+        sysLogPrintf(LOG_INFO, "update: %s", s_instMsg);
+        s_inst = INST_FAIL;
+        return 0;
+    }
+    snprintf(tmp, sizeof(tmp), "%s.new", s_instPath);
+    if (!nxHttpDownload(s_assetUrl, tmp, &s_instPct, sha)) { instFail("download"); return 0; }
+    if (strcmp(sha, s_assetSha) != 0) {
+        remove(tmp);
+        instFail("hash mismatch");
+        return 0;
+    }
+    if (remove(s_instPath) != 0 || rename(tmp, s_instPath) != 0) {
+        /* The new file is intact at <nro>.new; the user can rename it by hand. */
+        instFail("replace");
+        return 0;
+    }
+    sysLogPrintf(LOG_INFO, "update: %s replaced with %s (sha256 %s)", s_instPath, s_tag, sha);
+    s_inst = INST_DONE;
+    return 0;
+}
+
+void updateInstall(void)
+{
+    const char *self = sysSelfPath();
+    size_t n = self ? strlen(self) : 0;
+    static const char tail[] = "/" UC_NRO_ASSET;
+    if (!SDL_AtomicGet(&s_ready) || (s_inst != INST_IDLE && s_inst != INST_FAIL)) return;
+    /* Only the installed NRO: a test build run over nxlink has another name. */
+    if (n < sizeof(tail) || n >= sizeof(s_instPath) || strcmp(self + n - (sizeof(tail) - 1), tail) != 0) {
+        instFail("not the installed NRO");
+        return;
+    }
+    snprintf(s_instPath, sizeof(s_instPath), "%s", self);
+    if (s_instThread) { SDL_WaitThread(s_instThread, NULL); s_instThread = NULL; }   /* the failed try */
+    s_instPct = 0;
+    s_inst = INST_RUN;
+    s_instThread = SDL_CreateThread(updateInstallThread, "ge007-update", NULL);   /* joined on quit */
+    if (!s_instThread) instFail("thread");
+}
+
+void updateCheckShutdown(void)
+{
+    nxNetAbort();   /* a download in progress stops; its partial file is removed */
+    if (s_checkThread) { SDL_WaitThread(s_checkThread, NULL); s_checkThread = NULL; }
+    if (s_instThread) { SDL_WaitThread(s_instThread, NULL); s_instThread = NULL; }
+    nxNetShutdown();
+}
+
+int updateInstallIdle(void) { return s_inst == INST_IDLE || s_inst == INST_FAIL; }
+
+const char *updateInstallStatus(void)
+{
+    static char text[64];
+    switch (s_inst) {
+    case INST_RUN:  snprintf(text, sizeof(text), "Downloading %d%%", s_instPct); return text;
+    case INST_DONE: return "Updated: restart the game";
+    case INST_FAIL: return s_instMsg;
+    default:        return "Update available: install";
+    }
+}
+#else
+void updateInstall(void) { updateCheckOpenReleases(); }
+void updateCheckShutdown(void) { (void)s_checkThread; (void)s_instThread; }   /* PC: threads are detached */
+int  updateInstallIdle(void) { return 1; }
+const char *updateInstallStatus(void) { return "Update available: open page"; }
+#endif

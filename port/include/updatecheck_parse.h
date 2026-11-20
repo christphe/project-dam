@@ -87,4 +87,59 @@ static inline int hasPcAsset(const char *body)
     return 0;
 }
 
+static inline const char *jsonSkipWs(const char *q)
+{
+    while (*q == ' ' || (*q >= 9 && *q <= 13)) q++;
+    return q;
+}
+
+/* Copy the JSON string value of the next "key": "value" at or after p into out
+ * (no escapes: GitHub's asset fields have none). Returns the position just
+ * past the value, or NULL. */
+static inline const char *jsonFindKey(const char *p, const char *key, char *out, size_t n)
+{
+    size_t kl = strlen(key);
+    while ((p = strchr(p, '"')) != NULL) {
+        if (strncmp(p + 1, key, kl) == 0 && p[1 + kl] == '"') {
+            const char *q = jsonSkipWs(p + 2 + kl);
+            if (*q == ':') {
+                q = jsonSkipWs(q + 1);
+                if (*q == '"') {
+                    size_t i = 0;
+                    q++;
+                    while (*q && *q != '"' && *q != 92 && i + 1 < n) out[i++] = *q++;
+                    if (*q != '"') return NULL;
+                    out[i] = 0;
+                    return q + 1;
+                }
+            }
+        }
+        p++;
+    }
+    return NULL;
+}
+
+/* Find the release asset called `name`: its download URL and its sha256
+ * (GitHub's "digest": "sha256:<64 hex>"). Returns 1 only if both are there. */
+static inline int findAsset(const char *body, const char *name, char *url, size_t urlN, char *sha, size_t shaN)
+{
+    char val[256], dig[96];
+    const char *p = body;
+    while ((p = jsonFindKey(p, "name", val, sizeof(val))) != NULL) {
+        if (strcmp(val, name) != 0) continue;
+        const char *d = jsonFindKey(p, "digest", dig, sizeof(dig));
+        if (!d || strncmp(dig, "sha256:", 7) != 0 || strlen(dig + 7) != 64 || shaN < 65) return 0;
+        if (!jsonFindKey(d, "browser_download_url", url, urlN)) return 0;
+        for (int i = 0; i < 64; i++) {
+            char c = dig[7 + i];
+            if (c >= 'A' && c <= 'F') c = (char)(c + 32);
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return 0;
+            sha[i] = c;
+        }
+        sha[64] = 0;
+        return 1;
+    }
+    return 0;
+}
+
 #endif
