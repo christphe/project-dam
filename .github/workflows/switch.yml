@@ -51,7 +51,8 @@ jobs:
         run: |
           cmake -S . -B build-switch -G Ninja -DROMID=ntsc-final \
             -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake \
-            -DPROJECT_DAM_VERSION=${{ steps.version.outputs.version }}
+            -DPROJECT_DAM_VERSION=${{ steps.version.outputs.version }} \
+            -DGE007_UPDATE_VERSION=${{ steps.version.outputs.version }}
           cmake --build build-switch
 
       - name: Package
@@ -60,7 +61,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: project-dam-${{ steps.version.outputs.version }}
-          path: dist/project-dam-${{ steps.version.outputs.version }}.zip
+          path: |
+            dist/project-dam-${{ steps.version.outputs.version }}.zip
+            dist/project-dam.nro
           if-no-files-found: error
 
   release:
@@ -95,5 +98,5 @@ jobs:
             ' CHANGELOG.md
           } > notes.md
           cat notes.md
-          gh release create "$tag" dist/*.zip \
+          gh release create "$tag" dist/*.zip dist/project-dam.nro \
             --title "Project Dam v$version" --notes-file notes.md --latest

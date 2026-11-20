@@ -68,6 +68,8 @@ void sysSetArgs(int argc, char **argv);
 int  sysRelaunchSelf(void);
 /* Nonzero if the given argument (e.g. "--debug-gl") was passed. */
 int  sysArgCheck(const char *arg);
+/* The host argv[0] (the NRO path on the Switch), or NULL. */
+const char *sysSelfPath(void);
 /* Value following the given argument on the command line, or NULL. */
 const char *sysArgGetString(const char *arg);
 /* The host argv[1..] joined with spaces, as the game's "cartridge token

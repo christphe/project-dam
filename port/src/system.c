@@ -286,6 +286,11 @@ void sysSetArgs(int argc, char **argv)
     g_argv = argv;
 }
 
+const char *sysSelfPath(void)
+{
+    return (g_argv && g_argc > 0) ? g_argv[0] : NULL;
+}
+
 /* D443: relaunch this executable with the original argv (same cwd -- a child
  * inherits it). Called ONLY from the atexit handler, i.e. after the D344
  * orderly quit has parked the render thread and the config/eeprom are saved.

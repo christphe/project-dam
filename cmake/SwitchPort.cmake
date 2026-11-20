@@ -113,6 +113,27 @@ macro(switch_dependencies)
   set(ZLIB_INCLUDE_DIR "${ZLIB_INCLUDE_DIRS}")
   # D973: deko3d (libnx's lib dir), for the deko3d backend (the Switch default).
   list(APPEND LIBS deko3d SDL2::SDL2 ZLIB::ZLIB m)
+  # In-game update (port/src/switch/nxupdate.c): libcurl on mbedtls, and the
+  # Mozilla CA bundle of the build image linked into the NRO (mbedtls has no
+  # system certificate store; libcurl 7.69 cannot take it from memory).
+  list(APPEND LIBS curl mbedtls mbedx509 mbedcrypto z)
+  set(_ca_bundle "/etc/ssl/certs/ca-certificates.crt")
+  if(NOT EXISTS "${_ca_bundle}")
+    message(FATAL_ERROR "Switch build: ${_ca_bundle} missing (install ca-certificates in the build image)")
+  endif()
+  file(WRITE "${CMAKE_BINARY_DIR}/nxcacert.S"
+    ".section .rodata
+.balign 8
+.global nx_cacert_start
+.global nx_cacert_end
+"
+    "nx_cacert_start:
+.incbin \"${_ca_bundle}\"
+.byte 0
+nx_cacert_end:
+")
+  set(SWITCH_CACERT_SRC "${CMAKE_BINARY_DIR}/nxcacert.S")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_ca_bundle}")
 endmacro()
 
 # D973: the deko3d shader pack ("shipped shader cache"): every combiner listed in

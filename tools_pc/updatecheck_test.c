@@ -127,6 +127,43 @@ int main(void)
     checkPc("{\"browser_download_url\":\"https://x/windows-notes/project-dam.nro\"}", 0);
     checkPc("{\"browser_download_url\":\"https://x/a.nro\"", 0);
 
+    /* findAsset: the release's project-dam.nro, its url and its sha256. */
+    {
+        static const char hex[] = "7a94f70bc17aeb357ee4ba88c1478ec5fe1a3a3247be1a2466dfca239878540d";
+        char url[200], sha[65];
+        char body[1200];
+        snprintf(body, sizeof(body),
+                 "{\"name\":\"Project Dam v0.4.0\",\"assets\":["
+                 "{\"name\":\"project-dam-0.4.0.zip\",\"digest\":\"sha256:%.64s\","
+                 "\"browser_download_url\":\"https://x/download/t/project-dam-0.4.0.zip\"},"
+                 "{\"url\":\"u\",\"name\": \"project-dam.nro\",\"uploader\":{\"login\":\"x\"},"
+                 "\"digest\": \"sha256:%.64s\",\"download_count\":0,"
+                 "\"browser_download_url\": \"https://x/download/t/project-dam.nro\"}]}",
+                 "0000000000000000000000000000000000000000000000000000000000000000", hex);
+        int ok = findAsset(body, "project-dam.nro", url, sizeof(url), sha, sizeof(sha));
+        if (ok && strcmp(url, "https://x/download/t/project-dam.nro") == 0 && strcmp(sha, hex) == 0) {
+            printf("PASS findAsset nro\n");
+        } else {
+            printf("FAIL findAsset nro ok=%d url=%s sha=%s\n", ok, url, sha);
+            g_fail++;
+        }
+        if (!findAsset(body, "project-dam.nro.sig", url, sizeof(url), sha, sizeof(sha))) {
+            printf("PASS findAsset missing asset\n");
+        } else {
+            printf("FAIL findAsset missing asset\n");
+            g_fail++;
+        }
+        /* no digest (null) -> not usable */
+        if (!findAsset("{\"name\":\"project-dam.nro\",\"digest\":null,"
+                       "\"browser_download_url\":\"https://x/a\"}",
+                       "project-dam.nro", url, sizeof(url), sha, sizeof(sha))) {
+            printf("PASS findAsset null digest\n");
+        } else {
+            printf("FAIL findAsset null digest\n");
+            g_fail++;
+        }
+    }
+
     if (g_fail) {
         printf("%d case(s) FAILED\n", g_fail);
         return 1;

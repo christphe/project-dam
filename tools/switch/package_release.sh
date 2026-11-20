@@ -23,6 +23,9 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/switch/project-dam/data"
 
 cp "$NRO" "$STAGE/switch/project-dam/project-dam.nro"
+# The in-game update downloads this file by name; the release carries it next
+# to the zip and GitHub lists its sha256.
+cp "$NRO" "$OUT/project-dam.nro"
 
 cp LICENSE NOTICE "$STAGE/"
 sed "s/@VERSION@/$VERSION/g" tools/switch/README-release.txt > "$STAGE/README.txt"
