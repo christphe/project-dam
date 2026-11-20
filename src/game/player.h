@@ -186,6 +186,9 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 #define GE_PROJ_SIM_OWNER(own, op, view) coopProjSimOwner((own), (op), (view))
 #define GE_SPLIT_GE2()           (getPlayerCount() >= 2 && coopSplitView())
 #define GE_SPLIT_EQ2()           (getPlayerCount() == 2 && coopSplitView())
+extern int portSplitVertical;   /* Game.SplitScreen: 2 players side by side instead of one above the other */
+#define GE_SPLIT_VERT()          (GE_SPLIT_EQ2() && portSplitVertical)
+#define GE_WATCH_NO_OPTIONS()    (getPlayerCount() == 1 || coopIsMission())   /* the menu replaces the watch's settings pages */
 #define GE_COOP_VIEW_ORDER()     coopViewOrder()
 #define GE_FROZEN_CAMERA         coopFrozenCamera
 #else
@@ -210,6 +213,8 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 #define GE_FROZEN_CAMERA         bondviewFrozenCameraTick
 #define GE_SPLIT_GE2()           (getPlayerCount() >= 2)
 #define GE_SPLIT_EQ2()           (getPlayerCount() == 2)
+#define GE_SPLIT_VERT()          0
+#define GE_WATCH_NO_OPTIONS()    0
 #define GE_COOP_VIEW_ORDER()
 #define GE_PICKUP_TAKEN(prop)    0
 #define GE_PICKUP_VISIBLE(prop)  1

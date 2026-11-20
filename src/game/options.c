@@ -862,7 +862,7 @@ void watch_screen1_navigation(void)
 
         if (goto_watch_screen_index_2)
         {
-            watch_screen_index = WATCH_INDEX_CONTROL_OPTIONS;
+            watch_screen_index = GE_WATCH_NO_OPTIONS() ? WATCH_INDEX_MISSION_BRIEFING : WATCH_INDEX_CONTROL_OPTIONS;   /* solo / co-op: the settings pages are in the menu */
             set_controlstick_lr_disabled();
             sub_GAME_7F0A5210();
             trigger_watch_zoom(WATCHZOOM3, 15.0f);
@@ -952,7 +952,7 @@ void watch_screen4_navigation(void) {
     {
         if (watch_item_is_actively_selected == 0)
         {
-            watch_screen_index = WATCH_INDEX_GAME_OPTIONS;
+            watch_screen_index = GE_WATCH_NO_OPTIONS() ? WATCH_INDEX_INVENTORY : WATCH_INDEX_GAME_OPTIONS;   /* solo / co-op: no settings pages */
             reset_game_options_index();
             sub_GAME_7F0A5210();
             trigger_watch_zoom(WATCHZOOM3, 15.0f);

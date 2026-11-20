@@ -7908,6 +7908,11 @@ s16 getHeight330or240(void)
 
 s16 bondviewGetCurrentPlayerViewportWidth(void)
 {
+    if (GE_SPLIT_VERT())
+    {
+        return VIEWPORT_WIDTH_4P;   /* two players side by side: half the width, the full height */
+    }
+
     if (getPlayerCount() >= 3)
     {
         return VIEWPORT_WIDTH_4P;
@@ -7933,6 +7938,11 @@ s16 bondviewGetCurrentPlayerViewportWidth(void)
 
 s16 get_curplayer_viewport_ulx(void)
 {
+    if (GE_SPLIT_VERT())
+    {
+        return get_cur_playernum() == 1 ? 0xa1 : 0;
+    }
+
     if (2 < getPlayerCount())
     {
         if ((get_cur_playernum() == 1) || (get_cur_playernum() == 3))
@@ -7954,7 +7964,7 @@ s16 bondviewGetCurrentPlayerViewportHeight(void)
 {
     f32 t;
 
-    if (GE_SPLIT_GE2())
+    if (GE_SPLIT_GE2() && !GE_SPLIT_VERT())
     {
         return VIEWPORT_HEIGHT_4P;
     }
@@ -8000,7 +8010,7 @@ s16 bondviewGetCurrentPlayerViewportUly(void)
 {
     f32 t;
 
-    if (GE_SPLIT_EQ2())
+    if (GE_SPLIT_EQ2() && !GE_SPLIT_VERT())
     {
         if (get_cur_playernum() == 0)
         {
