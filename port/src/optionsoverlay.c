@@ -57,6 +57,8 @@ extern MENU current_menu;
 #include "lv.h"   /* lvlGetCurrentMultiPlayerSec (D606 mission timer) */
 #include "bondtypes.h"   /* sImageTableEntry (D555 crosshair pointer: typed field reads) */
 #include "file.h"   /* save_data (D356 reset probe: second-file isolation) */
+#include "wheel.h"
+#include "assign.h"
 #include "optionsoverlay.h"
 #include "hudaspect.h"   /* D335b/D472: PORT_HUD_ASPECT */
 #include "watchsettings.h"
@@ -2660,6 +2662,141 @@ void optionsOverlayBack(void)
 
 int optionsOverlayMouseActive(void) { return s_mouseActive; }   /* D567 */
 
+int optionsMenuGet(const char *key, double *out)
+{
+    if (!strcmp(key, "__DisplayMode")) { *out = videoGetDisplayMode(); return 1; }
+    if (!strcmp(key, "__Resolution")) { *out = s_resSel; return 1; }
+    if (!strcmp(key, "__ControlStyle")) {   /* 0 Modern, 1 Enhanced (the XBLA layouts), 2 Original (the N64 styles) */
+        double scheme = 0, preset = 0;
+        struct Row *rs = rowByKey("Input.ControlScheme"), *rp = rowByKey("Input.PadPreset");
+        if (rs && rs->found) scheme = rowGet(rs);
+        if (rp && rp->found) preset = rowGet(rp);
+        *out = scheme != 0 ? 2 : (preset == 5 ? 0 : 1);
+        return 1;
+    }
+    if (!strcmp(key, "__BondFile")) {   /* the save file the profile settings are read from */
+        const int f = watchSettingsActiveFolder();
+        *out = f < 0 ? 0 : f;
+        return 1;
+    }
+    if (!strcmp(key, "Audio.Device")) {   /* the current device's place in the list, 0 = the system default */
+        const char *cur = audioDeviceCurrentName();
+        int n = audioDeviceRefresh();
+        *out = 0;
+        for (int i = 0; cur && cur[0] && i < n; i++)
+            if (!strcmp(cur, audioDeviceName(i))) { *out = i + 1; break; }
+        return 1;
+    }
+    struct Row *r = rowByKey(key);
+    if (!r || (!r->found && watchSettingsFieldForKey(key) < 0)) return 0;
+    *out = rowGet(r);
+    return 1;
+}
+
+void optionsMenuSet(const char *key, double value)
+{
+    if (!strcmp(key, "__DisplayMode")) { videoSetDisplayMode((int)lround(value)); return; }
+    if (!strcmp(key, "__BondFile")) {   /* file select only: step to the file */
+        if (current_menu != MENU_FILE_SELECT) return;
+        for (int i = 0; i < 4 && watchSettingsActiveFolder() != (int)lround(value); i++) watchSettingsChooseFile(1);
+        return;
+    }
+    if (!strcmp(key, "Audio.Device")) {
+        const int k = (int)lround(value);
+        if (k <= 0) audioDeviceRequest("");
+        else if (k - 1 < audioDeviceRefresh()) audioDeviceRequest(audioDeviceName(k - 1));
+        return;
+    }
+    if (!strcmp(key, "__ControlStyle")) {
+        const int k = (int)lround(value);
+        struct Row *rs = rowByKey("Input.ControlScheme"), *rp = rowByKey("Input.PadPreset");
+        if (!rs || !rp) return;
+        rowSet(rs, k == 2 ? 1.0 : 0.0);
+        if (k == 0) rowSet(rp, 5.0);                              /* Modern is a layout of its own */
+        else if (k == 1 && rowGet(rp) == 5.0) rowSet(rp, 0.0);    /* leaving Modern: the first of the remastered layouts */
+        return;
+    }
+    if (!strcmp(key, "__Resolution")) {
+        const int k = (int)lround(value);
+        if (k < 0 || k >= s_resFitN || k == s_resSel) return;
+        s_resSel = k;
+        const int i = s_resFit[k];
+        videoRequestWindowSize(kResList[i][0], kResList[i][1]);
+        return;
+    }
+    struct Row *r = rowByKey(key);
+    if (r && (r->found || watchSettingsFieldForKey(key) >= 0)) rowSet(r, value);
+}
+
+int optionsMenuResCount(void) { return s_resFitN; }
+
+#ifndef GE_MENU_RUN_STAGE
+#define GE_MENU_RUN_STAGE 11   /* the same value input.c uses for current_menu while a mission runs */
+#endif
+int optionsMenuFileSelect(void) { return current_menu == MENU_FILE_SELECT; }
+int optionsMenuProfileAvailable(void) { return watchSettingsAvailable(); }
+int optionsMenuUpdateAvailable(void) { return updateCheckAvailable() != NULL; }
+int optionsMenuInStage(void) { return current_menu == GE_MENU_RUN_STAGE; }
+
+int optionsMenuAudioCount(void) { return 1 + audioDeviceRefresh(); }
+
+const char *optionsMenuAudioLabel(int i)
+{
+    return i <= 0 ? "Default" : audioDeviceName(i - 1);
+}
+
+void optionsMenuSetSeat(int seat)
+{
+    if (seat >= 0 && seat <= 3 && seat != s_padSeat) padSetSeat(seat);
+}
+
+const char *optionsMenuBindText(const char *key, int slot)
+{
+    const char *t = inputBindingSlot(key, slot);
+    return t ? t : "";
+}
+
+void optionsMenuBindBegin(const char *key, int slot)
+{
+    struct Row *r = rowByKey(key);
+    if (!r || r->kind != ROW_BIND) return;
+    r->bindSlot = slot;
+    bindingBegin(r);
+}
+
+int optionsMenuBindActive(void) { return optionsBindingCaptureActive(); }
+
+void optionsMenuAction(const char *key)
+{
+    if (!strcmp(key, "__AssignDevices")) { portAssignRequest(); return; }
+    if (!strcmp(key, "__UpdateOpen")) { updateCheckOpenReleases(); return; }
+    if (!strcmp(key, "__RestartGame")) {   /* D443: the orderly D344 quit, then main.c relaunches */
+        sysLogPrintf(LOG_INFO, "menu: restart game requested");
+        configSave();
+        videoRequestRestart("Restart game");
+        return;
+    }
+    if (!strcmp(key, "__QuitToDesktop")) {
+        sysLogPrintf(LOG_INFO, "menu: quit requested");
+        configSave();
+        videoRequestQuit("Quit to desktop");
+        return;
+    }
+    if (!strcmp(key, "__ResetBindings")) {
+        int n = 0;
+        for (int i = 0; i < NUM_ROWS; i++)
+            if (rows[i].kind == ROW_BIND) { n += inputBindingResetKey(rows[i].key); rows[i].bindSlot = 0; }
+        configSave();
+        sysLogPrintf(LOG_INFO, "optionsoverlay: key bindings reset (%d)", n);
+    }
+}
+
+void optionsMenuResLabel(int i, char *out, int n)
+{
+    if (i < 0 || i >= s_resFitN) { if (n > 0) out[0] = 0; return; }
+    snprintf(out, (size_t)n, "%d x %d", kResList[s_resFit[i]][0], kResList[s_resFit[i]][1]);
+}
+
 int optionsOverlayIsOpen(void)
 {
     if (!s_inited) {
@@ -2777,6 +2914,24 @@ static void overlayHandleInputLocked(void)
     /* The overlay owns the mouse while it is open: force the OS cursor free +
      * visible (a stage poll would otherwise leave it locked/hidden). */
     inputSuspendForOverlay();
+    {   /* GE_NEWMENU=1: the new menu does its own navigation (menu_game.cpp feeds it the pad, keys and mouse);
+         * this handler only closes it, with B, Start or Esc. Nothing here may touch a row. */
+        extern int menuNewActive(void);
+        if (menuNewActive()) {
+            extern int menuTakeCloseRequest(void);
+            if (portAssignBlocks()) { SDL_AtomicSet(&s_backPending, 0); return; }   /* the device screen takes every press, Esc included */
+            if (optionsBindingCaptureTick()) return;   /* a key is being captured for a binding: nothing else reacts */
+            const int owner = inputOverlayOwnerPad();
+            const int st = inputPadButton(owner, SDL_CONTROLLER_BUTTON_START) != 0;
+            const int esc = SDL_AtomicSet(&s_backPending, 0);
+            /* B closes only from the list of entries: the menu decides (menuTakeCloseRequest), so a B that leaves
+             * a form never closes it too. Start and Esc always close. */
+            const int close = menuTakeCloseRequest() || (st && !s_nmPrevStart) || esc;
+            s_nmPrevStart = st;
+            if (close) optionsOverlayToggle();
+            return;
+        }
+    }
     if (optionsBindingCaptureTick()) { s_rmbBlock = 1; return; }   /* D544: a right-click bound here must not also go back */
 
     /* D361: regression probe on the ACTUAL joyPoll/F10 thread (not the
@@ -4060,6 +4215,19 @@ static Gfx *overlayEmitLocked(void)
     }
 
     if (!s_open) {
+        {   /* no menu geometry left behind */
+            extern int menuNewActive(void);
+            extern void menuUiClose(void);
+            extern void menuWheelFrame(void);
+            if (menuNewActive()) {
+                char an[4][48];
+                int astep = 0, acount = 0;
+                extern void menuAssignFrame(void);
+                if (portAssignState(an, &astep, &acount)) menuAssignFrame();   /* who plays with which device */
+                else if (portWheelMask() != 0) menuWheelFrame();   /* the Modern wheels */
+                else menuUiClose();
+            }
+        }
         if ((!s_showFps || !s_fpsText[0]) && !s_missionTimeText[0]) {
             return NULL;   /* nothing appended -> golden dumps byte-identical */
         }
@@ -4088,6 +4256,25 @@ static Gfx *overlayEmitLocked(void)
         return s_buf;
     }
 
+    {   /* the new menu (port/src/menu, Dear ImGui through gfx_ui_*) replaces the drawing while GE_NEWMENU=1 */
+        extern int menuNewActive(void);
+        extern void menuUiFrame(void);
+        if (menuNewActive()) {
+            if (s_ovPaused) {   /* a level load clears the flags: keep them set while the menu is open */
+                if (!g_pausedFlag) g_pausedFlag = 1;
+                if (!lvlGetControlsLockedFlag()) lvlSetControlsLockedFlag(1);
+            }
+            static int s_nmLog = 0;
+            if (getenv("GE_NEWMENU_LOG") && (s_nmLog++ % 120) == 0)
+                sysLogPrintf(LOG_INFO, "optionsoverlay: new menu frame %d, g_GlobalTimer=%d paused=%d", s_nmLog, (int)g_GlobalTimer, s_ovPaused);
+            extern void menuAssignFrame(void);
+            char an[4][48];
+            int astep = 0, acount = 0;
+            if (portAssignState(an, &astep, &acount)) menuAssignFrame();   /* choosing the devices: the screen takes the menu's place */
+            else menuUiFrame();
+            return NULL;
+        }
+    }
     overlayUpdateVisible();
     overlayUpdateScroll();
     if (s_scrollSnap) {

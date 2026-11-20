@@ -233,6 +233,7 @@ static const char *const kRetiredKeys[] = {
     "Input.MenuPointerSpeed",  /* D574 */
     "Input.PadAimSens",        /* project-dam 0.1.0 aim curve, retired */
     "Input.PadAimCurve",       /* project-dam 0.1.0 aim curve, retired */
+    "Input.MouseAimMode",      /* the mouse always aims Centered */
 };
 
 static void applyKV(const char *dottedKey, const char *val)

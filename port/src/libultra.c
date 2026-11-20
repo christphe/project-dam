@@ -22,6 +22,8 @@
 /* NOTE: no <sched.h> here — angle-bracket form would resolve to the game's
  * src/sched.h (it is on the include path), not MinGW's. osYieldThread uses a
  * short sleep instead of sched_yield(). */
+#include "wheel.h"
+#include "assign.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -978,6 +980,8 @@ s32 osRecvMesg(OSMesgQueue *mq, OSMesg *msg, s32 flag)
      * input/scheduler and render threads never touch GE watch/save state. */
     if (mq == &gfxFrameMsgQ) {
         watchSettingsGameTick();
+        portWheelGameTick();   /* the Modern weapon / gadget wheels */
+        portAssignTick();      /* who plays with which device, when a multiplayer game is set up */
         /* D961 GE_LOWLAT: drop a retrace the game would only turn into a frame
          * that then waits behind the one still rendering. */
         if (s_llMode && flag == OS_MESG_BLOCK && m != NULL && ((OSScMsg *)m)->type == OS_SC_RETRACE_MSG) {
