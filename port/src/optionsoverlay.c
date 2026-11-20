@@ -50,6 +50,7 @@ extern MENU current_menu;
 #include "platform.h"
 #include "system.h"
 #include "config.h"
+#include "defaults.h"
 #include "video.h"
 #include "input.h"
 #include "front.h"   /* selected_folder_num (D356 stage probe) */
@@ -2330,157 +2331,15 @@ int optionsRowIsReset(int i)
     return r && isArmRow(r);
 }
 
-/* ini rows reset to the port's C initializers (verified at implementation
- * time, D356 -- each entry cites its source variable): the reset table
- * mirrors them; config.c itself has no central default table (first-write
- * "defaults" are just the current values). __Resolution is NOT here: it is
- * action-backed (s_resSel + videoRequestWindowSize), not a registered config
- * row, so a numeric default cannot express it -- a documented exclusion (the
- * findings D356 entry states it); the player's resolution choice survives a
- * VIDEO reset. */
-static const struct { const char *key; double def; } kResetDefaults[] = {
-    /* INPUT (port/src/input.c initializers) */
-    { "Input.MouseEnabled",       1 },   /* = 1 (on) */
-    { "Input.CrosshairCursor",    1 },   /* = 1 (on, D555) */
-    { "Input.MouseSensitivity", 100 },  /* static int mouseSensitivity = 100 */
-    { "Input.MouseYScale",      100 },  /* = 100 (native), Wave A item 6 */
-    { "Input.MouseInvertY",      0 },   /* = 0 */
-#if defined(__SWITCH__)
-    { "Input.AimMode",           1 },   /* project-dam: = Centred (with the weapon sway) on the console */
-#else
-    { "Input.AimMode",           0 },   /* = AIMMODE_N64 (0) */
-#endif
-    { "Input.AimRange",          0 },   /* = 0 (PC) */
-#if defined(__SWITCH__)
-    { "Input.PadLookInvertY",    1 },   /* project-dam: = 1 (inverted) */
-#else
-    { "Input.PadLookInvertY",    0 },   /* = 0 */
-#endif
-#if defined(__SWITCH__)
-    { "Input.PadDeadzoneL",     3000 },/* project-dam: = NX_DZ_L (10%) */
-#else
-    { "Input.PadDeadzoneL",     7500 },/* = STICK_DEADZONE (7500 = 25%, D546), Wave A */
-#endif
-#if defined(__SWITCH__)
-    { "Input.PadDeadzoneR",     3000 },/* project-dam: = NX_STICK_DEADZONE_R (10%) */
-#else
-    { "Input.PadDeadzoneR",     7500 },/* = STICK_DEADZONE (7500 = 25%, D546), Wave A */
-#endif
-#if defined(__SWITCH__)
-    { "Input.PadLookSensX",      85 },  /* project-dam: = NX_LOOK_SENS (0.85x) */
-#else
-    { "Input.PadLookSensX",     100 },  /* = 100 (native), Wave A */
-#endif
-#if defined(__SWITCH__)
-    { "Input.PadLookSensY",      85 },  /* project-dam: = NX_LOOK_SENS (0.85x) */
-#else
-    { "Input.PadLookSensY",     100 },  /* = 100 (native), Wave A */
-#endif
-#if defined(__SWITCH__)
-    { "Input.PadAimLookSens",    75 },  /* project-dam: = 0.75x */
-    { "Game.AimZoom",             2 },  /* project-dam: = 2x */
-    { "Game.AimAssist",           2 },  /* project-dam: = High */
-    { "Game.AimEntry",            1 },  /* project-dam: = Move view */
-    { "Game.AimStop",             1 },  /* project-dam: = on */
-    { "Game.LookAhead",           3 },  /* project-dam: = High */
-    { "Input.PadLookCurve",     200 },  /* project-dam: = 2.0 (the game's own) */
-    { "Input.PadTurnAccel",       2 },  /* project-dam: = High */
-#else
-    { "Input.PadAimLookSens",   100 },  /* = native */
-    { "Game.AimAssist",           2 },  /* project-dam: = High */
-    { "Game.AimEntry",            1 },  /* project-dam: = Move view */
-    { "Game.AimStop",             1 },  /* project-dam: = on */
-#endif
-#if defined(__SWITCH__)
-    { "Input.PadLookSmooth",      2 },  /* project-dam: = NX_LOOK_SMOOTH */
-#else
-    { "Input.PadLookSmooth",      0 },  /* = 0 (off), Wave A */
-#endif
-    { "Input.PadSouthpaw",        0 },  /* = 0 (off), Wave A */
-#if defined(__SWITCH__)
-    { "Input.PadTriggerPct",     10 },  /* project-dam: = NX_TRIGGER_PCT */
-#else
-    { "Input.PadTriggerPct",     25 },  /* = 25 (was 23; rounded, D508) */
-#endif
-    { "Input.RumbleScale", 0.5 },       /* = gRumbleScale (0.5f), D401 */
-    { "Input.CrouchMode",        1 },   /* = 1 (toggle; D556) */
-    { "Input.MouseSmoothing",    0 },   /* = 0 (raw) */
-    { "Input.MouseRawInput",     0 },   /* = 0 (off) */
-    { "Input.ControlScheme",     0 },   /* = 0 (Modern), D513 */
-    { "Input.P1Type",            2 },   /* = auto (D993) */
-    { "Input.PadPreset",         0 },   /* = 0 (Jinx 1.1), D469 */
-    /* GRAPHICS (port/src/video.c initializers) */
-#if defined(__SWITCH__)
-    { "Video.MSAA",                 4 },   /* project-dam: docked */
-#else
-    { "Video.MSAA",                 2 },   /* = 2 */
-#endif
-#if defined(__SWITCH__)
-    { "Video.MSAAHandheld",         2 },   /* project-dam */
-    { "Video.FXAA",                 1 },   /* project-dam: on */
-#else
-    { "Video.FXAA",                 0 },   /* off: the picture as rendered */
-    { "Video.SkyScale",             0 },   /* GE+ sky and sea at full size */
-    #if defined(GE_VULKAN)
-    { "Video.Renderer",             1 },   /* issue #44: Vulkan */
-#else
-    { "Video.Renderer",             0 },
-#endif
-#endif
-#if defined(__SWITCH__)
-    { "Video.Visuals",              2 },   /* D982: Enhanced */
-#else
-    { "Video.Visuals",              1 },   /* D982: Fixed */
-#endif
-    { "Video.TextureFilter",        1 },   /* = 1 (bilinear) */
-    { "Video.Anisotropy",           4 },   /* = 4 */
-    { "Video.FovScale",            100 },  /* = 100 */
-    { "Video.NativeWidescreen",      1 },  /* = 1 */
-    { "Video.WidescreenAuto",        1 },  /* = 1 */
-    { "Video.SafeAreaCrop",          1 },  /* = 1 */
-    { "Video.AspectMode",            0 },  /* = 0 (Window), D447 */
-    { "Video.DrawDistance",        200 },  /* 2.0x (D546) */
-    { "Video.FogDistance",         100 },  /* 1.0x = N64 fog (D540) */
-    { "Video.LodDistance",         200 },  /* 2.0x (D546) */
-    { "Video.CrosshairHide",      0 },   /* = 0 (on, N64) */
-    { "Video.CrosshairPersistent", 0 },   /* D436: off = N64 (aim mode only) */
-    { "Video.CrosshairColor",   0 },   /* = 0 (authored red sprite) */
-    { "Video.CrosshairRed",   255 },
-    { "Video.CrosshairGreen", 255 },
-    { "Video.CrosshairBlue",  255 },
-    { "Video.CrosshairSize",  100 },   /* = 100% */
-    { "Video.CrosshairStyle",   0 },   /* = 0 (original) */
-    { "Video.CrosshairAlpha", 100 },   /* = 100% (D511) */
-    { "Video.CrosshairHealthColor", 0 },   /* = 0 (off, D511) */
-    /* GAMEPLAY ini rows (port/src/video.c initializers) */
-    { "Game.SkipIntro",   0 },   /* = 0 */
-    { "Game.CheckUpdates", 0 },  /* = 0 (off, D551) */
-    { "Game.MissionTimer", 0 },  /* = 0 (off, D606) */
-#if defined(__SWITCH__)
-    { "Game.BloodOnHit", 1 },    /* project-dam: = on */
-#else
-    { "Game.BloodOnHit", 0 },    /* off: the game's own puff */
-#endif
-    { "Game.CoopEnemyHealth", 1 },/* project-dam: = 150% (coop.c) */
-    { "Game.NoHitFlash",  0 },   /* = 0 */
-    { "Game.AllUnlocked", 0 },   /* = 0 -- D257's "default ON" note was stale */
-    { "Game.HudScale",   100 },  /* = 100 (D226) */
-    { "Game.ScreenShakeIntensity", 1 },   /* = portScreenShakeScale (1.0f), D181 */
-    /* VIDEO (port/src/video.c initializers; DisplayFPS in overlayConfigInit) */
-    { "Video.Fullscreen", 0 },   /* = 0 (windowed) */
-    { "Video.FullscreenMode", 0 },   /* = 0 (borderless, D511) */
-    { "Video.VSync",        1 }, /* = 1 (on) */
-    { "Video.FpsCap",      -1 }, /* = -1 (Auto: match display refresh) */
-    { "Video.DisplayFPS",   0 }, /* registered 0 */
-    /* AUDIO (port/src/audio.c, D470) */
-    { "Audio.MasterVolume", 100 }, /* = 100 (bit-identical passthrough) */
-};
-
+/* ini rows reset to their default in port/src/defaults.json (defaults.h): the same table seeds the ini at
+ * launch (defaultsApply) and feeds the options menu. __Resolution is NOT in it: it is action-backed
+ * (s_resSel + videoRequestWindowSize), not a registered config row, so a numeric default cannot express it
+ * (a documented exclusion, findings D356); the player's resolution choice survives a VIDEO reset. */
+/* The values come from port/src/defaults.json (defaults.h), the same table that seeds the ini at launch. */
 static double kResetDefault(const char *key)
 {
-    for (size_t i = 0; i < sizeof(kResetDefaults) / sizeof(kResetDefaults[0]); i++)
-        if (strcmp(kResetDefaults[i].key, key) == 0) return kResetDefaults[i].def;
-    return -1.0;
+    double v;
+    return defaultsGet(key, &v) ? v : -1.0;
 }
 
 /* The section's DECLARED row range (its header through the next header) --

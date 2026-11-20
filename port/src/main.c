@@ -25,6 +25,7 @@
 #include "system.h"
 #include "versionhash.h"
 #include "portaddr.h"
+#include "defaults.h"
 #include "config.h"
 #include "updatecheck.h"
 #include "fs.h"
@@ -281,7 +282,9 @@ int main(int argc, char **argv)
      * AFTER the load (hardware-detected, once per ini, only while the display
      * keys are untouched), so a first launch from Desktop Mode no longer
      * skips it for good. */
+    defaultsApply();   /* port/src/defaults.json: what a key the ini does not mention starts at */
     configLoad();
+    defaultsMigrate();   /* an ini older than defaults.json's version: bring its values forward */
     videoApplySteamDeckPreset();
     updateCheckStart();   /* opt-in (Game.CheckUpdates, default off); no-op otherwise */
     atexit(portAtExit);   /* persist config + window geometry on clean exit */
