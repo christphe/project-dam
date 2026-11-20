@@ -30,6 +30,17 @@ static void checkVer(const char *tag, const char *running, int want)
     }
 }
 
+static void checkPc(const char *body, int want)
+{
+    int got = hasPcAsset(body);
+    if (got == want) {
+        printf("PASS hasPcAsset = %d\n", got);
+    } else {
+        printf("FAIL hasPcAsset(\"%s\") = %d, expected %d\n", body, got, want);
+        g_fail++;
+    }
+}
+
 static void checkTag(const char *body, size_t outN, int wantOk, const char *want)
 {
     char out[64];
@@ -57,6 +68,9 @@ int main(void)
     checkVer("v1.0.0", "1.0", 0);
     checkVer("V0.6.0", "0.5.1", 1);
     checkVer("v0.5.1-rc1", "0.5.1", 0);
+    checkVer("project-dam-v0.4.0", "0.3.0", 1);
+    checkVer("project-dam-v0.3.0", "0.3.0", 0);
+    checkVer("project-dam-v0.3.0", "0.4.0", 0);
     checkVer("garbage", "0.5.0", 0);
     checkVer("v0.5.1", "", 0);
 
@@ -104,6 +118,14 @@ int main(void)
         checkTag(body, 64, 1, "v0.5.1");
         free(body);
     }
+
+    /* hasPcAsset: only file names count, not release notes or other URLs. */
+    checkPc("{\"assets\":[{\"browser_download_url\":\"https://x/download/t/project-dam-0.4.0-windows.zip\"}]}", 1);
+    checkPc("{\"assets\":[{\"browser_download_url\": \"https://x/download/t/project-dam-0.4.0-linux.tar.gz\"}]}", 1);
+    checkPc("{\"assets\":[{\"browser_download_url\":\"https://x/download/t/project-dam.nro\"}]}", 0);
+    checkPc("{\"body\":\"Windows and Linux builds soon\",\"assets\":[]}", 0);
+    checkPc("{\"browser_download_url\":\"https://x/windows-notes/project-dam.nro\"}", 0);
+    checkPc("{\"browser_download_url\":\"https://x/a.nro\"", 0);
 
     if (g_fail) {
         printf("%d case(s) FAILED\n", g_fail);
