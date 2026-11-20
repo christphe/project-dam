@@ -84,8 +84,8 @@ static GLenum gl_mirror_clamp = GL_MIRROR_CLAMP_TO_EDGE;
 static bool gl_es = false;
 extern int gfx_rdp_affine;   /* D540: defined in gfx_pc.cpp */
 extern int gfx_fog_vertex;   /* D540: defined in gfx_pc.cpp */
-extern int gfx_fog_force;    /* D982: GE_FOGPIXEL, -1 = follow Video.Visuals >= Fixed */
 extern "C" int portDisplayFixes; /* port/src/video.c: Video.Visuals >= Fixed (D982) */
+extern "C" int portPerPixelFog;                /* port/src/video.c: Video.PerPixelFog */
 static bool gl_core_profile = false;
 
 static int gfx_opengl_get_max_texture_size() {
@@ -396,7 +396,7 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
     /* D540: RDP-style screen-affine shade colour (see gfx_opengl_init).
      * D543: fog is the per-vertex RSP value by default, which the RDP also
      * interpolates screen-affine (it rides in shade alpha), so it shares the
-     * shade qualifier. GE_FOGPIXEL=1 (D540 per-pixel) needs a perspective
+     * shade qualifier. Video.PerPixelFog (D540 per-pixel) needs a perspective
      * attribute: it carries fog * w, divided by w in the shader. */
     const char *shadeq = gfx_rdp_affine ? "noperspective " : "";
     const char *fogq = gfx_fog_vertex ? shadeq : "";
@@ -673,7 +673,7 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
     // TODO discard if alpha is 0?
     if (cc_features.opt_fog) {
         /* D543 default: vFog.a is the per-vertex RSP value, used as-is
-         * (N64). GE_FOGPIXEL=1 (D540): vFog.a = fog * w, divided by w here =
+         * (N64). Video.PerPixelFog (D540): vFog.a = fog * w, divided by w here =
          * exact per-pixel fog from the pixel's own depth. */
         append_line(fs_buf, &fs_len, gfx_fog_vertex ? "    float fogA = clamp(vFog.a, 0.0, 1.0);"
                                                     : "    float fogA = clamp(vFog.a * gl_FragCoord.w, 0.0, 1.0);");
@@ -1853,14 +1853,12 @@ static void gfx_opengl_init(void) {
      * Fog (D543): per-vertex RSP fog by default, as the N64. Its old
      * light/dark cycling at the player's feet came from GPU near-clipping of
      * behind-camera corners; gfx_sp_tri1 now near-clips on the CPU like the
-     * RSP. GE_FOGPIXEL=1 = the D540 exact per-pixel fog (A/B). */
+     * RSP. */
     {
-        const char *sp = getenv("GE_SHADEPERSP"), *fp = getenv("GE_FOGPIXEL");
+        const char *sp = getenv("GE_SHADEPERSP");
         gfx_rdp_affine = (!gl_es && gl_glsl_version >= 130 && !(sp && sp[0] == '1')) ? 1 : 0;
-        /* D543: per-vertex RSP fog unless Video.Visuals >= Fixed (D982);
-         * GE_FOGPIXEL=0/1 overrides the setting for the whole run. */
-        gfx_fog_force = (fp && fp[0]) ? (fp[0] == '1') : -1;
-        gfx_fog_vertex = gfx_fog_force >= 0 ? !gfx_fog_force : !portDisplayFixes;
+        /* D543: per-vertex RSP fog unless Video.PerPixelFog is on. */
+        gfx_fog_vertex = !portPerPixelFog;
     }
     sysLogPrintf(LOG_NOTE, "GL: shade %s, fog %s", gfx_rdp_affine ? "affine (RDP)" : "perspective",
                  gfx_fog_vertex ? "per-vertex" : "per-pixel");

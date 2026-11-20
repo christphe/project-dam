@@ -284,20 +284,27 @@ static struct Row rows[] = {
     /* D447: Original letter/pillarboxes to the console aspect (4:3, or 16:9 while
      * the watch-menu Ratio is 16:9); Window fills the window. */
     { .key="Video.AspectMode", .label="Aspect ratio", .kind=ROW_ENUM, .step=1, .names=kAspectMode },
-    /* D334: native widescreen (world projected at the window aspect, Hor+).
-     * While on, "Widescreen auto FOV" has no effect (it was the stretch-era
-     * vertical-FOV compensation). */
-    { .key="Video.NativeWidescreen", .label="Native widescreen", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
-    { .key="Video.WidescreenAuto", .label="Widescreen auto FOV", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
 #if defined(__SWITCH__)
     { .key="Video.MSAAHandheld", .label="Anti-aliasing (handheld)", .kind=ROW_MSAA },   /* project-dam */
     { .key="Video.MSAA", .label="Anti-aliasing (docked)", .kind=ROW_MSAA },
-    { .key="Video.FXAA", .label="FXAA", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
 #else
     { .key="Video.MSAA", .label="Anti-aliasing", .kind=ROW_MSAA, .restart=1 },
-    { .key="Video.FXAA", .label="FXAA", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },   /* project-dam: now on PC too */
 #endif
     { .key="Video.Visuals", .label="Visuals", .kind=ROW_ENUM, .step=1, .names=kVisuals },   /* D982 */
+    SEP(V2),
+    { .key="Video.VSync", .label="VSync", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
+    { .key="Video.FpsCap", .label="Frame rate cap", .kind=ROW_FPSCAP },
+    { .key="Video.DisplayFPS", .label="Show FPS", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
+    SEP(V3),
+    /* The rest of the picture options live one level down (tabs menu rework). */
+    { .key="__OpenVideoAdv", .label="Advanced", .kind=ROW_ACTION },   /* a sub-menu */
+    { .key="__ResetVideo", .label="Reset to defaults", .kind=ROW_ACTION },
+    SEP_BACK(Video),
+
+    /* Video > Advanced: the options most players never touch. Physically after Video's
+     * Back row so Video's reset range (header -> next header) stays its own. */
+    { .key="__HdrVideoAdv", .label="ADVANCED", .kind=ROW_HEADER },
+    { .key="Video.FXAA", .label="FXAA", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },   /* project-dam: now on PC too */
 #if !defined(__SWITCH__)
     { .key="Video.SkyScale", .label="Sky and sea detail", .kind=ROW_ENUM, .step=1, .names=kSkyScale, .shownWhen="Video.Visuals", .shownValue=2 },
 #endif
@@ -1235,13 +1242,15 @@ static int rowPlatformOk(const struct Row *r)
     };
     /* Display mode Switch / N64 only shows Show FPS; Custom shows the rest. */
     static const char *const kCustomOnly[] = {
-        "Video.AspectMode", "Video.NativeWidescreen", "Video.WidescreenAuto",
-        "Video.MSAAHandheld", "Video.MSAA", "Video.FXAA", "Video.Visuals",
+        "Video.AspectMode", "Video.MSAAHandheld", "Video.MSAA", "Video.Visuals",
         "__SepV2", "Video.VSync", "Video.FpsCap",
-        "__SepV3", "Video.TextureFilter", "Video.Anisotropy",
-        "__SepV4", "Video.SafeAreaCrop",
+        "__SepV3", "__OpenVideoAdv", "__ResetVideo",
+        /* Video > Advanced */
+        "Video.FXAA",
+        "__SepGapA1", "__SepA1", "Video.TextureFilter", "Video.Anisotropy",
+        "__SepGapA2", "__SepA2", "Video.SafeAreaCrop",
         "Video.DrawDistance", "Video.FogDistance", "Video.LodDistance",
-        "__SepV5", "Game.ScreenShakeIntensity", "__ResetVideo",
+        "__SepGapA3", "__SepA3", "Game.ScreenShakeIntensity", "__ResetVideoAdv",
         NULL,
     };
     for (int k = 0; kDesktopOnly[k]; k++) {
@@ -1251,10 +1260,11 @@ static int rowPlatformOk(const struct Row *r)
     /* PC: Enhanced / Original keep the hardware rows (the presets do not
      * set them there); Custom shows the rest too. */
     static const char *const kCustomOnly[] = {
-        "Video.AspectMode", "Video.NativeWidescreen", "Video.WidescreenAuto", "Video.Visuals", "Video.SkyScale",
-        "Video.TextureFilter", "__SepV4", "Video.SafeAreaCrop",
+        "Video.AspectMode", "Video.Visuals", "__ResetVideo",
+        /* Video > Advanced */
+        "Video.TextureFilter", "__SepGapA2", "__SepA2", "Video.SafeAreaCrop",
         "Video.DrawDistance", "Video.FogDistance", "Video.LodDistance",
-        "__SepV5", "Game.ScreenShakeIntensity", "__ResetVideo",
+        "__SepGapA3", "__SepA3", "Game.ScreenShakeIntensity", "__ResetVideoAdv",
         NULL,
     };
 #endif
@@ -4062,7 +4072,6 @@ static const struct { const char *key, *help; } kRowHelp[] = {
     { "Video.CrosshairPersistent", "Shows the crosshair all the time. The N64 shows it only while aiming. Off by default." },
     { "Video.CrosshairColor", "Original keeps the game's red sight. Custom: set Red, Green and Blue (0-255)." },
     { "Video.CrosshairHealthColor", "The crosshair shifts from green to red as your health drops." },
-    { "Video.WidescreenAuto", "This only applies when Native widescreen is off." },
     { "Game.ScreenShakeIntensity", "Sets how strongly explosions shake the screen." },
     { "Input.AimMode", "Original lets the crosshair move. Centered keeps it in the middle." },
     { "Input.AimRange", "Sets how far the crosshair can move from the center." },

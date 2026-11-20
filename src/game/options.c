@@ -590,7 +590,11 @@ void cur_player_set_ammo_onscreen_setting(u32 param_1)
 
 u32 cur_player_get_screen_setting(void)
 {
+#ifdef PORT
+    return SCREEN_SIZE_FULLSCREEN;   /* the picture shape is the menu's Aspect ratio: the game's own screen size no longer applies */
+#else
     return game_options_entries[PLAYER_OPTION_SCREEN].current_value;
+#endif
 }
 void cur_player_set_screen_setting(u32 param_1)
 {
@@ -599,7 +603,11 @@ void cur_player_set_screen_setting(u32 param_1)
 
 SCREEN_RATIO_OPTION get_screen_ratio(void)
 {
+#ifdef PORT
+    return SCREEN_RATIO_NORMAL;   /* likewise the game's own screen ratio: Aspect ratio in the menu does it */
+#else
     return game_options_entries[PLAYER_OPTION_RATIO].current_value;
+#endif
 }
 
 void set_screen_ratio(SCREEN_RATIO_OPTION ratio_option)

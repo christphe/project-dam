@@ -93,10 +93,9 @@ struct NormalColor {
 
 /* D540: set by the GL backend at init. gfx_rdp_affine: RDP-style
  * screen-affine shade colour. gfx_fog_vertex: 1 = per-vertex RSP fog
- * (default, D543), 0 = the D540 exact per-pixel fog (GE_FOGPIXEL=1). */
+ * (default, D543), 0 = the D540 exact per-pixel fog (Video.PerPixelFog). */
 int gfx_rdp_affine = 0;
 int gfx_fog_vertex = 0;
-int gfx_fog_force = -1;   /* D982: GE_FOGPIXEL=0/1 pins the form for the run; -1 = Video.Visuals >= Fixed */
 
 struct LoadedVertex {
     float x, y, z, w;
@@ -104,7 +103,7 @@ struct LoadedVertex {
     struct RGBA color;
     uint8_t fog;
     uint8_t clip_rej;
-    float fog_n;   /* D540: fog sent to the GPU (0..255): the RSP value (default), or fog * w (GE_FOGPIXEL) */
+    float fog_n;   /* D540: fog sent to the GPU (0..255): the RSP value (default), or fog * w (Video.PerPixelFog) */
 };
 
 static struct {
@@ -3945,7 +3944,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
             d->fog = clampf(fog_z, 0.f, 255.f);
             /* D543 default: the per-vertex RSP value (as the N64; D543's CPU
              * near clip lerps it for clip-created vertices like the RSP).
-             * GE_FOGPIXEL=1 (D540): the GPU gets fog * w (z*mul + w*off,
+             * Video.PerPixelFog (D540): the GPU gets fog * w (z*mul + w*off,
              * linear in clip space) and the shader divides by w -- exact
              * per-pixel fog. The D503 full-fog snap is opt-in (GE_FOGSNAP=1). */
             d->fog_n = gfx_fog_vertex ? d->fog
@@ -7578,7 +7577,7 @@ extern "C" void reset_texture_state() {
  * filter change does (render thread, between frames). deko3d reads it at
  * the next shader bind. */
 extern "C" void gfx_set_fog_pixel(int on) {
-    const int vtx = gfx_fog_force >= 0 ? !gfx_fog_force : !on;
+    const int vtx = !on;
     if (vtx == gfx_fog_vertex) return;
     gfx_fog_vertex = vtx;
     reset_texture_state();
@@ -7612,8 +7611,7 @@ extern "C" void gfx_set_anisotropy_level(int level) {
     }
 }
 extern "C" void gfx_set_wrap_fix(int on) {
-    const char* e = getenv("GE_WRAPFIX"); /* RC3 test override */
-    g_wrap_fix = e ? (atoi(e) != 0) : !!on;
+    g_wrap_fix = !!on;
 }
 
 extern "C" int gfx_create_framebuffer(uint32_t width, uint32_t height, int upscale, int autoresize) {
