@@ -3,7 +3,7 @@
 ## [Unreleased] - minor
 
 ### Added
-- Switch: in-game update. With Check for updates on (Game page, off by default), the game looks at Project Dam's latest release (nothing is attempted while the console is offline) and, when it is newer, an Update row appears; pressing it twice downloads the NRO, checks its sha256 against the one GitHub lists, then replaces the installed NRO and asks you to restart the game; nothing is downloaded below 5 percent battery unless the console is charging (#68)
+- Switch: in-game update. With Check for updates on (Game page), an Update row appears when a new version is out (#68)
 
 ### Fixed
 - PC: the optional update check (Game.CheckUpdates, off by default) looked at the upstream port's releases and compared them with the upstream version; it now looks at Project Dam's releases and only announces one that has a PC build
