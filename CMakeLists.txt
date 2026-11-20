@@ -637,6 +637,12 @@ list(APPEND LIBS "${EXTRA_LIBRARIES}")
 # Port layer (shims + software RSP).
 file(GLOB_RECURSE SRC_PORT      "${CMAKE_SOURCE_DIR}/port/src/*.c")
 file(GLOB_RECURSE SRC_PORT_CXX  "${CMAKE_SOURCE_DIR}/port/src/*.cpp")
+# Dear ImGui (MIT, vendored): the menu's widget layer. Core files only; the port draws it through
+# port/src/menu/imgui_gbi.cpp (no ImGui platform or renderer backend is used in the game).
+file(GLOB SRC_IMGUI "${CMAKE_SOURCE_DIR}/port/third_party/imgui/*.cpp")
+# include/math.h (the N64 SDK's) shadows the system one: <cmath> first pulls in the real <math.h>, so ImGui's
+# own #include <math.h> then finds sqrtf, powf, fabsf... already declared.
+set_source_files_properties(${SRC_IMGUI} PROPERTIES COMPILE_OPTIONS "-include;cmath")
 file(GLOB_RECURSE SRC_FAST3D    "${CMAKE_SOURCE_DIR}/port/fast3d/*.cpp"
                                "${CMAKE_SOURCE_DIR}/port/fast3d/glad/*.c")
 
@@ -909,6 +915,7 @@ set(SRC
   ${SRC_ROMASSETS}
   ${SRC_DRAM_SYMS}
   ${SRC_PORT_CXX}
+  ${SRC_IMGUI}
   ${SRC_FAST3D}
   ${SRC_LIBAUDIO}
   ${SRC_LIBULTRARE_AUDIO}

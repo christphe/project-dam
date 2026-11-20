@@ -71,6 +71,10 @@ extern save_data *fileGetSaveForFoldernum(u32 folder);
  * declare lround; without this the call is an implicit `int lround()`
  * (GCC only rescued it via its builtin signature). */
 long lround(double x);
+double hypot(double x, double y);
+double fabs(double x);
+double floor(double x);
+double ceil(double x);
 
 /* ---- game symbols (rendering/UI only; see input.c for the same pattern) ---- */
 struct font;
@@ -261,6 +265,9 @@ static int rowSchemeOk(const struct Row *r);   /* D516 */
  * mid-page group separator (PD: menuitem separators between option groups). */
 #define SEP(n) { .key="__Sep" #n, .label="", .kind=ROW_ACTION }
 #define SEP_BACK(n) SEP(n), { .key="__Back" #n, .label="Back", .kind=ROW_ACTION }
+/* A section title: a blank row (no line), then a separator that carries a label (drawn as a title,
+ * its line starts after the text). The first group of a page has no title: the tab names it. */
+#define SEPT(n, t) { .key="__SepGap" #n, .label="", .kind=ROW_ACTION }, { .key="__Sep" #n, .label=t, .kind=ROW_ACTION }
 
 /* Menu PD parity (R7): PD's six groups -- Video, Audio, Mouse, Controller,
  * Game, Key Bindings -- shared by the F10 overlay and the front-end PC Options.
@@ -311,14 +318,10 @@ static struct Row rows[] = {
 #if defined(GE_VULKAN) && !defined(__SWITCH__)
     { .key="Video.Renderer", .label="Renderer", .kind=ROW_ENUM, .step=1, .names=kRenderer, .restart=1 },   /* issue #44 */
 #endif
-    SEP(V2),
-    { .key="Video.VSync", .label="VSync", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
-    { .key="Video.FpsCap", .label="Frame rate cap", .kind=ROW_FPSCAP },
-    { .key="Video.DisplayFPS", .label="Show FPS", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
-    SEP(V3),
+    SEPT(A1, "Textures"),
     { .key="Video.TextureFilter", .label="Texture filter", .kind=ROW_ENUM, .step=1, .names=kTexFilter },
     { .key="Video.Anisotropy", .label="Anisotropic filtering", .kind=ROW_SLIDER, .step=1, .unit="x" },
-    SEP(V4),
+    SEPT(A2, "Distance"),
     { .key="Video.SafeAreaCrop", .label="Crop overscan", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
     /* 1.0x..8.0x the authored distance (ini 100..800 %; 2.5x default).
      * Legacy AutoFov ini keys remain supported but no longer hide sliders. */
@@ -327,11 +330,11 @@ static struct Row rows[] = {
      * capped at the draw distance. 0.5x..8.0x, 1.0x default. */
     { .key="Video.FogDistance", .label="Fog distance", .kind=ROW_SLIDER, .step=25, .uiMin=100, .uiMax=800 }   /* D565: no < 100 */,
     { .key="Video.LodDistance", .label="LOD distance", .kind=ROW_SLIDER, .step=25, .uiMin=100, .uiMax=800 },
-    SEP(V5),
+    SEPT(A3, "Effects"),
     /* D181 re-exposed (PD "Explosion shake"): named for what it scales (explosions only). */
     { .key="Game.ScreenShakeIntensity", .label="Explosion shake", .kind=ROW_SLIDER, .step=0.1, .uiMin=0, .uiMax=3 },
-    { .key="__ResetVideo", .label="Reset to defaults", .kind=ROW_ACTION },
-    SEP_BACK(Video),
+    { .key="__ResetVideoAdv", .label="Reset to defaults", .kind=ROW_ACTION },
+    SEP_BACK(VideoAdv),
 
     { .key="__HdrAudio", .label="AUDIO", .kind=ROW_HEADER },
     /* D470: port-level master volume (final gain on the mixed output, whole %)
@@ -417,6 +420,7 @@ static struct Row rows[] = {
     { .key="__KbmEnd", .label="", .kind=ROW_ACTION },
 #endif
     { .key="Input.PadPreset", .label="Layout presets", .kind=ROW_ENUM, .step=1, .names=kPadPreset, .schemeOnly=1 },
+    { .key="__OpenLayout", .label="Show layout", .kind=ROW_ACTION, .schemeOnly=1 },   /* a sub-menu: the preset drawn on a pad */
     /* D516: Original shows the game's own styles (the save's, per seat), not the port presets. */
     { .key="Bond.Control", .label="Layout presets", .kind=ROW_ENUM, .step=1, .names=kOrigStyle,
       .found=1, .uiMax=7, .cfgMax=7, .schemeOnly=2 },
@@ -431,7 +435,8 @@ static struct Row rows[] = {
     { .key="Input.Pad.Start", .label="Pause/start", .kind=ROW_PADBIND, .shownWhen="Input.PadPreset", .shownValue=3, .schemeOnly=1 },
 #if defined(__SWITCH__)
     /* project-dam: the aim rows live here on the console (no Mouse page), grouped between two separators. */
-    { .key="__SepC1", .label="", .kind=ROW_ACTION, .schemeOnly=1 },
+    { .key="__SepGapC1", .label="", .kind=ROW_ACTION, .schemeOnly=1 },
+    { .key="__SepC1", .label="Aim", .kind=ROW_ACTION, .schemeOnly=1 },
     { .key="Input.AimMode", .label="Aim style", .kind=ROW_ENUM, .step=1, .names=kAimMode, .schemeOnly=1 },
     { .key="Input.AimRange", .label="Aim range", .kind=ROW_ENUM, .step=1, .names=kAimRange, .hiddenIfOn="Input.AimMode", .schemeOnly=1 },
     { .key="Input.PadAimLookSens", .label="Aim sensitivity", .kind=ROW_SLIDER, .step=5, .schemeOnly=1 },   /* project-dam */
@@ -439,7 +444,8 @@ static struct Row rows[] = {
     { .key="Game.AimAssist", .label="Aim assist", .kind=ROW_ENUM, .step=1, .names=kAimAssist, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },       /* project-dam: nxgame.c */
     { .key="Game.AimEntry", .label="Aim entry", .kind=ROW_ENUM, .step=1, .names=kAimEntry, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },           /* project-dam: nxgame.c */
     { .key="Game.AimStop", .label="Stop on aim", .kind=ROW_TOGGLE, .step=1, .names=kOnOff, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },           /* project-dam: nxgame.c */
-    { .key="__SepC2", .label="", .kind=ROW_ACTION, .schemeOnly=1 },
+    { .key="__SepGapC2", .label="", .kind=ROW_ACTION },
+    { .key="__SepC2", .label="Look and sticks", .kind=ROW_ACTION },
 #else
     /* The pad's Centered aim helpers (nxgame.c), shown while the aim style is Centered. */
     { .key="Input.PadAimLookSens", .label="Aim sensitivity", .kind=ROW_SLIDER, .step=5, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },
@@ -465,6 +471,16 @@ static struct Row rows[] = {
     { .key="Input.RumbleScale", .label="Vibration", .kind=ROW_SLIDER, .step=0.05 },
     { .key="__ResetController", .label="Reset to defaults", .kind=ROW_ACTION },
     SEP_BACK(Controller),
+
+    /* Controller > Layout: the selected seat's preset drawn on a pad (optionsoverlay.c drawLayout).
+     * The blank rows only reserve the picture's height. */
+    { .key="__HdrLayout", .label="LAYOUT", .kind=ROW_HEADER },
+    { .key="__Blank1", .label="", .kind=ROW_ACTION }, { .key="__Blank2", .label="", .kind=ROW_ACTION },
+    { .key="__Blank3", .label="", .kind=ROW_ACTION }, { .key="__Blank4", .label="", .kind=ROW_ACTION },
+    { .key="__Blank5", .label="", .kind=ROW_ACTION }, { .key="__Blank6", .label="", .kind=ROW_ACTION },
+    { .key="__Blank7", .label="", .kind=ROW_ACTION }, { .key="__Blank8", .label="", .kind=ROW_ACTION },
+    { .key="__Blank9", .label="", .kind=ROW_ACTION },
+    SEP_BACK(Layout),
 
     /* PD Key Bindings: one flat list (movement binds, separator, action binds).
      * Mouse buttons 1-5 share the visible slots with keys; pads stay fixed. */
@@ -508,7 +524,7 @@ static struct Row rows[] = {
       .names=kOnOff, .found=1, .uiMax=1, .cfgMax=1, .saveScoped=1 },
     { .key="Bond.Ammo", .label="Ammo on screen", .kind=ROW_TOGGLE,
       .names=kOnOff, .found=1, .uiMax=1, .cfgMax=1, .saveScoped=1 },
-    SEP(G1),
+    SEPT(G1, "View"),
     /* Crouch mode lives here (PD keeps it in "Game"; ratified T1 gate 1).
      * D371/D374: GEPD layout default; crouch defaults to hold. */
     { .key="Input.CrouchMode", .label="Crouch mode", .kind=ROW_ENUM, .step=1, .names=kHold },
@@ -525,7 +541,7 @@ static struct Row rows[] = {
     { .key="Game.AIWideView", .label="Gameplay view area", .kind=ROW_TOGGLE, .step=1, .names=kGameplayView },
     /* D232: the community "no damage flash" toggle (red/green hit-flash overlay in bondview2). */
     { .key="Game.NoHitFlash", .label="No hit flash", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
-    SEP(G2),
+    SEPT(G2, "Crosshair and HUD"),
     { .key="Video.CrosshairHide", .label="Show crosshair", .kind=ROW_TOGGLE, .step=1, .names=kOnOffRev },
     { .key="Video.CrosshairPersistent", .label="Crosshair always on", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },   /* D436 */
     { .key="Video.CrosshairColor", .label="Crosshair color", .kind=ROW_ENUM, .step=1, .names=kCrosshairColor },
@@ -538,7 +554,7 @@ static struct Row rows[] = {
     { .key="Video.CrosshairHealthColor", .label="Crosshair color by health", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },   /* D511 */
     /* D226: scales the ammo counter, pickup/status text and dialogue. */
     { .key="Game.HudScale", .label="HUD scale", .kind=ROW_SLIDER, .step=5, .unit="%" },
-    SEP(G3),
+    SEPT(G3, "Campaign"),
     /* D216/Game.SkipIntro: D408 -- with it on, a failed/aborted
      * mission skips the post-mission failure dossier (MENU_MISSION_FAILED). */
     { .key="Game.SkipIntro", .label="Skip intro", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
@@ -555,7 +571,7 @@ static struct Row rows[] = {
     { .key="Game.BloodOnHit", .label="Blood on hit", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
     /* project-dam: 2-player split-screen co-op campaign (coop.c). */
     { .key="Game.CoopEnemyHealth", .label="Co-op enemy health", .kind=ROW_ENUM, .step=1, .names=kCoopHealth },
-    SEP(G4),
+    SEPT(G4, "Updates"),
     /* D551: opt-in update check; the action row appears only once a newer release is known. */
     { .key="Game.CheckUpdates", .label="Check for updates", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
     { .key="__UpdateOpen", .label="Update available: open page", .kind=ROW_ACTION },
@@ -606,6 +622,8 @@ int optionsRowHeaderParent(int i)
     if (i < 0 || i >= NUM_ROWS || rows[i].kind != ROW_HEADER) return -1;
     /* Select player is the Controller hub entry; its Controller page nests under it. */
     if (!strcmp(rows[i].key, "__HdrController")) return rowIndexByKey("__HdrSelPlayerC");
+    if (!strcmp(rows[i].key, "__HdrVideoAdv")) return rowIndexByKey("__HdrVideo");
+    if (!strcmp(rows[i].key, "__HdrLayout")) return rowIndexByKey("__HdrController");
 #if !defined(__SWITCH__)
     /* PC: Key bindings open from player 1's Input page (a sub-menu). */
     if (!strcmp(rows[i].key, "__HdrBindings")) return rowIndexByKey("__HdrController");
@@ -621,9 +639,13 @@ int optionsRootHeader(int k)
     return rowIndexByKey(kRootOrder[k]);
 }
 
+static int isBlankRow(const struct Row *r)   /* unselectable, draws nothing (reserves room for a picture) */
+{
+    return r->kind == ROW_ACTION && !strncmp(r->key, "__Blank", 7);
+}
 static int isSepRow(const struct Row *r)
 {
-    return r->kind == ROW_ACTION && !strncmp(r->key, "__Sep", 5);
+    return r->kind == ROW_ACTION && (!strncmp(r->key, "__Sep", 5) || isBlankRow(r));
 }
 
 /* On/Off rows draw as PD checkboxes; named two-way rows (Reverse/Upright,
@@ -650,6 +672,8 @@ int optionsRowChildHeader(int i)
     if (i < 0 || i >= NUM_ROWS) return -1;
     const char *key = rows[i].key;
     if (!strncmp(key, "__SelPlayerC", 12)) return rowIndexByKey("__HdrController");
+    if (!strcmp(key, "__OpenVideoAdv")) return rowIndexByKey("__HdrVideoAdv");
+    if (!strcmp(key, "__OpenLayout")) return rowIndexByKey("__HdrLayout");
 #if !defined(__SWITCH__)
     if (!strcmp(key, "__OpenBindings")) return rowIndexByKey("__HdrBindings");
 #endif
@@ -1017,10 +1041,12 @@ extern s32 portHudScalePercent(void);   /* video.c: Game.HudScale %, 75..150 (D2
  * hud/100, so the box stays centred, fills the same window area share, and a
  * taller scale just means fewer visible rows (scrolls as before). 100 % is
  * the S2 mapping exactly. */
+#define OV_SHRINK 70   /* the menu draws at this % of the old size (it was too big: ~7 rows on a 16:9 screen) */
 static s32 ovHud(void)
 {
     s32 h = portHudScalePercent();
-    return h < 75 ? 75 : (h > 150 ? 150 : h);
+    h = h < 75 ? 75 : (h > 150 ? 150 : h);
+    return s_open ? h * OV_SHRINK / 100 : h;   /* only the open menu shrinks: the FPS / timer readouts keep their size */
 }
 static s32 ovW(void) { return (s32)lround(320.0 * 100.0 / (double)ovHud()); }
 static s32 ovH(void)
@@ -1042,8 +1068,8 @@ static struct OvLayout overlayLayout(void)
 {
     struct OvLayout o;
     s32 w = ovW(), h = ovH();
-    s32 cardW = s_section < 0 ? 196 : w - 16;   /* PD hub dialogs are narrow; settings pages wide */
-    if (cardW > 304) cardW = 304;
+    s32 cardW = s_section < 0 ? 210 : w - 16;   /* PD hub dialogs are narrow; settings pages wide */
+    if (cardW > 340) cardW = 340;
     o.maxRows = (h - 2 * 4 - OV_HINT_H - OV_TITLE_H - 1 - OV_PAD_TOP - OV_PAD_BOT) / OV_LINE;
     if (o.maxRows < 4) o.maxRows = 4;
     int contentN = s_visN - (s_section >= 0 ? 1 : 0);   /* a section's title is not a row */
@@ -1485,9 +1511,14 @@ static void presetProbe(void);   /* D440 GE_PRESETPROBE, below */
 /* Test hook (D558): applies the GE_OPTIONSOVERLAY / _SECTION / _SELECTBACK / _DROPDOWN /
  * _SELECT=<row key> request. Called from init and, with GE_OPTIONSOVERLAY_ATFRAME=<n>, again
  * at emit frame n so it survives the level load (page state resets on load). */
+static void overlayPauseGame(void);   /* GE_NEWMENU: defined with the toggle below */
 static void overlayApplyTestRequest(const char *e)
 {
     s_open = 1;
+    {
+        extern int menuNewActive(void);
+        if (menuNewActive()) overlayPauseGame();
+    }
         /* Diagnostic screenshots: 1 = root, 2..7 = the six pages in hub order;
          * GE_OPTIONSOVERLAY_SECTION=__HdrController etc. targets nested pages. */
         int page = atoi(e) - 2;
@@ -1599,7 +1630,8 @@ static void overlayInit(void)
         /* Pages may scroll (PD dialogs do); overlayHitCheck walks the first and
          * last scroll windows instead of a no-scroll row cap. */
         static const struct { const char *page, *childA, *childB; } pages[] = {
-            { "__HdrVideo", "__DisplayMode", "Game.ScreenShakeIntensity" },
+            { "__HdrVideo", "__DisplayMode", "__OpenVideoAdv" },
+            { "__HdrVideoAdv", "Video.FXAA", "Game.ScreenShakeIntensity" },
             { "__HdrAudio", "Audio.MasterVolume", "Bond.FX" },
 #if defined(__SWITCH__)
             { "__HdrMouse", "Input.MouseSensitivity", "Input.MouseRawInput" },
@@ -2501,6 +2533,7 @@ static void presetProbe(void)
 /* GE_OVNAV test step (called from the file-select hook, game thread):
  * O toggle, D/U move, A open header/link, B back one level, P log the place. */
 static SDL_SpinLock s_ovLock;   /* tentative: the definition below is the same object */
+static void overlayTabStep(int dir);
 void optionsOverlayTestStep(char c)
 {
     SDL_AtomicLock(&s_ovLock);
@@ -2518,6 +2551,8 @@ void optionsOverlayTestStep(char c)
         if (rows[i].kind == ROW_HEADER) { if (s_section < 0) overlayOpenHeader(i); }
         else if (optionsRowChildHeader(i) >= 0) overlayOpenLink(i);
     } else if (c == 'B') { if (s_section >= 0) overlayBackOne(); }
+    else if (c == '<') overlayTabStep(-1);
+    else if (c == '>') overlayTabStep(+1);
     overlayUpdateVisible();
     overlayUpdateScroll();
     if (c == 'P') {
@@ -2528,6 +2563,34 @@ void optionsOverlayTestStep(char c)
             if (rows[s_visIdx[q]].kind == ROW_BOND_FILE) sysLogPrintf(LOG_INFO, "ovnav: chooser row visible at %d", q);
     }
     SDL_AtomicUnlock(&s_ovLock);
+}
+
+/* GE_NEWMENU=1: while the menu is open in a stage the game is paused with its own flags (the pause the
+ * multiplayer watch uses: the clock timer reads 0, the controls are locked), and what was set before
+ * is put back on close. Nothing here touches src/game. */
+extern s32 g_pausedFlag;                       /* src/game/mpmenu.c */
+extern void lvlSetControlsLockedFlag(s32 v);   /* src/game/lv.c */
+extern s32 lvlGetControlsLockedFlag(void);
+static int s_ovPaused = 0;
+static s32 s_ovPrevPaused = 0, s_ovPrevLocked = 0;
+static void overlayPauseGame(void)
+{
+    const int inStage = current_menu == 11 /* the stage */ || current_menu == MENU_INVALID /* bare -level_XX boot */;
+    if (!inStage || s_ovPaused) return;
+    s_ovPrevPaused = g_pausedFlag;
+    s_ovPrevLocked = lvlGetControlsLockedFlag();
+    g_pausedFlag = 1;
+    lvlSetControlsLockedFlag(1);
+    s_ovPaused = 1;
+    sysLogPrintf(LOG_INFO, "optionsoverlay: game paused");
+}
+static void overlayResumeGame(void)
+{
+    if (!s_ovPaused) return;
+    g_pausedFlag = s_ovPrevPaused;
+    lvlSetControlsLockedFlag(s_ovPrevLocked);
+    s_ovPaused = 0;
+    sysLogPrintf(LOG_INFO, "optionsoverlay: game resumed");
 }
 
 void optionsOverlayToggle(void)
@@ -2546,6 +2609,12 @@ void optionsOverlayToggle(void)
         s_memSeat = s_padSeat;
     }
     s_open = !s_open;
+    {
+        extern int menuNewActive(void);
+        if (menuNewActive()) {
+            if (s_open) overlayPauseGame(); else overlayResumeGame();
+        }
+    }
     ddClose();   /* closing (or reopening) the menu cancels a pending pick */
     if (s_open) {
         s_section = -1;
@@ -2675,6 +2744,8 @@ void optionsOverlayHandleInput(void)
     SDL_AtomicUnlock(&s_ovLock);
 }
 
+static int s_prevTabL, s_prevTabR;   /* L / R edge state (tabs) */
+static int s_nmPrevB = 1, s_nmPrevStart = 1;   /* the new menu: B / Start edges (held when it opens = no press) */
 static void overlayHandleInputLocked(void)
 {
     static int prevUp, prevDn, prevLf, prevRt, prevLmb, prevRmb, prevPadBack;
@@ -2685,6 +2756,8 @@ static void overlayHandleInputLocked(void)
     if (!s_open) {
         s_latchArm = 1;   /* D563: whatever is held when it opens is latched */
         prevUp = prevDn = prevLf = prevRt = prevLmb = prevRmb = 0;
+        s_prevTabL = s_prevTabR = 1;   /* a shoulder held while opening is not a tab press */
+        s_nmPrevB = s_nmPrevStart = 1;
         s_dragRow = -1;
         SDL_AtomicSet(&s_dragWatchField, 0);
         optionsAdjustCommitPending();   /* D489: closed by the host mid-hold */
@@ -2826,6 +2899,21 @@ static void overlayHandleInputLocked(void)
         return;
     }
     prevPadBack = padBack;
+
+    {   /* Tabs: L / R (or PageUp / PageDown) switch the top-level page */
+        int tl = inputPadButton(inputOverlayOwnerPad(), SDL_CONTROLLER_BUTTON_LEFTSHOULDER) || ks[SDL_SCANCODE_PAGEUP];
+        int tr = inputPadButton(inputOverlayOwnerPad(), SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) || ks[SDL_SCANCODE_PAGEDOWN];
+        int dir = (tr && !s_prevTabR) ? +1 : (tl && !s_prevTabL) ? -1 : 0;
+        s_prevTabL = tl; s_prevTabR = tr;
+        if (dir) {
+            s_mouseActive = 0;
+            navDir = adjDir = 0;
+            if (s_ddRow >= 0) ddClose();
+            overlayTabStep(dir);
+            prevUp = up; prevDn = dn; prevLf = lf; prevRt = rt;
+            return;
+        }
+    }
 
     /* D469: Y or Delete clears the selected pad-binding slot (one press, no modal). */
     {
@@ -3393,18 +3481,19 @@ static int sectionIsMixedScope(int header)
 /* ---- menu PD parity: palette + drawing helpers ----
  * Palette = PD's own green dialog colours (g_MenuColours[], src/game/menu.c:110,
  * PD is MIT, Ryan Dwyer). RGBA, alpha as PD stores it (0x7f = ~50 %). */
-#define PD_DIALOG_BORDER1   0x00bf007fu   /* left/lower border, title gradient start */
-#define PD_TITLEBG          0x0050007fu   /* title gradient middle */
-#define PD_DIALOG_BORDER2   0x00ff007fu   /* right border, title gradient end */
-#define PD_TITLE_TEXT       0xffff00ffu   /* yellow */
-#define PD_BODY             0x002f00c8u   /* PD stores 0x7f; raised after the first look (maintainer: easier to read) */
-#define PD_ITEM_UNFOCUSED   0x55ff55ffu
-#define PD_ITEM_DISABLED    0x006f00afu
+#define PD_DIALOG_BORDER1   0x9be37a50u   /* left/lower border, title gradient start */
+#define PD_TITLEBG          0x1018117fu   /* title gradient middle */
+#define PD_DIALOG_BORDER2   0x9be37a50u   /* right border, title gradient end */
+#define PD_TITLE_TEXT       0x9be37affu   /* accent: muted green (Vert sobre theme) */
+#define PD_BODY             0x0b110cc8u   /* PD stores 0x7f; raised after the first look (maintainer: easier to read) */
+#define PD_ITEM_UNFOCUSED   0xd3e3cfffu
+#define PD_ITEM_DISABLED    0x7e957a9fu
+#define PD_ITEM_TAG         0x7e957affu   /* "(restart)" / "(per profile)" tags: subdued but readable */
 #define PD_FOCUS_INNER      0xffffffffu
-#define PD_FOCUS_OUTER      0x004400ffu
-static const u8 PAL_TITLE_L[3]  = {   0, 191,   0 };   /* border1 */
-static const u8 PAL_TITLE_M[3]  = {   0,  80,   0 };   /* titlebg */
-static const u8 PAL_TITLE_R[3]  = {   0, 255,   0 };   /* border2 */
+#define PD_FOCUS_OUTER      0x0b110cffu
+static const u8 PAL_TITLE_L[3]  = {  18,  28,  20 };   /* title bar: flat */
+static const u8 PAL_TITLE_M[3]  = {  18,  28,  20 };
+static const u8 PAL_TITLE_R[3]  = {  18,  28,  20 };
 
 static u8 lerpU8(int a, int b, int num, int den)
 {
@@ -3440,7 +3529,7 @@ static Gfx *fillGradH3(Gfx *gdl, s32 x0, s32 y0, s32 x1, s32 y1,
 
 /* PD menugfxDrawShimmer: a 40-unit-wide soft streak sweeping along a bar edge.
  * Wall-clock driven (render-rate independent); clipped to [x0, x1). */
-static Gfx *drawShimmer(Gfx *gdl, s32 x0, s32 x1, s32 y0, s32 y1, int periodMs, int phaseMs)
+__attribute__((unused)) static Gfx *drawShimmer(Gfx *gdl, s32 x0, s32 x1, s32 y0, s32 y1, int periodMs, int phaseMs)
 {
     s32 span = (x1 - x0) + 80;
     s32 head = (s32)(((sysGetMicroseconds() / 1000 + (uint64_t)phaseMs) % (uint64_t)periodMs) * (uint64_t)span / (uint64_t)periodMs) - 40;
@@ -3463,7 +3552,7 @@ static u32 pulseInk(void)
     int w = ph < 333 ? ph : 667 - ph;                           /* 0..333..0 */
     int t = w * 1000 / 333;                                     /* 0..1000 */
     t = t * t * (3000 - 2 * t) / 1000000;                       /* smoothstep */
-    u8 r = lerpU8(0x55, 0xff, t, 1000), g = lerpU8(0xff, 0xff, t, 1000), b = lerpU8(0x55, 0xff, t, 1000);
+    u8 r = lerpU8(0x9b, 0xff, t, 1000), g = lerpU8(0xe3, 0xff, t, 1000), b = lerpU8(0x7a, 0xff, t, 1000);
     return ((u32)r << 24) | ((u32)g << 16) | ((u32)b << 8) | 0xffu;
 }
 
@@ -3647,9 +3736,295 @@ static const struct HintLine kHint[] = {
     /*  8 */ { "Keyboard and mouse only   Left/Right: Slot",  "Keys/mouse only   L/R: Slot" },
     /*  9 */ { "Enter: Bind   {B}/Esc: Back",                 "Enter: Bind   {B}: Back" },
     /* 10 */ { "{A}/Enter: Select   Left/Right: Change",      "{A}: Select   L/R: Change" },
+    /* 11 */ { "{LB}/{RB}: Tabs   {B}/Esc: Back   {START}: Close", "{LB}/{RB}: Tabs   {B}: Back" },
 };
-enum { H_PADCAP1, H_PADCAP2, H_KEYCAP1, H_KEYCAP2, H_HUB1, H_HUB2, H_CTRL1, H_BACK, H_BIND1, H_BIND2, H_SEC1 };
+enum { H_PADCAP1, H_PADCAP2, H_KEYCAP1, H_KEYCAP2, H_HUB1, H_HUB2, H_CTRL1, H_BACK, H_BIND1, H_BIND2, H_SEC1, H_TABS };
 static void tipSelfCheck(void);
+
+
+/* ------------------------------------------------------------------------ */
+/* Tabs: the top-level pages are tabs in the title bar, switched with L / R.  */
+/* ------------------------------------------------------------------------ */
+
+/* k in kRootOrder of the top-level page that holds section hdr (walks up the nested pages), or -1. */
+static int rootOfSection(int hdr)
+{
+    int guard = 0;
+    while (hdr >= 0 && guard++ < 8) {
+        int parent = optionsRowHeaderParent(hdr);
+        if (parent < 0) break;
+        hdr = parent;
+    }
+    for (int k = 0; k < NUM_ROOTS; k++)
+        if (hdr >= 0 && hdr == optionsRootHeader(k)) return k;
+    return -1;
+}
+
+/* Previous / next top-level page. From the hub, R opens the first tab and L the last. The Controller
+ * tab opens the selected player's own page (the Select player step is only a Back away). */
+static void overlayTabStep(int dir)
+{
+    int k = s_section < 0 ? (dir > 0 ? -1 : NUM_ROOTS) : rootOfSection(s_section);
+    k += dir;
+    if (k < 0) k = NUM_ROOTS - 1;
+    if (k >= NUM_ROOTS) k = 0;
+    int hdr = optionsRootHeader(k);
+    if (hdr >= 0 && !strcmp(rows[hdr].key, "__HdrSelPlayerC")) {
+        padSetSeat(s_padSeat);
+        hdr = rowIndexByKey("__HdrController");
+    }
+    if (hdr >= 0) overlayOpenHeader(hdr);
+}
+
+/* Tab text for k: the page name, extended on the active tab with where inside the page we are. */
+static void tabLabel(int k, int active, char *out, int n)
+{
+    char base[48];
+    titleCase(rows[optionsRootHeader(k)].label, base, sizeof(base));
+    snprintf(out, n, "%s", base);
+    if (!active || s_section < 0) return;
+    const char *key = rows[s_section].key;
+    const char *sub = NULL;
+    char tmp[24];
+    if (!strcmp(key, "__HdrVideoAdv")) sub = "Advanced";
+    else if (!strcmp(key, "__HdrLayout")) { snprintf(tmp, sizeof(tmp), "P%d Layout", s_padSeat + 1); sub = tmp; }
+    else if (!strcmp(key, "__HdrBindings")) { snprintf(tmp, sizeof(tmp), "P%d Keys", s_padSeat + 1); sub = tmp; }
+    else if (!strcmp(key, "__HdrController")) { snprintf(tmp, sizeof(tmp), "Player %d", s_padSeat + 1); sub = tmp; }
+    if (sub) snprintf(out, n, "%s: %s", base, sub);
+    else if (rows[s_section].saveScoped) {
+        int f = watchSettingsActiveFolder();
+        if (f >= 0) snprintf(out, n, "%s (Profile %d)", base, f + 1);
+    }
+}
+
+/* Geometry of the strip: x of each tab, shared by the rect pass and the text pass. */
+static void tabGeometry(const struct OvLayout *o, char lab[][64], s32 *xs, s32 *ws, s32 *chipL, s32 *chipR)
+{
+    int act = rootOfSection(s_section);
+    s32 total = 0;
+    for (int k = 0; k < NUM_ROOTS; k++) {
+        tabLabel(k, k == act, lab[k], 64);
+        ws[k] = bodyWidth(lab[k]);
+        total += ws[k];
+    }
+    s32 avail = (o->right - o->left) - 2 * 26, gap = 12;
+    if (total + gap * (NUM_ROOTS - 1) > avail) gap = (avail - total) / (NUM_ROOTS - 1);
+    if (gap < 4) gap = 4;
+    s32 x = (o->left + o->right) / 2 - (total + gap * (NUM_ROOTS - 1)) / 2;
+    for (int k = 0; k < NUM_ROOTS; k++) { xs[k] = x; x += ws[k] + gap; }
+    *chipL = o->left + 5;
+    *chipR = o->right - 5;
+}
+
+static Gfx *drawTabStripRects(Gfx *gdl, const struct OvLayout *o)
+{
+    char lab[NUM_ROOTS][64];
+    s32 xs[NUM_ROOTS], ws[NUM_ROOTS], cl, cr;
+    tabGeometry(o, lab, xs, ws, &cl, &cr);
+    int act = rootOfSection(s_section);
+    if (act >= 0)   /* the active tab: an underline in the title colour */
+        gdl = fillRectC(gdl, xs[act] - 2, o->titleB - 2, xs[act] + ws[act] + 2, o->titleB, PD_TITLE_TEXT);
+    return gdl;
+}
+
+static Gfx *drawTabStripText(Gfx *gdl, const struct OvLayout *o)
+{
+    char lab[NUM_ROOTS][64];
+    s32 xs[NUM_ROOTS], ws[NUM_ROOTS], cl, cr;
+    tabGeometry(o, lab, xs, ws, &cl, &cr);
+    int act = rootOfSection(s_section);
+    for (int k = 0; k < NUM_ROOTS; k++) {
+        if (k == act) {
+            gdl = drawBody(gdl, xs[k] + 1, o->top + 2, lab[k], 0x000000ff);
+            gdl = drawBody(gdl, xs[k], o->top + 1, lab[k], PD_TITLE_TEXT);
+        } else {
+            gdl = drawBody(gdl, xs[k], o->top + 1, lab[k], PD_ITEM_UNFOCUSED);
+        }
+    }
+    char l[16], r[16];
+    inputPadHelpFmt(l, sizeof(l), "{LB}");
+    inputPadHelpFmt(r, sizeof(r), "{RB}");
+    gdl = drawBody(gdl, cl, o->top + 1, l, PD_ITEM_UNFOCUSED);
+    gdl = drawBodyR(gdl, cr, o->top + 1, r, PD_ITEM_UNFOCUSED);
+    return gdl;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Controller > Layout: the selected player's preset drawn on a pad.          */
+/* ------------------------------------------------------------------------ */
+
+static int onLayoutPage(void)
+{
+    return s_section >= 0 && !strcmp(rows[s_section].key, "__HdrLayout");
+}
+
+struct PadLook {
+    const char *lt, *rt, *lb, *rb;   /* trigger / shoulder names */
+    const char *face[4];             /* A B X Y: what the pad family prints on them (or a shape) */
+    int pos[4];                      /* A B X Y -> slot: 0 top, 1 left, 2 right, 3 bottom */
+};
+static struct PadLook padLook(void)
+{
+    int fam = inputPadFamily(inputOverlayOwnerPad());
+    if (fam == 2)   /* Nintendo: A right, B bottom, X top, Y left */
+        return (struct PadLook){ "ZL", "ZR", "L", "R", { "A", "B", "X", "Y" }, { 2, 3, 0, 1 } };
+    if (fam == 1)   /* PlayStation: cross bottom, circle right, square left, triangle top */
+        return (struct PadLook){ "L2", "R2", "L1", "R1", { "X", "O", "#", "^" }, { 3, 2, 1, 0 } };
+    /* Xbox: A bottom, B right, X left, Y top */
+    return (struct PadLook){ "LT", "RT", "LB", "RB", { "A", "B", "X", "Y" }, { 3, 2, 1, 0 } };
+}
+
+/* Stored preset value (0 Jinx, 1 Christmas, 2 Frost, 3 Custom, 4 Elektra) -> stick roles (D394 table). */
+static const char *const kLeftStickRole[5]  = { "Move / strafe", "Move / turn", "Look / strafe", "", "Look / turn" };
+static const char *const kRightStickRole[5] = { "Look / turn", "Look / strafe", "Move / turn", "", "Move / strafe" };
+
+/* The pad is computed, not drawn from an image: each part is a signed-distance shape (circle, rounded
+ * box, smooth union of those), filled row by row. A run of fully covered pixels is one rectangle; the
+ * edge pixels are single rectangles whose alpha is their coverage, so the outline is smooth at any
+ * size. One silhouette serves a generic Xbox or Switch Pro pad (sticks upper-left / lower-right). */
+enum { PS_CIRCLE, PS_BOX, PS_BODY, PS_CROSS };
+struct PShape {
+    int kind;
+    double x, y, a, b, r;   /* centre, extents, corner radius */
+};
+static double sdCircle(double px, double py, double cx, double cy, double r) { return hypot(px - cx, py - cy) - r; }
+static double sdBox(double px, double py, double cx, double cy, double hx, double hy, double r)
+{
+    double dx = fabs(px - cx) - hx + r, dy = fabs(py - cy) - hy + r;
+    return hypot(dx > 0 ? dx : 0, dy > 0 ? dy : 0) + (dx > dy ? (dx < 0 ? dx : 0) : (dy < 0 ? dy : 0)) - r;
+}
+static double sdSmin(double a, double b, double k)
+{
+    double h = k - fabs(a - b);
+    if (h < 0) h = 0;
+    return (a < b ? a : b) - h * h * 0.25 / k;
+}
+static double shapeDist(const struct PShape *s, double px, double py)
+{
+    switch (s->kind) {
+    case PS_CIRCLE: return sdCircle(px, py, s->x, s->y, s->r);
+    case PS_BOX:    return sdBox(px, py, s->x, s->y, s->a, s->b, s->r);
+    case PS_CROSS: {   /* d-pad: two bars */
+        double h = sdBox(px, py, s->x, s->y, s->a, s->b, s->r), v = sdBox(px, py, s->x, s->y, s->b, s->a, s->r);
+        return h < v ? h : v;
+    }
+    default: {   /* PS_BODY: a centre block and two grips, blended */
+        double c = sdBox(px, py, s->x, s->y - 6, 50, 19, 16);
+        double l = sdCircle(px, py, s->x - 44, s->y + 12, 21), r = sdCircle(px, py, s->x + 44, s->y + 12, 21);
+        return sdSmin(sdSmin(c, l, 14), r, 14);
+    }
+    }
+}
+static void shapeBounds(const struct PShape *s, s32 *x0, s32 *y0, s32 *x1, s32 *y1)
+{
+    double hx = s->a, hy = s->b;
+    if (s->kind == PS_CIRCLE) hx = hy = s->r;
+    else if (s->kind == PS_CROSS) hx = hy = (s->a > s->b ? s->a : s->b);
+    else if (s->kind == PS_BODY) { hx = 70; hy = 40; }
+    *x0 = (s32)floor(s->x - hx) - 3; *x1 = (s32)ceil(s->x + hx) + 3;
+    *y0 = (s32)floor(s->y - hy) - 3; *y1 = (s32)ceil(s->y + hy) + 3;
+    if (s->kind == PS_BODY) *y0 = (s32)floor(s->y - 30) - 3;
+}
+static Gfx *fillShape(Gfx *gdl, const struct PShape *s, double grow, u32 rgba)
+{
+    s32 bx0, by0, bx1, by1;
+    shapeBounds(s, &bx0, &by0, &bx1, &by1);
+    gdl = aaBegin(gdl);
+    for (s32 y = by0; y < by1; y++) {
+        s32 run = -1;
+        for (s32 x = bx0; x <= bx1; x++) {
+            double cov = 0.0;
+            if (x < bx1) {
+                cov = 0.5 - (shapeDist(s, x + 0.5, y + 0.5) - grow);
+                cov = cov < 0 ? 0 : (cov > 1 ? 1 : cov);
+            }
+            if (cov >= 0.999) { if (run < 0) run = x; continue; }
+            if (run >= 0) { gdl = aaPiece(gdl, run, y, x, y + 1, rgba, 1.0); run = -1; }
+            if (cov > 0.02) gdl = aaPiece(gdl, x, y, x + 1, y + 1, rgba, cov);
+        }
+    }
+    return gdl;
+}
+/* a part with an accent ring when the preset uses it */
+static Gfx *drawPart(Gfx *gdl, struct PShape s, u32 fill, int used)
+{
+    if (used) gdl = fillShape(gdl, &s, 1.1, 0x9be37ad0u);
+    return fillShape(gdl, &s, 0.0, fill);
+}
+
+static Gfx *layoutLabel(Gfx *gdl, s32 cx, s32 cy, const char *t)   /* centred on a part */
+{
+    return drawBody(gdl, cx - bodyWidth(t) / 2, cy - 6, t, PD_ITEM_UNFOCUSED);
+}
+
+/* pass 0 = the pad's shapes, pass 1 = every text. Both walk the same coordinates. */
+static Gfx *drawLayout(Gfx *gdl, const struct OvLayout *o, int pass)
+{
+    int preset = *inputPadPresetPtr(s_padSeat);
+    const s32 cx = (o->left + o->right) / 2, y0 = o->contentY + 3, cy = y0 + 50;
+    if (preset < 0 || preset > 4) preset = 0;
+    if (preset == 3) {   /* Custom: nothing fixed to draw */
+        if (pass == 1) {
+            static const char *const l[3] = { "Custom layout", "Every action is bound one by one", "on the Controller page" };
+            for (int i = 0; i < 3; i++)
+                gdl = drawBody(gdl, cx - bodyWidth(l[i]) / 2, y0 + 30 + i * 14, l[i], i ? PD_ITEM_UNFOCUSED : PD_TITLE_TEXT);
+        }
+        return gdl;
+    }
+    const struct PadLook pl = padLook();
+    /* face diamond: slots top, left, right, bottom around (fx, fy) */
+    const double fx = cx + 36, fy = cy - 4;
+    const double slotX[4] = { fx, fx - 9, fx + 9, fx }, slotY[4] = { fy - 9, fy, fy, fy + 9 };
+    const double lsx = cx - 34, lsy = cy - 4, rsx = cx + 14, rsy = cy + 12, dpx = cx - 17, dpy = cy + 12;
+    if (pass == 0) {
+        struct PShape body = { PS_BODY, cx, cy, 0, 0, 0 };
+        gdl = fillShape(gdl, &body, 1.2, 0x9be37a60u);   /* outline */
+        gdl = fillShape(gdl, &body, 0.0, 0x16241aeeu);
+        gdl = drawPart(gdl, (struct PShape){ PS_BOX, cx - 42, cy - 39, 14, 4, 4 }, 0x24372aeeu, 1);   /* triggers */
+        gdl = drawPart(gdl, (struct PShape){ PS_BOX, cx + 42, cy - 39, 14, 4, 4 }, 0x24372aeeu, 1);
+        gdl = drawPart(gdl, (struct PShape){ PS_BOX, cx - 40, cy - 27, 17, 3.2, 3 }, 0x24372aeeu, 1);   /* shoulders */
+        gdl = drawPart(gdl, (struct PShape){ PS_BOX, cx + 40, cy - 27, 17, 3.2, 3 }, 0x24372aeeu, 0);
+        gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, lsx, lsy, 0, 0, 10 }, 0x0b110cffu, 1);   /* sticks: recess + cap */
+        gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, lsx, lsy, 0, 0, 7 }, 0x2c4231ffu, 0);
+        gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, rsx, rsy, 0, 0, 10 }, 0x0b110cffu, 1);
+        gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, rsx, rsy, 0, 0, 7 }, 0x2c4231ffu, 0);
+        gdl = drawPart(gdl, (struct PShape){ PS_CROSS, dpx, dpy, 8, 2.8, 1.2 }, 0x2c4231ffu, 0);   /* d-pad */
+        for (int b = 0; b < 4; b++)
+            gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, slotX[pl.pos[b]], slotY[pl.pos[b]], 0, 0, 5.2 }, 0x0b110cffu, 1);
+        return gdl;
+    }
+    const s32 xr = cx - 68, xl = cx + 68;   /* label columns: right edge of the left one, left edge of the right one */
+    gdl = layoutLabel(gdl, (s32)(cx - 42), cy - 39, pl.lt);
+    gdl = layoutLabel(gdl, (s32)(cx + 42), cy - 39, pl.rt);
+    gdl = layoutLabel(gdl, (s32)(cx - 40), cy - 27, pl.lb);
+    gdl = layoutLabel(gdl, (s32)(cx + 40), cy - 27, pl.rb);
+    gdl = layoutLabel(gdl, (s32)lsx, (s32)lsy, "LS");
+    gdl = layoutLabel(gdl, (s32)rsx, (s32)rsy, "RS");
+    for (int b = 0; b < 4; b++)
+        gdl = layoutLabel(gdl, (s32)slotX[pl.pos[b]], (s32)slotY[pl.pos[b]], pl.face[b]);
+    gdl = drawBodyR(gdl, xr, cy - 45, "Aim", PD_ITEM_UNFOCUSED);
+    gdl = drawBodyR(gdl, xr, cy - 33, "Aim", PD_ITEM_UNFOCUSED);
+    gdl = drawBodyR(gdl, xr, cy - 12, kLeftStickRole[preset], PD_ITEM_UNFOCUSED);
+    gdl = drawBodyR(gdl, xr, cy + 0, "Click: crouch", PD_ITEM_TAG);
+    gdl = drawBodyR(gdl, xr, cy + 13, "D-pad", PD_ITEM_UNFOCUSED);
+    gdl = drawBody(gdl, xl, cy - 45, "Fire", PD_ITEM_UNFOCUSED);
+    gdl = drawBody(gdl, xl, cy - 33, "None", PD_ITEM_TAG);
+    {   /* face buttons in A, B, X, Y order -> their actions */
+        static const char *const act[4] = { "Use", "Gadget", "Reload", "Next weapon" };
+        for (int b = 0; b < 4; b++) {
+            char line[40];
+            snprintf(line, sizeof(line), "%s  %s", pl.face[b], act[b]);
+            gdl = drawBody(gdl, xl, cy - 20 + b * 12, line, PD_ITEM_UNFOCUSED);
+        }
+    }
+    gdl = drawBody(gdl, xl, cy + 28, kRightStickRole[preset], PD_ITEM_UNFOCUSED);
+    gdl = drawBody(gdl, xl, cy + 40, "Click: crouch", PD_ITEM_TAG);
+    {
+        const char *foot = "Sticks: up-down / left-right";
+        gdl = drawBody(gdl, cx - bodyWidth(foot) / 2, y0 + 105, foot, PD_ITEM_TAG);
+    }
+    return gdl;
+}
 
 Gfx *optionsOverlayEmit(void)
 {
@@ -3754,8 +4129,6 @@ static Gfx *overlayEmitLocked(void)
     {
         gdl = fillGradH3(gdl, o.left - 2, o.top, o.right + 2, o.titleB,
                          PAL_TITLE_L, PAL_TITLE_M, PAL_TITLE_R, 127);
-        gdl = drawShimmer(gdl, o.left - 2, o.right + 2, o.top, o.top + 1, 2400, 0);
-        gdl = drawShimmer(gdl, o.left - 2, o.right + 2, o.titleB - 1, o.titleB, 2400, 1200);
         gdl = fillRectC(gdl, o.left, o.titleB, o.right, o.titleB + 1, PD_DIALOG_BORDER1);   /* line under the title bar */
         gdl = fillRectC(gdl, o.left, o.titleB + 1, o.right, o.bottom, PD_BODY);
         gdl = fillRectC(gdl, o.left, o.titleB + 1, o.left + 1, o.bottom, PD_DIALOG_BORDER1);
@@ -3778,13 +4151,13 @@ static Gfx *overlayEmitLocked(void)
         } else if (!strcmp(rows[s_section].key, "__HdrController") &&
                    (PAD_PAGE_ALWAYS || (s_sel >= 0 && s_sel < s_visN && rows[s_visIdx[s_sel]].kind == ROW_PADBIND))) {
             help1 = &kHint[H_CTRL1];
-            help2 = &kHint[H_BACK];
+            help2 = &kHint[H_TABS];
         } else if (!strcmp(rows[s_section].key, "__HdrBindings")) {
             help1 = &kHint[H_BIND1];
             help2 = &kHint[H_BIND2];
         } else {
             help1 = &kHint[H_SEC1];
-            help2 = &kHint[H_BACK];
+            help2 = &kHint[H_TABS];
         }
     }
     /* D507: description of the focused row (any input source), first line under
@@ -3827,11 +4200,17 @@ static Gfx *overlayEmitLocked(void)
         int isCue = (p == cueP);
         u32 fillInk = !r->found ? PD_ITEM_DISABLED :
                       isCue ? pulseInk() : PD_ITEM_UNFOCUSED;
-        if (isSepRow(r)) {   /* PD menuitemSeparatorRender: a 1 px line */
-            gdl = fillRectC(gdl, o.left + 8, rowY + OV_LINE / 2, o.right - 8, rowY + OV_LINE / 2 + 1, PD_ITEM_DISABLED);
+        if (isBlankRow(r) || (isSepRow(r) && !strncmp(r->key, "__SepGap", 8))) continue;   /* blank space, no line */
+        if (isSepRow(r)) {   /* PD menuitemSeparatorRender: a 1 px line; with a label it is a section title */
+            const s32 x0 = r->label[0] ? o.labelX + bodyWidth(r->label) + 6 : o.left + 8;
+            gdl = fillRectC(gdl, x0, rowY + OV_LINE / 2, o.right - 8, rowY + OV_LINE / 2 + 1, PD_ITEM_DISABLED);
             continue;
         }
         if (s_section < 0) continue;   /* hub rows are text only */
+        if (isCue && r->found) {   /* Vert sobre: a thin accent marker and a faint fill instead of the pulse alone */
+            gdl = fillRectC(gdl, o.left + 1, rowY, o.right - 1, rowY + OV_LINE, 0x9be37a1au);
+            gdl = fillRectC(gdl, o.left + 1, rowY + 2, o.left + 3, rowY + OV_LINE - 2, PD_TITLE_TEXT);
+        }
         if (strcmp(r->key, "Video.CrosshairColor") == 0 && r->found) {
             extern void portCrosshairPreview(s32 *, s32 *, s32 *);
             char val[48];
@@ -3863,14 +4242,21 @@ static Gfx *overlayEmitLocked(void)
         }
     }
 
+    if (s_section >= 0 && rootOfSection(s_section) >= 0) gdl = drawTabStripRects(gdl, &o);
+    if (onLayoutPage()) gdl = drawLayout(gdl, &o, 0);
+
     /* ---- pass 2: text ---- */
     gdl = microcode_constructor(gdl);
+    if (onLayoutPage()) gdl = drawLayout(gdl, &o, 1);
 
     for (int p = p0; p <= pLast; p++) {
         const struct Row *r = &rows[s_visIdx[p]];
         s32 rowY = o.contentY + (s32)lround((p - s_scrollF) * OV_LINE) + OV_TEXT_DY;
         if (rowY - OV_TEXT_DY < bodyTop || rowY - OV_TEXT_DY + OV_LINE > bodyBot) continue;
-        if (isSepRow(r)) continue;
+        if (isSepRow(r)) {
+            if (r->label[0]) gdl = drawBody(gdl, o.labelX, rowY, r->label, PD_TITLE_TEXT);   /* section title */
+            continue;
+        }
         int isCue = (p == cueP);
         u32 ink = !r->found ? PD_ITEM_DISABLED :
                   isCue ? pulseInk() : PD_ITEM_UNFOCUSED;
@@ -3909,7 +4295,7 @@ static Gfx *overlayEmitLocked(void)
         if (r->saveScoped && sectionIsMixedScope(s_section)) {
             s32 tagX = o.labelX + bodyWidth(r->label) + 4;
             if (tagX + bodyWidth("(per profile)") < labelEnd - 2)
-                gdl = drawBody(gdl, tagX, rowY, "(per profile)", PD_ITEM_DISABLED);
+                gdl = drawBody(gdl, tagX, rowY, "(per profile)", PD_ITEM_TAG);
         }
         if (!r->found) {
             gdl = drawBodyR(gdl, o.valueR, rowY, "(n/a)", PD_ITEM_DISABLED);
@@ -3918,7 +4304,7 @@ static Gfx *overlayEmitLocked(void)
         if (r->restart) {
             s32 tagX = o.labelX + bodyWidth(r->label) + 4;
             if (tagX + bodyWidth("(restart)") < labelEnd - 2)
-                gdl = drawBody(gdl, tagX, rowY, "(restart)", PD_ITEM_DISABLED);
+                gdl = drawBody(gdl, tagX, rowY, "(restart)", PD_ITEM_TAG);
         }
         if (!checkbox && val[0])   /* sliders: PD shows the value text right of the wedge */
             gdl = drawBodyR(gdl, o.valueR, rowY, val,
@@ -3928,7 +4314,7 @@ static Gfx *overlayEmitLocked(void)
     {   /* late pass (PD): the open dropdown's popup list over everything */
         s32 dx0, dy0, dx1, dy1; int vis;
         if (ddGeom(&dx0, &dy0, &dx1, &dy1, &vis)) {
-            gdl = fillRectC(gdl, dx0, dy0, dx1, dy1, 0x002800eeu);
+            gdl = fillRectC(gdl, dx0, dy0, dx1, dy1, 0x0b110cf2u);
             gdl = fillRectC(gdl, dx0, dy0, dx1, dy0 + 1, PD_DIALOG_BORDER2);
             gdl = fillRectC(gdl, dx0, dy1 - 1, dx1, dy1, PD_DIALOG_BORDER2);
             gdl = fillRectC(gdl, dx0, dy0, dx0 + 1, dy1, PD_DIALOG_BORDER2);
@@ -3949,7 +4335,10 @@ static Gfx *overlayEmitLocked(void)
                 gdl = drawBodyR(gdl, dx1 - 3, dy1 - 12, s_ddTop + vis < s_ddN ? "v" : "^", PD_TITLE_TEXT);
         }
     }
-    {
+    const int tabs = s_section >= 0 && rootOfSection(s_section) >= 0;
+    if (tabs) {
+        gdl = drawTabStripText(gdl, &o);
+    } else {
         char raw[64], title[64];
         if (s_section >= 0) optionsRowTitle(s_section, raw, sizeof(raw));
         else snprintf(raw, sizeof(raw), "Options");
@@ -3964,7 +4353,7 @@ static Gfx *overlayEmitLocked(void)
             gdl = drawBody(gdl, o.left + 8 + bodyWidth(title) + 6, o.top + 1, note, PD_ITEM_UNFOCUSED);
         }
     }
-    if (s_visN - first > o.maxRows)
+    if (!tabs && s_visN - first > o.maxRows)
         gdl = drawBodyR(gdl, o.right - 8, o.top + 1,
                         s_scroll > first ? "^ v" : "v", PD_TITLE_TEXT);
 
@@ -4214,6 +4603,10 @@ void optionsRowTitle(int i, char *out, int n)
         snprintf(out, n, "PLAYER %d %s", s_padSeat + 1, r->label);
     else if (!strcmp(r->key, "__HdrSelPlayerC"))
         snprintf(out, n, "SELECT PLAYER");
+    else if (!strcmp(r->key, "__HdrVideoAdv"))
+        snprintf(out, n, "VIDEO ADVANCED");
+    else if (!strcmp(r->key, "__HdrLayout"))
+        snprintf(out, n, "PLAYER %d LAYOUT", s_padSeat + 1);
     else
         snprintf(out, n, "%s", r->label);
 }

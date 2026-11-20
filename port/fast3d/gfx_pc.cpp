@@ -1,6 +1,7 @@
 #define NOMINMAX
 
 #include "floatvtx.h" /* D245 */
+#include "gfx_ui.h"    /* menu UI drawn through the rendering API */
 #include "skyplus.h"  /* GE+ sky: G_SKYPLUS_EXT */
 #include <cmath>
 #include <cstdint>
@@ -6863,6 +6864,145 @@ static uint64_t s_perf_frames = 0, s_perf_last_start = 0;
 static double s_perf_maxiv = 0, s_perf_maxiv_dl = 0, s_perf_maxiv_run = 0;
 static uint64_t s_perf_maxiv_frame = 0, s_perf_over20 = 0, s_perf_over33 = 0;
 
+/* ------------------------------------------------------------------------ */
+/* Menu UI (port/src/menu, Dear ImGui): drawn straight through the rendering API. See gfx_ui.h.            */
+/* ------------------------------------------------------------------------ */
+static std::vector<GfxUiVertex> s_ui_vtx;
+static std::vector<uint32_t> s_ui_idx;
+static std::vector<GfxUiCmd> s_ui_cmd;
+static std::vector<uint8_t> s_ui_atlas;
+static std::vector<float> s_ui_vbo;
+static int s_ui_aw = 0, s_ui_ah = 0;
+static bool s_ui_atlas_dirty = false, s_ui_on = false;
+static uint32_t s_ui_tex = 0;
+
+extern "C" void gfx_ui_set_atlas(const uint8_t* rgba, int w, int h) {
+    s_ui_atlas.assign(rgba, rgba + (size_t)w * (size_t)h * 4);
+    s_ui_aw = w;
+    s_ui_ah = h;
+    s_ui_atlas_dirty = true;
+}
+
+extern "C" void gfx_ui_submit(const GfxUiVertex* v, uint32_t nv, const uint32_t* idx, uint32_t ni,
+                              const GfxUiCmd* c, uint32_t nc) {
+    s_ui_vtx.assign(v, v + nv);
+    s_ui_idx.assign(idx, idx + ni);
+    s_ui_cmd.assign(c, c + nc);
+    s_ui_on = nv > 0 && nc > 0;
+}
+
+/* Draw the submitted geometry into the current target. Does nothing while no menu is open. */
+static void gfx_ui_flush(void) {
+    if (!s_ui_on || s_ui_atlas.empty()) {
+        return;
+    }
+    gfx_flush();   /* whatever the game batched first */
+
+    /* a shader for texel0 * shade, with alpha: the same program a G_CC_MODULATERGBA draw would use */
+    Gfx tmp[4];
+    Gfx* g = tmp;
+    gDPSetCombineMode(g++, G_CC_MODULATERGBA, G_CC_MODULATERGBA);
+    gSPEndDisplayList(g++);
+    const uint64_t saved_combine = rdp.combine_mode;
+    gfx_run_dl(tmp);
+    ColorCombinerKey key;
+    key.combine_mode = rdp.combine_mode;
+    key.options = (uint64_t)SHADER_OPT_ALPHA;
+    rdp.combine_mode = saved_combine;
+    struct ColorCombiner* comb = gfx_lookup_or_create_color_combiner(key);
+    if (comb->prg[0] == NULL) {
+        comb->prg[0] = gfx_lookup_or_create_shader_program(comb->shader_id0, comb->shader_id1);
+    }
+    struct ShaderProgram* prg = comb->prg[0];
+    if (prg != rendering_state.shader_program) {
+        gfx_rapi->unload_shader(rendering_state.shader_program);
+        gfx_rapi->load_shader(prg);
+        rendering_state.shader_program = prg;
+    }
+    uint8_t num_inputs = 0;
+    bool used_tex[2] = { false, false };
+    gfx_rapi->shader_get_info(prg, &num_inputs, used_tex);
+    const GfxClipParameters clip = gfx_rapi->get_clip_parameters();
+
+    gfx_rapi->set_use_alpha(true, false);
+    rendering_state.alpha_blend = true;
+    rendering_state.modulate = false;
+    gfx_rapi->set_depth_mode(false, false, false, false, 0);
+    rendering_state.depth_mode = 0;
+
+    if (s_ui_tex == 0) {
+        s_ui_tex = gfx_rapi->new_texture();
+        s_ui_atlas_dirty = true;
+    }
+    gfx_rapi->select_texture(0, s_ui_tex, true);
+    if (s_ui_atlas_dirty) {
+        gfx_rapi->upload_texture(s_ui_atlas.data(), (uint32_t)s_ui_aw, (uint32_t)s_ui_ah, false);
+        s_ui_atlas_dirty = false;
+    }
+    gfx_rapi->set_sampler_parameters(0, true, G_TX_CLAMP, G_TX_CLAMP, false);
+    rendering_state.textures[0] = nullptr;
+    rendering_state.textures[1] = nullptr;
+
+    const int W = (int)gfx_current_dimensions.width, H = (int)gfx_current_dimensions.height;
+    gfx_rapi->set_viewport(0, 0, W, H);
+    rendering_state.viewport = { 0, 0, (uint32_t)W, (uint32_t)H };
+
+    const size_t floats_per_vtx = 4 + (used_tex[0] ? 2 : 0) + (size_t)num_inputs * 4;
+    const size_t max_tris = MAX_BUFFERED;
+    s_ui_vbo.resize(floats_per_vtx * 3 * max_tris);
+    float* out = s_ui_vbo.data();
+    size_t tris = 0, len = 0;
+
+    for (const GfxUiCmd& c : s_ui_cmd) {
+        int x0 = (int)c.clip_x0, x1 = (int)c.clip_x1, y0 = (int)c.clip_y0, y1 = (int)c.clip_y1;
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > W) x1 = W;
+        if (y1 > H) y1 = H;
+        if (x1 <= x0 || y1 <= y0) {
+            continue;
+        }
+        gfx_rapi->set_scissor(x0, H - y1, x1 - x0, y1 - y0);   /* the rendering API's scissor origin is bottom-left */
+        rendering_state.scissor = { (int16_t)x0, (int16_t)(H - y1), (uint32_t)(x1 - x0), (uint32_t)(y1 - y0) };
+        for (uint32_t i = 0; i + 2 < c.elem_count; i += 3) {
+            for (int k = 0; k < 3; k++) {
+                const GfxUiVertex& v = s_ui_vtx[s_ui_idx[c.idx_offset + i + (uint32_t)k]];
+                const float nx = v.x / (float)W * 2.0f - 1.0f;
+                const float ny = 1.0f - v.y / (float)H * 2.0f;   /* clip space, y up */
+                out[len++] = nx;
+                out[len++] = clip.invert_y ? -ny : ny;
+                out[len++] = clip.z_is_from_0_to_1 ? 0.5f : 0.0f;
+                out[len++] = 1.0f;
+                if (used_tex[0]) {
+                    out[len++] = v.u;
+                    out[len++] = v.v;
+                }
+                const float r = (float)(v.col & 0xff) / 255.0f, gg = (float)((v.col >> 8) & 0xff) / 255.0f;
+                const float b = (float)((v.col >> 16) & 0xff) / 255.0f, a = (float)((v.col >> 24) & 0xff) / 255.0f;
+                for (int j = 0; j < num_inputs; j++) {   /* texel0 * shade: the only input is the vertex colour */
+                    out[len++] = r;
+                    out[len++] = gg;
+                    out[len++] = b;
+                    out[len++] = a;
+                }
+            }
+            if (++tris == max_tris) {
+                gfx_rapi->draw_triangles(s_ui_vbo.data(), len, tris);
+                tris = 0;
+                len = 0;
+            }
+        }
+        if (tris > 0) {   /* the scissor changes next: flush this command's triangles */
+            gfx_rapi->draw_triangles(s_ui_vbo.data(), len, tris);
+            tris = 0;
+            len = 0;
+        }
+    }
+    rdp.viewport_or_scissor_changed = true;   /* the game's own viewport and scissor are re-applied by the next draw */
+    rendering_state.viewport = { 0, 0, 0, 0 };
+    rendering_state.scissor = { 0, 0, 0, 0 };
+}
+
 /* One pass of a frame: draw the game DL (and the port overlay DL) and
  * composite to the window back buffer. Shared by gfx_run and the D578
  * interpolation passes. With emit_overlay the port overlay DL is emitted at
@@ -6973,6 +7113,7 @@ static void gfx_frame_body(Gfx* commands, bool emit_overlay, Gfx** overlay_io, u
             s_overlay_scale = 1.0f;
         }
     }
+    gfx_ui_flush();   /* the menu UI, in the same target as the overlay */
     gfx_flush();
     *perf_t1 = perf_t0 ? gfx_perf_now_ns() : 0;
     gfxFramebuffer = 0;

@@ -1,0 +1,58 @@
+#ifndef MENU_UI_H
+#define MENU_UI_H
+
+/* The menu's interface, written against Dear ImGui only. This file and menu_ui.cpp know nothing about the
+ * game: tools_pc/menuview runs them on their own, the game draws the same frames through gfx_ui_*
+ * (port/fast3d/gfx_ui.h). What the menu shows comes from menu.json (menu_model.h); the look is the one
+ * validated in the design artifact. */
+#include <stddef.h>
+#include <string>
+
+#include <string>
+#include <vector>
+
+namespace menu {
+
+/* Call once after the ImGui context exists and before the first frame. The font data must stay valid
+ * (ImGui keeps pointers to it): the harness reads the TTFs from disk, the game embeds them. */
+void init(const void* bodyTtf, size_t bodyLen, const void* headTtf, size_t headLen);
+
+/* Loads (or reloads) the content. Values already set are kept for the controls that still exist. On failure
+ * returns false with the reason in *err; the menu then shows it instead of the content. */
+bool setData(const char* json, size_t len, std::string* err);
+
+void setPlatform(bool pc);   /* which defaults and which "platform ==" rules apply */
+/* The link to the game's values: get fills the config value of a control's key (false = no such value), set stores
+ * one. Without it the menu keeps its own values (the viewer). */
+void setBinding(bool (*get)(const char* key, double* out), void (*set)(const char* key, double value));
+void setOptionLabels(const char* id, const std::vector<std::string>& labels);   /* a list only the game knows (resolutions) */
+/* Key and button capture is the game's: text of a slot ("" = none), begin a capture, is one running. */
+void setKeyBinding(std::string (*text)(const char* key, int slot), void (*begin)(const char* key, int slot), bool (*active)());
+/* An action control was activated: the game does it (centre the window, reset a section...). */
+void setActionHandler(void (*handler)(const char* key));
+/* The weapon / gadget wheel of the Modern control style, drawn over the game: the item names, the picked one (-1 = none). */
+void drawWheel(float W, float H, int seat, float x0, float y0, float x1, float y1, const char* title, const std::vector<std::string>& names, int sel);
+/* The "press a button" screen of a multiplayer set-up: what each player has so far, whose turn it is. */
+void drawAssign(float W, float H, const std::vector<std::string>& names, int step, int count);
+void showRoot();   /* the next frame shows the first menu (Resume / Options / Restart / Quit) */
+void debugGoto(int tab, int entry, int focus);   /* tests: open on this tab and entry (focus -1 = the list) */
+void setContext(bool fileSelect, bool inStage, bool updateAvailable, bool profile);   /* where the game is: the rules "fileselect" and "stage" read it */
+/* where the gamepad drawing sits in the texture (uv of its corners) and its width over its height */
+void setPadImage(float u0, float v0, float u1, float v1, float aspect);
+void setOwner(int seat);     /* the player whose pad drives the menu (0-based; -1 = not shown): named in the header */
+void setDev(bool dev);       /* dev mode: the controls marked "dev" show up */
+bool isPc();
+bool devOn();
+
+/* One frame of the menu, filling a W x H pixel target. Call between ImGui::NewFrame and ImGui::Render. */
+void draw(float W, float H);
+
+/* True once, when the player asked to close the menu (B while on the list of entries). The game polls it. */
+bool takeCloseRequest();
+
+/* A one-line description of the navigation state (tab, entry, focus, value), for the harness self-test. */
+const char* debugState();
+
+}  // namespace menu
+
+#endif
