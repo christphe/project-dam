@@ -2000,6 +2000,8 @@ Before optimising a "slow" interpolated frame, check what its time contains: wit
 
 fast3d's `use_alpha` (blender inputs CLR_MEM/1MA) is a heuristic for "this is an alpha-blended draw". On the RDP the blender only acts on interior pixels when `FORCE_BL` is set (or via coverage/`CVG_X_ALPHA`); a render mode with XLU-style inputs but no `FORCE_BL` is opaque regardless of combiner alpha. Vanilla GE never noticed because its combiner alpha there is `SHADE` alpha (255). A mod's DL with cycle-2 alpha `(0,0,0,0)` drew fully transparent = black. GL blend is now gated on `FORCE_BL | CVG_X_ALPHA`.
 
+**Update 2026-11-21 (#66):** `CVG_X_ALPHA` alone is not a blend either. It folds the alpha into the pixel coverage; without `FORCE_BL` the RDP writes the inside of the triangle opaque. fast3d blended it, so a `G_RM_AA_ZB_TEX_EDGE2` surface with partial alpha turned translucent: exploded objects (propobj.c zeroes some vertex alphas) showed the background through their lower half. Blend is now `FORCE_BL` only for texedge draws; the texedge discard still cuts transparent texels. Finding: `docs/dev/findings/2026-11-21-cvg-x-alpha-without-force-bl-is-not-blending.md`.
+
 **Tell:** rasterized with correct depth, immune to vertex-shade boosting, correct raw texels, black output. **Bisect fast:** output raw `texVal0/texVal1` in the fragment shader (bypasses combiner + blend); if that is right, the fault is combiner or blend state, not textures.
 
 ## D43. A capture taken through the feature under test is not ground truth (D628)
