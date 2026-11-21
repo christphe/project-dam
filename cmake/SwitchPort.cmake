@@ -137,7 +137,9 @@ macro(switch_dependencies)
   if(NOT EXISTS "${_ca_bundle}")
     message(FATAL_ERROR "Switch build: ${_ca_bundle} missing (install ca-certificates in the build image)")
   endif()
-  file(WRITE "${CMAKE_BINARY_DIR}/nxcacert.S"
+  # .tmp + configure_file COPYONLY: file(WRITE) touches the file on every configure, which relinked
+  # the NRO on every build.
+  file(WRITE "${CMAKE_BINARY_DIR}/nxcacert.S.tmp"
     ".section .rodata
 .balign 8
 .global nx_cacert_start
@@ -148,6 +150,7 @@ macro(switch_dependencies)
 .byte 0
 nx_cacert_end:
 ")
+  configure_file("${CMAKE_BINARY_DIR}/nxcacert.S.tmp" "${CMAKE_BINARY_DIR}/nxcacert.S" COPYONLY)
   set(SWITCH_CACERT_SRC "${CMAKE_BINARY_DIR}/nxcacert.S")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_ca_bundle}")
 endmacro()
@@ -162,7 +165,7 @@ macro(switch_deko3d_shaders target)
     find_program(DK_UAM uam HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
     find_program(DK_HOST_CXX NAMES c++ g++ HINTS /usr/bin REQUIRED NO_CMAKE_FIND_ROOT_PATH)
     set(_dk_pack "${CMAKE_BINARY_DIR}/ge007_dksh.bin")
-    file(GLOB _dk_glsl "${CMAKE_SOURCE_DIR}/port/switch/shaders/*.glsl")
+    file(GLOB _dk_glsl CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/switch/shaders/*.glsl")
     add_custom_command(OUTPUT "${_dk_pack}"
       COMMAND "${CMAKE_COMMAND}" -DDK_PACK_RUN=ON
               "-DDK_SRC=${CMAKE_SOURCE_DIR}" "-DDK_OUT=${CMAKE_BINARY_DIR}/dksh"

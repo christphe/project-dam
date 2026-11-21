@@ -96,11 +96,11 @@ def build(kind):
     if kind in BUILDS:
         d, extra = BUILDS[kind]
         conf = ""
-        if not (REPO / d / "build.ninja").exists():     # configure once; GLOB needs a manual reconfigure
+        # configure once: the source GLOBs are CONFIGURE_DEPENDS, so ninja itself re-runs cmake when a file
+        # is added or removed. Re-running cmake on every build rewrote generated files and cost ~4 s.
+        if not (REPO / d / "build.ninja").exists():
             conf = (f"cmake -S . -B {d} -G Ninja -DROMID=ntsc-final {SWITCH_TC} "
                     + " ".join(extra) + " && ")
-        else:
-            conf = f"cmake {d} >/dev/null && "           # picks up new .c files
         docker(conf + f"cmake --build {d}")
         return REPO / d / NRO
     if kind == "windows":
