@@ -22,8 +22,8 @@ and anti-aliasing, co-op, and aim helpers, grouped under a Display mode of
 picture back. It is unofficial and ships no game content: you need your own US
 ROM.
 
-- **Download (Switch only for now):** [latest release](../../releases/latest); the archive's
-  `README.txt` has the install steps.
+- **Download:** [latest release](../../releases/latest): the Switch archive, and a Windows
+  build from 0.4.0. The archive's `README.txt` has the install steps.
 - **Changes:** [CHANGELOG.md](CHANGELOG.md) for this fork; the game's own
   changes are in [upstream's releases](https://github.com/jkdansereau/goldeneye-pc-port/releases).
 - **Build:** [Building from source](#building-from-source).
@@ -72,8 +72,8 @@ original game assets. You need your own GoldenEye 007 ROM (US version) to play.*
 - **Nintendo Switch:** a console running custom firmware with the homebrew
   menu. Launch through title takeover (hold R while starting a game), not from
   the album applet: the game needs the full application memory.
-- **Windows and Linux (PC):** 64-bit x86. No PC release yet: build from source
-  (see below). The renderer is Vulkan, with OpenGL 3.0 as the fallback.
+- **Windows and Linux (PC):** 64-bit x86. Windows releases start with 0.4.0; before that, and for
+  Linux, build from source (see below). The renderer is Vulkan, with OpenGL 3.0 as the fallback.
 - **Input:** Switch controllers; on PC, keyboard and mouse or an
   SDL-supported controller. Split-screen and co-op need one controller per
   player.
@@ -161,8 +161,8 @@ styles, rebinding and split-screen.
   code as well as in the port layer. The **Original** display mode and control
   style bring back the N64's picture and controls, not necessarily every
   behavior.
-- **Switch and PC from one source.** Switch is the main target and is
-  what the releases ship; Windows and Linux builds come from the same code.
+- **Switch and PC from one source.** Switch is the main target; the
+  Windows build is released from 0.4.0, and Linux builds come from the same code.
 
 Bots, online play, mod support and PAL/JP ROMs are not available. The
 [user guide](docs/user-guide.md#feature-list) has the full feature list.
@@ -221,8 +221,7 @@ the ROM.
 Project Dam is pre-1.0 and changes between versions: see the
 [CHANGELOG](CHANGELOG.md) for what is in the next release and what each one
 changed. The Switch is the primary target and is tested on Ryujinx and on a
-console; the PC build compiles and runs but is not released yet: PC releases will
-come once the PC rendering is where it should be.
+console; the PC build runs and is released for Windows from 0.4.0.
 Known issues are in the [known-issues table](docs/ROADMAP.md#known-issues).
 
 ## Roadmap

@@ -289,7 +289,7 @@ folder is not touched. Without the option, copy the new `switch/` folder of the
 release over the old one.
 
 **PC:** *Check for updates* tells you a new release exists and opens its notes;
-it installs nothing. This fork has no PC release yet, so you build from source.
+it installs nothing. Windows releases start with 0.4.0; before that, and on Linux, you build from source.
 Extract or build the new version into a new folder, then copy your ROM, `ge007.eep`
 and `ge007.ini` from the old `data/` folder into the new one. Don't copy the
 generated `pcmodels-*` and `pccg-*` folders: the new version makes its own on first start, and
