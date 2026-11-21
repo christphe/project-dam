@@ -435,6 +435,76 @@ int nxPadConnectedMask(void)
     return mask;
 }
 
+/* #40: controller vibration. input.c cannot include <switch.h> (its u64/s64
+ * clash with the game's types), so the libnx calls live here. One handle set
+ * per seat, created lazily for the npad that SDL device index `dev` reads and
+ * recreated when that npad or its style changes. The caller serialises. */
+#define NX_RUMBLE_SEATS 4
+static struct {
+    HidVibrationDeviceHandle h[2];
+    int n;                   /* handles in h[], 0 = none */
+    HidNpadIdType id;
+    HidNpadStyleTag style;
+} s_rum[NX_RUMBLE_SEATS];
+static int s_rumWarned;
+
+/* amp > 0 resolves the npad (dev 0 falls back to the handheld Joy-Cons) and
+ * the style, creates the handles if needed, and sends to all of them (both
+ * Joy-Cons / both Pro motors). amp == 0 sends zeros to the cached handles
+ * only. */
+void nxRumbleSend(int seat, int dev, float amp, float ampLow, float ampHigh,
+                  float freqLow, float freqHigh)
+{
+    static const HidNpadStyleTag order[] = {
+        HidNpadStyleTag_NpadFullKey, HidNpadStyleTag_NpadHandheld,
+        HidNpadStyleTag_NpadJoyDual, HidNpadStyleTag_NpadJoyLeft,
+        HidNpadStyleTag_NpadJoyRight };
+    if (seat < 0 || seat >= NX_RUMBLE_SEATS) return;
+    if (amp > 0.f) {
+        if (dev < 0 || dev > 7) return;
+        HidNpadIdType id = (HidNpadIdType)(HidNpadIdType_No1 + dev);
+        u32 set = hidGetNpadStyleSet(id);
+        if (dev == 0 && set == 0) {
+            const u32 hs = hidGetNpadStyleSet(HidNpadIdType_Handheld);
+            if (hs) { id = HidNpadIdType_Handheld; set = hs; }
+        }
+        HidNpadStyleTag style = 0;
+        for (unsigned k = 0; k < sizeof(order) / sizeof(order[0]); ++k) {
+            if (set & order[k]) { style = order[k]; break; }
+        }
+        if (!style) return;
+        const int n = (style == HidNpadStyleTag_NpadJoyLeft ||
+                       style == HidNpadStyleTag_NpadJoyRight) ? 1 : 2;
+        if (s_rum[seat].n == 0 || s_rum[seat].id != id || s_rum[seat].style != style) {
+            s_rum[seat].n = 0;
+            if (R_FAILED(hidInitializeVibrationDevices(s_rum[seat].h, n, id, style))) {
+                if (!s_rumWarned) {
+                    s_rumWarned = 1;
+                    sysLogPrintf(LOG_WARNING, "input: #40 vibration init failed (seat %d)", seat);
+                }
+                return;
+            }
+            s_rum[seat].n = n; s_rum[seat].id = id; s_rum[seat].style = style;
+        }
+    }
+    if (s_rum[seat].n == 0) return;
+    HidVibrationValue v[2];
+    float lo = amp * ampLow, hi = amp * ampHigh;
+    if (lo > 1.f) lo = 1.f;
+    if (hi > 1.f) hi = 1.f;
+    for (int k = 0; k < s_rum[seat].n; ++k) {
+        v[k].amp_low = lo;   v[k].freq_low = freqLow;
+        v[k].amp_high = hi;  v[k].freq_high = freqHigh;
+    }
+    hidSendVibrationValues(s_rum[seat].h, v, s_rum[seat].n);
+}
+
+/* Forget the seat's handles (after its zeros were sent). */
+void nxRumbleForget(int seat)
+{
+    if (seat >= 0 && seat < NX_RUMBLE_SEATS) s_rum[seat].n = 0;
+}
+
 /* D959: host-thread applet service. Keeps the applet message queue serviced
  * (HOME, sleep, dock/undock) without touching SDL's event queue: on Switch
  * every SDL_PollEvent runs SDL's SWITCH_PumpEvents, which on an operation
