@@ -5,7 +5,7 @@ sources:
   - port/src/assign.c
   - src/game/player.h
   - port/src/input.c
-verified: 7d15f029
+verified: e2fda9e2
 ---
 
 # Co-op

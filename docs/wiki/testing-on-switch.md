@@ -7,7 +7,7 @@ sources:
   - port/src/config.c
   - port/src/input_script.c
   - port/src/coop.c
-verified: 7d15f029
+verified: e2fda9e2
 ---
 
 # Testing on the Switch

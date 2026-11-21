@@ -34,7 +34,7 @@ The repo is public, MIT-licensed and forked, so these apply to anything tracked 
 
 ## Options overlay
 
-Adding an option or writing its help text: `docs/options-overlay.md`.
+Adding an option or writing its help text: `docs/wiki/options-menu.md`.
 
 ## Critical files
 

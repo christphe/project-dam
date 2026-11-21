@@ -9,7 +9,7 @@ sources:
   - port/src/defaults.json
   - tools_pc/gen_menudata.py
   - tools_pc/menuview/menuview.py
-verified: 7d15f029
+verified: e2fda9e2
 ---
 
 # The options menu
@@ -77,6 +77,7 @@ The schema is written at the top of the file (`_schema`); the essentials:
 - **Expressions:** control ids, `'strings'`, numbers, `== != && || !` and parentheses. Extra
   names: `platform` (`'switch'` / `'pc'`), `dev`, `fileselect`, `stage`.
 - **`help`:** one text, or one per option id (`"1"` / `"0"` for a toggle).
+  Choose by what the values are. Values that differ in kind get one text each (`helpBy`), for example the gamepad mode, where the player must read what each value does before choosing. Values that explain themselves get one text for the option (`help`): the crosshair colour, the anisotropy level, an on/off flag; the text says what the option is for. Never a per-value text that repeats the label, nor several behaviours squeezed into one text.
 - **`dev`:** hidden unless dev mode is on. `true` / `"all"`, or `"switch"` / `"pc"` for one
   platform only.
 
@@ -140,7 +141,7 @@ written.
    but not in `rows[]` reads as absent and its control does nothing.
 3. **The default:** add the key to `port/src/defaults.json` (one value, or Switch / PC).
 4. **The control:** add it to an entry in `port/src/menu/menu.json`, with a short English help
-   text.
+   text (see the `help` rule above for one text or one per value).
 5. Run `python tools_pc/gen_menudata.py`, check the page in menuview, then build.
 
 If the setting replaces an older key or changes its meaning, bump `version` in `defaults.json`
