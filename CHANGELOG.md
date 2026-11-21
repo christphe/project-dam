@@ -3,10 +3,21 @@
 ## [Unreleased] - minor
 
 ### Added
-- Switch: in-game update. With Check for updates on (Game page), an Update row appears when a new version is out (#68)
+- A fullscreen options menu, the same on the Switch and the PC (F10 on the PC, Select on a pad): a first menu (Resume, Options, Controllers, Check for updates, Restart, Quit), then Video, Audio, Input and Game pages with a help line for each value. It replaces the small card of the old overlay
+- Modern control style: right trigger fires, left trigger aims, the face buttons reload, switch weapon and use (by position, so a Nintendo pad gets the same hands), a click of the right stick crouches. Hold the left bumper for a weapon wheel or the right one for a gadget wheel and pick with the right stick: you keep walking, the wheel only takes the aim
+- Check for updates in the first menu (PC and Switch): "Update available" opens the release notes, and on the Switch installs the new version (A twice: it downloads, checks the hash and replaces the NRO, #68). The version is shown beside the title
+- Aspect ratio Auto, Fit, 4:3, 16:9 or 21:9, and a split screen with the two players side by side
+- Co-op and Multiplayer stay open with one controller: Co-op asks for the second controller when it is chosen, Multiplayer asks for as many as there are players when Start is pressed (the Controllers button does the same any time, the system's controller screen on the Switch)
+- Vertical field of view in degrees (60 is the original) with the horizontal one shown for the window's aspect ratio; a crosshair page with a preview of the sprite at its real size, colour and opacity; the crosshair size goes from 10 to 100%
+
+### Changed
+- Auto-aim is off while the mouse is the device that aims, and comes back when a stick is pushed
+- GE_LOWLAT (lower input latency) is on by default on the PC too; GE_LOWLAT=0 turns it off
+- The mouse always aims Centered; Input.AimMode is the gamepad's. Escape no longer frees the mouse
 
 ### Fixed
 - PC: the optional update check (Game.CheckUpdates, off by default) looked at the upstream port's releases and compared them with the upstream version; it now looks at Project Dam's releases and only announces one that has a PC build
+- The button that closes the menu no longer reaches the game as a press
 
 ## [0.3.0] - 2026-11-19
 
