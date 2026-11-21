@@ -520,28 +520,40 @@ void nxAimStopStep(struct player *p, int moving)
 }
 
 /*
- * Game.LookAhead (Controller page, "Look ahead (Extended)": off, low, medium,
- * high = 45, 60, 90 degrees per second at most): an auto-level for the
- * Extended controls. The game's own Look ahead (the per-file option on the
- * Game page, bondview2.c 5950-5995) eases the view back toward the horizon
- * while you walk, but it needs moveData.analogWalk > 60, an analogue walk. In
- * the Extended scheme the left stick is sent as digital steps (the C buttons,
- * input.c), so analogWalk stays 0 and it never fires. This does the same job
- * from the port, as its own option: walking forward with the left stick, the
- * look stick at rest for a moment, not aiming, the pitch eases back to level
- * (the game's own base pitch is -4, a view a little low), once it is more than
- * 5 degrees above it or 10 below, the game's own thresholds. Flat horizon only:
- * the game also follows the slope ahead. Called from the pad's Centered branch
- * (input.c), once per poll.
+ * Look ahead, Low / Medium / High (#85). The game's own Look ahead (the per-file
+ * option, bondview2.c ~5890-6040) has five values in the port: Off, Original,
+ * Low, Medium, High. Off and Original are the save's bit (OPTION_LOOKAHEAD);
+ * the level is Game.LookAheadLevel (0 Original, 1 Low, 2 Medium, 3 High),
+ * global, written by watchsettings.c. Original is the game's look-ahead (with
+ * GameDirect, the hook after the 1.x disableLookAhead lets it run:
+ * input.c portLookAheadMode). Low / Medium / High keep the game's centre off
+ * and ease here instead: walking forward with the left stick, the look stick
+ * at rest for the level's delay, not aiming, the pitch eases toward the
+ * game's own slope target (the floor 300 units ahead, exported by the hook
+ * through nxLookAheadSetTarget) without its -4 base pitch, so flat ground
+ * stays level (D957: the maintainer rejected -4 as the target), once it is
+ * more than 5 degrees above it or 10 below, the game's thresholds. Called from the pad's Centered
+ * branch (input.c), once per poll; Original controls never get here.
  */
-static int s_lookAhead = 3;   /* 0 off, 1 low, 2 medium, 3 high: the top speed of the ease */
+static int s_lookAheadLevel = 0;   /* 0 Original, 1 Low, 2 Medium, 3 High */
 
-#define LOOKAHEAD_TARGET   (0.0f)    /* level with the horizon; the game's own base pitch is -4, a view a little low */
-#define LOOKAHEAD_IDLE_SEC 0.5     /* the look stick must have rested this long */
+#define LOOKAHEAD_FLAT     (0.0f)    /* level, until the hook has exported a target */
+#define LOOKAHEAD_BASE     (-4.0f)   /* the game's base pitch inside targetPitch (bondview2.c ~5891), taken out */
 #define LOOKAHEAD_UP       5.0f    /* start when this far above the target ... */
 #define LOOKAHEAD_DOWN     10.0f   /* ... or this far below it */
 #define LOOKAHEAD_SOFT_DEG 6.0     /* the ease slows over the last degrees to the target */
-static const double kLookAheadDps[4] = { 0.0, 45.0, 60.0, 90.0 };   /* degrees per second, by setting */
+static const double kLookAheadDps[4]  = { 0.0, 45.0, 60.0, 90.0 };   /* degrees per second, by level */
+static const double kLookAheadIdle[4] = { 0.0, 1.0, 0.7, 0.5 };      /* seconds the look stick must rest, by level */
+
+int nxLookAheadLevel(void) { return s_lookAheadLevel; }
+void nxLookAheadSetLevel(int level) { s_lookAheadLevel = level < 0 ? 0 : (level > 3 ? 3 : level); }
+
+/* The game's target pitch, per player, from the hook in bondview2.c (game thread; read on the poll thread). */
+static volatile float s_lookAheadTarget[4] = { LOOKAHEAD_FLAT, LOOKAHEAD_FLAT, LOOKAHEAD_FLAT, LOOKAHEAD_FLAT };
+void nxLookAheadSetTarget(int playernum, float pitch)
+{
+    if (playernum >= 0 && playernum < 4) s_lookAheadTarget[playernum] = pitch - LOOKAHEAD_BASE;
+}
 
 void nxLookAheadStep(struct player *p, int walkingForward, int lookIdle)
 {
@@ -551,7 +563,8 @@ void nxLookAheadStep(struct player *p, int walkingForward, int lookIdle)
 #define idleSince idleSinceA[pi]
 #define last lastA[pi]
 #define active activeA[pi]
-    double aimMode = 0.0, now, dt, diff, speed, step;
+    const int level = s_lookAheadLevel;
+    double now, dt, diff, speed, step;
     struct timespec ts;
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -561,17 +574,16 @@ void nxLookAheadStep(struct player *p, int walkingForward, int lookIdle)
     if (dt < 0.0 || dt > 0.1) {
         dt = 0.1;   /* a stall: do not lurch */
     }
-    configGetValue("Input.AimMode", &aimMode);
-    if (p == NULL || !s_lookAhead || aimMode == 0.0 || p->insightaimmode ||
+    if (p == NULL || level == 0 || !p->automovecentreenabled || p->insightaimmode ||
         p->bonddead || !p->outside_watch_menu || p->pause_state != 0 || !walkingForward || !lookIdle) {
         idleSince = now;
         active = 0;
         return;
     }
-    if (now - idleSince < LOOKAHEAD_IDLE_SEC) {
+    if (now - idleSince < kLookAheadIdle[level]) {
         return;
     }
-    diff = (double)LOOKAHEAD_TARGET - (double)p->vv_verta;   /* > 0: the view is below the target */
+    diff = (double)s_lookAheadTarget[pi] - (double)p->vv_verta;   /* > 0: the view is below the target */
     if (!active) {
         if (diff < -LOOKAHEAD_UP || diff > LOOKAHEAD_DOWN) {
             active = 1;
@@ -579,11 +591,11 @@ void nxLookAheadStep(struct player *p, int walkingForward, int lookIdle)
             return;
         }
     }
-    /* The setting's speed all the way, slowing in proportion over the last
+    /* The level's speed all the way, slowing in proportion over the last
      * LOOKAHEAD_SOFT_DEG degrees so it lands softly. (An exponential ease with
-     * a fixed time constant made the three settings feel alike: only its first
+     * a fixed time constant made the three levels feel alike: only its first
      * moments depend on the speed.) */
-    speed = kLookAheadDps[s_lookAhead];
+    speed = kLookAheadDps[level];
     if (diff < LOOKAHEAD_SOFT_DEG && diff > -LOOKAHEAD_SOFT_DEG) {
         speed *= (diff < 0.0 ? -diff : diff) / LOOKAHEAD_SOFT_DEG;
     }
@@ -605,5 +617,5 @@ PD_CONSTRUCTOR static void nxGameRegisterConfig(void)
     configRegisterInt("Game.AimAssist", &s_aimAssist, 0, 2);
     configRegisterInt("Game.AimEntry", &s_aimEntry, 0, 2);
     configRegisterInt("Game.AimStop", &s_aimStop, 0, 1);
-    configRegisterInt("Game.LookAhead", &s_lookAhead, 0, 3);
+    configRegisterInt("Game.LookAheadLevel", &s_lookAheadLevel, 0, 3);
 }

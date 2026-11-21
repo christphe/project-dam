@@ -5537,6 +5537,32 @@ void bondviewProcessInput(s8 stick_x, s8 stick_y, u16 buttons, u16 oldbuttons)
             {
                 moveData.disableLookAhead = 1;
             }
+#ifdef PORT
+            /* #85 Look ahead under GameDirect (rule-2 sign-off): the left stick walks and the right stick looks, so the
+             * SOLITARE reason for disableLookAhead is gone. Original level: the game's look-ahead runs, and a deflected
+             * look stick counts as a manual pitch, as C-up / C-down does in HONEY (~5970 and the movecentrerelease set
+             * further down): cancel, disarm, block until the walk stick is released. Low / Medium / High: the game's
+             * centre stays off, the port eases (nxgame.c nxLookAheadStep). */
+            if (!g_CurrentPlayer->insightaimmode && g_PlayerIsInTank != 1)
+            {
+                extern int portLookAheadMode(int playernum);
+                const int lookAheadMode = portLookAheadMode(get_cur_playernum());
+                if (lookAheadMode == 1 || lookAheadMode == 2)
+                {
+                    moveData.disableLookAhead = 0;
+                }
+                if (lookAheadMode == 2)
+                {
+                    g_CurrentPlayer->docentreupdown = FALSE;
+                    g_CurrentPlayer->automovecentre = FALSE;
+                    g_CurrentPlayer->movecentrerelease = TRUE;
+                }
+                if (lookAheadMode == 3)
+                {
+                    g_CurrentPlayer->docentreupdown = FALSE;
+                }
+            }
+#endif
         }
     }
 
@@ -5955,6 +5981,13 @@ void bondviewProcessInput(s8 stick_x, s8 stick_y, u16 buttons, u16 oldbuttons)
                 }
             }
         }
+
+#ifdef PORT
+        {   /* #85: the slope target for the port's Look ahead Low / Medium / High (nxgame.c) */
+            extern void nxLookAheadSetTarget(int playernum, float pitch);
+            nxLookAheadSetTarget(get_cur_playernum(), targetPitch);
+        }
+#endif
 
         if ((g_CurrentPlayer->movecentrerelease) && (moveData.analogWalk < 40) && (moveData.analogWalk > -40))
         {

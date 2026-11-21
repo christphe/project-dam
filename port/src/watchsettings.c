@@ -36,6 +36,12 @@ extern void cur_player_set_sight_onscreen_control(u32 value);
 extern void cur_player_set_ammo_onscreen_setting(u32 value);
 
 static int frontFolder(void);   /* defined below; the lazy file default */
+
+/* #85: Look ahead reads 0 Off, 1 Original, 2 Low, 3 Medium, 4 High. The save keeps its one bit
+ * (OPTION_LOOKAHEAD: Off / not Off); the level is the global Game.LookAheadLevel (nxgame.c). */
+extern int nxLookAheadLevel(void);
+extern void nxLookAheadSetLevel(int level);
+static int lookAheadValue(int on) { return on ? 1 + nxLookAheadLevel() : 0; }
 static int stageActive(void);   /* defined below; the choose-file guard uses it */
 
 /* D354: env-gated headless probe for the F10 queue->apply->persist path
@@ -216,6 +222,7 @@ int watchSettingsBlankValue(enum WatchSettingField field)
     if (field == WATCH_SETTING_MUSIC) return ((int)kBlankSave.music_vol << 7) | (kBlankSave.music_vol >> 1);
     if (field == WATCH_SETTING_FX)    return ((int)kBlankSave.sfx_vol << 7) | (kBlankSave.sfx_vol >> 1);
     if (field == WATCH_SETTING_CONTROL) return (kBlankSave.options & OPTION_CONTROLTYPE) >> 8;
+    if (field == WATCH_SETTING_LOOKAHEAD) return (kBlankSave.options & OPTION_LOOKAHEAD) ? 1 : 0;   /* on = Original */
     return (kBlankSave.options & bits[field]) ? 1 : 0;
 }
 
@@ -273,6 +280,7 @@ static int savedValue(const save_data *save, enum WatchSettingField field)
     if (field == WATCH_SETTING_MUSIC) return ((int)save->music_vol << 7) | (save->music_vol >> 1);
     if (field == WATCH_SETTING_FX) return ((int)save->sfx_vol << 7) | (save->sfx_vol >> 1);
     if (field == WATCH_SETTING_CONTROL) return (save->options & OPTION_CONTROLTYPE) >> 8;
+    if (field == WATCH_SETTING_LOOKAHEAD) return lookAheadValue((save->options & OPTION_LOOKAHEAD) != 0);
     return (save->options & bits[field]) ? 1 : 0;
 }
 
@@ -383,6 +391,7 @@ void watchSettingsSet(enum WatchSettingField field, int value, int commit)
 {
     if ((unsigned)field >= WATCH_SETTING_COUNT || !watchSettingsAvailable()) return;
     if (field == WATCH_SETTING_CONTROL && !stageActive()) return;   /* D516: no live player */
+    if (field == WATCH_SETTING_LOOKAHEAD && value > 0) nxLookAheadSetLevel(value - 1);   /* #85: the ini part; the bit follows */
     if (!stageActive()) {
         int f = frontFolder();
         SDL_AtomicLock(&uiLock);
@@ -475,7 +484,7 @@ static int liveValue(enum WatchSettingField field)
     case WATCH_SETTING_AUTOAIM: return cur_player_get_autoaim();
     case WATCH_SETTING_AIMCONTROL: return cur_player_get_aim_control();
     case WATCH_SETTING_SIGHT: return cur_player_get_sight_onscreen_control();
-    case WATCH_SETTING_LOOKAHEAD: return cur_player_get_lookahead();
+    case WATCH_SETTING_LOOKAHEAD: return lookAheadValue(cur_player_get_lookahead() != 0);
     case WATCH_SETTING_AMMO: return cur_player_get_ammo_onscreen_setting();
     case WATCH_SETTING_CONTROL: {   /* D516: -1 when the seat has no live player */
         struct player *p = controlPlayer(SDL_AtomicGet(&controlSeat));
