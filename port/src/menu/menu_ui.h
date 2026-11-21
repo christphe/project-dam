@@ -37,7 +37,7 @@ void drawWheel(float W, float H, int seat, float x0, float y0, float x1, float y
 void drawAssign(float W, float H, const std::vector<std::string>& names, int step, int count);
 void showRoot();   /* the next frame shows the first menu (Resume / Options / Restart / Quit) */
 void debugGoto(int tab, int entry, int focus);   /* tests: open on this tab and entry (focus -1 = the list) */
-void setUpdate(int state, const char* tag, const char* notes, const char* version);   /* the update check: its state, the release found, its text, this build's version */
+void setUpdate(int state, const char* tag, const char* notes, const char* version, bool installable, bool busy, const char* status);   /* the update check: its state, the release found, its text, this build's version */
 void setContext(bool fileSelect, bool inStage, bool updateAvailable, bool profile);   /* where the game is: the rules "fileselect" and "stage" read it */
 /* where the gamepad drawing sits in the texture (uv of its corners) and its width over its height */
 void setPadImage(float u0, float v0, float u1, float v1, float aspect);

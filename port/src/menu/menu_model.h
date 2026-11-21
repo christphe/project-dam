@@ -84,6 +84,9 @@ struct State {
     bool profile = false;              /* a save file is selected: the per-profile settings can be read and written */
     bool updateAvailable = false;      /* the update check found a newer release */
     int updateState = 0;               /* 0 idle, 1 checking, 2 up to date, 3 available, 4 failed */
+    bool updateInstallable = false;    /* the Switch installs the update itself (A twice); the PC opens the page */
+    bool updateBusy = false;           /* the install is downloading, or done */
+    std::string updateStatus;          /* what the install says: "Downloading 12%", "Updated: restart the game", a failure */
     std::string updateTag, updateNotes, version;   /* the release found, its text, and this build's version */
     bool inStage = false;              /* a mission is running */
     std::map<std::string, double> v;   /* control id -> value */

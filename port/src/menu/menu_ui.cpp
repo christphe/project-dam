@@ -420,7 +420,10 @@ void setContext(bool fileSelect, bool inStage, bool updateAvailable, bool profil
     g_state.inStage = inStage;
 }
 
-void setUpdate(int state, const char* tag, const char* notes, const char* version) {
+void setUpdate(int state, const char* tag, const char* notes, const char* version, bool installable, bool busy, const char* status) {
+    g_state.updateInstallable = installable;
+    g_state.updateBusy = busy;
+    g_state.updateStatus = status ? status : "";
     g_state.updateState = state;
     g_state.updateTag = tag ? tag : "";
     g_state.updateNotes = notes ? notes : "";
@@ -502,6 +505,8 @@ void drawFooter(ImDrawList* dl, float W, float H, float footH, float u, const ch
 }
 
 float g_updScroll = 0.0f;  /* lines scrolled */
+bool g_updArmed = false;   /* Switch: the first A of the install was pressed */
+double g_updArmedAt = 0.0;
 
 /* a release's text: the version, then the notes, scrolled with up / down; A opens the page, B goes back */
 void drawUpdatePanel(ImDrawList* dl, float W, float H, float u, float hh) {
@@ -510,14 +515,24 @@ void drawUpdatePanel(ImDrawList* dl, float W, float H, float u, float hh) {
     const bool down = pressed(ImGuiKey_DownArrow, ImGuiKey_GamepadDpadDown, ImGuiKey_GamepadLStickDown, true);
     const bool ok = pressed(ImGuiKey_Enter, ImGuiKey_GamepadFaceDown, ImGuiKey_None, false);
     const bool back = pressed(ImGuiKey_Backspace, ImGuiKey_GamepadFaceRight, ImGuiKey_None, false);
-    if (back) { g_updPanel = false; return; }
-    if (ok && g_actionHandler) g_actionHandler("__UpdateOpen");
+    if (back) { g_updPanel = false; g_updArmed = false; return; }
+    const double now = ImGui::GetTime();
+    if (g_updArmed && now - g_updArmedAt > 3.0) g_updArmed = false;   /* the confirm lasts 3 s */
+    if (ok && g_actionHandler) {
+        if (!g_state.updateInstallable) g_actionHandler("__UpdateOpen");
+        else if (!g_state.updateBusy) {
+            if (g_updArmed) { g_updArmed = false; g_actionHandler("__UpdateInstall"); }
+            else { g_updArmed = true; g_updArmedAt = now; }
+        }
+    }
     const float x0 = 10.0f * u, w = W - 2 * x0, top = hh + 2.0f * u;
     {   /* one line: the release, then what you have */
         const std::string title = upper(tr("Update available") + ": " + g_state.updateTag);
         const float tp = 2.0f * u;
         text(dl, g_head, tp, ImVec2(x0, top), kGold, title.c_str());
-        const std::string have = "(" + tr("you have") + " " + g_state.version + ")";
+        std::string have = "(" + tr("you have") + " " + g_state.version + ")";
+        if (g_state.updateInstallable && g_state.updateStatus.compare(0, 16, "Update available") != 0) have = g_state.updateStatus;   /* downloading, done, failed */
+        else if (g_updArmed) have = tr("Press A again to install");
         text(dl, g_body, px * 0.9f, ImVec2(x0 + textSize(g_head, tp, title.c_str()).x + 1.2f * u, top + tp * 0.18f), kMut, have.c_str());
     }
     /* the notes: wrapped to the width; # / ## / ### lines are headings (the only markdown handled); runs of blank
@@ -574,8 +589,9 @@ void drawUpdatePanel(ImDrawList* dl, float W, float H, float u, float hh) {
         text(dl, pl.lvl ? g_head : g_body, lp, ImVec2(x0, y0 + (l - (int)g_updScroll) * lineH + (lineH - lp) * 0.3f), pl.lvl ? kGold : kInk, pl.s.c_str());
     }
     dl->PopClipRect();
-    static const char* hints[3][2] = { { "A", "Open the page" }, { "Up/Down", "Scroll" }, { "B", "Back" } };
-    drawFooter(dl, W, H, footH, u, hints, 3);
+    static const char* hintsPc[3][2] = { { "A", "Open the page" }, { "Up/Down", "Scroll" }, { "B", "Back" } };
+    static const char* hintsNx[3][2] = { { "A", "Install" }, { "Up/Down", "Scroll" }, { "B", "Back" } };
+    drawFooter(dl, W, H, footH, u, g_state.updateInstallable ? hintsNx : hintsPc, 3);
 }
 
 /* the first menu: what a pause menu offers, then the options */
@@ -583,9 +599,9 @@ void drawRoot(ImDrawList* dl, float W, float H, float u, float hh) {
     if (g_updPanel) { drawUpdatePanel(dl, W, H, u, hh); return; }
     static const char* const ids[6] = { "Resume", "Options", "Controllers", "Updates", "Restart", "Quit" };
     static const char* const actions[6] = { "", "", "__AssignDevices", "__UpdateCheck", "__RestartGame", "__QuitToDesktop" };
-    std::vector<int> shown;   /* no self-relaunch and no network on the Switch: no Restart or update check there */
+    std::vector<int> shown;   /* no self-relaunch on the Switch: no Restart there */
     for (int i = 0; i < 6; i++)
-        if ((i != 3 && i != 4) || g_state.pc) shown.push_back(i);
+        if (i != 4 || g_state.pc) shown.push_back(i);
     const int n = (int)shown.size();
     const float footH = 5.0f * u, bw = 30.0f * u, bh = 5.4f * u, gap = 1.2f * u;
     const bool up = !g_capturing && pressed(ImGuiKey_UpArrow, ImGuiKey_GamepadDpadUp, ImGuiKey_GamepadLStickUp, true);

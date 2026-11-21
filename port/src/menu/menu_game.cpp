@@ -42,6 +42,9 @@ int optionsMenuUpdateState(void);
 const char* optionsMenuUpdateTag(void);
 const char* optionsMenuUpdateNotes(void);
 const char* optionsMenuVersion(void);
+int optionsMenuUpdateInstallable(void);
+int optionsMenuUpdateBusy(void);
+const char* optionsMenuUpdateStatus(void);
 int optionsMenuWheel(void);
 float portFovHorizDegrees(int pct);
 int inputCrosshairCursorOn(void);
@@ -183,7 +186,8 @@ static void runFrame(int mode) {   /* 0 the menu, 1 the wheel, 2 the device assi
         menu::setOwner(inputOverlayOwnerSeat());
         optionsMenuSetSeat(inputOverlayOwnerSeat());
         menu::setContext(optionsMenuFileSelect() != 0, optionsMenuInStage() != 0, optionsMenuUpdateAvailable() != 0, optionsMenuProfileAvailable() != 0);
-        menu::setUpdate(optionsMenuUpdateState(), optionsMenuUpdateTag(), optionsMenuUpdateNotes(), optionsMenuVersion());
+        menu::setUpdate(optionsMenuUpdateState(), optionsMenuUpdateTag(), optionsMenuUpdateNotes(), optionsMenuVersion(),
+                        optionsMenuUpdateInstallable() != 0, optionsMenuUpdateBusy() != 0, optionsMenuUpdateStatus());
         feedInput(io, W, H);
         io.AddMouseWheelEvent(0.0f, (float)optionsMenuWheel());   /* the mouse wheel: the lists and the release text scroll */
     }

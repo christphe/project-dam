@@ -219,9 +219,9 @@
         { "id": "xhealth", "key": "Video.CrosshairHealthColor", "label": "Color by health", "type": "toggle" },
         { "id": "reset_crosshair", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
       ] },
-      { "name": "Updates", "show": "platform == 'pc'", "controls": [
-        { "id": "updates", "key": "Game.CheckUpdates", "label": "Check for updates", "type": "toggle" },
-        { "id": "updateopen", "key": "__UpdateOpen", "label": "Update available: open the page", "type": "action", "show": "update == 1" }
+      { "name": "Updates", "controls": [
+        { "id": "updates", "key": "Game.CheckUpdates", "label": "Check for updates at start", "type": "toggle",
+          "help": "Looks for a new version when the game starts. Off, nothing goes over the network until you press Check for updates in the first menu." }
       ] }
     ] }
   ]

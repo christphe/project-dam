@@ -2746,6 +2746,16 @@ const char *optionsMenuUpdateTag(void)
     return strncmp(t, "project-dam-", 12) == 0 ? t + 12 : t;
 }
 const char *optionsMenuUpdateNotes(void) { return updateCheckNotes(); }
+int optionsMenuUpdateInstallable(void)   /* the console downloads and replaces the NRO itself; the PC opens the releases page */
+{
+#ifdef __SWITCH__
+    return 1;
+#else
+    return 0;
+#endif
+}
+int optionsMenuUpdateBusy(void) { return !updateInstallIdle(); }   /* downloading, or done */
+const char *optionsMenuUpdateStatus(void) { return updateInstallStatus(); }
 const char *optionsMenuVersion(void) { return updateCheckRunning(); }
 int optionsMenuInStage(void) { return current_menu == GE_MENU_RUN_STAGE; }
 
@@ -2781,6 +2791,7 @@ void optionsMenuAction(const char *key)
 {
     if (!strcmp(key, "__AssignDevices")) { portAssignRequest(); return; }
     if (!strcmp(key, "__UpdateOpen")) { updateCheckOpenReleases(); return; }
+    if (!strcmp(key, "__UpdateInstall")) { updateInstall(); return; }   /* Switch: download, check, replace; PC: the page */
     if (!strcmp(key, "__UpdateCheck")) { updateCheckRun(); return; }
     if (!strcmp(key, "__RestartGame")) {   /* D443: the orderly D344 quit, then main.c relaunches */
         sysLogPrintf(LOG_INFO, "menu: restart game requested");
