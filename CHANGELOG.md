@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased] - patch
+## [Unreleased] - minor
+
+### Added
+- Switch: in-game update. With Check for updates on (Game page), an Update row appears when a new version is out (#68)
 
 ### Fixed
 - PC: the optional update check (Game.CheckUpdates, off by default) looked at the upstream port's releases and compared them with the upstream version; it now looks at Project Dam's releases and only announces one that has a PC build

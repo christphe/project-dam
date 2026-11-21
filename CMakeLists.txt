@@ -222,7 +222,7 @@ set(VERSION_CODENAME "larkspur")
 set(GE007_VERSION "0.6.0")   # bump on every release
 # Project Dam release number (the update check compares it with the fork's
 # releases); GE007_VERSION above is the upstream base. Bump with each release.
-set(GE007_UPDATE_VERSION "0.3.0")
+set(GE007_UPDATE_VERSION "0.3.0" CACHE STRING "Project Dam release number the update check compares with")
 set(ORIGIN_URL "https://github.com/jkdansereau/goldeneye-pc-port")
 
 configure_file(
@@ -904,6 +904,7 @@ endif()
 
 set(SRC
   ${SRC_GAME}
+  ${SWITCH_CACERT_SRC}
   ${SRC_PORT}
   ${SRC_ROMASSETS}
   ${SRC_DRAM_SYMS}

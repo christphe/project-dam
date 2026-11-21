@@ -22,13 +22,15 @@ KEYS = {"console_ip": "SWITCH_IP", "ryujinx_exe": "SWITCH_EMU_EXE", "ryujinx_sd"
         "ares_exe": "N64_EMU_EXE", "ares_rom": "N64_ROM", "image": "DOCKER_IMAGE"}
 IMAGE = cfg_image = "local/project-dam-build:latest"
 SD_DIR = "switch/project-dam"          # game folder on the SD card
+NX_DIR = "project-dam"                 # the same folder for nxlink: the netloader writes under sdmc:/switch/
 NRO = "ge007.aarch64.nro"
 
 # build kind -> (build dir, cmake configure extras, output)
 BUILDS = {
     "switch": ("build-switch", []),
     "args":   ("build-switch-args", ["-DNX_ARGS=ON"]),
-    "link":   ("build-switch-link", ["-DNX_LINKSTDIO=ON"]),
+    # NX_ARGS too: the NAME=value tokens (--secs, env) are only read with it
+    "link":   ("build-switch-link", ["-DNX_LINKSTDIO=ON", "-DNX_ARGS=ON"]),
 }
 SWITCH_TC = "-DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake"
 
@@ -139,7 +141,8 @@ def cmd_nx(a):
         nro = named
     log = Path(a.log) if a.log else REPO / BUILDS.get(kind, BUILDS["link"])[0] / "nx.log"
     log.write_text("", encoding="utf-8")
-    cmd = [sys.executable, str(HERE / "switch" / "nxlink.py"), ip, str(nro), f"{SD_DIR}/project-dam-test.nro",
+    dest = "project-dam.nro" if a.installed else "project-dam-test.nro"   # --installed: the in-game update's target
+    cmd = [sys.executable, str(HERE / "switch" / "nxlink.py"), ip, str(nro), f"{NX_DIR}/{dest}",
            str(log)] + game_args(a)
     print(f"log: {log}")
     env = dict(os.environ, NXLINK_RETRIES=os.environ.get("NXLINK_RETRIES", "20"))
@@ -244,6 +247,8 @@ def main():
     p.add_argument("--build", choices=["link", "args", "switch", "none"], default="link",
                    help="which build to send (default link: log + crash dump come back); none = send the last one without rebuilding")
     p.add_argument("--name", help="copy the NRO to <name>-test.nro before sending")
+    p.add_argument("--installed", action="store_true",
+                   help="send over the installed project-dam.nro instead of project-dam-test.nro (tests the in-game update)")
     p.add_argument("--secs", type=int, help="NX_TEST_SECS=N")
     p.add_argument("--log", help="stdio log file (default: <build dir>/nx.log)")
     game_opts(p); p.set_defaults(fn=cmd_nx)
