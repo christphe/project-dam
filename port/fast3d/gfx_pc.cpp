@@ -4407,6 +4407,17 @@ static inline void gfx_tri_state(TriState& ts) {
         cc_options |= (uint64_t)SHADER_OPT_A2C;
     }
     ts.blend = ts.use_alpha && !ts.a2c;
+    /* #66: CVG_X_ALPHA without FORCE_BL is coverage, not blending. The RDP
+     * folds the alpha into the pixel coverage and writes the inside of the
+     * triangle opaque; only FORCE_BL blends interior pixels. Blending here
+     * made objects drawn in G_RM_AA_ZB_TEX_EDGE2 translucent wherever their
+     * alpha is partial: an exploded crate (propobj.c zeroes some vertex
+     * alphas, its env alpha is 100..255) showed the background (Dam's blue
+     * clear colour) through its lower half; the N64 draws it solid. The
+     * texedge discard below still cuts the transparent texels. */
+    if ((rdp.other_mode_l & CVG_X_ALPHA) == CVG_X_ALPHA && (rdp.other_mode_l & FORCE_BL) == 0) {
+        ts.blend = false;
+    }
     /* D987: a blended surface that writes no depth (XLU) also writes depth
      * where its final alpha is opaque, in a second depth-only pass: its
      * opaque part (a plank, a frame) then hides what is drawn behind it later
