@@ -10,7 +10,11 @@
  */
 void        updateCheckStart(void);          /* call once, after configLoad() */
 const char *updateCheckAvailable(void);      /* newer tag (e.g. "vX.Y.Z") or NULL */
-void        updateCheckOpenReleases(void);   /* SDL_OpenURL on the releases page */
+void        updateCheckOpenReleases(void);   /* SDL_OpenURL on the latest release's page */
+void        updateCheckRun(void);            /* the menu's button: one check now, whatever Game.CheckUpdates says */
+const char *updateCheckRunning(void);        /* this build's version ("0.3.0", "dev") */
+int         updateCheckState(void);          /* 0 idle, 1 checking, 2 up to date, 3 available, 4 failed */
+const char *updateCheckNotes(void);          /* the available release's text (plain ASCII, lines), "" otherwise */
 
 /* Switch: install the update found by the check (download project-dam.nro,
  * verify its sha256, replace the running NRO; the new version starts on the

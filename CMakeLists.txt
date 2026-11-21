@@ -220,9 +220,17 @@ endif()
 # keeps pointing at this repository no matter who compiles or renames it.
 set(VERSION_CODENAME "larkspur")
 set(GE007_VERSION "0.6.0")   # bump on every release
-# Project Dam release number (the update check compares it with the fork's
-# releases); GE007_VERSION above is the upstream base. Bump with each release.
-set(GE007_UPDATE_VERSION "0.3.0" CACHE STRING "Project Dam release number the update check compares with")
+
+# PDAM_VERSION: Project Dam's own release number (releases are tagged project-dam-vX.Y.Z). The update check compares
+# it with the latest release; GE007_VERSION above is the upstream base. The release workflow passes it
+# (-DPROJECT_DAM_VERSION=X.Y.Z); any other build says "dev", a constant (versioninfo.h is force-included everywhere,
+# so a commit hash in it would defeat ccache), and is never offered an update.
+set(PROJECT_DAM_VERSION "" CACHE STRING "Project Dam version (the release tag without project-dam-v)")
+if(PROJECT_DAM_VERSION)
+  set(PDAM_VERSION "${PROJECT_DAM_VERSION}")
+else()
+  set(PDAM_VERSION "dev")
+endif()
 set(ORIGIN_URL "https://github.com/jkdansereau/goldeneye-pc-port")
 
 configure_file(
