@@ -12,6 +12,10 @@
 # All services share the project-dam-ccache volume (fixed name, so every
 # worktree uses the same cache). A plain `docker run` gets it with
 # `-v project-dam-ccache:/ccache`.
+# One project name for every checkout and worktree: otherwise each folder gets
+# its own <folder>_default network and Docker runs out of address pools.
+name: project-dam
+
 services:
   linux:
     build:
