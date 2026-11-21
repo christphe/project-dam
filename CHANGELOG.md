@@ -9,7 +9,14 @@
 - Aspect ratio Auto, Fit, 4:3, 16:9 or 21:9, and a split screen with the two players side by side
 - Co-op for 2, 3 or 4 players (#75), and the Co-op row of the mode menu now also on PC: choosing Co-op asks how many players, each partner picks a character, and the mission runs in a split screen of two or four views; any player standing at a downed player's body can revive them, and the mission fails when everyone is down; Co-op enemy health is now a bonus per extra player (+0, +50 or +100%, so +50% gives 150% at 2 players, 200% at 3 and 250% at 4)
 - Co-op and Multiplayer stay open with one controller: Co-op asks for the controllers it needs when it is chosen, Multiplayer asks for as many as there are players when Start is pressed (the Controllers button does the same any time, the system's controller screen on the Switch)
-- PC: a Vulkan rendering backend (#44), the default on the PC with OpenGL as the fallback: a *Renderer* row on the Display page (OpenGL or Vulkan, restart needed) or `GE_RENDERER=vk` / `gl`. It needs a Vulkan 1.3 driver (without one the game logs a line and uses OpenGL), links no Vulkan library at build time, draws the same frame as the Switch renderer (MSAA, FXAA, the GE+ sky, frame interpolation, the mesh path) and keeps a pipeline cache in `ge007.vkcache`. An ini written by an earlier build stays on OpenGL until the row is changed. FXAA is now available on the PC for both renderers, with a row in the Video menu
+- PC port, what it has that the upstream port does not:
+  - A Vulkan rendering backend (#44), the default, with OpenGL as the fallback: a *Renderer* row on the Display page (restart needed) or `GE_RENDERER=vk` / `gl`. It needs a Vulkan 1.3 driver (without one the game logs a line and uses OpenGL) and keeps a pipeline cache in `ge007.vkcache`. An ini written by an earlier build stays on OpenGL until the row is changed
+  - The GE+ sky and sea on Vulkan and desktop OpenGL, with a Display option for their detail, and FXAA for both renderers
+  - The Display mode (Enhanced, Original or Custom) and the Visuals preset of the Switch build
+  - Co-op for 2 to 4 players, Blood on hit, and the Centered aim helpers on a gamepad (sway, aim assist, aim entry, stop on aim, aim sensitivity)
+  - One Input page per player: input type (Auto, Keyboard + mouse or Gamepad), controller choice, mode and key bindings
+  - The ROM is converted by the game itself on first launch, with a boot screen showing the progress (a C converter built into the game, #61, #64)
+  - Windows and Linux builds from Docker (MinGW-w64 cross-compilation for Windows), and `tools/dev.py` to build, run and test them
 - GE+ water on Dam and Caverns (Enhanced visuals, Switch and PC on Vulkan or OpenGL): the levels' own water gets the moving waves and the sky's reflection, with its colour remade from the level's water texture in large soft patches that keep the original's tones (#79)
 - Vertical field of view in degrees (60 is the original) with the horizontal one shown for the window's aspect ratio; a crosshair page with a preview of the sprite at its real size, colour and opacity; the crosshair size goes from 10 to 100%
 
