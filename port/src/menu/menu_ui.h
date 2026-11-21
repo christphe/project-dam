@@ -17,6 +17,12 @@ namespace menu {
  * (ImGui keeps pointers to it): the harness reads the TTFs from disk, the game embeds them. */
 void init(const void* bodyTtf, size_t bodyLen, const void* headTtf, size_t headLen);
 
+/* Each text size is drawn from a font baked at that pixel size. Call fontsFrame(width) before NewFrame: true when
+ * the atlas must be rebuilt (a new size was asked for, or the window changed); then fontsBuild() (which clears the
+ * atlas: add custom rects after it) and upload the texture again. */
+bool fontsFrame(float W);
+void fontsBuild();
+
 /* Loads (or reloads) the content. Values already set are kept for the controls that still exist. On failure
  * returns false with the reason in *err; the menu then shows it instead of the content. */
 bool setData(const char* json, size_t len, std::string* err);

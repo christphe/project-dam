@@ -64,6 +64,29 @@ Uint64 s_lastTicks = 0;
 
 extern "C" void menuBindGame(void);
 
+/* The texture: the fonts at the sizes the menu draws (menu::fontsBuild) plus the gamepad drawing. Rebuilt before a
+ * frame when the menu asks for a size it hasn't baked, or the window changed size. */
+static void buildAtlas() {
+    ImGuiIO& io = ImGui::GetIO();
+    menu::fontsBuild();
+    const int padRect = io.Fonts->AddCustomRectRegular(kMenuPadW, kMenuPadH);   /* the gamepad drawing, in the same texture */
+    unsigned char* px = nullptr;
+    int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    if (const ImFontAtlasCustomRect* r = io.Fonts->GetCustomRectByIndex(padRect)) {
+        for (int y = 0; y < kMenuPadH; y++)
+            for (int x = 0; x < kMenuPadW; x++) {
+                unsigned char* d = px + ((size_t)(r->Y + y) * (size_t)w + (size_t)(r->X + x)) * 4;
+                d[0] = d[1] = d[2] = 255;
+                d[3] = kMenuPad[y * kMenuPadW + x];
+            }
+        menu::setPadImage((float)r->X / (float)w, (float)r->Y / (float)h, (float)(r->X + kMenuPadW) / (float)w,
+                          (float)(r->Y + kMenuPadH) / (float)h, (float)kMenuPadW / (float)kMenuPadH);
+    }
+    io.Fonts->SetTexID((ImTextureID)(intptr_t)1);
+    gfx_ui_set_atlas(px, w, h);
+}
+
 void init() {
     IMGUI_CHECKVERSION();
     s_ctx = ImGui::CreateContext();
@@ -100,22 +123,7 @@ void init() {
         int t = 0, e = 0, f = -1;
         if (sscanf(g, "%d,%d,%d", &t, &e, &f) >= 2) menu::debugGoto(t, e, f);
     }
-    const int padRect = io.Fonts->AddCustomRectRegular(kMenuPadW, kMenuPadH);   /* the gamepad drawing, in the same texture */
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
-    if (const ImFontAtlasCustomRect* r = io.Fonts->GetCustomRectByIndex(padRect)) {
-        for (int y = 0; y < kMenuPadH; y++)
-            for (int x = 0; x < kMenuPadW; x++) {
-                unsigned char* d = px + ((size_t)(r->Y + y) * (size_t)w + (size_t)(r->X + x)) * 4;
-                d[0] = d[1] = d[2] = 255;
-                d[3] = kMenuPad[y * kMenuPadW + x];
-            }
-        menu::setPadImage((float)r->X / (float)w, (float)r->Y / (float)h, (float)(r->X + kMenuPadW) / (float)w,
-                          (float)(r->Y + kMenuPadH) / (float)h, (float)kMenuPadW / (float)kMenuPadH);
-    }
-    io.Fonts->SetTexID((ImTextureID)(intptr_t)1);
-    gfx_ui_set_atlas(px, w, h);
+    buildAtlas();
 }
 
 void feedMouse(ImGuiIO& io, float W, float H);
@@ -208,6 +216,7 @@ static void runFrame(int mode) {   /* 0 the menu, 1 the wheel, 2 the device assi
         feedInput(io, W, H);
         io.AddMouseWheelEvent(0.0f, (float)optionsMenuWheel());   /* the mouse wheel: the lists and the release text scroll */
     }
+    if (menu::fontsFrame(W)) buildAtlas();   /* before NewFrame: the atlas is locked during a frame */
     ImGui::NewFrame();
     if (mode == 3) {   /* the mouse picks a row too: hovering moves the selection, a click starts */
         int row = -1;
