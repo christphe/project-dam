@@ -138,6 +138,7 @@ jobs:
           python3 tools_pc/gen_findings_index.py --check  # finding file names + unique labels
           python3 tools_pc/gen_env_probes.py --check
           python3 tools_pc/gen_convert_data.py --check
+          python3 tools_pc/gen_menudata.py --check   # menu.json and defaults.json -> menu_data.cpp and defaults_data.c
 
       # Docs budget guardrail: warn, don't fail.
       - name: Check dev-docs size budgets (warn only)

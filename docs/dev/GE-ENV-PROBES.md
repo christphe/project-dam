@@ -126,7 +126,11 @@ Two classes:
 | `GE_FRAMEREC=0` | `port/fast3d/gfx_frame.cpp` (`rec_enabled`) | D968 A/B switch: no frame recording; every rendering call goes straight to the backend (the old immediate path). Also turns the replay thread off. Read once. | **live** (D968 A/B) |
 | `GE_FRAMETHREAD` | `port/fast3d/gfx_frame.cpp` (`thread_wanted`) | D969: replay the recorded frame on its own thread, pipelined with the decode. Switch: on unless `=0`; elsewhere opt-in (`=1`). Off when `GE_FRAMEREC=0`. Read once. | **live** (D969) |
 | `GE_REPLAYCORE=<0..2>` | `port/src/libultra.c` (`portReplayThreadEnter`) | D969, Switch: CPU core of the replay thread (default 2). | **live** (D969 tuning) |
-| `GE_LOWLAT` | `port/src/libultra.c` (`portLatInit`) | D961 low-latency scheduling. Switch: on unless `=0`; elsewhere opt-in (`=1`). Read once. | **live** (D961) |
+| `GE_LOWLAT` | `port/src/libultra.c` (`portLatInit`) | D961 low-latency scheduling. On unless `=0`, on every platform. Read once. | **live** (D961) |
+| `GE_MENUGOTO` | `port/src/menu/menu_game.cpp` | Test hook: opens the menu on a tab / entry (`tab,entry,focus`) for screenshots. | live |
+| `GE_NEWMENU_LOG` | `port/src/optionsoverlay.c` | Logs the menu frame counter and the pause state every 120 frames while the menu is open. | live |
+| `GE_SEADUMP` | `port/fast3d/gfx_deko3d.cpp` | `=1` writes one captured frame for `tools_pc/seaview/` (ROM-derived, kept out of git). | live |
+| `GE_UPDATE_AS` | `port/src/updatecheck.c` | Test hook: the version the update check believes the build is (`0.1.0`), and it skips the PC-asset filter, to see the Update available button and the release text without publishing a release. | live |
 | `GE_PRESSLATCH=<n>` | `port/src/libultra.c` (`portLatInit`), `port/src/input.c` (`padLatchEnabled`) | D961, opt-in: latch a button press seen between two pad samples into the next sample, and keep a physical press visible for at least n polls (1 = 2 polls, clamped to 2..4). Read once. | **live** (D961 opt-in) |
 | `GE_GLSTREAM` (+ `GE_GLSTREAM_MB=<n>`) | `port/fast3d/gfx_opengl.cpp` (`gfx_opengl_stream_init`) | D965/D966, GL: stream draw data through a mapped ring buffer. Switch: on unless `=0`; elsewhere opt-in. `_MB` sets each ring section's size in MiB. Falls back to the old path, logging once, if the driver cannot map it. | **live** (D965/D966) |
 | `GE_VBORING=0` | `port/fast3d/gfx_opengl.cpp` (`gfx_opengl_init`) | Switch GL: turn the vertex ring buffer off; vertex batches go through `glBufferData` again. Read once. | **live** (Switch GL A/B) |
