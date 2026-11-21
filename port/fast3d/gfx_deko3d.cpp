@@ -452,6 +452,12 @@ int s_lut_fb = -1;     /* its render target (an s_fbs entry, made on first use) 
 #define WATER_UBO_OFS 3072
 int s_sky_slot_w = -1;   /* the cloud texture, for the reflections (set by the sky pass) */
 int s_wtex_slot = -1;    /* the wave heights (skyplus.c's fbm), for the sea and the water draws */
+/* the level's water colour map (skyplus.c, baked from the level's water texture), water.frag binding 4; the sky block also
+ * carries 4 more vec4 after the 16 of DkSkyUniforms (pushed at WATER_UBO_OFS + 256: deep, light, flags), 512 bytes bound */
+DkImage s_wmap_img;
+DkHeapBlock s_wmap_blk;
+int s_wmap_slot = -1;
+int s_wmap_gen = -1;
 
 struct DkshHeader { uint32_t magic, header_sz, control_sz, code_sz, programs_off, num_programs; };
 
@@ -520,6 +526,7 @@ void load_pack(void) {
     s_fxaa_ok = fs && pack_shader(pack_find(0, DK_PACK_FXAA), 1, &s_fxaa_frag);
     s_sky_ok = fs && pack_shader(pack_find(0, DK_PACK_SKYPLUS), 1, &s_sky_frag);
     s_water_ok = pack_shader(pack_find(0, DK_PACK_WATER), 1, &s_water_frag);
+    gfx_water_surfaces = s_water_ok ? 1 : 0;   /* skyplus.c: the level's own water surfaces get the GE+ water */
     s_lut_ok = fs && pack_shader(pack_find(0, DK_PACK_SKYLUT), 1, &s_lut_frag);
     int combiners = 0;
     for (uint32_t i = 0; i < s_pack_count; i++) combiners += (s_pack[i].id0 != 0 || s_pack[i].id1 >= DK_PACK_NAMED_MAX);
@@ -775,6 +782,11 @@ void bind_program(ShaderProgram* p) {
                                                                     DkWrapMode_Repeat, DkWrapMode_Repeat, 2 }))   /* anisotropic: grazing water (8 cost the console ~7 ms) */
             : dkMakeTextureHandle(s_dummy_slot, 0);
         dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 3, &wh, 1);   /* the wave heights */
+        const DkResHandle mh = s_wmap_slot >= 0
+            ? dkMakeTextureHandle(s_wmap_slot, sampler_slot(SmpKey{ DkFilter_Linear, DkFilter_Linear, DkMipFilter_Linear,
+                                                                    DkWrapMode_Repeat, DkWrapMode_Repeat, 1 }))
+            : dkMakeTextureHandle(s_dummy_slot, 0);
+        dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 4, &mh, 1);   /* the water colour map (patches) */
     }
     s_st_pushes++;
 }
@@ -1386,7 +1398,7 @@ void dk_init(void) {
     dkCmdBufBindSamplerDescriptorSet(s_cmd, s_desc.gpu + NUM_IMG_DESC * sizeof(DkImageDescriptor), NUM_SMP_DESC);
     dkCmdBufBindUniformBuffer(s_cmd, DkStage_Fragment, 0, s_ubo.gpu, 256);
     dkCmdBufBindUniformBuffer(s_cmd, DkStage_Fragment, 1, s_ubo.gpu + 256, 256);
-    dkCmdBufBindUniformBuffer(s_cmd, DkStage_Fragment, 2, s_ubo.gpu + WATER_UBO_OFS, 256);   /* GE+ water */
+    dkCmdBufBindUniformBuffer(s_cmd, DkStage_Fragment, 2, s_ubo.gpu + WATER_UBO_OFS, 512);   /* GE+ water */
     DkColorWriteState cw;
     dkColorWriteStateDefaults(&cw);
     dkCmdBufBindColorWriteState(s_cmd, &cw);
@@ -1410,7 +1422,7 @@ void dk_start_frame(void) {
     {
         /* GE+ water off until this frame's sky pass (uWave4 = vec4 15 of the block) */
         static const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-        dkCmdBufPushConstants(s_cmd, s_ubo.gpu + WATER_UBO_OFS, 256, 15 * 16, sizeof zero, zero);
+        dkCmdBufPushConstants(s_cmd, s_ubo.gpu + WATER_UBO_OFS, 512, 15 * 16, sizeof zero, zero);
     }
     /* at most FRAMES_IN_FLIGHT frames queued on the GPU */
     wait_serial(s_frame_serial[(s_frame_idx + 1) % (FRAMES_IN_FLIGHT + 1)]);
@@ -1885,8 +1897,8 @@ void gfx_deko3d_skyplus_pass(int slot) {
     }
     const SkyPlusDraw& d = s_sky_ring[slot];
     const PortSkyPlus& p = d.p;
-    if (d.vp[2] <= 0 || d.vp[3] <= 0 || (d.aspA < 0.0f ? -d.aspA : d.aspA) < 1e-6f || !p.tex) return;
-    if (p.texGen != s_sky_gen || s_sky_slot < 0) {
+    if (d.vp[2] <= 0 || d.vp[3] <= 0 || (d.aspA < 0.0f ? -d.aspA : d.aspA) < 1e-6f || (!p.tex && !p.waterOnly)) return;
+    if (!p.waterOnly && (p.texGen != s_sky_gen || s_sky_slot < 0)) {
         /* R8 with a CPU mip chain (GL: glGenerateMipmap; the plane is seen at grazing angles) */
         /* RGBA8 with the intensity in every channel (GL: R8 read as .r): the
          * same format and copy path as every game texture */
@@ -1907,7 +1919,20 @@ void gfx_deko3d_skyplus_pass(int slot) {
         s_sky_slot = write_img_desc(&s_sky_img, false);
         s_sky_gen = p.texGen;
     }
-    s_sky_slot_w = s_sky_slot;
+    if (!p.waterOnly) s_sky_slot_w = s_sky_slot;
+    if (p.wmap && (p.wmapGen != s_wmap_gen || s_wmap_slot < 0)) {
+        std::vector<uint32_t> offs(1, 0);
+        uint32_t levels = 1;
+        static std::vector<uint8_t> mips;
+        build_mips(p.wmap, SKYPLUS_WMAP_W, SKYPLUS_WMAP_H, mips, offs, &levels);
+        if (s_wmap_slot >= 0) free_image(s_wmap_blk, s_wmap_slot);
+        s_wmap_slot = -1;
+        if (upload_image(&s_wmap_img, &s_wmap_blk, DkImageFormat_RGBA8_Unorm, 4, mips.data(), offs, SKYPLUS_WMAP_W,
+                         SKYPLUS_WMAP_H, levels, mips.size())) {
+            s_wmap_slot = write_img_desc(&s_wmap_img, false);
+            s_wmap_gen = p.wmapGen;
+        }
+    }
     if (p.waterTex && (p.waterTexGen != s_wtex_gen || s_wtex_slot < 0)) {
         std::vector<uint32_t> offs(1, 0);
         uint32_t levels = 1;
@@ -1950,8 +1975,23 @@ void gfx_deko3d_skyplus_pass(int slot) {
     u.v[15][3] = 0.0f;
     /* water draws read the pixel's y from its clip position: mirrored on a target drawn y-inverted */
     u.v[1][2] = (!win && s_fbs[s_cur_fb].invert_y) ? 1.0f : 0.0f;
-    dkCmdBufPushConstants(s_cmd, s_ubo.gpu + WATER_UBO_OFS, 256, 0, sizeof u, &u);
-    if (getenv("GE_SEADUMP") && sea && p.waterTex) {   /* dev: one frame of the sky pass inputs (block Sky, clouds, waves) for tools_pc/seaview */
+    dkCmdBufPushConstants(s_cmd, s_ubo.gpu + WATER_UBO_OFS, 512, 0, sizeof u, &u);
+    {   /* the level's own water surfaces: vec4 16..19 of the block (water.frag only; the sky shaders' block ends at 15) */
+        float x[4][4] = {};
+        for (int i = 0; i < 3; i++) { x[0][i] = p.deep[i]; x[1][i] = p.light[i]; }
+        x[0][3] = p.patchScale > 0.0f ? p.patchScale : 6.0f;
+        x[1][3] = p.reflectLit;
+        x[2][0] = (p.wmap && s_wmap_slot >= 0) ? 1.0f : 0.0f;   /* the colour map is ready */
+        x[2][1] = p.waterOnly ? 1.0f : 0.0f;                    /* a level without a sky: the fog colour is mirrored, no glints */
+        x[3][0] = p.toneKeep;
+        x[3][1] = p.reflectGain;
+        dkCmdBufPushConstants(s_cmd, s_ubo.gpu + WATER_UBO_OFS, 512, sizeof u, sizeof x, x);
+    }
+    if (p.waterOnly) {   /* nothing to draw: the water draws of this frame read the block */
+        restore_state();
+        return;
+    }
+    if (getenv("GE_SEADUMP") && (sea || p.wmap) && p.waterTex) {   /* dev: one frame of the sky pass inputs (block Sky, clouds, waves) for tools_pc/seaview */
         static int dn = 0;
         if (++dn == 400) {
             FILE* df = fopen("sdmc:/switch/project-dam/data/sea_dump.bin", "wb");

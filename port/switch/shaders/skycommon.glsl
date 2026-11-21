@@ -63,6 +63,7 @@
 /* set by waterShade while it reads the sky for a reflection */
 bool gReflect = false;
 int gSeaMode = 0;   /* waterNormal: 0 both wave sets by the distance (the level's water draws), 1 the moving set only, 2 the still set only */
+float gGlint = 1.0;   /* waterShade: the weight of the sun's glints (0 = none: a cave) */
 bool gLite = false;   /* waterShade reflects the horizon colour, not the sky panorama (the baked far sea, the viewers' tests) */
 
 vec2 ofsOf(int i) { return i == 0 ? uOfs01.xy : (i == 1 ? uOfs01.zw : uOfs2X.xy); }
@@ -366,5 +367,5 @@ vec3 waterShade(vec3 nd, vec3 n, vec3 body, float dist) {
     float near = 1.0 / (1.0 + dist / 2500.0);
     float glint = (smoothstep(0.990, 0.996, g) * 1.2 * near + pow(g, 40.0) * 0.12) * smoothstep(-0.01, 0.03, sunDir.y);
     if (uNight > 0.5) glint *= 0.15;
-    return c + sunCol * glint;
+    return c + sunCol * (glint * gGlint);
 }

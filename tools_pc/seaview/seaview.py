@@ -2,7 +2,9 @@
 """seaview: look at and tune the GE+ sky and sea outside the game, on the PC and on the console.
 
   python tools_pc/seaview/seaview.py dump              capture one frame of Frigate in the Switch emulator (data/sea_dump.bin)
-  python tools_pc/seaview/seaview.py pc [--hp]         build and open the PC viewer (--hp: ask for the discrete GPU)
+  python tools_pc/seaview/seaview.py pc [--hp] [viewer options]   build and open the PC viewer (--hp: ask for the discrete GPU);
+        viewer options go through: --mode sea|water --level dam|caverns|complex --cam x,y,z,yaw,pitch --wtex FILE
+        --shot FILE.png|tga (renders one frame, writes it, exits; waits for it) --w N --h N --time T
   python tools_pc/seaview/seaview.py nx-build          build the console viewer (nx/seaview-nx.nro)
   python tools_pc/seaview/seaview.py nx-send [--ini F] build if needed, send to the console with the settings of a viewer .ini
   python tools_pc/seaview/seaview.py ini2args F        print the console arguments an .ini turns into
@@ -103,7 +105,17 @@ def cmd_pc(env, a):
         sys.exit("seaview: the PC viewer did not build")
     shaders = os.path.join(REPO, "port", "switch", "shaders") + os.sep
     detached = 0x00000008 | 0x00000200 if os.name == "nt" else 0   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: outlive this script
-    subprocess.Popen([exe, "--shaders", shaders, "--dump", DUMP, "--sway", "1"], cwd=DATA, creationflags=detached)
+    extra = list(getattr(a, "extra", []))
+    for i, x in enumerate(extra[:-1]):   # the viewer runs in data/: paths given relative to here must be made absolute
+        if x in ("--shot", "--wtex", "--out", "--dump"):
+            extra[i + 1] = os.path.abspath(extra[i + 1])
+    shooting = "--shot" in extra
+    base = [exe, "--shaders", shaders, "--dump", DUMP]
+    if shooting:   # unattended screenshot: a fixed time and no sway, so the image repeats; wait for it
+        base += [] if "--time" in extra else ["--time", "0"]
+        r = subprocess.run(base + ["--sway", "0"] + extra, cwd=DATA)
+        sys.exit(r.returncode)
+    subprocess.Popen(base + ["--sway", "1"] + extra, cwd=DATA, creationflags=detached)
     print("PC viewer open; its settings are saved in", DATA)
 
 
@@ -190,6 +202,8 @@ def ini2args(path):
         elif k == "__tex": out.append(f"tex={int(v)}")
         elif k in t:
             kind, idx = t[k]
+            if kind == 3:   # the water surface mode: PC viewer only
+                continue
             if kind == 0: out.append(f"pr{idx}={v:g}")
             elif kind == 1: out.append(f"u{idx}={v:g}")
             elif idx == 0: el = v
@@ -223,11 +237,14 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("dump"); p.add_argument("--close", action="store_true", help="close the emulator after the capture"); p.set_defaults(f=cmd_dump)
-    p = sub.add_parser("pc"); p.add_argument("--hp", action="store_true"); p.set_defaults(f=cmd_pc)
+    p = sub.add_parser("pc", allow_abbrev=False); p.add_argument("--hp", action="store_true"); p.set_defaults(f=cmd_pc)
     p = sub.add_parser("nx-build"); p.add_argument("--ini"); p.add_argument("--live", action="store_true"); p.set_defaults(f=cmd_nx_build)
     p = sub.add_parser("nx-send"); p.add_argument("--ini"); p.add_argument("--rep", type=int); p.add_argument("--live", action="store_true", help="the variants and values stay uniforms: change the variant on the pad (slower shaders)"); p.set_defaults(f=cmd_nx_send)
     p = sub.add_parser("ini2args"); p.add_argument("ini"); p.set_defaults(f=cmd_ini2args)
-    a = ap.parse_args()
+    a, extra = ap.parse_known_args()
+    if extra and a.cmd != "pc":
+        ap.error("unrecognized arguments: " + " ".join(extra))
+    a.extra = extra   # the PC viewer's own options (--shot, --mode, --level, --cam, ...)
     a.f(load_env(), a)
 
 

@@ -9,6 +9,7 @@
 - Aspect ratio Auto, Fit, 4:3, 16:9 or 21:9, and a split screen with the two players side by side
 - Co-op for 2, 3 or 4 players (#75), and the Co-op row of the mode menu now also on PC: choosing Co-op asks how many players, each partner picks a character, and the mission runs in a split screen of two or four views; any player standing at a downed player's body can revive them, and the mission fails when everyone is down; Co-op enemy health is now a bonus per extra player (+0, +50 or +100%, so +50% gives 150% at 2 players, 200% at 3 and 250% at 4)
 - Co-op and Multiplayer stay open with one controller: Co-op asks for the controllers it needs when it is chosen, Multiplayer asks for as many as there are players when Start is pressed (the Controllers button does the same any time, the system's controller screen on the Switch)
+- GE+ water on Dam and Caverns (Enhanced visuals, Switch and PC on Vulkan or OpenGL): the levels' own water gets the moving waves and the sky's reflection, with its colour remade from the level's water texture in large soft patches that keep the original's tones (#79)
 - Vertical field of view in degrees (60 is the original) with the horizontal one shown for the window's aspect ratio; a crosshair page with a preview of the sprite at its real size, colour and opacity; the crosshair size goes from 10 to 100%
 
 ### Changed

@@ -770,7 +770,7 @@ static void gfx_generate_cc(struct ColorCombiner* comb, const ColorCombinerKey& 
     }
     /* GE+ water: GE's water combiner (unk_092E50.c MipMap2C_Something*_Setup,
      * only used on water) is drawn by the backend's water shader */
-    if (s_water_ext && is_2cyc &&
+    if ((s_water_ext || gfx_water_surfaces) && is_2cyc &&
         c[0][0][0] == G_CCMUX_TEXEL1 && c[0][0][1] == G_CCMUX_TEXEL0 && c[0][0][2] == G_CCMUX_PRIM_LOD_FRAC &&
         c[0][0][3] == G_CCMUX_TEXEL0 && c[1][0][0] == G_CCMUX_COMBINED && c[1][0][1] == G_CCMUX_0 &&
         c[1][0][2] == G_CCMUX_SHADE && c[1][0][3] == G_CCMUX_0) {
@@ -1176,8 +1176,17 @@ static void gfx_a2cdump_refused(const void* addr, int why) {
     }
 }
 
+/* GE+ water: set while the first water draw of a level imports its TEXEL0; the decoded image goes to skyplus.c
+ * (skyPlusWaterSource), which makes the level's water colour from it. */
+static bool s_water_import = false;
+static uint8_t s_water_import_fmt = 0, s_water_import_siz = 0;
+
 static void gfx_upload_texture(uint32_t width, uint32_t height, bool gen_mipmaps) {
     gfx_rapi->upload_texture(tex_upload_buffer, width, height, gen_mipmaps);
+    if (s_water_import) {
+        s_water_import = false;
+        skyPlusWaterSource(tex_upload_buffer, (int)width, (int)height, (int)s_water_import_fmt, (int)s_water_import_siz);
+    }
     if (!gfx_a2cdump_on() || s_a2cdump_cur == nullptr) {
         return;
     }
@@ -1685,8 +1694,8 @@ static void import_texture(int i, int tile, bool importReplacement) {
         }
     }
 
-    if (gfx_texture_cache_lookup(i, key)) {
-        return;
+    if (gfx_texture_cache_lookup(i, key) && !s_water_import) {
+        return;   /* (a cache hit is decoded again when the water capture wants the image) */
     }
     s_tick_texmiss++;
     s_a2cdump_cur = orig_addr;   /* GE_A2CDUMP */
@@ -4439,11 +4448,21 @@ static inline void gfx_tri_state(TriState& ts) {
         // TODO: fix this; for now just ignore smaller mips
         const uint32_t tile = rdp.first_tile_index + gfx_lod_tile_offset(i);
         if (ts.comb->used_textures[i]) {
-            if (rdp.textures_changed[i]) {
+            /* GE+ water: the level's water texture (TEXEL0 of the water combiner) is captured once per level, also when the
+             * texture is already bound or cached (import_texture decodes it again then) */
+            const bool water_cap = i == 0 && (ts.comb->shader_id1 & SHADER_OPT_WATER) && (s_water_ext || gfx_water_surfaces) &&
+                                   skyPlusWaterWanted();
+            if (water_cap) {
+                s_water_import = true;
+                s_water_import_fmt = rdp.texture_tile[tile].fmt;
+                s_water_import_siz = rdp.texture_tile[tile].siz;
+            }
+            if (rdp.textures_changed[i] || water_cap) {
                 gfx_flush();
                 import_texture(i, tile, false);
                 rdp.textures_changed[i] = false;
             }
+            s_water_import = false;
 
             uint8_t cms = rdp.texture_tile[tile].cms;
             uint8_t cmt = rdp.texture_tile[tile].cmt;

@@ -26,6 +26,35 @@ The look target: realistic but stylised, a fine busy grain that tightens toward 
 
 **Half scale** (deko3d, `SKY_HALF_SCALE`): the sea target is a quarter of the viewport's width and half its height, and the final pass (pass 2) is drawn into a half-size target (`s_skyr_fb`); pass 5 enlarges it onto the screen. Halving only the final pass gained ~1 ms on the console (12.4 -> 11.4 ms): the waves in the sea target are the heavy part, so the sea target has to follow the scale too. Both together: 12.4 -> **6.2 ms** median per frame (console, Frigate, handheld).
 
+## The level's own water surfaces (Dam, Caverns, Complex; #79)
+
+Only Frigate has a sea plane. On Dam, Caverns and Complex the water is level geometry drawn with GE's water combiner (`unk_092E50.c`, `lerp(TEXEL0, TEXEL1, PRIM_LOD_FRAC) * SHADE`); fast3d tags it `SHADER_OPT_WATER` and deko3d draws it with `water.frag.glsl`, which restyles it only while `uWave4.z > 0.5` (set by the GE+ sky pass, cleared each frame by `dk_start_frame`): Visuals = Original and N64 display mode keep GE's combiner exactly.
+
+- **Body colour from the level's own texture.** The first water draw of a level hands its decoded TEXEL0 to `skyPlusWaterSource` (`gfx_pc.cpp`, forced even on a texture-cache hit). `skyplus.c` enlarges it to 64x64, blurs it heavily (3 box passes of radius 6, wrapping) and stretches min..max to 0..1: a tiling **patch map** (binding 4, R = 0 deep .. 1 light). The shader reads it with the draw's own texcoord divided by `PatchScale` (large soft patches) and blends **deep** into **light** by it, times the level's tint. Default deep / light = the mean colour of the texture's darker / lighter half (by luminance, split at the median). Until the bake is ready (first frame) or if no texture was captured, the body is GE's texture x shade as before.
+- **The body keeps the original's tone by design**: `body = clamp(mix(deep, light, patch) * SHADE) * tint`, the patch colour standing in for GE's `lerp(TEXEL0, TEXEL1, LOD)` in `texture x SHADE` (same order, no extra factor). Deep / light being the means of the texture's darker / lighter halves, the average tone matches the original's, only redistributed into large soft patches.
+- **The sky enters only through the reflection** (`waterShade`'s Fresnel), not the body. **`ToneKeep`** (0..1) pulls the reflection into the body's hue (its brightness kept: `body * lum(w) / lum(body)`), so the sky's blue does not repaint the water; **`ReflectGain`** scales the reflection's weight. Measured on the PC at Dam's intro camera 1 (mean water colour): GE 12,25,29; the reflection as is 18,38,58 (bright blue); ToneKeep 0.8 + ReflectGain 0.6 gives 15,32,39 (the original's teal, a little brighter).
+- **`reflectLit`** (0..1): how much the vertex lighting dims the reflection's weight (not the body: it always carries SHADE). 0 = full reflection (Dam, Caverns: their water is lit dark), 1 = the old rule `lit = max(shade) * 1.4` (Complex: keeps its pits black; also the default for unknown levels).
+- **Caverns (no sky).** With GE+ active and a level without clouds that is in `waterLevelName`, `skyPlusRender` emits the sky command with `waterOnly = 1`: the pass only fills the water uniforms (time, waves, colours, `uWave4.z = 1`) and draws nothing; `skyplus.c` then does the same fill GE's `skyRender` does for a level without clouds. The water mirrors the level's fog colour (`gLite`, the horizon colour = the record's colour) and has no sun glints (`gGlint = 0`). Its texture (TEXEL0, a 64x64 I4) alone is about half the tone of GE's lerp with TEXEL1, so its tint is 2 (measured at intro camera 1: 10,14,14 vs GE's 10,12.5,12.6), with ToneKeep 0.8 and ReflectGain 0.5 (the reflected fog colour is dark).
+- **Uniforms.** The Sky block of `water.frag` carries four more vec4 after the sky block's 16 (`uWX0` deep + patch size, `uWX1` light + reflectLit, `uWX2` ready / waterOnly flags, `uWX3` toneKeep / reflectGain), pushed at `WATER_UBO_OFS + 256`; the UBO is bound with 512 bytes.
+- **Log line** (once per level, `LOG_NOTE`): `GE+ water: <level> source texture WxH fmt F siz S; computed deep ... light ...; used deep ... light ... tint ... reflectLit ... patchScale ...`.
+
+**PC backends (Vulkan, desktop GL 4.6).** The same `water.frag.glsl` draws these surfaces; each backend sets `gfx_water_surfaces` (log line `GE+ water surfaces: on (vulkan)` / `on (opengl)`), which turns on the `SHADER_OPT_WATER` tag in fast3d, the texture capture and `waterOnly` in `skyplus.c`. Original mode and backends without the water (GL < 4.6, ES) keep GE's combiner.
+- **Vulkan**: `water.frag` is in the SPIR-V pack as `DK_PACK_WATER` (blocks moved up by 4 like the other draws'; its colour-map sampler moved to binding 7 and its Sky block to 8 by `cmake/VulkanShaders.cmake`), paired with the uber vertex shader (every output it reads exists there). Its own descriptor set layout (`s_water_set_layout`): samplers 0..3 and 7, Draw 4, Comb 5, Sky 8. The Sky block (20 vec4) is a ring allocation made by each sky (or water-only) pass; until one ran this frame the water draws read zeros (`uWave4.z = 0` = GE's combiner).
+- **GL**: the generated vertex shader is kept (made `#version 460`, plus `out vec3 vClip = (clip x, y, w)`), the fragment shader is `water.frag.glsl` under `#define GE_GL` with the program's inputs defined (`WATER_FOG`, `WATER_PIXEL_FOG`, `WATER_TPF`, `WATER_IVEC`, `WATER_SHADEQ`, `WATER_FOGQ`; the Draw / Comb blocks become constants). The Sky block is a uniform buffer at binding 2 (20 vec4, zeroed in `uWave4` at frame start), the cloud / wave / colour-map textures sit on units 2, 3, 4 (the sky pass uses 3..7 inside and puts back what it found). A water program that fails to build falls back to the generated shader (GE's own water) with the error in the log.
+
+`$S/water/<level>.ini` (read on a level change, keys not case-sensitive), besides `Tint`, `Swell`, `Chop`, `Speed`:
+
+| Key | Meaning | Default |
+|---|---|---|
+| `Deep = r, g, b` | the deep colour, 0..1 | computed from the texture |
+| `Light = r, g, b` | the light colour, 0..1 | computed from the texture |
+| `ReflectLit = x` | 0..1, see above | Dam 0, Caverns 0, others 1 (Complex 1) |
+| `PatchScale = x` | the patch map's size in water-texture repeats (0.5..64) | 6 |
+| `ToneKeep = x` | 0..1: the reflection pulled into the body's hue | Dam 0.8, Caverns 0.8, others 0 |
+| `ReflectGain = x` | 0..2: the reflection's weight, x the Fresnel | Dam 0.6, Caverns 0.5, others 1 |
+
+Tuning: `GE_SEADUMP=1` also writes the level's source water texture to `data/water_src.bin` (int w, int h, RGBA8), to convert into `tools_pc/seaview/data/water_<level>.tga` for the viewer's Water surface mode (README there). The PC intro cameras (`GE_INTROCAM=n`) give fixed views of the water for before/after captures (Dam: 1 = the pier, 0 = the lake from the dam; Caverns: 1, 2).
+
 ## The far sea (the part that took a week)
 
 Observations that settled the design:
@@ -66,6 +95,6 @@ Coverage limit: the panorama goes down to sin(elevation) 0.64 from the bake eye,
 
 - Ryubing shows the half-scale image wrong (an enlarged sea; a test gradient drawn into the half-size target read back as one flat colour) where the console is right: not explained, judge half scale on the console.
 - The first-frame black bake's cause.
-- Looks owed: docked, co-op (two viewports share one panorama), Dam (legacy `gSeaMode 0`), Caverns, Complex.
+- Looks owed: docked, co-op (two viewports share one panorama), Dam (legacy `gSeaMode 0`; the new body colour above, to judge), Caverns (water-only, to judge), Complex (`reflectLit 1`, pits must stay black).
 - Judge this sea on Ryubing or the console only: the old Ryujinx (r.49574a9) draws bright streaks, arcs and blocks in the far sea that neither shows.
 - The `$S/water/<level>.ini` override: document it in `docs/` when final.
