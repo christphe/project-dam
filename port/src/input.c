@@ -1755,6 +1755,9 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
     unsigned button = 0;
     int sx = 0, sy = 0;
     int crouchNow = 0;
+    /* GameDirect, the keyboard part: when set, the move keys go to the game as analog walk / strafe (merged with
+     * the stick at the publish below) instead of C-button steps, so a stick at rest can't cancel them. */
+    int kbDirect = 0, kbFwd = 0, kbBack = 0, kbLeft = 0, kbRight = 0, kbLook = 0;
 
     /* D194/D238: self-correcting every poll -- cheap (plain field writes,
      * see options.c cur_player_set_control_type), and re-asserts itself if
@@ -1961,15 +1964,29 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
          * front-end screen (file select, cheat) can be
          * driven vertically from the keyboard. Watch/pause keeps the C-button
          * mapping: it is current_menu==RUN_STAGE (menuMode 0), N64-style. */
-        if (styleIsSolitare(idx) && !menuMode) {   /* D498, D513, D518 */
-            if (inputActHeld(ks, IA_FORWARD)) button |= GE_CONT_E;   /* C-up = forward   */
-            if (inputActHeld(ks, IA_BACK))    button |= GE_CONT_D;   /* C-down = back    */
+        /* GameDirect (Enhanced / Modern, the same rules as the pad's inputDirectMoveDecide): W/S/A/D walk and
+         * strafe at full analog scale, through the hook in bondview2.c, not as C steps. The pad's GameDirect
+         * zeroes the game's digital steps, so the C bits alone stopped as soon as a pad was plugged in. Aiming
+         * (the C-bit slow strafe), the tank, the watch, Original and the QA harness keep the C bits. */
+        kbDirect = !controlScheme && styleIsSolitare(idx) && inputCanUseGameplayActions(menuMode) &&
+                   !(inputSlotPlayer() && inputSlotPlayer()->insightaimmode) &&
+                   !(g_inputReplayActive || inputScriptIsActive(0) || g_inputRec != NULL);
+        kbFwd = inputActHeld(ks, IA_FORWARD);
+        kbBack = inputActHeld(ks, IA_BACK);
+        kbLeft = inputActHeld(ks, IA_STRAFE_L);
+        kbRight = inputActHeld(ks, IA_STRAFE_R);
+        kbLook = (g_inputMouseDY != 0.0);   /* the mouse pitches: the "look stick deflected" of portLookAheadMode */
+        if (kbDirect) {
+            /* walk / strafe go out at the GameDirect publish below */
+        } else if (styleIsSolitare(idx) && !menuMode) {   /* D498, D513, D518 */
+            if (kbFwd)  button |= GE_CONT_E;   /* C-up = forward   */
+            if (kbBack) button |= GE_CONT_D;   /* C-down = back    */
         } else {
-            if (inputActHeld(ks, IA_FORWARD))  sy =  STICK_MAX;
-            if (inputActHeld(ks, IA_BACK))     sy = -STICK_MAX;
+            if (kbFwd)  sy =  STICK_MAX;
+            if (kbBack) sy = -STICK_MAX;
         }
-        if (inputActHeld(ks, IA_STRAFE_L)) button |= GE_CONT_C;   /* strafe left  */
-        if (inputActHeld(ks, IA_STRAFE_R)) button |= GE_CONT_F;   /* strafe right */
+        if (!kbDirect && kbLeft)  button |= GE_CONT_C;   /* strafe left  */
+        if (!kbDirect && kbRight) button |= GE_CONT_F;   /* strafe right */
         if (inputActHeld(ks, IA_TURN_L))   sx = -STICK_MAX;       /* keyboard turn */
         if (inputActHeld(ks, IA_TURN_R))   sx =  STICK_MAX;
         if (sx) g_inputAimDevMouse = 0;   /* D337: keyboard stick turn is the active aim device */
@@ -2429,8 +2446,11 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
     InputCommands mc;
     const InputStrategy *const strat = padPoll(idx, pad, wheelOpen, &mc);   /* the seat's control style decides, the blocks below apply it */
     {
-        const int direct = (strat && pad) ? mc.direct : 0;
-        padDirectPublish(idx, direct, direct ? mc.walk : 0, direct ? mc.strafe : 0, direct ? mc.lookRawActive : 0);
+        const int padDirect = (strat && pad) ? mc.direct : 0;
+        int walk = padDirect ? mc.walk : 0, strafe = padDirect ? mc.strafe : 0;
+        if (kbDirect) inputDirectMoveAddKeys(kbFwd, kbBack, kbLeft, kbRight, &walk, &strafe);   /* stick + keys, clamped */
+        const int direct = padDirect || kbDirect;
+        padDirectPublish(idx, direct, walk, strafe, (padDirect && mc.lookRawActive) || (kbDirect && kbLook));
     }
     if (pad) {
         /* D282: front-end menus (main menu, file select, mission-select map)

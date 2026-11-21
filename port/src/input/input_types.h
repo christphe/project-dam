@@ -147,6 +147,10 @@ int inputTriggerDown(const InputSnapshot *in, int left);   /* analog past the tr
  * the values in the game's own stick scale (the N64 "safe" scale: a 5 unit deadzone off, +-75 at the rim, as
  * the game derives it from a HONEY stick), else 0 and the game's movement is untouched. */
 int inputDirectMoveDecide(const InputContext *ctx, const InputCommands *cmds, int *walk, int *strafe);
+/* GameDirect, the keyboard part: adds the held move keys to walk / strafe at full scale (+-INPUT_DIRECT_MAX),
+ * on top of the stick, each axis clamped to +-INPUT_DIRECT_MAX. Opposite inputs cancel. */
+#define INPUT_DIRECT_MAX       (INPUT_STICK_MAX - 5)   /* the game's "safe" stick scale at the rim */
+void inputDirectMoveAddKeys(int fwd, int back, int left, int right, int *walk, int *strafe);
 void inputMapSticks(const InputSnapshot *in, InputStrategyState *st, InputCommands *out);   /* Modern / Enhanced stick roles */
 
 #endif

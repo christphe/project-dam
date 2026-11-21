@@ -47,8 +47,8 @@
    "why": "= 1 (on, D555)"
   },
   "Input.MouseSensitivity": {
-   "value": 100,
-   "why": "static int mouseSensitivity = 100"
+   "value": 230,
+   "why": "the maintainer's tuned value (static int mouseSensitivity = 100 before the defaults apply)"
   },
   "Input.MouseYScale": {
    "value": 100,

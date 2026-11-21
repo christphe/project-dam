@@ -114,3 +114,14 @@ int inputDirectMoveDecide(const InputContext *ctx, const InputCommands *cmds, in
     *strafe = safeAxis(cmds->strafe);
     return 1;
 }
+
+static int clampDirect(int v)
+{
+    return v > INPUT_DIRECT_MAX ? INPUT_DIRECT_MAX : (v < -INPUT_DIRECT_MAX ? -INPUT_DIRECT_MAX : v);
+}
+
+void inputDirectMoveAddKeys(int fwd, int back, int left, int right, int *walk, int *strafe)
+{
+    *walk = clampDirect(*walk + (fwd ? INPUT_DIRECT_MAX : 0) - (back ? INPUT_DIRECT_MAX : 0));
+    *strafe = clampDirect(*strafe + (right ? INPUT_DIRECT_MAX : 0) - (left ? INPUT_DIRECT_MAX : 0));
+}

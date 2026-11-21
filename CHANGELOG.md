@@ -22,6 +22,7 @@
 - Auto-aim is off while the mouse is the device that aims, and comes back when a stick is pushed
 - GE_LOWLAT (lower input latency) is on by default on the PC too; GE_LOWLAT=0 turns it off
 - The mouse always aims Centered; Input.AimMode is the gamepad's. Escape no longer frees the mouse
+- PC: the mouse sensitivity is 230 by default on a fresh install (it was 100); an existing ini keeps its value
 
 ### Fixed
 - PC, 2 or more players: the options menu opens on the pages of the player who opened it, and only that player's device drives it (any pad's Select opens it, in the menus too). Each player's pad settings (preset, bindings, Modern) are that player's even with the keyboard and mouse as player 1, and the Modern wheels read the right pad (#83)
