@@ -143,10 +143,10 @@ static const char *const kControlScheme[] = { "Enhanced", "Original", NULL };   
 static const char *const kAimMode[]   = { "Original", "Centered", NULL };   /* D337; project-dam: the weapon sway is part of Centered */
 static const char *const kTurnAccel[] = { "Off", "Low", "High", NULL };   /* project-dam */
 static const char *const kAimZoom[]   = { "Off", "1.5x", "2x", NULL };    /* project-dam */
-static const char *const kLookAhead[] = { "Off", "Original", "Low", "Medium", "High", NULL };   /* project-dam #85: Bond.LookAhead */
 #else
 static const char *const kAimMode[]   = { "Original", "Centered", NULL };   /* D337 */
 #endif
+static const char *const kLookAhead[] = { "Off", "Original", "Low", "Medium", "High", NULL };   /* project-dam #85: Bond.LookAhead */
 static int displayModeNow(void);   /* defined with the preset helpers below */
 static const char *const kDisplayModeName[3];
 static const char *const kAimRange[]  = { "Extended", "Original", NULL };             /* D338 */
