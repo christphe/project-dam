@@ -68,6 +68,7 @@ typedef struct PortSkyPlus {
     float patchScale;     /* the patch map's size in water-texture repeats */
     float toneKeep;       /* 0..1: how much the reflection is pulled into the body's hue (keeps the original's tone) */
     float reflectGain;    /* the reflection's weight, x the Fresnel */
+    float worldScale;     /* bg.c room_data_float2 (1 / the level's scale): turns the water draws' depth into the eye's units */
     int waterOnly;        /* 1: no sky (a level without one: Caverns): this command only sets the water block, nothing is drawn */
 } PortSkyPlus;
 

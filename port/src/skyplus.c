@@ -22,6 +22,7 @@
 
 #include "bondconstants.h"
 #include "bondtypes.h"
+#include "game/bg.h"
 #include "game/bgfog.h"
 #include "game/bondview.h"
 #include "game/player.h"
@@ -676,6 +677,7 @@ Gfx *skyPlusRender(Gfx *gdl)
         p->reflectLit = s_ws.reflectLit;
         p->patchScale = s_ws.patchScale;
         p->toneKeep = s_ws.toneKeep;
+        p->worldScale = get_room_data_float2();
         p->reflectGain = s_ws.reflectGain;
         if (s_wbaked) {
             static int s_wlogStage = -1, s_wlogGen = -1;

@@ -1985,6 +1985,7 @@ void gfx_deko3d_skyplus_pass(int slot) {
         x[2][1] = p.waterOnly ? 1.0f : 0.0f;                    /* a level without a sky: the fog colour is mirrored, no glints */
         x[3][0] = p.toneKeep;
         x[3][1] = p.reflectGain;
+        x[3][2] = p.worldScale;
         dkCmdBufPushConstants(s_cmd, s_ubo.gpu + WATER_UBO_OFS, 512, sizeof u, sizeof x, x);
     }
     if (p.waterOnly) {   /* nothing to draw: the water draws of this frame read the block */

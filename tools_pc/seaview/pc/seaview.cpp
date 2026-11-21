@@ -679,7 +679,8 @@ int main(int argc, char** argv) {
             uw[64] = W_(8); uw[65] = W_(9); uw[66] = W_(10); uw[67] = W_(2);          /* uWX0: deep colour, patch size in repeats */
             uw[68] = W_(11); uw[69] = W_(12); uw[70] = W_(13); uw[71] = W_(3);        /* uWX1: light colour, reflectLit */
             uw[72] = 1; uw[73] = noSky ? 1.f : 0.f;                                   /* uWX2: map ready, water only */
-            uw[76] = W_(20); uw[77] = W_(21);                                         /* uWX3: toneKeep, reflectGain */
+            uw[76] = W_(20); uw[77] = W_(21); uw[78] = 1.0f;   /* uWX3.z: the viewer's plane is in world units */
+                                                    /* uWX3: toneKeep, reflectGain */
             glBindBuffer(GL_UNIFORM_BUFFER, uboW); glBufferSubData(GL_UNIFORM_BUFFER, 0, 320, uw);
             const int dr[8] = { 0, 0, 0, 0, 0, 0, 0, 0 }; glBindBuffer(GL_UNIFORM_BUFFER, dDraw); glBufferSubData(GL_UNIFORM_BUFFER, 0, 32, dr);
             const unsigned cb[8] = { 0, 0, 0, 0, W_(6) > 0 ? 2u : 0u, 0, 0, 0 }; glBindBuffer(GL_UNIFORM_BUFFER, dComb); glBufferSubData(GL_UNIFORM_BUFFER, 0, 32, cb);   /* flags: CF_FOG */

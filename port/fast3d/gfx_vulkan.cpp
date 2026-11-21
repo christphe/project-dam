@@ -3106,6 +3106,7 @@ void gfx_vulkan_skyplus_pass(int slot) {
         wu[18][1] = p.waterOnly ? 1.0f : 0.0f;
         wu[19][0] = p.toneKeep;
         wu[19][1] = p.reflectGain;
+        wu[19][2] = p.worldScale;
         uint8_t* wp = ring_alloc(WATER_UBO_BYTES, (uint32_t)s_ubo_align, &s_wat_buf, &s_wat_off);
         memcpy(wp, wu, sizeof wu);
         s_wat_valid = true;

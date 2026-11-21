@@ -108,7 +108,7 @@ layout(std140, binding = 2) uniform Sky {
     vec4 uWX0;   /* deep colour, patch map size in water-texture repeats */
     vec4 uWX1;   /* light colour, reflectLit (0..1: how much the vertex lighting dims the reflection and body) */
     vec4 uWX2;   /* x: the patch map is ready, y: a level without a sky (mirror the fog colour, no glints) */
-    vec4 uWX3;   /* x: toneKeep (the reflection pulled into the body's hue), y: reflectGain */
+    vec4 uWX3;   /* x: toneKeep (the reflection pulled into the body's hue), y: reflectGain, z: 1 / the level's scale (bg.c room_data_float2) */
 };
 
 
@@ -150,12 +150,15 @@ void main() {
     if (uAsp4.z > 0.5) ndc.y = -ndc.y;
     float xg = (ndc.x - uAsp.y) / uAsp.x;
     vec3 d = skyRay(xg * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    /* d is on the image plane (1 along the view axis), w = the view depth */
-    vec3 p = uEye + d * wz;
+    /* d is on the image plane (1 along the view axis), w = the view depth. w comes out of GE's matrices in the level's
+     * scaled units, the eye and the rays in the player's: x room_data_float2 (1 / the level's scale) puts them together.
+     * Without it the pattern moved ~0.22x as far as the scenery on Dam: the waves slid with the camera when strafing */
+    float wscale = uWX3.z > 0.0 ? uWX3.z : 1.0;
+    vec3 p = uEye + d * (wz * wscale);
     gDpdx = dFdx(p.xz);
     gDpdy = dFdy(p.xz);
     if (uWave4.z > 0.5 && vClip.z > 0.0) {
-        float dist = length(d) * vClip.z;
+        float dist = length(d) * vClip.z * wscale;
         vec3 nd = normalize(d);
         vec3 n = waterNormal(p.xz, dist);
         /* GE's rule: the reflection and glints are dimmed by the vertex colour,

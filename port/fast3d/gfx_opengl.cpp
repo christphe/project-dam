@@ -2809,6 +2809,7 @@ static void sp2_water_setup(const SkyPlusDraw& d, const float u[16][4]) {
     wu[18][1] = p.waterOnly ? 1.0f : 0.0f;                              /* no sky: the fog colour is mirrored, no glints */
     wu[19][0] = p.toneKeep;
     wu[19][1] = p.reflectGain;
+    wu[19][2] = p.worldScale;
     glBindBufferBase(GL_UNIFORM_BUFFER, 2, s_wat_ubo);
     glBufferData(GL_UNIFORM_BUFFER, sizeof wu, wu, GL_DYNAMIC_DRAW);
 }
