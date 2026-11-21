@@ -262,23 +262,38 @@ float portCrosshairHealthRatio(void)
 static int padTriggerPct;               /* defined (with its default) further down */
 static u32 padActPrev[MAX_PADS];        /* D469: per-slot previous action-held bitset (edges track through menus too) */
 static int padSelectPrev[MAX_PADS];     /* Select (BACK) edge per pad (D472: was one shared flag) */
-static int s_ovOwner = -1;              /* D472: pad that opened the F10 overlay (-1 = keyboard/none) */
+static int s_ovDev = -1;               /* pad seat (pads[] index) that opened the menu (-1 = keyboard + mouse) */
+static int s_ovPlayer = 0;              /* player (0..3) who opened the menu; its pages are edited */
 
-/* D472: the pad that drives the F10 overlay: the opener while it is attached,
- * else the lowest attached pad (keyboard-opened, or the owner detached), else 0. */
+/* The pad that drives the menu: the opener's while it is attached. Opened by the keyboard (or the
+ * opener detached): in a 2+ player stage with the keyboard + mouse as player 1 no pad drives it (-1);
+ * otherwise the lowest attached pad (it is player 1's), else 0. */
 int inputOverlayOwnerPad(void)
 {
-    if (s_ovOwner >= 0 && s_ovOwner < MAX_PADS && pads[s_ovOwner]) return s_ovOwner;
+    if (s_ovDev >= 0 && s_ovDev < MAX_PADS && pads[s_ovDev]) return s_ovDev;
+    if (inputSeatShift()) return -1;
     for (int i = 0; i < MAX_PADS; i++)
         if (pads[i]) return i;
     return 0;
 }
 
-static int padSeatForSlot(int idx);
-
+/* The player who opened the menu (0 for the keyboard + mouse). */
 int inputOverlayOwnerSeat(void)
 {
-    return padSeatForSlot(inputOverlayOwnerPad());
+    return s_ovPlayer >= 0 && s_ovPlayer < MAX_PADS ? s_ovPlayer : 0;
+}
+
+/* pads[] seat of a controller (-1 if none). */
+static int padSeatOfPad(const SDL_GameController *pad)
+{
+    for (int i = 0; i < MAX_PADS; i++)
+        if (pad && pads[i] == pad) return i;
+    return -1;
+}
+
+int inputSlotPadSeat(int slot)
+{
+    return padSeatOfPad(slotPad(slot));
 }
 
 /* ------------------------------------------------------------------------
@@ -664,15 +679,6 @@ static u32 padActHeld(const PadBinds *b, u32 raw)
     for (int a = 0; a < PA_COUNT; a++)
         if (raw & b->mask[a]) h |= 1u << a;
     return h;
-}
-
-/* Seat that feeds controller slot idx (pads[] index; D448/D416). */
-static int padSeatForSlot(int idx)
-{
-    if (idx < 0) idx = 0;
-    if (idx >= MAX_PADS) idx = MAX_PADS - 1;
-    if (inputSeatShift() && idx > 0) return idx - 1;
-    return idx;
 }
 
 /* D401: per-pad haptics (N64 Rumble Pak -> SDL_GameControllerRumble).
@@ -1620,15 +1626,14 @@ static const InputStrategy *padStrategyFor(int seat)
  * (commands untouched). */
 static const InputStrategy *padPoll(int idx, SDL_GameController *pad, int wheelOpen, InputCommands *cmd)
 {
-    const int seat = padSeatForSlot(idx);
-    const InputStrategy *strat = padStrategyFor(seat);
-    SDL_GameController *dev = pad ? pad : pads[idx];
+    const InputStrategy *strat = padStrategyFor(idx);   /* the player's settings (#83) */
+    SDL_GameController *dev = pad ? pad : (inputSeatShift() ? NULL : pads[idx]);   /* behind the keyboard player 1, pads[idx] is another player's */
     if (!dev || (!pad && strat != &g_inputStyleModern)) return NULL;
 
     InputSnapshot in;
     memset(&in, 0, sizeof in);
     u32 raw = padReadRaw(dev);
-    if (pad) raw = padLatchApply(seat, raw);   /* D961 */
+    if (pad) raw = padLatchApply(idx, raw);   /* D961 */
     in.buttons = raw;
     in.lx = SDL_GameControllerGetAxis(dev, SDL_CONTROLLER_AXIS_LEFTX);
     in.ly = SDL_GameControllerGetAxis(dev, SDL_CONTROLLER_AXIS_LEFTY);
@@ -1636,7 +1641,7 @@ static const InputStrategy *padPoll(int idx, SDL_GameController *pad, int wheelO
     in.ry = SDL_GameControllerGetAxis(dev, SDL_CONTROLLER_AXIS_RIGHTY);
     in.triggerL = SDL_GameControllerGetAxis(dev, SDL_CONTROLLER_AXIS_TRIGGERLEFT);
     in.triggerR = SDL_GameControllerGetAxis(dev, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
-    in.family = padFamily[seat];
+    in.family = padFamily[padSeatOfPad(dev)];   /* button names: the physical pad */
     in.prevActions = padActPrev[idx];
 
     struct player *mp = inputSlotPlayer();
@@ -1664,10 +1669,10 @@ static const InputStrategy *padPoll(int idx, SDL_GameController *pad, int wheelO
     in.cfg.lookInvertY = padLookInvertY;
     in.cfg.triggerPct = padTriggerPct;
     in.cfg.naturalPitch = styleIsSolitare(idx);
-    in.cfg.stickSwap = stickSwap(idx);   /* D498/D518: roles by slot, like stickSolitare (binds below go by seat) */
+    in.cfg.stickSwap = stickSwap(idx);   /* D498/D518: roles by slot, like stickSolitare (binds below go by player too) */
     in.cfg.n64StickFeel = n64StickFeel;
     {
-        const PadBinds *pb = &padTabGet()->seat[seat];
+        const PadBinds *pb = &padTabGet()->seat[idx];
         memcpy(in.cfg.bind, pb->mask, sizeof in.cfg.bind);
         memcpy(in.cfg.n64Bind, pb->n64, sizeof in.cfg.n64Bind);
     }
@@ -1775,12 +1780,12 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
      * (neutral pad, no stick) and the nav keys / wheel / gamepad drive the
      * overlay instead. Mirrors the WI-1 "cursor free in a stage -> withhold
      * input" pattern. Controllers 1-3 are untouched. */
-    if (idx == 0 && !optionsOverlayIsOpen()) s_ovOwner = -1;   /* D472: ownership lasts one open */
+    if (idx == 0 && !optionsOverlayIsOpen()) { s_ovDev = -1; s_ovPlayer = 0; }   /* ownership lasts one open */
 
-    /* D472: a non-zero owner pad is swallowed too (neutral) while the overlay
-     * is open; pad 0 below still hosts the overlay tick. */
-    if (idx != 0 && optionsOverlayIsOpen() && idx == inputOverlayOwnerPad()) {
-        padActPrev[idx] = pads[idx] ? padActHeld(&padTabGet()->seat[padSeatForSlot(idx)], padReadRaw(pads[idx])) : 0;
+    /* D472: the slot that plays the owner pad is swallowed too (neutral) while the overlay
+     * is open; slot 0 below still hosts the overlay tick. */
+    if (idx != 0 && optionsOverlayIsOpen() && slotPad(idx) && padSeatOfPad(slotPad(idx)) == inputOverlayOwnerPad()) {
+        padActPrev[idx] = padActHeld(&padTabGet()->seat[idx], padReadRaw(slotPad(idx)));
         if (stick_x) *stick_x = 0;
         if (stick_y) *stick_y = 0;
         return 0;
@@ -1806,8 +1811,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
             s_shiftWas = shift;
         }
         if (idx >= 0 && idx < MAX_PADS && s_untilRelease[idx]) {
-            SDL_GameController *sp = slotPad(idx);
-            const u32 held = sp ? padActHeld(&padTabGet()->seat[padSeatForSlot(idx)], padReadRaw(sp)) : 0;
+            const u32 held = slotPad(idx) ? padActHeld(&padTabGet()->seat[idx], padReadRaw(slotPad(idx))) : 0;
             if (held) {
                 padActPrev[idx] = held;
                 if (stick_x) *stick_x = 0;
@@ -1820,7 +1824,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
 
     /* the device screen takes every press */
     if (portAssignBlocks()) {
-        padActPrev[idx] = pads[idx] ? padActHeld(&padTabGet()->seat[padSeatForSlot(idx)], padReadRaw(pads[idx])) : 0;
+        padActPrev[idx] = slotPad(idx) ? padActHeld(&padTabGet()->seat[idx], padReadRaw(slotPad(idx))) : 0;
         if (stick_x) *stick_x = 0;
         if (stick_y) *stick_y = 0;
         return 0;
@@ -1829,7 +1833,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
     if (idx == 0 && optionsOverlayIsOpen()) {
         const Uint8 *overlayKs = SDL_GetKeyboardState(NULL);
         /* D469: pad use/reload/edge state follows the bound actions, not fixed A/X/B/Y */
-        u32 ovHeld = pads[0] ? padActHeld(&padTabGet()->seat[0], padReadRaw(pads[0])) : 0;
+        u32 ovHeld = slotPad(0) ? padActHeld(&padTabGet()->seat[0], padReadRaw(slotPad(0))) : 0;
         s_useHeldPrev = inputActHeld(overlayKs, IA_CANCEL) || (ovHeld & (1u << PA_USE));
         s_reloadHeldPrev = inputActHeld(overlayKs, IA_RELOAD) || (ovHeld & (1u << PA_RELOAD));
         s_crouchLatch = 0;
@@ -2028,7 +2032,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
          * combined edges prevent a held input from repeatedly using a door.
          * In menus/watch/tank the pad keeps native accept/cancel buttons. */
         SDL_GameController *slot0Pad = slotPad(0);
-        u32 slot0Held = (slot0Pad && !controlScheme) ? padActHeld(&padTabGet()->seat[padSeatForSlot(0)], padReadRaw(slot0Pad)) : 0;
+        u32 slot0Held = (slot0Pad && !controlScheme) ? padActHeld(&padTabGet()->seat[0], padReadRaw(slot0Pad)) : 0;
         int padUse = (slot0Held & (1u << PA_USE)) != 0;       /* D469: bound actions (Jinx 1.1: A / X) */
         int padReload = (slot0Held & (1u << PA_RELOAD)) != 0;
         int useNow = inputScriptIsActive(0) ? g_inputScriptSlots[0].use : (inputActHeld(ks, IA_CANCEL) || padUse);
@@ -2477,27 +2481,37 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         /* Select (BACK) opens the F10 options overlay -- the gamepad
          * equivalent of the F10 key for controller-only machines (Steam
          * Deck). The game never reads BACK, so nothing is withheld. */
-        {
+        /* Outside a stage (not split) the sweep below handles every pad. */
+        if (inStage() || inputMpSplit()) {
+            const int seat = padSeatOfPad(pad);   /* edges are tracked per pads[] seat */
             int selNow = SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_BACK);
             /* D472: only opens here (closing is the owner's, in the overlay path) */
-            if (selNow && !padSelectPrev[idx] && !optionsOverlayIsOpen()) {
-                s_ovOwner = idx;
+            if (selNow && !padSelectPrev[seat] && !optionsOverlayIsOpen()) {
+                s_ovPlayer = idx;
+                s_ovDev = seat;
                 optionsOverlayToggle();
             }
-            padSelectPrev[idx] = selNow;
+            padSelectPrev[seat] = selNow;
         }
     }
 
-    /* Every device can reach the menus: a pad that does not play player 1 (Input.P1Type =
-     * keyboard + mouse, in a stage) still opens the F10 overlay with Select, so the input
-     * type can be changed from the pad alone. */
-    if (!pad && idx == 0 && !inputMpSplit() && pads[0] != NULL && !optionsOverlayIsOpen()) {
-        const int selNow = SDL_GameControllerGetButton(pads[0], SDL_CONTROLLER_BUTTON_BACK);
-        if (selNow && !padSelectPrev[0]) {
-            s_ovOwner = 0;
-            optionsOverlayToggle();
+    /* Every device can reach the menus: Select on any attached pad opens the menu outside a
+     * stage, and in a solo stage where no pad plays player 1 (Input.P1Type = keyboard + mouse),
+     * so the input type can be changed from a pad alone. The opener is player = its seat there
+     * (player 0 in a stage), device = that pad. */
+    if (idx == 0 && !inputMpSplit() && (!inStage() || !pad)) {
+        int open = optionsOverlayIsOpen();
+        for (int i = 0; i < MAX_PADS; i++) {
+            if (!pads[i]) continue;
+            const int selNow = SDL_GameControllerGetButton(pads[i], SDL_CONTROLLER_BUTTON_BACK);
+            if (selNow && !padSelectPrev[i] && !open) {
+                s_ovPlayer = inStage() ? 0 : i + inputSeatShift();   /* behind the keyboard player 1 (character select) */
+                s_ovDev = i;
+                optionsOverlayToggle();
+                open = 1;   /* one opener per frame */
+            }
+            padSelectPrev[i] = selNow;
         }
-        padSelectPrev[0] = selNow;
     }
 
     if (idx == 0 && inputScriptIsActive(0)) crouchNow = g_inputScriptSlots[0].crouch;

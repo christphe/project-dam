@@ -125,12 +125,13 @@ void portWheelGameTick(void)
     }
     int mask = 0;
     for (int seat = 0; seat < 4; seat++) {
-        struct player *p = seatPlayer(seat);
+        struct player *p = seatPlayer(seat);   /* "seat" is the player here; pd is the pads[] seat that plays it */
+        const int pd = inputSlotPadSeat(seat);
         int kind = KIND_NONE, n = 0;
         struct WheelItem items[WHEEL_MAX];
         if (p && inputPadIsModern(seat)) {
-            const int lb = inputPadButton(seat, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) != 0;
-            const int rb = inputPadButton(seat, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) != 0;
+            const int lb = inputPadButton(pd, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) != 0;
+            const int rb = inputPadButton(pd, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) != 0;
             const int want = lb ? KIND_WEAPONS : (rb ? KIND_GADGETS : KIND_NONE);
             if (want != KIND_NONE) {
                 n = build(p, want, items);
@@ -140,8 +141,8 @@ void portWheelGameTick(void)
                     mask |= 1 << seat;
                     if (s_openKind[seat] != want) s_openSel[seat] = -1;   /* nothing is picked until the stick is pushed: letting go without a pick keeps what is in hand */
                     s_openKind[seat] = want;
-                    const float x = inputPadAxis(seat, SDL_CONTROLLER_AXIS_RIGHTX) / 32767.0f;
-                    const float y = inputPadAxis(seat, SDL_CONTROLLER_AXIS_RIGHTY) / 32767.0f;
+                    const float x = inputPadAxis(pd, SDL_CONTROLLER_AXIS_RIGHTX) / 32767.0f;
+                    const float y = inputPadAxis(pd, SDL_CONTROLLER_AXIS_RIGHTY) / 32767.0f;
                     if (x * x + y * y > 0.36f) {   /* the stick is pushed: its direction picks the sector, the first one is at the top */
                         float a = atan2f(x, -y);   /* 0 = up, clockwise */
                         if (a < 0) a += 6.2831853f;
@@ -156,7 +157,7 @@ void portWheelGameTick(void)
             }
         }
         {   /* a shoulder button is held: say what the wheel saw (one line a second at most) */
-            const int rl = inputPadButton(seat, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) != 0, rr = inputPadButton(seat, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) != 0;
+            const int rl = inputPadButton(pd, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) != 0, rr = inputPadButton(pd, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) != 0;
             static Uint32 lastAll = 0;
             if ((rl || rr) && SDL_GetTicks() - lastAll > 1000) {
                 lastAll = SDL_GetTicks();
