@@ -75,7 +75,7 @@ Example, a 40 s performance run of the Jungle in co-op with a 150% draw distance
 
 ```sh
 NXLINK_RETRIES=40 python tools/switch/nxlink.py <ip> build-switch-link/ge007.aarch64.nro \
-    switch/project-dam/project-dam-test.nro run.log \
+    project-dam/project-dam-test.nro run.log \
     -level_37 -hard0 GE_COOP=1 GE_PERFSTAT=1 NX_TEST_SECS=40 "GE_CFG=Video.DrawDistance=150;Video.LodDistance=150"
 ```
 
@@ -115,9 +115,9 @@ time: one launch, then a second upload that only checks the launcher survived th
 
 ```sh
 NXLINK_RETRIES=20 python tools/switch/nxlink.py <ip> build-switch-link/ge007.aarch64.nro \
-    switch/project-dam/project-dam-test.nro run-1.log
+    project-dam/project-dam-test.nro run-1.log
 NXLINK_RETRIES=10 python tools/switch/nxlink.py <ip> build-switch-link/ge007.aarch64.nro \
-    switch/project-dam/project-dam-test.nro run-2.log   # connects only if the launcher is alive
+    project-dam/project-dam-test.nro run-2.log   # connects only if the launcher is alive
 ```
 
 `NXLINK_RETRIES` (3 s per attempt) makes an upload fail fast when the launcher no longer answers (it

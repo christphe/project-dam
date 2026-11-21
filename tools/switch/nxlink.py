@@ -2,7 +2,7 @@
 
     python nxlink.py <switch-ip> <file.nro> <sd-path> <log-out> [args...]
 
-Uploads <file.nro> to the homebrew menu's netloader (Y), at <sd-path>, with the
+Uploads <file.nro> to the homebrew menu's netloader (Y), at sdmc:/switch/<sd-path>, with the
 given arguments, then acts as the stdio server (`nxlink -s`): everything the
 program writes after nxlinkStdio() is appended to <log-out>.
 """
