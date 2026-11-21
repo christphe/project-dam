@@ -4,7 +4,7 @@
  "migrations": [
   {
    "version": 1,
-   "why": "Native widescreen and Widescreen auto FOV are gone: the picture always takes the output aspect. Whoever had the stretched 4:3 picture off (native widescreen off) gets forced 4:3 with bars. The fog form used to follow Visuals (Original = per-vertex): it is now its own key. The Custom gamepad layout is gone (Modern replaces it): a Custom seat falls back to 1.1 Jinx.",
+   "why": "Native widescreen and Widescreen auto FOV are gone: the picture always takes the output aspect. Whoever had the stretched 4:3 picture off (native widescreen off) gets forced 4:3 with bars. The fog form used to follow Visuals (Original = per-vertex): it is now its own key. The Custom gamepad layout is gone (Modern replaces it): a Custom seat (any player) falls back to 1.1 Jinx.",
    "steps": [
     {
      "key": "Video.AspectMode",
@@ -27,6 +27,30 @@
      "set": 0,
      "when": {
       "key": "Input.PadPreset",
+      "eq": 3
+     }
+    },
+    {
+     "key": "Input.PadPreset2",
+     "set": 0,
+     "when": {
+      "key": "Input.PadPreset2",
+      "eq": 3
+     }
+    },
+    {
+     "key": "Input.PadPreset3",
+     "set": 0,
+     "when": {
+      "key": "Input.PadPreset3",
+      "eq": 3
+     }
+    },
+    {
+     "key": "Input.PadPreset4",
+     "set": 0,
+     "when": {
+      "key": "Input.PadPreset4",
       "eq": 3
      }
     }

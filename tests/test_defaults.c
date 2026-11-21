@@ -68,12 +68,21 @@ static void migrations(void)
     GE_CHECK(configSetValue("Video.PerPixelFog", 1));
     GE_CHECK(configSetValue("Video.AspectMode", 0));
     GE_CHECK(configSetValue("Input.PadPreset", 3));
+    GE_CHECK(configSetValue("Input.PadPreset2", 3));
+    GE_CHECK(configSetValue("Input.PadPreset3", 5));   /* not Custom: untouched */
+    GE_CHECK(configSetValue("Input.PadPreset4", 3));
     defaultsMigrate();
     GE_CHECK(configGetValue("Video.AspectMode", &v));
     GE_CHECK(v == 1);
     GE_CHECK(configGetValue("Video.PerPixelFog", &v));
     GE_CHECK(v == 0);
     GE_CHECK(configGetValue("Input.PadPreset", &v));
+    GE_CHECK(v == 0);
+    GE_CHECK(configGetValue("Input.PadPreset2", &v));   /* every player's Custom seat, not only player 1's */
+    GE_CHECK(v == 0);
+    GE_CHECK(configGetValue("Input.PadPreset3", &v));
+    GE_CHECK(v == 5);
+    GE_CHECK(configGetValue("Input.PadPreset4", &v));
     GE_CHECK(v == 0);
     GE_CHECK(configGetValue("Config.Version", &v));   /* stamped with the current version */
     GE_CHECK(v == kDefaultsVersion);
