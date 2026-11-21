@@ -37,6 +37,8 @@ void setActionHandler(void (*handler)(const char* key));
 void drawWheel(float W, float H, int seat, float x0, float y0, float x1, float y1, const char* title, const std::vector<std::string>& names, int sel);
 /* The "press a button" screen of a multiplayer set-up: what each player has so far, whose turn it is. */
 void drawAssign(float W, float H, const std::vector<std::string>& names, int step, int count);
+/* The co-op player count (2, 3 or 4) asked from the mode menu: `sel` 0..2 is the highlighted row. */
+void drawCoopCount(float W, float H, int sel, int* hover, bool* click);   /* hover: the row the mouse moved onto (-1 none) */
 void showRoot();   /* the next frame shows the first menu (Resume / Options / Restart / Quit) */
 void debugGoto(int tab, int entry, int focus);   /* tests: open on this tab and entry (focus -1 = the list) */
 void setUpdate(int state, const char* tag, const char* notes, const char* version, bool installable, bool busy, const char* status);   /* the update check: its state, the release found, its text, this build's version */

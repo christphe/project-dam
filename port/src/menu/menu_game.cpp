@@ -118,6 +118,8 @@ void init() {
     gfx_ui_set_atlas(px, w, h);
 }
 
+void feedMouse(ImGuiIO& io, float W, float H);
+
 void feedInput(ImGuiIO& io, float W, float H) {
     const int pad = inputOverlayOwnerPad();
     auto btn = [&](SDL_GameControllerButton b) { return inputPadButton(pad, b) != 0; };
@@ -153,6 +155,10 @@ void feedInput(ImGuiIO& io, float W, float H) {
     io.AddKeyEvent(ImGuiKey_PageUp, ks[SDL_SCANCODE_PAGEUP] != 0);
     io.AddKeyEvent(ImGuiKey_PageDown, ks[SDL_SCANCODE_PAGEDOWN] != 0);
 
+    feedMouse(io, W, H);
+}
+
+void feedMouse(ImGuiIO& io, float W, float H) {
     int mx = 0, my = 0;
     const Uint32 mb = SDL_GetMouseState(&mx, &my);
     SDL_Window* win = SDL_GetMouseFocus();
@@ -174,7 +180,11 @@ extern "C" int menuNewActive(void) {   /* the menu is this one: the C-era overla
     return 1;
 }
 
-static void runFrame(int mode) {   /* 0 the menu, 1 the wheel, 2 the device assignment */
+extern "C" int coopModalActive(void);
+extern "C" int coopModalSel(void);
+extern "C" void coopModalPointer(int row, int click);
+
+static void runFrame(int mode) {   /* 0 the menu, 1 the wheel, 2 the device assignment, 3 the co-op player count */
     const bool wheel = mode == 1;
     if (!s_ctx) init();
     const float W = (float)gfx_current_dimensions.width, H = (float)gfx_current_dimensions.height;
@@ -184,6 +194,7 @@ static void runFrame(int mode) {   /* 0 the menu, 1 the wheel, 2 the device assi
     io.DeltaTime = s_lastTicks ? (float)(now - s_lastTicks) / 1000.0f : 1.0f / 60.0f;
     if (io.DeltaTime <= 0.0f || io.DeltaTime > 0.25f) io.DeltaTime = 1.0f / 60.0f;
     s_lastTicks = now;
+    if (mode == 3) feedMouse(io, W, H);
     if (mode == 0) {
         menu::setOwner(inputOverlayOwnerSeat());
         optionsMenuSetSeat(inputOverlayOwnerSeat());
@@ -194,7 +205,13 @@ static void runFrame(int mode) {   /* 0 the menu, 1 the wheel, 2 the device assi
         io.AddMouseWheelEvent(0.0f, (float)optionsMenuWheel());   /* the mouse wheel: the lists and the release text scroll */
     }
     ImGui::NewFrame();
-    if (mode == 2) {   /* who plays with which device */
+    if (mode == 3) {   /* the mouse picks a row too: hovering moves the selection, a click starts */
+        int row = -1;
+        bool click = false;
+        menu::drawCoopCount(W, H, coopModalSel(), &row, &click);
+        coopModalPointer(row, click ? 1 : 0);
+        menu::drawPointer(inputCrosshairCursorOn() != 0, W, H);
+    } else if (mode == 2) {   /* who plays with which device */
         char an[4][48];
         int astep = 0, acount = 0;
         std::vector<std::string> list;
@@ -246,6 +263,7 @@ static void runFrame(int mode) {   /* 0 the menu, 1 the wheel, 2 the device assi
 extern "C" void menuUiFrame(void) { runFrame(0); }
 extern "C" void menuWheelFrame(void) { runFrame(1); }
 extern "C" void menuAssignFrame(void) { runFrame(2); }
+extern "C" void menuCoopCountFrame(void) { runFrame(3); }
 
 extern "C" {
 int portDevMode(void);

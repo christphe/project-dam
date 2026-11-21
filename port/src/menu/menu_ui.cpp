@@ -1207,4 +1207,38 @@ void drawAssign(float W, float H, const std::vector<std::string>& names, int ste
     ImGui::End();
 }
 
+void drawCoopCount(float W, float H, int sel, int* hover, bool* click) {
+    *hover = -1;
+    *click = false;
+    if (!g_head) return;
+    const float u = W / 100.0f;
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(W, H));
+    ImGui::Begin("##coopcount", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBackground |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoInputs);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(ImVec2(0, 0), ImVec2(W, H), IM_COL32(13, 14, 12, 235));
+    const int count = 3;
+    const float pw = 36.0f * u, rowH = 5.4f * u, gap = 1.0f * u;
+    const float ph = 9.0f * u + count * (rowH + gap), x0 = (W - pw) * 0.5f, y0 = (H - ph) * 0.5f;
+    box(dl, ImVec2(x0, y0), ImVec2(x0 + pw, y0 + ph), IM_COL32(21, 22, 15, 255), kGold);
+    const std::string head = upper(tr("Co-op"));
+    text(dl, g_head, 2.4f * u, ImVec2(x0 + 2.0f * u, y0 + 1.6f * u), kInk, head.c_str());
+    for (int i = 0; i < count; i++) {
+        const ImVec2 a(x0 + 2.0f * u, y0 + 6.0f * u + i * (rowH + gap)), b(x0 + pw - 2.0f * u, a.y + rowH);
+        const ImGuiIO& io = ImGui::GetIO();
+        const bool over = io.MousePos.x >= a.x && io.MousePos.x < b.x && io.MousePos.y >= a.y && io.MousePos.y < b.y;
+        if (over && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) *hover = i;   /* a resting pointer leaves the pad's choice alone */
+        if (over && ImGui::IsMouseClicked(0)) { *hover = i; *click = true; }
+        const bool on = i == sel;
+        box(dl, a, b, on ? kGoldFill : IM_COL32(13, 14, 12, 255), on ? kGold : kRule);
+        const std::string lab = std::to_string(i + 2) + " " + upper(tr("Players"));
+        text(dl, g_head, 1.9f * u, ImVec2(a.x + 1.4f * u, a.y + (rowH - 1.9f * u) * 0.5f), on ? kInk : kMut, lab.c_str());
+    }
+    const std::string hint = tr("A starts, B goes back.");
+    text(dl, g_body, 1.4f * u, ImVec2(x0 + 2.0f * u, y0 + ph - 2.6f * u), kMut, hint.c_str());
+    ImGui::End();
+}
+
 }  // namespace menu

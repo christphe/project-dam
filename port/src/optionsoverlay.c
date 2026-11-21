@@ -126,7 +126,7 @@ static const char *const kPadPreset[] = { "1.1 Jinx", "1.2 Christmas", "1.3 Fros
 static const char *const kOrigStyle[] = { "1.1 Honey", "1.2 Solitaire", "1.3 Kissy", "1.4 Goodnight",
                                           "2.1 Plenty", "2.2 Galore", "2.3 Domino", "2.4 Goodhead", NULL };
 static int s_padSeat = 0;   /* D469: seat edited by the Controller page rows */
-static const char *const kCoopHealth[] = { "100%", "150%", "200%", NULL };   /* project-dam: coop.c */
+static const char *const kCoopHealth[] = { "+0%", "+50%", "+100%", NULL };   /* project-dam: coop.c, per extra player */
 static const char *const kAimAssist[] = { "Off", "Low", "High", NULL };   /* project-dam: nxgame.c */
 static const char *const kAimEntry[]  = { "Off", "Move view", "Centre crosshair", NULL };   /* project-dam: nxgame.c */
 #if defined(__SWITCH__)
@@ -571,7 +571,7 @@ static struct Row rows[] = {
     { .key="Game.MissionTimer", .label="Mission timer", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
     /* project-dam: red puff on a guard hit instead of the wall puff (nxgame.c). */
     { .key="Game.BloodOnHit", .label="Blood on hit", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
-    /* project-dam: 2-player split-screen co-op campaign (coop.c). */
+    /* project-dam: 2 to 4 player split-screen co-op campaign (coop.c). */
     { .key="Game.CoopEnemyHealth", .label="Co-op enemy health", .kind=ROW_ENUM, .step=1, .names=kCoopHealth },
     SEPT(G4, "Updates"),
     /* D551: opt-in update check; the action row appears only once a newer release is known. */
@@ -4307,7 +4307,10 @@ static Gfx *overlayEmitLocked(void)
                 char an[4][48];
                 int astep = 0, acount = 0;
                 extern void menuAssignFrame(void);
+                extern int coopModalActive(void);
+                extern void menuCoopCountFrame(void);
                 if (portAssignState(an, &astep, &acount)) menuAssignFrame();   /* who plays with which device */
+                else if (coopModalActive()) menuCoopCountFrame();   /* the co-op player count, from the mode menu */
                 else if (portWheelMask() != 0) menuWheelFrame();   /* the Modern wheels */
                 else menuUiClose();
             }
@@ -4745,7 +4748,7 @@ static const struct { const char *key, *help; } kRowHelp[] = {
     { "Game.BloodOnHit", "A hit on a guard shows a dark-red puff, not the yellow wall puff." },
     { "Input.P1Type", "Auto: keyboard, mouse and pad all work. Else only that device." },
     { "Input.PlayerPad", "Which connected gamepad this player uses. Auto: the first free one." },
-    { "Game.CoopEnemyHealth", "How tough guards are in co-op. Higher takes more shots to kill." },
+    { "Game.CoopEnemyHealth", "Guard health bonus per extra player. Higher takes more shots to kill." },
     { "Video.Renderer", "Vulkan is the default; OpenGL is the fallback if it misbehaves on your GPU." },
     { "Video.MSAA", "Smooths jagged edges while docked. Higher is cleaner but slower." },
     { "Video.MSAAHandheld", "Smooths jagged edges in handheld mode. Higher is cleaner but slower." },

@@ -109,7 +109,7 @@ void sub_GAME_7F09B368(enum GUNHAND hand);
 void sub_GAME_7F09B398(enum GUNHAND hand);
 
 #ifdef PORT
-/* Fork-local co-op campaign (port/src/coop.c, docs/dev/findings.md D960).
+/* Fork-local co-op campaign for 2 to 4 players (port/src/coop.c, docs/dev/findings.md D960).
  * Each macro is the original N64 expression when built without PORT. */
 struct ChrRecord;
 s32 coopIsMission(void);
@@ -186,6 +186,7 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 #define GE_PROJ_SIM_OWNER(own, op, view) coopProjSimOwner((own), (op), (view))
 #define GE_SPLIT_GE2()           (getPlayerCount() >= 2 && coopSplitView())
 #define GE_SPLIT_EQ2()           (getPlayerCount() == 2 && coopSplitView())
+#define GE_SPLIT_GE3()           (getPlayerCount() >= 3 && coopSplitView())
 extern int portSplitVertical;   /* Game.SplitScreen: 2 players side by side instead of one above the other */
 #define GE_SPLIT_VERT()          (GE_SPLIT_EQ2() && portSplitVertical)
 #define GE_WATCH_NO_OPTIONS()    (getPlayerCount() == 1 || coopIsMission())   /* the menu replaces the watch's settings pages */
@@ -197,9 +198,10 @@ extern int portNeedPads(int n);
 #define GE_MP_AVAIL()            4
 #define GE_NEED_PADS(n)          portNeedPads(n)
 extern int coopMenuIntent(void);
+extern int coopMenuPlayers(void);
 extern int portAimIsMouse(void);
 #define GE_AUTOAIM_ON()          (cur_player_get_autoaim() && !portAimIsMouse())   /* no auto-aim while the mouse aims */
-#define GE_COOP_WAIT()           (coopMenuIntent() && !portNeedPads(2))   /* co-op chosen, fewer than 2 pads */
+#define GE_COOP_WAIT()           (coopMenuIntent() && !portNeedPads(coopMenuPlayers()))   /* co-op chosen, fewer pads than players */
 #else
 #define GE_RULE_SOLO()           (getPlayerCount() == 1)
 #define GE_RULE_MULTI()          (getPlayerCount() >= 2)
@@ -222,6 +224,7 @@ extern int portAimIsMouse(void);
 #define GE_FROZEN_CAMERA         bondviewFrozenCameraTick
 #define GE_SPLIT_GE2()           (getPlayerCount() >= 2)
 #define GE_SPLIT_EQ2()           (getPlayerCount() == 2)
+#define GE_SPLIT_GE3()           (getPlayerCount() >= 3)
 #define GE_SPLIT_VERT()          0
 #define GE_WATCH_NO_OPTIONS()    0
 #define GE_COOP_VIEW_ORDER()
