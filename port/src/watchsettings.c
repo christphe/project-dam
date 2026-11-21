@@ -27,7 +27,7 @@ extern u16 musicTrack1GetVolume(void);
 extern u16 get_mTrack2Vol(void);
 extern void fileBuildWriteNewSave(u32 folder);
 extern void set_cur_player_look_vertical_inverted(u32 value);
-extern int inputControlScheme(void);   /* D513: 0 Modern, 1 Original */
+extern int inputControlScheme(int seat);   /* D513, per player: 0 Enhanced, 1 Original, 2 Modern */
 extern int inputPadLookInvert(void);   /* D645 */
 extern void inputSetPadLookInvert(int v);
 extern void cur_player_set_aim_control(u32 value);
@@ -646,7 +646,7 @@ void watchSettingsGameTick(void)
      * (moveData.invertPitch), so the in-game watch "Look up/down" row is
      * the player's live control again, exactly as on the N64. RAM only;
      * one int compare per tick. */
-    if (stageActive() && g_CurrentPlayer && inputControlScheme() == 0 &&
+    if (stageActive() && g_CurrentPlayer && inputControlScheme(get_cur_playernum()) != 1 &&
         get_cur_player_look_vertical_inverted() != 0)
         set_cur_player_look_vertical_inverted(0);
     /* D645 (#145): in Original the F10 "Invert look" row and the watch
@@ -655,7 +655,7 @@ void watchSettingsGameTick(void)
      * aim-mode stick), as on the N64. */
     static int lastRow = -1, lastGame = -1;
     if (!stageActive()) lastRow = -1;   /* re-sync on each stage entry */
-    if (stageActive() && g_CurrentPlayer && inputControlScheme() == 1) {
+    if (stageActive() && g_CurrentPlayer && inputControlScheme(get_cur_playernum()) == 1) {
         int row = inputPadLookInvert(), game = get_cur_player_look_vertical_inverted() ? 1 : 0;
         if (lastRow < 0) {   /* stage entry: the F10 row (edited in the front end) wins */
             if (row != game) set_cur_player_look_vertical_inverted(row);

@@ -60,13 +60,16 @@ option's position or its `value` in `menu.json`.
 | `Game.SplitScreen` | 0 | 0 | Video > Display > Split screen |
 | `Input.AimMode` | 1 | 0 | Input > Aiming > Aim style |
 | `Input.AimRange` | 0 | 0 | Input > Aiming > Aim range |
-| `Input.ControlScheme` | 0 | 0 | Input > Style > Control style (with `Input.PadPreset`) |
+| `Input.ControlScheme` | 2 | 2 | Input > Style > Control style (0 Enhanced, 1 Original, 2 Modern) |
+| `Input.ControlScheme2` | 2 | 2 | Input > Style > Control style, for player 2 |
+| `Input.ControlScheme3` | 2 | 2 | Input > Style > Control style, for player 3 |
+| `Input.ControlScheme4` | 2 | 2 | Input > Style > Control style, for player 4 |
 | `Input.CrosshairCursor` | 1 | 1 | Input > Mouse > Crosshair pointer |
 | `Input.CrouchMode` | 1 | 1 | Input > Style > Crouch |
 | `Input.MouseEnabled` | 1 | 1 | Input > Mouse > Mouse enabled |
 | `Input.MouseInvertY` | 0 | 0 | Input > Mouse > Invert look |
 | `Input.MouseRawInput` | 0 | 0 | Input > Mouse > Raw input |
-| `Input.MouseSensitivity` | 100 | 100 | Input > Mouse > Horizontal sensitivity |
+| `Input.MouseSensitivity` | 230 | 230 | Input > Mouse > Horizontal sensitivity |
 | `Input.MouseSmoothing` | 0 | 0 | Input > Mouse > Smoothing |
 | `Input.MouseYScale` | 100 | 100 | Input > Mouse > Vertical sensitivity |
 | `Input.P1Type` | 2 | 2 | — (the device assignment screen) |
@@ -78,10 +81,10 @@ option's position or its `value` in `menu.json`.
 | `Input.PadLookSensX` | 85 | 100 | Input > Look and sticks > Horizontal look sensitivity |
 | `Input.PadLookSensY` | 85 | 100 | Input > Look and sticks > Vertical look sensitivity |
 | `Input.PadLookSmooth` | 2 | 0 | Input > Look and sticks > Look smoothing |
-| `Input.PadPreset` | 5 | 5 | Input > Style > Layout |
-| `Input.PadPreset2` | 5 | 5 | Input > Style > Layout, for player 2 |
-| `Input.PadPreset3` | 5 | 5 | Input > Style > Layout, for player 3 |
-| `Input.PadPreset4` | 5 | 5 | Input > Style > Layout, for player 4 |
+| `Input.PadPreset` | 0 | 0 | Input > Style > Layout (Enhanced) |
+| `Input.PadPreset2` | 0 | 0 | Input > Style > Layout, for player 2 |
+| `Input.PadPreset3` | 0 | 0 | Input > Style > Layout, for player 3 |
+| `Input.PadPreset4` | 0 | 0 | Input > Style > Layout, for player 4 |
 | `Input.PadSouthpaw` | 0 | 0 | Input > Look and sticks > Southpaw |
 | `Input.PadTriggerPct` | 10 | 25 | Input > Look and sticks > Trigger threshold |
 | `Input.PadTurnAccel` | 2 | — | Input > Look and sticks > Turn acceleration |

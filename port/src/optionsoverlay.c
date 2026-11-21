@@ -130,9 +130,9 @@ static const char *const kAimEntry[]  = { "Off", "Move view", "Centre crosshair"
 #define PAD_PAGE_ALWAYS 0
 #endif
 #if defined(__SWITCH__)
-static const char *const kControlScheme[] = { "Extended", "Original", NULL };   /* D513/D554: display text only (index = stored value) */
+static const char *const kControlScheme[] = { "Extended", "Original", "Modern", NULL };   /* D513/D554: display text only (index = stored value) */
 #else
-static const char *const kControlScheme[] = { "Enhanced", "Original", NULL };   /* PC: the Mode row, same two values */
+static const char *const kControlScheme[] = { "Enhanced", "Original", "Modern", NULL };   /* PC: the Mode row, same values */
 #endif
 #if defined(__SWITCH__)
 static const char *const kAimMode[]   = { "Original", "Centered", NULL };   /* D337; project-dam: the weapon sway is part of Centered */
@@ -231,7 +231,7 @@ struct Row {
     const char        *shownWhen;
     int                shownValue;
     int               *showPtr;
-    /* D516: 1 = only with Input.ControlScheme Ext, 2 = only with Original.
+    /* D516: 1 = only with the port's controls (Input.ControlScheme Enhanced / Modern), 2 = only with Original.
      * Resolved to schemePtr at init (shownWhen can't express a second condition). */
     int                schemeOnly;
     int               *schemePtr;
@@ -1419,10 +1419,12 @@ static void padSetSeat(int seat)
     if (seat < 0 || seat > 3) return;
     s_padSeat = seat;
     watchSettingsSetControlSeat(seat);
-    int *pp = inputPadPresetPtr(seat);
+    int *pp = inputPadPresetPtr(seat), *cs = inputControlSchemePtr(seat);
     for (int i = 0; i < NUM_ROWS; i++) {
         if (!strcmp(rows[i].key, "Input.PadPreset")) rows[i].ptr = pp;
+        else if (!strcmp(rows[i].key, "Input.ControlScheme")) rows[i].ptr = cs;   /* per player, like the preset */
         else if (rows[i].kind == ROW_PADBIND) rows[i].showPtr = pp;
+        if (rows[i].schemeOnly) rows[i].schemePtr = cs;
     }
 }
 
@@ -1756,7 +1758,7 @@ static int rowSchemeOk(const struct Row *r)
         return 1;
     }
     if (!r->schemeOnly || !r->schemePtr) return 1;
-    return (*r->schemePtr != 0) == (r->schemeOnly == 2);
+    return (*r->schemePtr == 1) == (r->schemeOnly == 2);   /* 1 = Original */
 }
 
 static double rowGet(const struct Row *r)
@@ -2661,14 +2663,6 @@ int optionsMenuGet(const char *key, double *out)
 {
     if (!strcmp(key, "__DisplayMode")) { *out = videoGetDisplayMode(); return 1; }
     if (!strcmp(key, "__Resolution")) { *out = s_resSel; return 1; }
-    if (!strcmp(key, "__ControlStyle")) {   /* 0 Modern, 1 Enhanced (the XBLA layouts), 2 Original (the N64 styles) */
-        double scheme = 0, preset = 0;
-        struct Row *rs = rowByKey("Input.ControlScheme"), *rp = rowByKey("Input.PadPreset");
-        if (rs && rs->found) scheme = rowGet(rs);
-        if (rp && rp->found) preset = rowGet(rp);
-        *out = scheme != 0 ? 2 : (preset == 5 ? 0 : 1);
-        return 1;
-    }
     if (!strcmp(key, "__BondFile")) {   /* the save file the profile settings are read from */
         const int f = watchSettingsActiveFolder();
         *out = f < 0 ? 0 : f;
@@ -2700,15 +2694,6 @@ void optionsMenuSet(const char *key, double value)
         const int k = (int)lround(value);
         if (k <= 0) audioDeviceRequest("");
         else if (k - 1 < audioDeviceRefresh()) audioDeviceRequest(audioDeviceName(k - 1));
-        return;
-    }
-    if (!strcmp(key, "__ControlStyle")) {
-        const int k = (int)lround(value);
-        struct Row *rs = rowByKey("Input.ControlScheme"), *rp = rowByKey("Input.PadPreset");
-        if (!rs || !rp) return;
-        rowSet(rs, k == 2 ? 1.0 : 0.0);
-        if (k == 0) rowSet(rp, 5.0);                              /* Modern is a layout of its own */
-        else if (k == 1 && rowGet(rp) == 5.0) rowSet(rp, 0.0);    /* leaving Modern: the first of the remastered layouts */
         return;
     }
     if (!strcmp(key, "__Resolution")) {
@@ -4750,7 +4735,7 @@ static const struct { const char *key, *help; } kRowHelp[] = {
     { "Video.SkyScale", "How sharp the Enhanced sky and sea are. Half draws them at a quarter of the pixels: faster, softer." },
     { "Video.Visuals", "Fixed: the original game's display flaws corrected. Enhanced: also a richer sky, scenery and effects." },
     { "Input.CrosshairCursor", "Uses the crosshair as the mouse pointer in this menu." },
-    { "Input.ControlScheme", "Choose the port's modern controls or the original game's." },
+    { "Input.ControlScheme", "Modern, the remastered layouts (Enhanced) or the original game's controls." },
     { "Bond.Control", "The original game's control presets." },
     { "Input.PadPreset", "Xbox Series-style presets, or your own custom layout." },
     { "Input.PadSouthpaw", "Swaps the fire and aim triggers." },

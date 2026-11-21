@@ -45,6 +45,9 @@ int g_focus = -1;         /* index among the visible controls of the entry, or -
 bool g_closeReq = false;
 float g_scroll = 0, g_scrollTarget = 0;
 std::string g_actionFired;   /* the id of the last action control activated (the game's adapter reads it) */
+std::string g_pressId;       /* the action button last pressed, and when: drawAction flashes it */
+double g_pressTime = -1.0;
+const double kPressFlash = 0.28;   /* seconds */
 std::string g_selId;         /* the select whose list is open, or "" */
 int g_ownerSeat = -1;
 float g_padUv[4] = { 0, 0, 0, 0 }, g_padAspect = 0;
@@ -100,8 +103,17 @@ bool hit(const char* id, ImVec2 a, ImVec2 size) {
 }
 
 /* an action control: "__ResetEntry" puts every control of its entry back to its default, anything else is the game's */
+/* the focused toggle / button: a gold frame around what A presses (Left / Right do nothing there) */
+void focusFrame(ImDrawList* dl, ImVec2 a, ImVec2 b, float u)
+{
+    const float p = 0.45f * u;
+    dl->AddRect(ImVec2(a.x - p, a.y - p), ImVec2(b.x + p, b.y + p), kGold, 0.0f, 0, 1.5f);
+}
+
 void fireAction(const Control& c) {
     g_actionFired = c.id;
+    g_pressId = c.id;
+    g_pressTime = ImGui::GetTime();
     if (c.key == "__ResetEntry") {
         for (const Tab& t : g_model.tabs)
             for (const Item& it : t.items) {
@@ -200,6 +212,7 @@ void drawToggle(ImDrawList* dl, const Control& c, int fi, float x, float y, floa
         dl->AddPolyline(tick, 3, col, ImDrawFlags_None, k);
     }
     text(dl, g_body, 1.6f * u, ImVec2(x + s + 0.9f * u, y + (s - 1.6f * u) * 0.5f - 0.1f * u), disabled ? kDisabled : kInk, on ? tr("ON").c_str() : tr("OFF").c_str());
+    if (g_focus == fi && !disabled) focusFrame(dl, ImVec2(x, y), ImVec2(x + s, y + s), u);
 }
 
 void drawSlider(ImDrawList* dl, const Control& c, int fi, float x, float y, float u, bool disabled) {
@@ -241,8 +254,15 @@ void drawAction(ImDrawList* dl, const Control& c, int fi, float x, float y, floa
     char id[64];
     snprintf(id, sizeof id, "##%s", c.id.c_str());
     if (hit(id, ImVec2(x, y), ImVec2(bw, bh)) && !disabled) { fireAction(c); g_focus = fi; }
-    box(dl, ImVec2(x, y), ImVec2(x + bw, y + bh), IM_COL32(21, 22, 15, 255), kRule);
-    textCenter(dl, g_head, 1.55f * u, ImVec2(x, y), ImVec2(x + bw, y + bh), disabled ? kDisabled : kInk, tr(c.label).c_str());
+    /* the press: the button sinks a little and flashes gold, then fades back */
+    const double t = (g_pressId == c.id && g_pressTime >= 0) ? (ImGui::GetTime() - g_pressTime) / kPressFlash : 1.0;
+    const float k = (t >= 0 && t < 1) ? (float)(1.0 - t) : 0.0f;
+    const float in = 0.35f * u * k;
+    const ImVec2 a(x + in, y + in), b(x + bw - in, y + bh - in);
+    box(dl, a, b, IM_COL32(21, 22, 15, 255), k > 0 ? kGold : kRule);
+    if (k > 0) dl->AddRectFilled(a, b, IM_COL32(230, 194, 90, (int)(110 * k)));
+    textCenter(dl, g_head, 1.55f * u, a, b, disabled ? kDisabled : kInk, tr(c.label).c_str());
+    if (g_focus == fi && !disabled) focusFrame(dl, ImVec2(x, y), ImVec2(x + bw, y + bh), u);
 }
 
 void startCapture(const Control& c, int slot) {
@@ -910,8 +930,9 @@ void draw(float W, float H) {
                 if (right) g_slotSel = 1;
                 if (ok) startCapture(c, g_slotSel);
             } else if (!dis) {
-                if (left) changeValue(c, -1);
-                if (right) changeValue(c, +1);
+                const bool press = c.type == CT_ACTION || c.type == CT_TOGGLE || c.type == CT_SELECT;   /* pressed only by A / Enter / a click: */
+                if (left && !press) changeValue(c, -1);                          /* a stick passing through Left / Right */
+                if (right && !press) changeValue(c, +1);                         /* must not fire or flip them */
                 if (ok && c.type == CT_SELECT) openSelect(c);
                 else if (ok && c.type != CT_SLIDER) changeValue(c, +1);
             }

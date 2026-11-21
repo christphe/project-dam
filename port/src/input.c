@@ -354,13 +354,12 @@ static const struct { const char *key; const char *label; const char *def; } kPa
     [PA_START]   = { "Start",      "Start / pause",    "start" },
 };
 
-/* Modern (preset 5): RT fire, LT aim, A use, X reload, Y next weapon, R3 crouch; LB opens the weapon wheel and RB
+/* Modern (Input.ControlScheme 2): RT fire, LT aim, A use, X reload, Y next weapon, R3 crouch; LB opens the weapon wheel and RB
  * the gadget wheel (port/src/wheel.c reads them itself); B is free. */
 static const char *const kPadModern[PA_COUNT] = {
     [PA_FIRE] = "righttrigger", [PA_AIM] = "lefttrigger", [PA_USE] = "a", [PA_RELOAD] = "x", [PA_CROUCH] = "rightstick",
     [PA_NEXTWPN] = "y", [PA_PREVWPN] = "none", [PA_GADGET] = "none", [PA_START] = "start",
 };
-#define PAD_PRESET_MODERN 5
 /* Modern goes by position, not by letter: a Nintendo pad prints Y where Xbox has X (left), X where Xbox has Y (top),
  * B at the bottom and A on the right. Same hands on every pad. */
 static const char *const kPadModernNin[PA_COUNT] = {
@@ -404,13 +403,18 @@ static int  padPreset[MAX_PADS] = {0};           /* D518: per-seat (Input.PadPre
  * 0 = legacy 1.1/HONEY + D166 digital pulse.
  * (D498: declared here so the stick-style helpers below can read it.) */
 static int naturalPitchMode = 1;                 /* Input.NaturalPitch */
-static int controlScheme = 0;                    /* D513 Input.ControlScheme: 0 Modern (port forces the style), 1 OG (the game's own selection is honoured) */
+/* D513 Input.ControlScheme[2/3/4], per player like the presets: 0 Enhanced (the XBLA layouts, Input.PadPreset),
+ * 1 Original (the game's own selection is honoured), 2 Modern. */
+enum { SCHEME_ENHANCED = 0, SCHEME_ORIGINAL = 1, SCHEME_MODERN = 2 };
+static int controlScheme[MAX_PADS] = { SCHEME_MODERN, SCHEME_MODERN, SCHEME_MODERN, SCHEME_MODERN };
+static int schemeOriginal(int seat) { return seat >= 0 && seat < MAX_PADS && controlScheme[seat] == SCHEME_ORIGINAL; }
 /* D513 accessor (#145): watchsettings.c gates D564's pin of the game's own
  * "Look up/down" value on this: in the Modern scheme the port's Invert
  * look rows own the inversion; in Original the game's watch setting is
  * the live control (the game honours it in bondview2's stick-pitch path),
  * so it must stay user-settable there. */
-int inputControlScheme(void) { return controlScheme; }
+int inputControlScheme(int seat) { return (seat >= 0 && seat < MAX_PADS) ? controlScheme[seat] : SCHEME_MODERN; }
+int *inputControlSchemePtr(int seat) { return &controlScheme[(seat >= 0 && seat < MAX_PADS) ? seat : 0]; }
 /* D645: Original scheme -- F10 "Invert look" mirrors the game's own
  * "Look up/down" (watchsettings.c keeps the two in sync both ways). */
 #if defined(PLATFORM_SWITCH)
@@ -469,7 +473,7 @@ static u32 padParseMask(const char *s, int *bad)
 static void padBuildBinds(PadBinds *b, int seat, int custom, int *bad)
 {
     for (int a = 0; a < PA_COUNT; a++)
-        b->mask[a] = padParseMask(custom ? padStr[seat][a] : (padPreset[seat] == PAD_PRESET_MODERN ? (padFamily[seat] == 2 ? kPadModernNin[a] : kPadModern[a]) : kPadAct[a].def), bad);
+        b->mask[a] = padParseMask(custom ? padStr[seat][a] : (controlScheme[seat] == SCHEME_MODERN ? (padFamily[seat] == 2 ? kPadModernNin[a] : kPadModern[a]) : kPadAct[a].def), bad);
     if (!b->mask[PA_START]) b->mask[PA_START] = PSM(PS_START);   /* lockout guard: keep a pause path */
     for (int n = 0; n < NB_COUNT; n++) b->n64[n] = 0;
 }
@@ -494,11 +498,15 @@ static int padPresetCustom(int seat) { return padPreset[seat] == 3; }
 /* D516: in Original the D498 port presets are not offered (the game's own
  * styles are); the stored preset is ignored (plain N64 layout) unless it is
  * Custom, whose binds still apply (edited in Ext only). Ext: exactly padPreset. */
-static int padPresetEff(int seat) { return (controlScheme && padPreset[seat] != 3) ? 0 : padPreset[seat]; }
+static int padPresetEff(int seat)
+{
+    if (controlScheme[seat] == SCHEME_MODERN) return INPRESET_JINX;   /* Modern: the natural-pitch roles of Jinx (the old preset 5 gave the same) */
+    return (schemeOriginal(seat) && padPreset[seat] != 3) ? 0 : padPreset[seat];
+}
 
 int inputPadIsModern(int seat)
 {
-    return seat >= 0 && seat < MAX_PADS && !controlScheme && padPreset[seat] == PAD_PRESET_MODERN;
+    return seat >= 0 && seat < MAX_PADS && controlScheme[seat] == SCHEME_MODERN;
 }
 
 /* D498: stick style for the active preset. 1.2 Christmas / 1.3 Frost force
@@ -523,7 +531,7 @@ static int stickSolitare(int seat) {
  * ignore anyway. */
 static int styleIsSolitare(int seat)
 {
-    if (!controlScheme) return stickSolitare(seat);
+    if (!schemeOriginal(seat)) return stickSolitare(seat);
     struct player *p = inputSlotPlayer();
     if (!p) return stickSolitare(seat);
     int t = p->cur_player_control_type_0;
@@ -537,9 +545,9 @@ static unsigned padComputeSig(void)
 {
     int anyCustom = 0;
     unsigned h = 2166136261u;
-    h = (h ^ (unsigned)controlScheme) * 16777619u;   /* D643 */
-    if (controlScheme)
-        for (int s = 0; s < MAX_PADS; s++)
+    for (int s = 0; s < MAX_PADS; s++) h = (h ^ (unsigned)controlScheme[s]) * 16777619u;   /* D643 */
+    for (int s = 0; s < MAX_PADS; s++)
+        if (schemeOriginal(s))
             for (int n = 0; n < NB_COUNT; n++)
                 for (const char *p = n64Str[s][n]; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
     for (int s = 0; s < MAX_PADS; s++) {
@@ -570,7 +578,7 @@ static const PadTable *padTabGet(void)
         int bad = 0;
         for (int s = 0; s < MAX_PADS; s++) {
             padBuildBinds(&spare->seat[s], s, padPresetCustom(s), &bad);
-            if (controlScheme) padBuildN64(&spare->seat[s], s, &bad);   /* D643 */
+            if (schemeOriginal(s)) padBuildN64(&spare->seat[s], s, &bad);   /* D643 */
         }
         SDL_AtomicSetPtr((void **)&padTabPub, spare);
         padTabSig = sig;
@@ -1584,7 +1592,7 @@ static void inputCycleGadget(void)
  * bits the game reads. What touches the game (aim models, crouch, the gadget
  * cycle) stays here.
  *   Original  (controlScheme 1)               g_inputStyleOriginal
- *   Modern    (controlScheme 0, preset 5)     g_inputStyleModern
+ *   Modern    (controlScheme 2)               g_inputStyleModern
  *   Enhanced  (controlScheme 0, preset 0..4)  g_inputStyleEnhanced
  * ------------------------------------------------------------------------ */
 _Static_assert(PSM(PS_A) == INB_A && PSM(PS_B) == INB_B && PSM(PS_X) == INB_X && PSM(PS_Y) == INB_Y &&
@@ -1614,7 +1622,7 @@ static int padAimScale(void *user, int v, int sens)
 /* The strategy of a seat's control style. */
 static const InputStrategy *padStrategyFor(int seat)
 {
-    if (controlScheme) return &g_inputStyleOriginal;
+    if (schemeOriginal(seat)) return &g_inputStyleOriginal;
     if (inputPadIsModern(seat)) return &g_inputStyleModern;
     return &g_inputStyleEnhanced;
 }
@@ -1766,7 +1774,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         (idx == 0 || idx < getPlayerCount())) {   /* D416: each slot rewrites only its own player's style */
         int wantSolitare = stickSolitare(idx) ? CONTROLLER_CONFIG_SOLITARE_ : CONTROLLER_CONFIG_HONEY_;   /* D498, D518 */
         struct player *sp = inputSlotPlayer();
-        if (controlScheme) {
+        if (schemeOriginal(idx)) {
             /* D513 OG controls: the port never writes the style; the game's own
              * selection (watch / save / MP setup) stands. Log each change once. */
             static int lastStyle[4] = { -1, -1, -1, -1 };
@@ -1968,7 +1976,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
          * strafe at full analog scale, through the hook in bondview2.c, not as C steps. The pad's GameDirect
          * zeroes the game's digital steps, so the C bits alone stopped as soon as a pad was plugged in. Aiming
          * (the C-bit slow strafe), the tank, the watch, Original and the QA harness keep the C bits. */
-        kbDirect = !controlScheme && styleIsSolitare(idx) && inputCanUseGameplayActions(menuMode) &&
+        kbDirect = !schemeOriginal(idx) && styleIsSolitare(idx) && inputCanUseGameplayActions(menuMode) &&
                    !(inputSlotPlayer() && inputSlotPlayer()->insightaimmode) &&
                    !(g_inputReplayActive || inputScriptIsActive(0) || g_inputRec != NULL);
         kbFwd = inputActHeld(ks, IA_FORWARD);
@@ -2067,7 +2075,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
          * combined edges prevent a held input from repeatedly using a door.
          * In menus/watch/tank the pad keeps native accept/cancel buttons. */
         SDL_GameController *slot0Pad = slotPad(0);
-        u32 slot0Held = (slot0Pad && !controlScheme) ? padActHeld(&padTabGet()->seat[0], padReadRaw(slot0Pad)) : 0;
+        u32 slot0Held = (slot0Pad && !schemeOriginal(0)) ? padActHeld(&padTabGet()->seat[0], padReadRaw(slot0Pad)) : 0;
         int padUse = (slot0Held & (1u << PA_USE)) != 0;       /* D469: bound actions (Jinx 1.1: A / X) */
         int padReload = (slot0Held & (1u << PA_RELOAD)) != 0;
         int useNow = inputScriptIsActive(0) ? g_inputScriptSlots[0].use : (inputActHeld(ks, IA_CANCEL) || padUse);
@@ -3102,9 +3110,10 @@ static void padMapSelfTest(void)
      * per-seat independence, guards. */
     {
         char savedN[MAX_PADS][NB_COUNT][32];
-        int savedCs = controlScheme, o1 = 1, o2 = 1, o3 = 1;
+        int savedCs[MAX_PADS], o1 = 1, o2 = 1, o3 = 1;
+        memcpy(savedCs, controlScheme, sizeof(savedCs));
         memcpy(savedN, n64Str, sizeof(savedN));
-        controlScheme = 1;
+        for (int s2 = 0; s2 < MAX_PADS; s2++) controlScheme[s2] = SCHEME_ORIGINAL;
         for (int s2 = 0; s2 < MAX_PADS; s2++) {
             padPreset[s2] = 0;
             for (int n = 0; n < NB_COUNT; n++) snprintf(n64Str[s2][n], sizeof(n64Str[0][0]), "%s", kN64Btn[n].def);
@@ -3127,7 +3136,7 @@ static void padMapSelfTest(void)
              ot->seat[3].n64[NB_A] == PSM(PS_A) && ot->seat[3].n64[NB_B] == PSM(PS_X);
         sysLogPrintf(LOG_INFO, "GE_PADMAPTEST: original table (%d) remap/seat-independence (%d) unbound-fallback (%d)", o1, o2, o3);
         fail += !(o1 && o2 && o3);
-        controlScheme = savedCs;
+        memcpy(controlScheme, savedCs, sizeof(savedCs));
         memcpy(n64Str, savedN, sizeof(savedN));
     }
 
@@ -3207,7 +3216,10 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
     configRegisterInt("Input.MouseSensitivity", &g_inputMouseSensitivity, 1, 500);  /* D238 */
     configRegisterInt("Input.MouseAimCurve", &aimCurveGamma, 50, 400);  /* D194(a), x100 */
     configRegisterInt("Input.NaturalPitch", &naturalPitchMode, 0, 1);  /* D194/D238 */
-    configRegisterInt("Input.ControlScheme", &controlScheme, 0, 1);    /* D513: 0 Modern, 1 OG controls */
+    configRegisterInt("Input.ControlScheme",  &controlScheme[0], 0, 2);   /* D513: 0 Enhanced, 1 Original, 2 Modern; per player */
+    configRegisterInt("Input.ControlScheme2", &controlScheme[1], 0, 2);
+    configRegisterInt("Input.ControlScheme3", &controlScheme[2], 0, 2);
+    configRegisterInt("Input.ControlScheme4", &controlScheme[3], 0, 2);
     configRegisterInt("Input.PadDeadzone", &padDeadzone, 0, 30000);  /* legacy; Wave A migrates to L/R */
     configRegisterInt("Input.PadDeadzoneL", &padDeadzoneL, 0, 30000);  /* Wave A: left (movement) stick */
     configRegisterInt("Input.PadDeadzoneR", &padDeadzoneR, 0, 30000);  /* Wave A: right (look) stick */

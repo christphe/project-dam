@@ -38,7 +38,8 @@
         { "id": "visuals", "show": "dispMode == 'custom'", "key": "Video.Visuals", "label": "Visuals", "type": "choice",
           "options": [ { "id": "original", "label": "Original" }, { "id": "fixed", "label": "Fixed" }, { "id": "enhanced", "label": "Enhanced" } ],
           "help": {"original": "The console picture, with its flaws.", "fixed": "The original game's display flaws corrected.", "enhanced": "Fixed, plus a richer sky, scenery and effects."}},
-        { "id": "crop", "show": "dispMode == 'custom'", "key": "Video.SafeAreaCrop", "label": "Crop overscan", "type": "toggle", "dev": "switch"}
+        { "id": "crop", "show": "dispMode == 'custom'", "key": "Video.SafeAreaCrop", "label": "Crop overscan", "type": "toggle", "dev": "switch"},
+        { "id": "reset_display", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
       ] },
       { "name": "Performance", "show": "platform == 'pc' || dev", "controls": [
         { "id": "msaaHandheld", "key": "Video.MSAAHandheld", "label": "Anti-aliasing (handheld)", "type": "slider", "dev": "switch",
@@ -79,7 +80,8 @@
         { "id": "blood", "key": "Game.BloodOnHit", "label": "Blood on hit", "type": "toggle",
           "help": "A hit on a guard shows a dark-red puff, not the yellow wall puff." },
         { "id": "shake", "key": "Game.ScreenShakeIntensity", "label": "Explosion shake", "type": "slider", "min": 0, "max": 30, "step": 1, "div": 10, "decimals": 1,
-          "help": "Sets how strongly explosions shake the screen." }
+          "help": "Sets how strongly explosions shake the screen." },
+        { "id": "reset_effects", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
       ] }
     ] },
     { "name": "Audio", "items": [
@@ -92,14 +94,15 @@
       ] },
       { "name": "Output", "controls": [
         { "id": "adev", "key": "Audio.Device", "label": "Output device", "type": "select", "default": "default", "show": "platform == 'pc'",
-          "options": [ { "id": "default", "label": "Default" } ] }
+          "options": [ { "id": "default", "label": "Default" } ] },
+        { "id": "reset_output", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action", "show": "platform == 'pc'" }
       ] }
     ] },
     { "name": "Input", "items": [
       { "group": "Gamepad" },
       { "name": "Style", "controls": [
-        { "id": "scheme", "key": "__ControlStyle", "label": "Control style", "type": "choice",
-          "options": [ { "id": "modern", "label": "Modern", "value": 0 }, { "id": "enhanced", "label": "Enhanced", "value": 1 }, { "id": "original", "label": "Original", "value": 2 } ],
+        { "id": "scheme", "key": "Input.ControlScheme", "label": "Control style", "type": "choice",
+          "options": [ { "id": "modern", "label": "Modern", "value": 2 }, { "id": "enhanced", "label": "Enhanced", "value": 0 }, { "id": "original", "label": "Original", "value": 1 } ],
           "help": { "modern": "Right trigger fires, left trigger aims. Left face button reloads, top one switches weapon, bottom one uses. Click the right stick to crouch. Hold the left bumper for the weapon wheel and the right one for the gadget wheel, then pick with the right stick.", "enhanced": "The remastered layouts, with a free look stick.", "original": "The N64 control styles, as the game shipped them." } },
         { "id": "padmap_modern", "type": "diagram", "follows": "scheme", "label": "", "show": "scheme == 'modern'",
           "layouts": { "modern": { "_by": "position", "lt": "Aim", "rt": "Fire", "lb": "Weapon wheel", "rb": "Gadget wheel", "a": "Use", "x": "Reload", "y": "Next weapon", "rs": "Crouch", "lstick": "Move (slow strafe)", "rstick": "Look", "dpad": "Up / down: zoom"} } },
@@ -111,7 +114,8 @@
         { "id": "ostyle", "key": "Bond.Control", "label": "Layout", "type": "choice", "default": 0, "tag": "per profile", "show": "profile == 1 && scheme == 'original'",
           "options": [ "1.1 Honey", "1.2 Solitaire", "1.3 Kissy", "1.4 Goodnight", "2.1 Plenty", "2.2 Galore", "2.3 Domino", "2.4 Goodhead" ] },
         { "id": "crouch", "key": "Input.CrouchMode", "label": "Crouch", "type": "choice",
-          "options": [ { "id": "hold", "label": "Hold", "value": 0 }, { "id": "toggle", "label": "Toggle", "value": 1 } ] }
+          "options": [ { "id": "hold", "label": "Hold", "value": 0 }, { "id": "toggle", "label": "Toggle", "value": 1 } ] },
+        { "id": "reset_style", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
       ] },
       { "name": "Aiming", "controls": [
         { "id": "aimstyle", "key": "Input.AimMode", "label": "Aim style", "type": "choice",
@@ -222,7 +226,8 @@
       ] },
       { "name": "Updates", "controls": [
         { "id": "updates", "key": "Game.CheckUpdates", "label": "Check for updates at start", "type": "toggle",
-          "help": "Looks for a new version when the game starts. Off, nothing goes over the network until you press Check for updates in the first menu." }
+          "help": "Looks for a new version when the game starts. Off, nothing goes over the network until you press Check for updates in the first menu." },
+        { "id": "reset_updates", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
       ] }
     ] }
   ]

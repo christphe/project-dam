@@ -63,7 +63,6 @@ original game assets. You need your own GoldenEye 007 ROM (US version) to play.*
 - [Roadmap](#roadmap)
 - [Building from source](#building-from-source)
 - [Documentation](#documentation)
-- [Contributing and forking](#contributing-and-forking)
 - [Credits](#credits)
 - [Legal](#legal)
 
@@ -265,14 +264,6 @@ unmodified PC port.
 | [Security](docs/security.md) and [Fidelity](docs/fidelity.md) | What a release installs, and how closely the upstream port tracks the original game's logic (this fork departs from it on purpose). |
 | [`docs/dev/`](docs/dev/) | The engineering record: the finding log and development process. |
 
-## Contributing and forking
-
-Issues and pull requests are welcome, and so are forks: the port layer, build
-system and `tools_pc/` are MIT-licensed and exist to be extended. Read
-[`CONTRIBUTING.md`](CONTRIBUTING.md) first: it has the ground rules that keep
-the port faithful, what to check before a pull request, and what a fork is
-asked to keep.
-
 ## Credits
 
 This port is a thin layer on a large amount of other people's work.
@@ -292,8 +283,6 @@ This port is a thin layer on a large amount of other people's work.
   "GEPD Edition" bundle). Its mouse-aim behaviour for GoldenEye/Perfect Dark is
   what the in-game GEPD-style aim mode is modelled on; the implementation here
   is an independent reimplementation of that behaviour, not derived code.
-  Thanks also to **Rice** and **schibo** of the 1964 team for the emulator it
-  shipped with.
 
 **Vendored / adapted code**
 
@@ -324,18 +313,7 @@ This port is a thin layer on a large amount of other people's work.
   Kids decompilation write-up), the agent-workflow practices in
   [`docs/dev-process.md`](docs/dev-process.md) are adapted from it.
 
-**Contributors**
-
-- **dolent** (#120, #121, #122, #123), **italoarruda** (#106, #107, #108, #109),
-  **danturn** (#95 macOS, #96), **Julio C. Rocha** (#88 macOS Intel groundwork),
-  **f1zz1ec0ke** (#137 frame interpolation), **JosephAHK** (#133), and
-  **MST246** (the #125 investigation), plus everyone who filed issues.
-
-**Consultation**
-
-- **f1zz1ec0ke** ([GitHub](https://github.com/f1zz1ec0ke)): LLM consultation on model
-  tuning, agent harnesses, and agentic strategy throughout the port's development
-  (and the author of the #137 frame-interpolation design noted above).
+Thanks to all the contributors of the original PC port.
 
 The models and tools used to develop the port are listed in
 [About the project](docs/about.md#tools-and-models-used-to-develop-the-port).

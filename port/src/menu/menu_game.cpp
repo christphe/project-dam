@@ -135,10 +135,14 @@ void feedInput(ImGuiIO& io, float W, float H) {
     io.AddKeyEvent(ImGuiKey_GamepadR1, btn(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER));
     const float ax = inputPadAxis(pad, SDL_CONTROLLER_AXIS_LEFTX) / 32767.0f;
     const float ay = inputPadAxis(pad, SDL_CONTROLLER_AXIS_LEFTY) / 32767.0f;
-    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, ax < -0.3f, ax < -0.3f ? -ax : 0.0f);
-    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, ax > 0.3f, ax > 0.3f ? ax : 0.0f);
-    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, ay < -0.3f, ay < -0.3f ? -ay : 0.0f);
-    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, ay > 0.3f, ay > 0.3f ? ay : 0.0f);
+    /* Past sqrt(1/2) the two axes can't both fire on a round gate: moving up or down a row never also steps the
+     * slider / choice it passes (at 0.3 an angled push did both). 0.75 keeps a margin and is still reached by a
+     * worn stick. */
+    const float kNav = 0.75f;
+    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, ax < -kNav, ax < -kNav ? -ax : 0.0f);
+    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, ax > kNav, ax > kNav ? ax : 0.0f);
+    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, ay < -kNav, ay < -kNav ? -ay : 0.0f);
+    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, ay > kNav, ay > kNav ? ay : 0.0f);
 
     const Uint8* ks = SDL_GetKeyboardState(nullptr);
     io.AddKeyEvent(ImGuiKey_UpArrow, ks[SDL_SCANCODE_UP] != 0);

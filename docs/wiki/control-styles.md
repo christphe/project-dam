@@ -27,10 +27,13 @@ in `port/src/input_aim.c`).
 |---|---|---|
 | **Original** | `Input.ControlScheme=1` | The N64 control styles (1.1 Honey … 2.4 Goodhead, chosen per profile with `Bond.Control`). The pad is read as an N64 pad. |
 | **Enhanced** | `Input.ControlScheme=0`, `Input.PadPreset` 0..4 | The remake layouts: 1.1 Jinx, 1.2 Christmas, 1.3 Frost, 1.4 Elektra (3 is a retired Custom slot, migrated to Jinx). The preset picks the stick roles; buttons come from a bind table. |
-| **Modern** | `Input.ControlScheme=0`, `Input.PadPreset=5` | The default on both platforms. RT fire, LT aim, R3 crouch, LB / RB weapon and gadget wheels; face buttons by position (bottom use, left reload, top next weapon), so a Nintendo pad keeps the same hands. While aiming, D-pad up / down zooms a scope and the left stick strafes slowly. |
+| **Modern** | `Input.ControlScheme=2` | The default on both platforms, for every player. RT fire, LT aim, R3 crouch, LB / RB weapon and gadget wheels; face buttons by position (bottom use, left reload, top next weapon), so a Nintendo pad keeps the same hands. While aiming, D-pad up / down zooms a scope and the left stick strafes slowly. |
 
-The menu shows one **Control style** row (`__ControlStyle`, computed from the two keys) and a
-**Layout** row per player (`Input.PadPreset`, `Input.PadPreset2..4`).
+The style and the Enhanced layout are both per player: **Control style** is
+`Input.ControlScheme`, `Input.ControlScheme2..4`, and **Layout** (Enhanced only) is
+`Input.PadPreset`, `Input.PadPreset2..4`. Each menu row writes only its own key. Inis older than
+`Config.Version` 2 had one global `Input.ControlScheme` (0 = the port's controls) and Modern as
+layout 5; the v2 migration converts them.
 
 ## How a poll works
 
