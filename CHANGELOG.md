@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] - minor
+## [0.4.0] - 2026-11-21
 
 ### Added
 - A Windows build (x86-64 zip) in every release, next to the Switch NRO; the PC update check offers it
