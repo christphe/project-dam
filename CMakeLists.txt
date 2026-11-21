@@ -260,9 +260,6 @@ if(APPLE)
 else()
   get_filename_component(PORT_HOST_STRING_H "${_PORT_GCC_DIR}/../include/string.h" ABSOLUTE)
 endif()
-configure_file(
-  "${CMAKE_SOURCE_DIR}/port/include/hoststring.h.in"
-  "${CMAKE_BINARY_DIR}/port/include/hoststring.h" @ONLY)
 
 # GE+ sky and sea for the GL backend: the Switch's own shaders (skyplus, skylut, with skycommon pasted at their
 # `#pragma skycommon` line, as cmake/SwitchPort.cmake and cmake/VulkanShaders.cmake do), embedded as C++ raw strings.
@@ -275,7 +272,11 @@ foreach(_sc skyplus skylut water)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/switch/shaders/${_sc}.frag.glsl")
 endforeach()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/switch/shaders/skycommon.glsl")
-file(WRITE "${CMAKE_BINARY_DIR}/port/include/gl_sky_src.inc" "${_gl_sky_inc}")
+# Written through a .tmp + configure_file COPYONLY: file(WRITE) touches the file on every configure, which
+# made gfx_opengl.cpp recompile on every build.
+file(WRITE "${CMAKE_BINARY_DIR}/port/include/gl_sky_src.inc.tmp" "${_gl_sky_inc}")
+configure_file("${CMAKE_BINARY_DIR}/port/include/gl_sky_src.inc.tmp"
+  "${CMAKE_BINARY_DIR}/port/include/gl_sky_src.inc" COPYONLY)
 
 # Host <sched.h> path for port/shim/sched.h. The decomp's src/sched.h is on
 # the include path and shadows the system header; libstdc++'s <thread>/gthr
@@ -286,9 +287,6 @@ if(APPLE)
 else()
   get_filename_component(PORT_HOST_SCHED_H "${_PORT_GCC_DIR}/../include/sched.h" ABSOLUTE)
 endif()
-configure_file(
-  "${CMAKE_SOURCE_DIR}/port/include/hostsched.h.in"
-  "${CMAKE_BINARY_DIR}/port/include/hostsched.h" @ONLY)
 
 # Host <stdlib.h> path for port/shim/stdlib.h. The N64 include/stdlib.h
 # typedefs lldiv_t/ldiv_t, which conflict with the host's when both land in
@@ -300,9 +298,6 @@ if(APPLE)
 else()
   get_filename_component(PORT_HOST_STDLIB_H "${_PORT_GCC_DIR}/../include/stdlib.h" ABSOLUTE)
 endif()
-configure_file(
-  "${CMAKE_SOURCE_DIR}/port/include/hoststdlib.h.in"
-  "${CMAKE_BINARY_DIR}/port/include/hoststdlib.h" @ONLY)
 
 # Host <stddef.h> path for port/shim/stddef.h (same reason as stdlib: the N64
 # stub shadows the host header in C++ TUs, hiding max_align_t from cstddef).
@@ -347,6 +342,9 @@ if(MINGW AND CMAKE_CROSSCOMPILING)
   set(GE_GAME_LINK_FLAGS "-Wl,--defsym=objectiveGetStatus_WEAK=get_status_of_objective")
 endif()
 switch_host_headers()   # goldeneye-nx hook: newlib header paths
+# The host-header shims are generated once, here, after every platform override (newlib, MinGW cross).
+# Generating them earlier too rewrote hoststring.h twice per configure on Switch (two contents), so its
+# mtime always moved and most of port/ recompiled on every build.
 configure_file(
   "${CMAKE_SOURCE_DIR}/port/include/hoststring.h.in"
   "${CMAKE_BINARY_DIR}/port/include/hoststring.h" @ONLY)
@@ -644,15 +642,15 @@ list(APPEND LIBS "${EXTRA_LIBRARIES}")
 # Sources
 # ----------------------------------------------------------------------------
 # Port layer (shims + software RSP).
-file(GLOB_RECURSE SRC_PORT      "${CMAKE_SOURCE_DIR}/port/src/*.c")
-file(GLOB_RECURSE SRC_PORT_CXX  "${CMAKE_SOURCE_DIR}/port/src/*.cpp")
+file(GLOB_RECURSE SRC_PORT CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/src/*.c")
+file(GLOB_RECURSE SRC_PORT_CXX CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/src/*.cpp")
 # Dear ImGui (MIT, vendored): the menu's widget layer. Core files only; the port draws it through
 # port/src/menu/imgui_gbi.cpp (no ImGui platform or renderer backend is used in the game).
-file(GLOB SRC_IMGUI "${CMAKE_SOURCE_DIR}/port/third_party/imgui/*.cpp")
+file(GLOB SRC_IMGUI CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/third_party/imgui/*.cpp")
 # include/math.h (the N64 SDK's) shadows the system one: <cmath> first pulls in the real <math.h>, so ImGui's
 # own #include <math.h> then finds sqrtf, powf, fabsf... already declared.
 set_source_files_properties(${SRC_IMGUI} PROPERTIES COMPILE_OPTIONS "-include;cmath")
-file(GLOB_RECURSE SRC_FAST3D    "${CMAKE_SOURCE_DIR}/port/fast3d/*.cpp"
+file(GLOB_RECURSE SRC_FAST3D CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/fast3d/*.cpp"
                                "${CMAKE_SOURCE_DIR}/port/fast3d/glad/*.c")
 
 # Generated absolute ROM asset symbols for this region (see
@@ -746,7 +744,7 @@ else()
 endif()
 
 # Game code — compiled unmodified.
-file(GLOB_RECURSE SRC_GAME "${CMAKE_SOURCE_DIR}/src/game/*.c")
+file(GLOB_RECURSE SRC_GAME CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/game/*.c")
 
 # EXCLUDED from src/game (replaced by port/src/rzdecomp.c, which backs
 # decompressdata()/rzipGetSomething() with real zlib):
@@ -766,13 +764,13 @@ list(REMOVE_ITEM SRC_GAME
   "${CMAKE_SOURCE_DIR}/src/game/zlib.c")
 
 # libaudio (AL) — runs on the CPU, platform independent.
-file(GLOB SRC_LIBAUDIO "${CMAKE_SOURCE_DIR}/src/libultra/audio/*.c")
+file(GLOB SRC_LIBAUDIO CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/libultra/audio/*.c")
 # Rare's audio "New" driver (drvrNew/env/reverb) — synthesizer.c calls
 # alSaveNew/alAuxBusNew/alMainBusNew/alLoadNew/alResampleNew/alEnvmixerNew/
 # alEnvmixerParam/alFxParam, all defined here. Runs on the CPU; must be linked.
-file(GLOB SRC_LIBULTRARE_AUDIO "${CMAKE_SOURCE_DIR}/src/libultrare/audio/*.c")
+file(GLOB SRC_LIBULTRARE_AUDIO CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/libultrare/audio/*.c")
 # gu matrix helpers.
-file(GLOB SRC_GU "${CMAKE_SOURCE_DIR}/src/libultra/gu/*.c")
+file(GLOB SRC_GU CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/libultra/gu/*.c")
 
 # GCC for Darwin crashes while lowering the decomp's ELF-style
 # `#pragma weak alias = target` directives. Compile generated copies with
