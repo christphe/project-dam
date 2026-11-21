@@ -12,6 +12,7 @@
 - Vertical field of view in degrees (60 is the original) with the horizontal one shown for the window's aspect ratio; a crosshair page with a preview of the sprite at its real size, colour and opacity; the crosshair size goes from 10 to 100%
 
 ### Changed
+- Enhanced and Modern walk and strafe at the speed of the left stick's tilt instead of the N64's full-step moves, for every player in split screen (#78). Modern with inverted look is the default control style on a fresh install
 - Auto-aim is off while the mouse is the device that aims, and comes back when a stick is pushed
 - GE_LOWLAT (lower input latency) is on by default on the PC too; GE_LOWLAT=0 turns it off
 - The mouse always aims Centered; Input.AimMode is the gamepad's. Escape no longer frees the mouse

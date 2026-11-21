@@ -22,6 +22,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Host (Linux) build of the game core plus the CTest binaries (tests/): no
+  # ROM, no window, no audio device. Runs in parallel with the NRO build.
+  tests:
+    runs-on: ubuntu-24.04
+    # Same pinned image as the nro job (devkitA64 image = Ubuntu with the host
+    # toolchain available); the host libraries are installed as in Dockerfile.build.
+    container: docker.io/devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+    steps:
+      - name: Tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build python3 libsdl2-dev libgl1-mesa-dev \
+            libvulkan-dev glslang-tools zlib1g-dev git
+          git config --system --add safe.directory '*'
+
+      - uses: actions/checkout@v7
+
+      - name: Build
+        run: |
+          cmake -S . -B build-linux -G Ninja -DROMID=ntsc-final
+          cmake --build build-linux
+
+      - name: Test
+        run: ctest --test-dir build-linux --output-on-failure
+
   nro:
     runs-on: ubuntu-24.04
     # Same pinned image as Dockerfile.build: devkitA64, libnx and the Switch

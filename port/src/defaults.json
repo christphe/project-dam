@@ -68,9 +68,8 @@
    "why": "= 0 (PC)"
   },
   "Input.PadLookInvertY": {
-   "switch": 1,
-   "pc": 0,
-   "why": "= 0"
+   "value": 1,
+   "why": "inverted look by default (maintainer's choice, #78)"
   },
   "Input.PadDeadzoneL": {
    "switch": 3000,
@@ -164,8 +163,20 @@
    "why": "= auto (D993)"
   },
   "Input.PadPreset": {
-   "value": 0,
-   "why": "= 0 (Jinx 1.1), D469"
+   "value": 5,
+   "why": "= 5 (Modern) by default (maintainer's choice, #78); 0 = Jinx 1.1, D469"
+  },
+  "Input.PadPreset2": {
+   "value": 5,
+   "why": "= 5 (Modern), same as player 1"
+  },
+  "Input.PadPreset3": {
+   "value": 5,
+   "why": "= 5 (Modern), same as player 1"
+  },
+  "Input.PadPreset4": {
+   "value": 5,
+   "why": "= 5 (Modern), same as player 1"
   },
   "Video.MSAA": {
    "switch": 4,

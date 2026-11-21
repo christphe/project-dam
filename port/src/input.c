@@ -57,7 +57,7 @@
  *
  *   "aim button held" is read from our own RMB/LShift state -- exact for
  *   the default hold-to-aim scheme; a toggle-aim scheme would need a read
- *   of slotPlayer()->insightaimmode (still no logic change).
+ *   of inputSlotPlayer()->insightaimmode (still no logic change).
  *
  *   GE's native pitch is inverted ("flight" style: C-up -> look down). We
  *   hide that: mouse-down looks down by default, MouseInvertY flips it.
@@ -106,189 +106,16 @@ extern s32 g_EnterTankAudioState;      /* bondview2.c: tank entry/running state 
 extern ITEM_IDS get_next_weapon_in_cycle_for_hand(GUNHAND hand, s32 direction);
 extern void gunRequestHandWeaponChange(enum GUNHAND hand, s32 nextWeapon, s32 cycleDirection);
 
-/* N64 button bits (from PR/os.h -- duplicated here to avoid pulling os.h,
- * whose `u8 errno;` field collides with <errno.h>'s macro). */
-#define GE_CONT_A      0x8000
-#define GE_CONT_B      0x4000
-#define GE_CONT_G      0x2000  /* Z trigger */
-#define GE_CONT_START  0x1000
-#define GE_CONT_UP     0x0800
-#define GE_CONT_DOWN   0x0400
-#define GE_CONT_LEFT   0x0200
-#define GE_CONT_RIGHT  0x0100
-#define GE_CONT_L      0x0020
-#define GE_CONT_R      0x0010
-#define GE_CONT_E      0x0008  /* C-up    */
-#define GE_CONT_D      0x0004  /* C-down  */
-#define GE_CONT_C      0x0002  /* C-left  */
-#define GE_CONT_F      0x0001  /* C-right */
+/* The control styles as pure strategies (snapshot -> commands, no SDL, no game
+ * state) and the commands -> N64 pad bridge; also home of the GE_CONT_* bits.
+ * This file is their adapter. */
+#include "input/input_types.h"
+#include "input/n64bridge.h"
+#include "input/style_modern.h"
+#include "input/style_enhanced.h"
+#include "input/style_original.h"
+#include "input/input_internal.h"
 
-#define MAX_PADS            4
-#define STICK_DEADZONE      7500   /* 25 %; D546 (was 7000 = 23 %) */
-#define STICK_MAX          80
-
-/* Front-end pointer mode: GE's menu cursor ("crosshair") is stick-driven
- * (front.c frontUpdateControlStickPosition reads joyGetStickX/Y and
- * integrates a screen position). During a running stage current_menu ==
- * MENU_RUN_STAGE (11, src/bondconstants.h enum MENU); every other value is
- * a front-end / briefing / debrief / cheat screen where the mouse should
- * feel like a pointer, not a look-axis. We read the game global directly
- * (enum MENU is ABI int) -- UI-context only, no logic change.
- * MENU_INVALID (-1) means the front end never ran (bare -level_XX boot):
- * treat that as in-game so direct-launch mouse-look is unaffected. */
-extern int current_menu;
-#define GE_MENU_RUN_STAGE  11
-#define GE_MENU_INVALID    (-1)
-/* D169: the front-end cursor lives in the game's virtual-screen field, which
- * is 440x330 in the front end -- not the 320x240 the pointer P-controller
- * assumed. Read the live field so the mouse pointer can reach the whole
- * mission-select grid. These are plain non-static engine accessors
- * (src/game/bondview.c) and globals (src/game/front.c); UI geometry only, no
- * logic change. */
-extern float getPlayer_c_screenwidth(void);
-extern float getPlayer_c_screenheight(void);
-extern float getPlayer_c_screenleft(void);
-extern float getPlayer_c_screentop(void);
-extern float cursor_h_pos, cursor_v_pos;
-
-/* D194/D238 -- natural-pitch control scheme.
- *
- * GE's hipfire pitch is structurally digital: bondviewProcessInput's default
- * (1.1/HONEY) scheme reads pitch only from C-up/C-down (see D166), so the
- * port emulates continuous pitch by duty-cycling that button -- an
- * approximation that can never fully match yaw's genuinely continuous,
- * unbounded analog mapping, which is the root of the "vertical feels slower"
- * complaint. GE's own 1.2/SOLITARE scheme (cur_player_get/set_control_type,
- * src/game/options.c; dispatch in bondviewProcessInput, bondview2.c ~5192-
- * 5450) gives BOTH pitch and yaw continuous analog stick control in hipfire
- * (canNaturalTurn/canNaturalPitch) -- at the cost of moving movement
- * (forward/back/strafe) from the analog stick onto digital step buttons
- * (digitalStepForward/Back/Left/Right, fed from C-buttons/D-pad). This is an
- * ORIGINAL, player-selectable GE control style (not new game logic) -- we
- * select it from the port the same way the options menu would
- * (cur_player_set_control_type), and remap WASD/gamepad accordingly so
- * movement keeps working under it. No src/ edits; no behavior invented that
- * GE didn't already support. Escape hatch: Input.NaturalPitch=0 reverts to
- * the 1.1/HONEY default with the D166 digital-pitch-pulse hack. */
-extern int cur_player_get_control_type(void);
-extern void cur_player_set_control_type(int type);
-
-/* D194 absolute aim: live camera/projection accessors (src/fr.c, src/game/,
- * port/src/video.c). All are plain reads of state owned by the game thread,
- * sampled from inputComputePad which already runs in that same context
- * (contSnapshotFromKeyboard <- osContStartReadData <- joy.c) -- no new
- * cross-thread access, and nothing here writes. */
-extern f32 viGetFovY(void);
-extern s16 viGetViewWidth(void);
-extern s16 viGetViewHeight(void);
-extern s16 viGetViewLeft(void);
-extern s16 viGetViewTop(void);
-extern s16 getWidth320or440(void);   /* CFB width the viewport rect lives in (320 NTSC) */
-extern s16 getHeight330or240(void);  /* CFB height (240 NTSC) */
-extern f32 portScaleFovY(f32 fovy, s32 isTitleScreen);
-extern s32 lvlGetCurrentStageToLoad(void);
-#define CONTROLLER_CONFIG_HONEY_    0
-#define CONTROLLER_CONFIG_SOLITARE_ 1
-#define CONTROLLER_CONFIG_GOODNIGHT_ 3   /* 1.4: SOLITARE movement, swapped button roles (bondview2.c) */
-#define TRIG_THRESHOLD     (30 * 256)
-#define RSTICK_THRESHOLD   0x4000
-/* Mouse-look tuning. GE's aim model is mode-dependent (bondview2.c
- * bondviewProcessInput):
- *   - Hipfire (!insightaimmode): yaw = analog stick-X ("natural turn"),
- *     pitch = DIGITAL C-up/C-down only (stick-Y is move fwd/back here).
- *   - Aim mode (R held):          yaw AND pitch = analog stick pushed past
- *     +/-60 -> proportional (stick-60)/10. C-up/C-down mean crouch/lean/
- *     zoom in this mode, NOT aim -- so we must NOT emit them while aiming
- *     (that was D118c: aim + mouse-down -> crouch).
- * GE's native pitch is inverted ("flight" style): C-up -> look down. We
- * hide that so mouse-down looks down by default; MouseInvertY flips it. */
-#define MOUSE_TURN_GAIN     6.0   /* hipfire: raw px this poll -> stick-X counts */
-#define MOUSE_PITCH_THRESH  1.5   /* hipfire: px/poll before a C-button fires  */
-#define AIM_MOVE_THRESH     0.3   /* aim mode: px/poll before the stick moves   */
-#define HIP_PITCH_FULL      6.0   /* hipfire pitch: |px/poll| for a solid C hold (D166) */
-
-/* D194(a) -- aim-mode response curve.
- *
- * bondviewPlayerControlStuff (bondview2.c) turns an aim-mode stick value
- * into turn speed as `(stick_x - 60) / 10.0`, clamped to 1.0 -- i.e. the
- * game's own proportional band is stick in [61,70]; anything from 71 up to
- * whatever AimBand allows (60+AimBand, up to 100) clamps to the exact same
- * max speed as 70. The old code aimed for the port's [61, 60+AimBand] range
- * (up to [61,80]) as if it were all proportional, so a config'd AimBand>10
- * bought nothing, and AIM_GAIN=4.0 reached the (effectively already-maxed)
- * top of that range by ~5 px/poll -- "near bang-bang", matching the D194(a)
- * complaint. Fix: curve-map px/poll onto the game's REAL proportional range
- * [61,70] (independent of AimBand, which still acts as an extra ceiling for
- * anyone who wants to cap below the game's own max), with a configurable
- * gamma so slow motions land near the low end instead of jumping to nearly
- * full speed immediately. */
-#define AIM_STICK_MIN        61
-#define AIM_STICK_GAME_MAX   70    /* bondview2.c: (stick-60)/10 saturates at stick=70 */
-#define AIM_FULL_SPEED_PX    20.0  /* px/poll (at MouseAimSpeed=100) that reaches AIM_STICK_GAME_MAX */
-
-/* D194 GEPD-style aim mapping. While RMB is held (cursor grabbed/hidden),
- * mouse MOVEMENT rotates the view by the same screen angle swept: a
- * sweep across the rendered viewport width sweeps the full horizontal FOV,
- * height <-> fovy. The crosshair stays locked at screen centre and stop
- * moving holds the view where it is (the game's own speed decay coasts it to
- * rest). Because the scale is angle-per-pixel of the CURRENT fovy, scope
- * zooms automatically become finer control. No target, no chase, no
- * snap-back: placement is cumulative and path-dependent, exactly like GEPD.
- */
-/* D194 GEPD-mirror aim constants (MouseInjectorPlugin/games/goldeneye.c): */
-#define AIM_ABS_DEAD_PX       2.0    /* per-poll px below this is jitter, not aim */
-#define GEPD_CROSSHAIR_LIMIT  5.159373283  /* crosshair pos units at the screen edge (GEPD 0x40A51996) */
-#define GEPD_EDGE_THRESHOLD   0.72f        /* |pos|/limit beyond which the view scrolls */
-#define GEPD_SCROLL_SPEED     475.0        /* GEPD: (ratio-threshold)*475*timestep per tick */
-#define GEPD_BASE_FOV         90.0f        /* unzoomed FOV (our native); GEPD uses its 60 override */
-
-/* D194(b) -- mouse sensitivity coupled to frame/poll rate.
- *
- * MOUSE_TURN_GAIN/AIM_GAIN above treat "px accumulated since the last
- * inputComputePad(0) drain" as a fixed per-poll unit, but the real interval
- * between drains drifts with render/scene load (D193 measured a rock-steady
- * 60 sim ticks/s in the idle case, but the drain itself piggybacks on
- * whatever cadence calls contSnapshotFromKeyboard() -- 1-2x per rendered
- * frame per D165's comment -- so a hitch or a variable-length frame changes
- * how much real time one "poll" of accumulated px represents). Net effect:
- * the same physical hand motion emits a different turn rate depending on
- * how ragged the poll cadence is, which reads as "sensitivity changes with
- * movement/frame rate" (the user's own words).
- *
- * Fix: measure real elapsed time since the last drain with a monotonic
- * clock and rescale the accumulated px by (dtRef / dtActual) before it
- * hits MOUSE_TURN_GAIN/AIM_GAIN, where dtRef is the nominal 1/60s tick
- * (matches D193's measured steady-state sim rate) -- so "px this poll"
- * always means "px for a nominal 1/60s tick" regardless of how long that
- * tick actually took in real time. Clamped both directions so one big
- * stall (level load, GC pause) can't fling the view. Menu-cursor paths
- * (D165/D169's P-controller, which has its own poll-count-based settling
- * design) are deliberately NOT touched by this -- gameplay look only. */
-#define MOUSE_DT_REF        (1.0 / 60.0)
-#define MOUSE_DT_SCALE_MIN  0.25   /* cap correction for an abnormally long poll gap */
-#define MOUSE_DT_SCALE_MAX  4.0    /* cap correction for an abnormally short poll gap */
-
-/* Item 1 (D165) — front-end 1:1 pointer. front.c frontUpdateControlStickPosition
- * INTEGRATES the stick as a velocity into a screen-pixel cursor position
- * (cursor_h_pos += (stickx*0.075 +/- 0.5) * delta, deadzone +/-5, clamp +/-70,
- * cursor clamped into the ~320x240 virtual screen rect minus a 20px margin).
- * Feeding it mouse *velocity* therefore gives velocity^2 feel. Instead we run a
- * P-controller: keep our own estimate of where the game cursor is (menuEst*,
- * integrated with the SAME recurrence as front.c), accumulate a target from
- * mouse motion, and emit stick = clamp(GAIN*(target-est)). The estimate re-syncs
- * to the real cursor whenever the target is held at a screen edge. */
-#define MENU_CURSOR_LO      20.0
-#define MENU_CURSOR_HI_H    300.0
-#define MENU_CURSOR_HI_V    220.0
-/* D345: after a front-end screen change, re-assert the 1:1 pointer for a few
- * frames if the mouse was used within this many ms (see inputComputePad). */
-#define MENU_POINTER_REASSERT_MS 1500.0
-#define MENU_CURSOR_MID_H   160.0
-#define MENU_CURSOR_MID_V   120.0
-
-static void applyGrab(int want);
-static void reconcileGrab(int menuMode);
-static void applyCursorVisibility(void);
 static void overlayFrontEndCrosshair(void);
 
 static int numControllers = 1;
@@ -318,7 +145,7 @@ static int nRealPads   = 0;
 extern s32 getPlayerCount(void);
 
 extern s32 coopActive(void);
-static int inputMpSplit(void)
+int inputMpSplit(void)
 {
     /* D960: a direct -level_XX co-op boot never visits RUN_STAGE (menu stays INVALID). */
     return (current_menu == GE_MENU_RUN_STAGE || (current_menu == GE_MENU_INVALID && coopActive())) &&
@@ -402,16 +229,16 @@ static SDL_GameController *slotPad(int idx)
 
 /* D416 per-slot input: the controller poll runs on the scheduler thread, where
  * g_CurrentPlayer is whichever player the game thread last selected -- wrong
- * for a split-screen slot. While a slot is being polled (s_slot >= 0) in a
+ * for a split-screen slot. While a slot is being polled (g_inputSlot >= 0) in a
  * 2+ player stage, every player-struct access in this file goes through
- * slotPlayer(), which resolves the player that owns the slot (player N reads
+ * inputSlotPlayer(), which resolves the player that owns the slot (player N reads
  * controller N, as on the N64). Outside a poll, or in solo, it is exactly
  * g_CurrentPlayer. */
-static int s_slot = -1;
-static struct player *slotPlayer(void)
+int g_inputSlot = -1;
+struct player *inputSlotPlayer(void)
 {
-    if (s_slot >= 0 && s_slot < 4 && inputMpSplit() && g_playerPointers[s_slot])
-        return g_playerPointers[s_slot];
+    if (g_inputSlot >= 0 && g_inputSlot < 4 && inputMpSplit() && g_playerPointers[g_inputSlot])
+        return g_playerPointers[g_inputSlot];
     return g_CurrentPlayer;
 }
 
@@ -537,21 +364,21 @@ static u8 padFamily[MAX_PADS];   /* defined with its notes below (D471); 2 = Nin
  * stays digital C-buttons (fixed, in addition to any C source bound here). */
 enum { NB_A, NB_B, NB_Z, NB_R, NB_L, NB_CU, NB_CD, NB_CL, NB_CR, NB_START,
        NB_DU, NB_DD, NB_DL, NB_DR, NB_COUNT };
-static const struct { const char *key; const char *def; unsigned bit; } kN64Btn[NB_COUNT] = {
-    [NB_A]     = { "A",      "a",                        GE_CONT_A },
-    [NB_B]     = { "B",      "x",                        GE_CONT_B },
-    [NB_Z]     = { "Z",      "righttrigger",             GE_CONT_G },
-    [NB_R]     = { "R",      "lefttrigger,rightshoulder", GE_CONT_R },
-    [NB_L]     = { "L",      "leftshoulder",             GE_CONT_L },
-    [NB_CU]    = { "CUp",    "none",                     GE_CONT_E },
-    [NB_CD]    = { "CDown",  "none",                     GE_CONT_D },
-    [NB_CL]    = { "CLeft",  "none",                     GE_CONT_C },
-    [NB_CR]    = { "CRight", "none",                     GE_CONT_F },
-    [NB_START] = { "Start",  "start",                    GE_CONT_START },
-    [NB_DU]    = { "DUp",    "dpup",                     GE_CONT_UP },
-    [NB_DD]    = { "DDown",  "dpdown",                   GE_CONT_DOWN },
-    [NB_DL]    = { "DLeft",  "dpleft",                   GE_CONT_LEFT },
-    [NB_DR]    = { "DRight", "dpright",                  GE_CONT_RIGHT },
+static const struct { const char *key; const char *def; } kN64Btn[NB_COUNT] = {
+    [NB_A]     = { "A",      "a" },
+    [NB_B]     = { "B",      "x" },
+    [NB_Z]     = { "Z",      "righttrigger" },
+    [NB_R]     = { "R",      "lefttrigger,rightshoulder" },
+    [NB_L]     = { "L",      "leftshoulder" },
+    [NB_CU]    = { "CUp",    "none" },
+    [NB_CD]    = { "CDown",  "none" },
+    [NB_CL]    = { "CLeft",  "none" },
+    [NB_CR]    = { "CRight", "none" },
+    [NB_START] = { "Start",  "start" },
+    [NB_DU]    = { "DUp",    "dpup" },
+    [NB_DD]    = { "DDown",  "dpdown" },
+    [NB_DL]    = { "DLeft",  "dpleft" },
+    [NB_DR]    = { "DRight", "dpright" },
 };
 typedef struct { u32 mask[PA_COUNT]; u32 n64[NB_COUNT]; } PadBinds;
 typedef struct { PadBinds seat[MAX_PADS]; } PadTable;
@@ -665,9 +492,7 @@ int inputPadIsModern(int seat)
  * Custom keep Input.NaturalPitch, so the NaturalPitch=0 escape hatch still
  * works exactly as before D498. D518: per seat. */
 static int stickSolitare(int seat) {
-    if (padPresetEff(seat) == 1 || padPresetEff(seat) == 2) return 0;
-    if (padPresetEff(seat) == 4) return 1;
-    return naturalPitchMode;
+    return inputEnhancedSolitare(padPresetEff(seat), naturalPitchMode);   /* input/style_enhanced.c */
 }
 /* D513: which stick mapping the port emits for the active player. Modern:
  * exactly stickSolitare() (the port forces the style, D498 pins included).
@@ -684,13 +509,13 @@ static int stickSolitare(int seat) {
 static int styleIsSolitare(int seat)
 {
     if (!controlScheme) return stickSolitare(seat);
-    struct player *p = slotPlayer();
+    struct player *p = inputSlotPlayer();
     if (!p) return stickSolitare(seat);
     int t = p->cur_player_control_type_0;
     return t == CONTROLLER_CONFIG_SOLITARE_ || t == CONTROLLER_CONFIG_GOODNIGHT_;
 }
 /* D498: 1.3 Frost / 1.4 Elektra swap the two sticks (never in menus). */
-static int stickSwap(int seat) { return padPresetEff(seat) == 2 || padPresetEff(seat) == 4; }
+static int stickSwap(int seat) { return inputEnhancedSwap(padPresetEff(seat)); }
 
 /* Signature of everything the table depends on (presets only unless a seat is Custom). */
 static unsigned padComputeSig(void)
@@ -841,109 +666,6 @@ static u32 padActHeld(const PadBinds *b, u32 raw)
     return h;
 }
 
-typedef struct { int facePlayable; int slotNative; int southpaw; int tank; int orig; } PadMapCtx;   /* orig: D643 */
-typedef struct { unsigned button; int crouch; int gadgetEdge; u32 actHeld; } PadMapOut;
-
-/* The pure mapping: raw source bits + bindings + previous action state ->
- * N64 button mask / crouch / gadget edge. buttonIn is whatever the keyboard
- * / stick code already put in the mask (the southpaw swap acts on it exactly
- * as the pre-D469 inline code did). No SDL, no game state: GE_PADMAPTEST. */
-static void padMapPure(const PadBinds *b, u32 raw, u32 actPrev, unsigned buttonIn,
-                       const PadMapCtx *c, PadMapOut *o)
-{
-    unsigned button = buttonIn;
-    if (c->orig) {   /* D643: strict virtual N64 pad; same in every context, no port actions, no southpaw swap */
-        for (int n = 0; n < NB_COUNT; n++)
-            if (raw & b->n64[n]) button |= kN64Btn[n].bit;
-        o->button = button;
-        o->crouch = 0;
-        o->gadgetEdge = 0;
-        o->actHeld = 0;
-        return;
-    }
-    u32 held = padActHeld(b, raw);
-    if (raw & b->mask[PA_FIRE] & PS_TRIGGERS) button |= GE_CONT_G;
-    if (raw & b->mask[PA_AIM] & PS_TRIGGERS)  button |= GE_CONT_R;
-    if (c->southpaw) {   /* Wave A: swap fire/grenade after the raw trigger edges */
-        unsigned t = button;
-        button = (t & ~(GE_CONT_G | GE_CONT_R))
-               | ((t & GE_CONT_G) ? GE_CONT_R : 0)
-               | ((t & GE_CONT_R) ? GE_CONT_G : 0);
-    }
-    o->crouch = 0;
-    o->gadgetEdge = 0;
-    u32 edge = held & ~actPrev;
-    if (c->facePlayable) {
-        if (held & (1u << PA_CROUCH)) o->crouch = 1;
-        if (c->slotNative && (edge & ((1u << PA_USE) | (1u << PA_RELOAD)))) button |= GE_CONT_B;
-        if (edge & (1u << PA_GADGET)) o->gadgetEdge = 1;
-        if (edge & (1u << PA_NEXTWPN)) button |= GE_CONT_A;
-        if (edge & (1u << PA_PREVWPN)) button |= GE_CONT_A | GE_CONT_G;   /* same backward-cycle idiom as the mouse wheel */
-        if (raw & b->mask[PA_AIM] & ~PS_TRIGGERS)  button |= GE_CONT_R;   /* digital sources (LB aim): playable only, after the swap */
-        if (raw & b->mask[PA_FIRE] & ~PS_TRIGGERS) button |= GE_CONT_G;
-    } else if (c->tank) {
-        /* D495: driving the tank. The native A (change weapon) and B (exit,
-         * sent by the locked use path in inputComputePadSlot) follow the
-         * player's bindings like on foot, instead of the fixed menu faces
-         * (A/X = A, B/Y = B): with the default preset X switched the tank
-         * weapon and Y left the tank. */
-        if (edge & ((1u << PA_NEXTWPN) | (1u << PA_PREVWPN))) button |= GE_CONT_A;
-        if (raw & b->mask[PA_AIM] & ~PS_TRIGGERS)  button |= GE_CONT_R;
-        if (raw & b->mask[PA_FIRE] & ~PS_TRIGGERS) button |= GE_CONT_G;
-    } else {
-        if (raw & (PSM(PS_A) | PSM(PS_X))) button |= GE_CONT_A;   /* menu lockout guard: fixed native accept/cancel */
-        if (raw & (PSM(PS_B) | PSM(PS_Y))) button |= GE_CONT_B;
-    }
-    if (held & (1u << PA_START)) button |= GE_CONT_START;
-    if (raw & PSM(PS_DUP))    button |= GE_CONT_UP;
-    if (raw & PSM(PS_DDOWN))  button |= GE_CONT_DOWN;
-    if (raw & PSM(PS_DLEFT))  button |= GE_CONT_LEFT;
-    if (raw & PSM(PS_DRIGHT)) button |= GE_CONT_RIGHT;
-    o->button = button;
-    o->actHeld = held;
-}
-
-/* Legacy reference: the pre-D469 inline pad block, transcribed verbatim from
- * release/v0.4.1 (input.c, trigger/face-button section) onto raw source bits.
- * Used ONLY by GE_PADMAPTEST to prove preset 0 is byte-identical. */
-static void padMapLegacy(u32 raw, u32 prevA, u32 prevB, u32 prevX, u32 prevY, unsigned buttonIn,
-                         const PadMapCtx *c, PadMapOut *o)
-{
-    unsigned button = buttonIn;
-    int crouchNow = 0, gadget = 0;
-    if (raw & PSM(PS_RT)) button |= GE_CONT_G;
-    if (raw & PSM(PS_LT)) button |= GE_CONT_R;
-    if (c->southpaw) {
-        int t = button;
-        button = (t & ~(GE_CONT_G | GE_CONT_R))
-               | ((t & GE_CONT_G) ? GE_CONT_R : 0)
-               | ((t & GE_CONT_R) ? GE_CONT_G : 0);
-    }
-    int padA = !!(raw & PSM(PS_A)), padX = !!(raw & PSM(PS_X));
-    int padB = !!(raw & PSM(PS_B)), padY = !!(raw & PSM(PS_Y));
-    if (c->facePlayable) {
-        if ((raw & PSM(PS_LS)) || (raw & PSM(PS_RS))) crouchNow = 1;
-        if (c->slotNative) {
-            if ((padA && !prevA) || (padX && !prevX)) button |= GE_CONT_B;
-        }
-        if (padB && !prevB) gadget = 1;
-        if (padY && !prevY) button |= GE_CONT_A;
-    } else {
-        if (padA || padX) button |= GE_CONT_A;
-        if (padB || padY) button |= GE_CONT_B;
-    }
-    if (c->facePlayable && (raw & PSM(PS_LB))) button |= GE_CONT_R;
-    if (raw & PSM(PS_START)) button |= GE_CONT_START;
-    if (raw & PSM(PS_DUP))    button |= GE_CONT_UP;
-    if (raw & PSM(PS_DDOWN))  button |= GE_CONT_DOWN;
-    if (raw & PSM(PS_DLEFT))  button |= GE_CONT_LEFT;
-    if (raw & PSM(PS_DRIGHT)) button |= GE_CONT_RIGHT;
-    o->button = button;
-    o->crouch = crouchNow;
-    o->gadgetEdge = gadget;
-    o->actHeld = 0;
-}
-
 /* Seat that feeds controller slot idx (pads[] index; D448/D416). */
 static int padSeatForSlot(int idx)
 {
@@ -996,92 +718,8 @@ static void padDetectFamily(int seat)
 }
 static float gRumbleScale = 0.5f;
 
-static int mouseEnabled   = 1;
-static int mouseGrabbed    = 1;     /* released while the window is unfocused */
-
-/* D287: SDL's mouse-mode and cursor calls belong on the window's thread (the
- * host thread that created it and pumps its events). Controller polls run on
- * the scheduler thread (osContStartReadData -> inputComputePad ->
- * reconcileGrab), so they called SDL_SetRelativeMouseMode / SDL_ShowCursor
- * concurrently with the host thread's own focus/click handling. On Windows
- * relative mode starts/stops SDL's raw-input thread and re-clips the cursor;
- * two threads flipping it at once (clicking back into the window after being
- * unfocused) can wedge. Callers now only record the wanted state; the host
- * thread applies it in inputApplyMouseRequests() from videoPumpEvents(). The
- * logical state (mouseGrabbed, deltas) still updates immediately. */
-static SDL_SpinLock s_mouseReqLock;
-static int s_reqRelative = -1, s_reqCursor = -1;    /* -1: nothing pending */
-static int s_appRelative = -1, s_appCursor = -1;    /* host thread only */
-
-static void mouseRequestRelative(int on)
-{
-    SDL_AtomicLock(&s_mouseReqLock);
-    s_reqRelative = on ? 1 : 0;
-    SDL_AtomicUnlock(&s_mouseReqLock);
-}
-
-static void mouseRequestCursor(int show)
-{
-    SDL_AtomicLock(&s_mouseReqLock);
-    s_reqCursor = show ? 1 : 0;
-    SDL_AtomicUnlock(&s_mouseReqLock);
-}
-
-/* D555 (reworked 2026-10-06): Input.CrosshairCursor -- while the F10 overlay /
- * PC Options is open the OS cursor is HIDDEN and optionsoverlay.c draws the
- * game's own crosshair sprite at the mouse position, last in its display list
- * (so it is above the card). Off: the OS arrow over the overlay, as before. */
-static int cfgCrosshairCursor = 1;
-int inputCrosshairCursorOn(void) { return cfgCrosshairCursor; }
-static int s_cursorShown = -1;   /* host thread only: last SDL_ShowCursor state applied */
-
-/* Host thread only (videoPumpEvents, inputInit). */
-void inputApplyMouseRequests(void)
-{
-    SDL_AtomicLock(&s_mouseReqLock);
-    const int rel = s_reqRelative, cur = s_reqCursor;
-    s_reqRelative = s_reqCursor = -1;
-    SDL_AtomicUnlock(&s_mouseReqLock);
-
-    if (rel >= 0 && rel != s_appRelative) {
-        s_appRelative = rel;
-        SDL_SetRelativeMouseMode(rel ? SDL_TRUE : SDL_FALSE);
-        if (rel) {
-            SDL_GetRelativeMouseState(NULL, NULL);   /* drain the accumulated jump */
-        }
-    }
-    if (cur >= 0) s_appCursor = cur;
-    if (s_appCursor >= 0) {
-        /* D555: with the crosshair pointer on, the overlay draws its own
-         * pointer, so the OS cursor stays hidden while it is open. */
-        const int show = s_appCursor == 1 && !(cfgCrosshairCursor && optionsOverlayIsOpen());
-        if (show != s_cursorShown) {
-            s_cursorShown = show;
-            SDL_ShowCursor(show ? SDL_ENABLE : SDL_DISABLE);
-        }
-    }
-}
-
-/* WI-1: Quake-style click-to-lock cursor capture. The cursor is free until
- * you click in the game window; ESC (or focus loss, or opening a menu) frees
- * it again. Re-entering a stage while still "armed" re-locks automatically so
- * unpausing / starting a level does not need a click.
- * D239/D192: the legacy always-grab mode (former Input.MouseCaptureMode=0)
- * is removed -- it felt wrong on the file-select menu and its front-end
- * pointer could not reach the outer grid cells. Click-to-lock is the only
- * mode now; existing ini files setting the old key are ignored.
- * Controller input is entirely independent of all of this. */
-/* D594: on macOS the FOCUS_GAINED-driven click-to-lock is unreliable (AppKit
- * key-window; no focus events over ssh), so start armed like PD's MLOCK_ON --
- * the mouse is locked by default in-stage (see reconcileGrab()). */
-#ifdef PLATFORM_MACOS
-static int captureArmed     = 1;   /* D594: PD MLOCK_ON default (see reconcileGrab) */
-#else
-static int captureArmed     = 0;   /* user has clicked to lock (capture mode) */
-#endif
-static int windowFocused    = 1;
 static int mouseAimSpeed  = 16;     /* aim-mode sensitivity, percent (B3: 50 -> 25 M-29 -> 16; still overshot at 25) */
-static int gepdSens       = 38;     /* D194 Input.GepdSens: GEPD SENSITIVITY setting, range 1..500
+int g_inputGepdSens       = 38;     /* D194 Input.GepdSens: GEPD SENSITIVITY setting, range 1..500
                                         (D304: widened from 1..80 to match Input.MouseTurnSpeed)
                                         (20 -> 25 "a bit slow" -> 30 user-calibrated match point
                                         -> 38: user asked defaults ~20-35% faster than that) */
@@ -1101,9 +739,9 @@ static int tankAimScale   = 100;
  * turn speed, only later. */
 static int sensLink       = 1;     /* F10 overlay: keep aim/turn sens at the
                                       stock 38:50 ratio (default on) */
-static int mouseTurnSpeed = 50;     /* hipfire yaw sensitivity, percent
+int g_inputMouseTurnSpeed = 50;     /* hipfire yaw sensitivity, percent
                                         (40 = M-123 match point at GepdSens=30; 50 = the user's
-                                        "~20-35% faster" default request, same +25% as gepdSens) */
+                                        "~20-35% faster" default request, same +25% as g_inputGepdSens) */
 static int mouseInvertY   = 0;      /* 1 = mouse-down looks up */
 static int mouseYScale    = 100;    /* extra vertical (pitch) sensitivity, % */
 static int mouseSmoothing = 0;      /* 0 = raw; 1..90 = low-pass strength (%) */
@@ -1111,7 +749,7 @@ static int mouseRawInput  = 0;      /* 1 = bypass OS pointer accel for aim    */
 static int mouseDtDecouple = 1;     /* D194(b): normalize look sensitivity by real
                                       * elapsed poll time instead of raw px/poll.
                                       * Escape hatch: 0 = prior (coupled) behaviour. */
-static int mouseSensitivity = 100;  /* D238: single master sensitivity, percent --
+int g_inputMouseSensitivity = 100;  /* D238: single master sensitivity, percent --
                                       * multiplies BOTH MouseAimSpeed and MouseTurnSpeed
                                       * so one number tunes overall feel; the two legacy
                                       * knobs stay as an independent per-mode trim on
@@ -1120,13 +758,13 @@ static int mouseSensitivity = 100;  /* D238: single master sensitivity, percent 
 static int aimCurveGamma  = 160;    /* D194(a): aim-mode response curve exponent x100
                                       * (100 = linear, >100 = more low-speed control /
                                       * less bang-bang, <100 = more twitchy). */
-static int aimAbsolute      = 1;    /* D194: 1 = GEPD-style aim while RMB is held --
+int g_inputAimAbsolute      = 1;    /* D194: 1 = GEPD-style aim while RMB is held --
                                       * crosshair locked at centre, mouse MOVEMENT
                                       * rotates the view 1:1 in screen angle; 0 =
                                       * legacy velocity stick from mouse delta. */
-static int mouseDirectLook  = 1;    /* WI-1 (GEPD-INPUT-PLAN.md #89): 1 = hipfire
+int g_inputMouseDirectLook  = 1;    /* WI-1 (GEPD-INPUT-PLAN.md #89): 1 = hipfire
                                       * writes vv_theta/vv_verta directly (see
-                                      * hipDirectCompute), same linear-in-px model
+                                      * inputHipDirectCompute), same linear-in-px model
                                       * as aim mode; 0 = legacy stick-curve path
                                       * (MOUSE_TURN_GAIN), kept as an escape hatch. */
 
@@ -1149,7 +787,7 @@ static int mouseDirectLook  = 1;    /* WI-1 (GEPD-INPUT-PLAN.md #89): 1 = hipfir
  * rest, driven by the port-supplied turn through a #ifdef PORT hook in
  * sub_GAME_7F067FBC (gunfire.c). Default off: it changes aim feel, so it is
  * opt-in. */
-static int pdMouseAim = 0;
+int g_inputPdMouseAim = 0;
 
 /* D337 -- aim mode, folded (user decision 2026-09-24):
  *   Input.AimMode 0 = N64 (default): the N64 aim model -- crosshair travels,
@@ -1164,114 +802,24 @@ static int pdMouseAim = 0;
  * for the N64 mode. GE_PDMOUSEAIM=0/1 still forces the integration at launch.
  * Legacy keys: Input.AimStyle 2 (Centred) migrates to AimMode 1; AimStyle 0/1
  * and Input.PdMouseAim map to the default N64 mode. */
-enum { AIMMODE_N64 = 0, AIMMODE_CENTRED = 1 };
 #if defined(PLATFORM_SWITCH)
 /* project-dam: Centred (with the weapon sway) by default on the console. In the N64 model the
  * crosshair springs back when the stick is released, so a shot needs the
  * stick held still at an angle -- workable on the N64's long stick, not on a
  * Joy-Con. Centred is the stick-turns-the-camera model of modern shooters;
- * the sway (padAimSway) gives the weapon back the motion Centred removes. */
-static int aimMode = AIMMODE_CENTRED;
+ * the sway (inputPadAimSway) gives the weapon back the motion Centred removes. */
+int g_inputAimMode = AIMMODE_CENTRED;
 static int nxDefaultsRev = 0;   /* Input.NxDefaultsRev: Switch default migrations done */
 #else
-static int aimMode = AIMMODE_N64;
+int g_inputAimMode = AIMMODE_N64;
 #endif
-static int s_aimDevMouse;               /* declared below with its notes */
-static int aimLegacyGepd = 0;
-static int aimStyleLegacy = 0;   /* Input.AimStyle (D333, superseded) */
+int g_inputAimDevMouse;               /* declared below with its notes */
+int g_inputAimLegacyGepd = 0;
+int g_inputAimStyleLegacy = 0;   /* Input.AimStyle (D333, superseded) */
 
-static int aimModeGet(void)
-{
-    if (aimStyleLegacy == 2 && aimMode == AIMMODE_N64) {   /* one-time migration */
-        aimMode = AIMMODE_CENTRED;
-    }
-    aimStyleLegacy = 0;
-    pdMouseAim = 0;
-    /* D422: every slot gets the configured mode (the aim state is per slot;
-     * padDirectCompute is stateless and acts on slotPlayer()). */
-    /* the style belongs to the device that aims, and is fixed from the moment the aim begins to the moment it ends */
-    static int latched = -1;
-    const int dev = s_aimDevMouse ? AIMMODE_CENTRED : aimMode;   /* the mouse always aims Centered; Input.AimMode is the gamepad's */
-    struct player *p = slotPlayer();
-    if (p && p->insightaimmode) {
-        if (latched < 0) latched = dev;
-        return latched;
-    }
-    latched = -1;
-    return dev;
-}
-
-/* Auto-aim is for a pad: while the mouse is the device that aims (player 1), the game gets it off (GE_AUTOAIM_ON). */
-extern s32 get_cur_playernum(void);
-int portAimIsMouse(void) { return s_aimDevMouse && get_cur_playernum() == 0; }
-
-/* D337: which device drove aim last. PD picks its crosshair damp per input
- * device; the mouse integration must not swallow a gamepad's stick aim just
- * because the mouse happens to be grabbed. Set by mouse motion, cleared by a
- * deflected pad stick (inputComputePad). */
-
-/* D338: Input.AimRange -- how far the N64-mode crosshair can travel.
- *   0 = PC (default, the GEPD/mouse-injector feel): the crosshair reaches the
- *       screen edge, camera edge-scroll from 72% of the way there.
- *   1 = N64: the original stick limits. N64 aim turns the crosshair by
- *       stick*0.65/80 per tick, so full deflection settles at 65% of the
- *       half-width whatever the weapon damp, and the camera starts turning past
- *       stick 60/80 -- 75% of that range (~49% of the half-width). */
-static int aimRange = 0;
-static double aimRangeScale(void)   { return aimRange ? 0.65 : 1.0; }
-static double aimEdgeThreshold(void) { return aimRange ? 0.75 : (double)GEPD_EDGE_THRESHOLD; }
-
-/* D422: FOV of the player that owns the polled slot. In a split-screen
- * stage the poll thread's viGetFovY() is whichever player the game thread
- * last set up (bondview2 viSetFovY(g_CurrentPlayer->zoominfovy)), so read the
- * slot player's own zoominfovy there. Solo: exactly viGetFovY(), as before. */
-static f32 slotFovY(void)
-{
-    if (inputMpSplit() && s_slot >= 0) {
-        struct player *p = slotPlayer();
-        if (p != NULL && p->zoominfovy > 0.0f)
-            return p->zoominfovy;
-    }
-    return viGetFovY();
-}
-
-static int pdMouseAimEnabled(void)
-{
-    const char *e = GE_ENVSTR("GE_PDMOUSEAIM");
-    if (e) return atoi(e) != 0;
-    return aimModeGet() == AIMMODE_N64 && !aimLegacyGepd;
-}
-
-/* D194 GEPD-aim state. Touched ONLY in inputComputePad (game thread), the
- * same confinement as every other static here. The per-poll grabbed delta
- * drives the view, so there is no free-running angle accumulator for
- * multi-tick catch-up (D193) to double-consume; the frac carry only dithers
- * this poll's stick quantization. */
-/* D194 GEPD-mirror aim state: the crosshair position accumulator in game
- * units (±GEPD_CROSSHAIR_LIMIT at the screen edge). Written straight into
- * slotPlayer()->crosshair_x/y_pos + gun_azimuth_angle/turning each tick;
- * bondview2's damped crosshair update keeps running and is simply
- * overwritten each tick (GEPD model, D194). */
-/* D422: the aim accumulators are per controller slot (seat), so any slot can
- * own a centred / GEPD aim state (online-ready input layer). Only the
- * keyboard/mouse block touches them today, and it runs for slot 0 only, so
- * solo reads/writes exactly slot 0 as before. AIMS = the slot being polled;
- * off the poll (s_slot == -1, game thread) it is slot 0, as before. */
-struct aimSlotState {
-    double crossX, crossY;   /* was s_gepdCrossX/Y */
-    int gepdHeldPrev;        /* aim held last tick -> adopt on entry */
-    int aimHeldPrev;         /* was s_aimHeldPrev */
-    int centreClearTicks;    /* was s_centreClearTicks */
-};
-static struct aimSlotState s_aimSt[4];
-#define AIMS (s_aimSt[(s_slot > 0 && s_slot < 4) ? s_slot : 0])
-static int aimGepdAccumulate(double dxPx, double dyLook);
-static void aimGepdEdgeScroll(void);
-static int aimGepdCompute(double dxPx, double dyLook);
-static int hipDirectCompute(double dxPx, double dyLook);
-static double s_hipThetaDegOut;   /* D428: yaw degrees the last hipDirectCompute applied */
-static void swayFeedTheta(double deg);
-static int padDirectCompute(int dx, int dy);   /* D404: pad twin of the above */
+double g_inputHipThetaDegOut;   /* D428: yaw degrees the last inputHipDirectCompute applied */
+void inputSwayFeedTheta(double deg);
+int inputPadDirectCompute(int dx, int dy);   /* D404: pad twin of the above */
 /* D194: bondview2's "look-ahead" pitch centreing (docentreupdown) arms during
  * hip-fire walking whenever the pitch strays from the horizon target, and --
  * once armed -- keeps pulling vv_verta back to it even in aim mode, EXCEPT
@@ -1284,10 +832,10 @@ static int padDirectCompute(int dx, int dy);   /* D404: pad twin of the above */
  * stick we choose to present. */
 /* (s_aimHeldPrev / s_centreClearTicks live in AIMS since D422.) */
 /* D194: always 0 since the free-cursor experiment was reverted (aim uses
- * grabbed relative deltas). Kept because reconcileGrab(),
- * applyCursorVisibility() and the mouse-button mask still branch on it --
+ * grabbed relative deltas). Kept because inputReconcileGrab(),
+ * inputApplyCursorVisibility() and the mouse-button mask still branch on it --
  * with it pinned to 0 they take exactly the pre-D194 paths. */
-static int    s_absAimSuspend = 0;
+
 
 static int aimAbsCompute(double dxPx, double dyPx, int *outSx, int *outSy);  /* D194 */
 static Uint64 s_lastLookPollCounter = 0;  /* D194(b): monotonic clock, gameplay-look drain only */
@@ -1315,19 +863,14 @@ static int padAimLookSens  = 75;
 static int padAimLookSens  = 100;   /* right stick while aiming (Centered), % */
 #endif
 #if defined(PLATFORM_SWITCH)
-static int padLookCurve    = 200;            /* project-dam: Centred stick curve exponent x100 (game: 200) */
-static int padTurnAccel    = 2;              /* project-dam: 0 off, 1 low (1.5x), 2 high (2x) */             /* project-dam: right stick while aiming (game aim mode), % */
+int g_inputPadLookCurve    = 200;            /* project-dam: Centred stick curve exponent x100 (game: 200) */
+int g_inputPadTurnAccel    = 2;              /* project-dam: 0 off, 1 low (1.5x), 2 high (2x) */             /* project-dam: right stick while aiming (game aim mode), % */
 #endif
 static int padSouthpaw     = 0;               /* 1 = swap fire (G) / grenade (R) trigger actions */
 static int padLookSmooth   = NX_LOOK_SMOOTH;               /* right-stick look low-pass strength, 0-10 (0 = off, 10 = max) */
 static int padTriggerPct   = NX_TRIGGER_PCT;              /* trigger press point, % of travel (~30*256) */
 /* padLookInvertY: declared with the D513 accessors above (D645). */
 static int inputDefaultsRev = 0;              /* D546: 1 once the deadzone default migration ran */
-/* Per-pad look-smoothing EMA state (Wave A item 5), one X/Y pair per pad. Reset
- * on hot-unplug (inputRescanPads) so a smoothed value can't stick after the
- * stick snaps back; the low-pass otherwise recentres it toward 0 on its own. */
-static double padSmSX[MAX_PADS] = {0};
-static double padSmSY[MAX_PADS] = {0};
 
 /* Smoothed mouse delta carried between polls when mouseSmoothing > 0. */
 static double mouseSmDX = 0.0, mouseSmDY = 0.0;
@@ -1336,8 +879,6 @@ static double mouseSmDX = 0.0, mouseSmDY = 0.0;
  * NOT a persistent aim accumulator: mouse-look is a displacement device and
  * GE's aim is a rate device, so we consume the whole delta each poll and
  * reset -- stop moving and the stick/ C-button releases immediately. */
-static double mouseDX = 0.0;
-static double mouseDY = 0.0;
 
 /* Mouse-wheel -> weapon cycle (D223): directional, like a normal PC shooter.
  * The port forces CONTROLLER_CONFIG_HONEY (bondview.c:1484), so GE's default
@@ -1771,395 +1312,9 @@ static void inputOpenPads(void)
     }
 }
 
-/* ------------------------------------------------------------------------
- * Scripted input (test harness, port-only). GE_INPUTSCRIPT lets a headless
- * run walk the front-end / pause menus with no human at the keyboard.
- *
- *   GE_INPUTSCRIPT="120:START;180:A;240:A;600:SDOWN;900:SNONE,A"
- *
- * Each entry is `<frame>:<tok>[,<tok>...]`. Buttons (A B Z START L R UP DOWN
- * LEFT RIGHT CUP CDOWN CLEFT CRIGHT) pulse for INPUTSCRIPT_PULSE controller
- * reads from <frame>. Analog-stick tokens (SUP SDOWN SLEFT SRIGHT) are
- * SUSTAINED: the stick stays deflected until a later entry changes it; SNONE
- * re-centres it. CHOLD/CREL hold/release GEPD crouch (D377);
- * UHOLD/UREL and RELOADHOLD/RELOADREL exercise dedicated use/reload (D378).
- * MLB<n>/MRB<n> (D597) press/release the sustained mouse buttons (n=1 press,
- * 0 release; slot 0 only): headless fire for the D595-class regression.
- * "Frame" = count of controller-0 reads since launch (roughly
- * 2 per rendered frame -- watch GE_INPUTLOG to calibrate). Unset env => no
- * effect; when set it is the ONLY controller-0 input source.
- *
- * GE_INPUTSCRIPT_P1 / _P2 / _P3 do the same for slots 1-3 (split-screen
- * seats), so a headless run can drive players 2-4 behind GE_MPVIRT/
- * GE_STARTMP with no physical pads:
- *   GE_INPUTSCRIPT_P1="600:ZHOLD;900:SUP;1200:SNONE,A"
- * Same entry syntax; "frame" = count of THAT controller's reads since
- * launch. Slots 1-3 have no mouse path, so mouse tokens (MDX/MDY) and
- * CHOLD/CREL are ignored there (one warning per script if they appear).
- * Unset => the seat stays idle exactly as before.
- *
- * GE_INPUTSCRIPT_MS=1 (abpad, tools_pc/abpad): every slot's "frame" is
- * instead milliseconds since SDL init (SDL_GetTicks), and buttons pulse for
- * INPUTSCRIPT_PULSE_MS. Read rates vary across the intro and menus, so a
- * read count can't be lined up with a wall-clock reference (1964). */
-#define INPUTSCRIPT_MAX       64
-#define INPUTSCRIPT_PULSE     6
-#define INPUTSCRIPT_PULSE_MS  50
+/* Scripted input and record / replay: port/src/input_script.c (the declarations are in input/input_internal.h). */
 
-static int scriptMsMode(void)
-{
-    static int ms = -1;
-    if (ms < 0) ms = GE_ENVFLAG("GE_INPUTSCRIPT_MS") ? 1 : 0;
-    return ms;
-}
 
-struct scriptEntry { long frame; unsigned mask; int sx, sy; int hasStick;
-                     int hasMouse, mdx, mdy, mlb, mrb; int hasHold, hold; /* D337/D597 mouse tokens */
-                     int hasZHold, zhold;                          /* D207: sustained fire */
-                     int hasCHold; unsigned chold;                 /* abpad: sustained C buttons (1.2 walk/strafe) */
-                     int hasCrouch, crouch;                       /* D377: free-crouch QA */
-                     int hasUse, use, hasReload, reload; };        /* D378: split-action QA */
-/* Per-slot state. Slot 0 is the original GE_INPUTSCRIPT harness (byte-for-
- * byte unchanged); slots 1-3 are GE_INPUTSCRIPT_P1..P3 for split-screen test
- * seats (virtual or physical pads). */
-struct scriptSlot {
-    struct scriptEntry entries[INPUTSCRIPT_MAX];
-    int count;        /* -1 = not parsed yet, 0 = parsed empty */
-    long frame;       /* controller reads for this slot since launch */
-    int curSX, curSY; /* stick set by the last scriptApply() for this slot */
-    int mouseOn, mdx, mdy, mlb, mrb;   /* sustained scripted mouse (slot 0 only) */
-    int hold, zhold, crouch, use, reload;  /* latest sustained holds */
-    unsigned chold;          /* latest sustained C-button mask */
-    int ignoredWarned;       /* P1..P3: warned once about mouse/crouch tokens */
-};
-static struct scriptSlot scriptSlots[4] = {
-    { .count = -1 }, { .count = -1 }, { .count = -1 }, { .count = -1 },
-};
-
-static const char *scriptTag(int slot)
-{
-    if (slot == 0) return "GE_INPUTSCRIPT";
-    return slot == 1 ? "GE_INPUTSCRIPT_P1" : slot == 2 ? "GE_INPUTSCRIPT_P2"
-                                                       : "GE_INPUTSCRIPT_P3";
-}
-
-static const char *scriptEnv(int slot)
-{
-    if (slot == 0) return getenv("GE_INPUTSCRIPT");
-    return slot == 1 ? getenv("GE_INPUTSCRIPT_P1")
-         : slot == 2 ? getenv("GE_INPUTSCRIPT_P2") : getenv("GE_INPUTSCRIPT_P3");
-}
-
-/* Apply one token to `e`. Buttons: A B Z START L R UP DOWN LEFT RIGHT CUP
- * CDOWN CLEFT CRIGHT (D-pad/C-buttons). Analog stick: SUP SDOWN SLEFT SRIGHT
- * (full +/-80 deflection -- moves menu cursors). */
-static void scriptApplyToken(struct scriptEntry *e, const char *s, int n,
-                             int slot)
-{
-    struct { const char *k; unsigned v; } btn[] = {
-        {"A",GE_CONT_A}, {"B",GE_CONT_B}, {"Z",GE_CONT_G}, {"START",GE_CONT_START},
-        {"L",GE_CONT_L}, {"R",GE_CONT_R}, {"UP",GE_CONT_UP}, {"DOWN",GE_CONT_DOWN},
-        {"LEFT",GE_CONT_LEFT}, {"RIGHT",GE_CONT_RIGHT},
-        {"CUP",GE_CONT_E}, {"CDOWN",GE_CONT_D}, {"CLEFT",GE_CONT_C}, {"CRIGHT",GE_CONT_F},
-    };
-    for (size_t i = 0; i < sizeof(btn)/sizeof(btn[0]); ++i) {
-        if ((int)strlen(btn[i].k) == n && SDL_strncasecmp(btn[i].k, s, n) == 0) {
-            e->mask |= btn[i].v;
-            return;
-        }
-    }
-    /* D337: sustained scripted mouse (px per poll) and aim hold, for headless
-     * aim-model measurements: MDX<n> MDY<n> (latest entry wins, 0 stops),
-     * RHOLD / RREL (hold / release the game's R aim button). */
-    if (n > 3 && (SDL_strncasecmp("MDX", s, 3) == 0 || SDL_strncasecmp("MDY", s, 3) == 0)) {
-        if (slot > 0) {   /* no mouse path on slots 1-3: ignore, warn once */
-            struct scriptSlot *st = &scriptSlots[slot];
-            if (!st->ignoredWarned) {
-                st->ignoredWarned = 1;
-                sysLogPrintf(LOG_WARNING, "%s: mouse tokens are ignored for slots 1-3 ('%.*s')",
-                             scriptTag(slot), n, s);
-            }
-            return;
-        }
-        char num[16]; int k = n - 3; if (k > 15) k = 15;
-        memcpy(num, s + 3, k); num[k] = 0;
-        e->hasMouse = 1;
-        if (s[2] == 'X' || s[2] == 'x') e->mdx = atoi(num); else e->mdy = atoi(num);
-        return;
-    }
-    /* D597: sustained scripted mouse buttons: MLB<n> MRB<n> (n=1 press,
-     * 0 release; latest entry wins), slot 0 only. Headless fire for the
-     * D595-class regression: aim with MDX, MLB1 on an AI -> struck animation
-     * with no SIGSEGV. A headless window has no real mouse state, so the
-     * bit ORs into the polled mask (see the D337 block in
-     * inputComputePadSlot); the game's mouse-button bindings (LMB=IA_FIRE)
-     * then drive it like a real press. */
-    if (n > 3 && (SDL_strncasecmp("MLB", s, 3) == 0 || SDL_strncasecmp("MRB", s, 3) == 0)) {
-        if (slot > 0) {   /* no mouse path on slots 1-3: ignore, warn once */
-            struct scriptSlot *st = &scriptSlots[slot];
-            if (!st->ignoredWarned) {
-                st->ignoredWarned = 1;
-                sysLogPrintf(LOG_WARNING, "%s: mouse tokens are ignored for slots 1-3 ('%.*s')",
-                             scriptTag(slot), n, s);
-            }
-            return;
-        }
-        char num[16]; int k = n - 3; if (k > 15) k = 15;
-        memcpy(num, s + 3, k); num[k] = 0;
-        e->hasMouse = 1;
-        if (s[1] == 'L') e->mlb = atoi(num) != 0; else e->mrb = atoi(num) != 0;   /* MLB/MRB: the L/R is index 1 */
-        return;
-    }
-    if (n == 5 && SDL_strncasecmp("RHOLD", s, 5) == 0) { e->hasHold = 1; e->hold = 1; return; }
-    if (n == 5 && SDL_strncasecmp("LHOLD", s, 5) == 0) { e->hasHold = 1; e->hold = 2; return; }
-    if (n == 4 && SDL_strncasecmp("RREL", s, 4) == 0)  { e->hasHold = 1; e->hold = 0; return; }
-    /* D207: ZHOLD / ZREL hold / release fire (Z) for automatic weapons;
-     * independent of RHOLD so aim + fire can be held together. */
-    if (n == 5 && SDL_strncasecmp("ZHOLD", s, 5) == 0) { e->hasZHold = 1; e->zhold = 1; return; }
-    if (n == 4 && SDL_strncasecmp("ZREL", s, 4) == 0)  { e->hasZHold = 1; e->zhold = 0; return; }
-    /* abpad: CUPHOLD/CDOWNHOLD/CLEFTHOLD/CRIGHTHOLD hold C buttons until CNONE
-     * (the port forces 1.2 SOLITARE, where C-up/down walk and C-left/right strafe). */
-    if (n == 7 && SDL_strncasecmp("CUPHOLD", s, 7) == 0)    { e->hasCHold = 1; e->chold |= GE_CONT_E; return; }
-    if (n == 9 && SDL_strncasecmp("CDOWNHOLD", s, 9) == 0)  { e->hasCHold = 1; e->chold |= GE_CONT_D; return; }
-    if (n == 9 && SDL_strncasecmp("CLEFTHOLD", s, 9) == 0)  { e->hasCHold = 1; e->chold |= GE_CONT_C; return; }
-    if (n == 10 && SDL_strncasecmp("CRIGHTHOLD", s, 10) == 0) { e->hasCHold = 1; e->chold |= GE_CONT_F; return; }
-    if (n == 5 && SDL_strncasecmp("CNONE", s, 5) == 0)      { e->hasCHold = 1; e->chold = 0; return; }
-    if ((n == 5 && SDL_strncasecmp("CHOLD", s, 5) == 0) ||
-        (n == 4 && SDL_strncasecmp("CREL", s, 4) == 0)) {
-        if (slot > 0) {   /* no crouch path on slots 1-3: ignore, warn once */
-            struct scriptSlot *st = &scriptSlots[slot];
-            if (!st->ignoredWarned) {
-                st->ignoredWarned = 1;
-                sysLogPrintf(LOG_WARNING, "%s: CHOLD/CREL are ignored for slots 1-3 ('%.*s')",
-                             scriptTag(slot), n, s);
-            }
-            return;
-        }
-        e->hasCrouch = 1; e->crouch = (SDL_strncasecmp("CHOLD", s, 5) == 0);
-        return;
-    }
-    if (n == 5 && SDL_strncasecmp("UHOLD", s, 5) == 0) { e->hasUse = 1; e->use = 1; return; }
-    if (n == 4 && SDL_strncasecmp("UREL", s, 4) == 0)  { e->hasUse = 1; e->use = 0; return; }
-    if (n == 10 && SDL_strncasecmp("RELOADHOLD", s, 10) == 0) { e->hasReload = 1; e->reload = 1; return; }
-    if (n == 9 && SDL_strncasecmp("RELOADREL", s, 9) == 0) { e->hasReload = 1; e->reload = 0; return; }
-    e->hasStick = 1;
-    if (n == 3 && SDL_strncasecmp("SUP", s, 3) == 0)      { e->sy =  STICK_MAX; return; }
-    if (n == 5 && SDL_strncasecmp("SDOWN", s, 5) == 0)    { e->sy = -STICK_MAX; return; }
-    if (n == 5 && SDL_strncasecmp("SLEFT", s, 5) == 0)    { e->sx = -STICK_MAX; return; }
-    if (n == 6 && SDL_strncasecmp("SRIGHT", s, 6) == 0)   { e->sx =  STICK_MAX; return; }
-    if (n == 5 && SDL_strncasecmp("SNONE", s, 5) == 0)    { return; }  /* recentre */
-    e->hasStick = 0;
-    sysLogPrintf(LOG_WARNING, "%s: unknown token '%.*s'", scriptTag(slot), n, s);
-}
-
-static void scriptParse(int slot)
-{
-    struct scriptSlot *st = &scriptSlots[slot];
-    const char *tag = scriptTag(slot);
-    st->count = 0;
-    const char *env = scriptEnv(slot);
-    if (!env || !*env) {
-        return;
-    }
-    const char *p = env;
-    while (*p && st->count < INPUTSCRIPT_MAX) {
-        char *end = NULL;
-        long fr = strtol(p, &end, 10);
-        if (end == p || *end != ':') {
-            sysLogPrintf(LOG_WARNING, "%s: bad entry near '%s'", tag, p);
-            break;
-        }
-        p = end + 1;
-        struct scriptEntry *e = &st->entries[st->count];
-        e->frame = fr;
-        e->mask = 0;
-        e->sx = e->sy = 0;
-        e->hasStick = 0;
-        e->hasMouse = e->mdx = e->mdy = e->mlb = e->mrb = 0;
-        e->hasHold = e->hold = 0;
-        e->hasZHold = e->zhold = 0;
-        e->hasCHold = 0; e->chold = 0;
-        e->hasCrouch = e->crouch = 0;
-        e->hasUse = e->use = e->hasReload = e->reload = 0;
-        while (*p && *p != ';') {
-            const char *tok = p;
-            while (*p && *p != ',' && *p != ';') ++p;
-            scriptApplyToken(e, tok, (int)(p - tok), slot);
-            if (*p == ',') ++p;
-        }
-        if (*p == ';') ++p;
-        st->count++;
-    }
-    sysLogPrintf(LOG_INFO, "%s: %d entr%s parsed",
-                 tag, st->count, st->count == 1 ? "y" : "ies");
-}
-
-static int scriptIsActive(int slot)
-{
-    struct scriptSlot *st = &scriptSlots[slot];
-    if (st->count < 0) {
-        scriptParse(slot);
-    }
-    return st->count > 0;
-}
-
-/* When a script is loaded it is the SOLE source of controller-0 input: real
- * keyboard/mouse/pad is ignored so headless menu walks are deterministic
- * (a relative-mouse SDL window with no focus otherwise spews phantom deltas).
- * Returns the scripted button mask for the current frame; advances the frame
- * counter (call exactly once per controller-0 read). */
-/* Refresh the latest sustained holds for one slot from its entries (latest
- * entry wins). Slot 0's mouse fields are read by the keyboard/mouse path; on
- * slots 1-3 only hold/zhold/use/reload can be set (mouse and crouch tokens
- * are ignored at parse time). */
-static void scriptRefreshHolds(int slot)
-{
-    struct scriptSlot *st = &scriptSlots[slot];
-    long bestM = -1, bestH = -1, bestZ = -1, bestC = -1, bestU = -1, bestR = -1, bestCH = -1;
-    for (int i = 0; i < st->count; ++i) {
-        long d = st->frame - st->entries[i].frame;
-        if (d < 0) continue;
-        if (st->entries[i].hasMouse && st->entries[i].frame > bestM) {
-            bestM = st->entries[i].frame;
-            st->mouseOn = 1;
-            st->mdx = st->entries[i].mdx;
-            st->mdy = st->entries[i].mdy;
-            st->mlb = st->entries[i].mlb;   /* D597 */
-            st->mrb = st->entries[i].mrb;
-        }
-        if (st->entries[i].hasHold && st->entries[i].frame > bestH) {
-            bestH = st->entries[i].frame;
-            st->hold = st->entries[i].hold;
-        }
-        if (st->entries[i].hasZHold && st->entries[i].frame > bestZ) {
-            bestZ = st->entries[i].frame;
-            st->zhold = st->entries[i].zhold;
-        }
-        if (st->entries[i].hasCHold && st->entries[i].frame > bestCH) {
-            bestCH = st->entries[i].frame;
-            st->chold = st->entries[i].chold;
-        }
-        if (st->entries[i].hasCrouch && st->entries[i].frame > bestC) {
-            bestC = st->entries[i].frame;
-            st->crouch = st->entries[i].crouch;
-        }
-        if (st->entries[i].hasUse && st->entries[i].frame > bestU) {
-            bestU = st->entries[i].frame;
-            st->use = st->entries[i].use;
-        }
-        if (st->entries[i].hasReload && st->entries[i].frame > bestR) {
-            bestR = st->entries[i].frame;
-            st->reload = st->entries[i].reload;
-        }
-    }
-}
-
-/* Input record/replay (test harness, port-only). GE_INPUTRECORD=<file>
- * appends controller 0's final button mask + stick per controller read;
- * GE_INPUTREPLAY=<file> feeds the same stream back read for read (then
- * neutral). Reads are tick-driven, so with -level_XX and a pinned GE_RSEED a
- * replay re-plays a human run (tools_pc/levelbench.sh --replay). Pad only:
- * mouse aim is not captured; D404 centred right-stick look is (fields 4-6). */
-static int s_replayActive;                          /* GE_INPUTREPLAY stream open */
-static int s_recPadDX, s_recPadDY, s_recPadDirect;  /* this poll's D404 pad-direct look */
-static int padDirectCompute(int dx, int dy);
-
-static FILE *s_rec, *s_rep;
-static int s_rrInit, s_repFetched;
-static struct { unsigned b; int x, y, pdx, pdy, pd, use, reload; } s_repCur;
-static int s_recUse, s_recReload;   /* this poll's dedicated use/reload (D378) */
-
-static void inputRecordReplayInit(void)
-{
-    if (s_rrInit) return;
-    s_rrInit = 1;
-    const char *r = getenv("GE_INPUTRECORD");
-    const char *p = getenv("GE_INPUTREPLAY");
-    if (p && *p) {
-        s_rep = fopen(p, "r");
-        s_replayActive = s_rep != NULL;
-        sysLogPrintf(LOG_NOTE, "GE_INPUTREPLAY %s: %s", p, s_rep ? "playing" : "cannot open");
-    }
-    if (r && *r) {
-        s_rec = fopen(r, "w");
-        if (s_rec) setvbuf(s_rec, NULL, _IOLBF, 0);   /* survive a crash/kill */
-        sysLogPrintf(LOG_NOTE, "GE_INPUTRECORD %s: %s", r, s_rec ? "recording" : "cannot open");
-    }
-}
-
-/* Read this poll's replay line (once per controller-0 poll). */
-static void replayFetch(void)
-{
-    inputRecordReplayInit();
-    if (!s_rep || s_repFetched) return;
-    s_repFetched = 1;
-    char line[128];
-    memset(&s_repCur, 0, sizeof s_repCur);
-    if (!fgets(line, sizeof line, s_rep) ||
-        sscanf(line, "%x %d %d %d %d %d %d %d", &s_repCur.b, &s_repCur.x, &s_repCur.y,
-               &s_repCur.pdx, &s_repCur.pdy, &s_repCur.pd, &s_repCur.use, &s_repCur.reload) < 3) {
-        sysLogPrintf(LOG_NOTE, "GE_INPUTREPLAY: end of stream");
-        fclose(s_rep);
-        s_rep = NULL;
-        s_replayActive = 0;
-        memset(&s_repCur, 0, sizeof s_repCur);
-    }
-}
-
-static void inputRecordReplay(unsigned *button, int *sx, int *sy)
-{
-    replayFetch();
-    if (s_replayActive || s_repFetched) {
-        *button = s_repCur.b; *sx = s_repCur.x; *sy = s_repCur.y;
-        /* D404 centred pad aim turns the camera directly, not via the
-         * stick channel: re-apply the recorded deflection, same poll. */
-        if (s_repCur.pd) padDirectCompute(s_repCur.pdx, s_repCur.pdy);
-    }
-    s_repFetched = 0;
-    if (s_rec) {
-        fprintf(s_rec, "%x %d %d %d %d %d %d %d\n", *button, *sx, *sy,
-                s_recPadDX, s_recPadDY, s_recPadDirect, s_recUse, s_recReload);
-    }
-    s_recPadDX = s_recPadDY = s_recPadDirect = s_recUse = s_recReload = 0;
-}
-
-static unsigned scriptApply(int slot, unsigned button)
-{
-    struct scriptSlot *st = &scriptSlots[slot];
-    if (!scriptIsActive(slot)) {
-        return button;
-    }
-    int ms = scriptMsMode();
-    if (ms) st->frame = (long)SDL_GetTicks();
-    scriptRefreshHolds(slot);   /* D207: refresh sustained holds even off the mouse path (idempotent) */
-    unsigned m = 0;
-    long bestStickFrame = -1;
-    long pulse = ms ? INPUTSCRIPT_PULSE_MS : INPUTSCRIPT_PULSE;
-    for (int i = 0; i < st->count; ++i) {
-        long d = st->frame - st->entries[i].frame;
-        if (d >= 0 && d < pulse) {
-            m |= st->entries[i].mask;
-        }
-        /* sustained stick: the latest-starting entry that carried a stick token */
-        if (d >= 0 && st->entries[i].hasStick && st->entries[i].frame > bestStickFrame) {
-            bestStickFrame = st->entries[i].frame;
-            st->curSX = st->entries[i].sx;
-            st->curSY = st->entries[i].sy;
-        }
-    }
-    if (st->hold == 1) m |= GE_CONT_R;   /* D337 RHOLD */
-    if (st->hold == 2) m |= GE_CONT_L;   /* D337 LHOLD (Q / "LeanLeft") */
-    if (st->zhold) m |= GE_CONT_G;       /* D207 ZHOLD (fire) */
-    m |= st->chold;                      /* abpad C-button holds */
-    if (!ms) st->frame++;
-    return m;
-}
-
-static void inputRebuildBinds(void);   /* D214; defined below with keyDown() */
-static void inputMigrateBinds(void);   /* D380; after configLoad */
-static void inputBindingProbe(void);   /* D383/D384; opt-in, restores ini state */
-
-static int bindsVersion = 0; /* D380/D386: versioned migration of effective ini binds */
 static int crouchMode = 1;   /* 0 = hold, 1 = toggle (latched crouch input); D556: toggle by default (existing ini values kept) */
 
 static void padMapSelfTest(void);
@@ -2226,7 +1381,7 @@ int inputInit(void)
     /* project-dam: inis written by 0.1.0 carry the N64 aim style as a plain
      * default; move them to Centred once. A later choice is kept. */
     if (nxDefaultsRev < 1) {
-        aimMode = AIMMODE_CENTRED;
+        g_inputAimMode = AIMMODE_CENTRED;
         nxDefaultsRev = 1;
     }
     /* Right-stick deadzone 10 % instead of the desktop 25 %: modern shooters
@@ -2244,8 +1399,8 @@ int inputInit(void)
 
     /* Relative mouse mode for mouse-look. Click-to-lock: we start released
      * and wait for a click in the window (video.c -> inputNotifyClick). */
-    mouseGrabbed = 0;
-    if (mouseEnabled) {
+    g_inputMouseGrabbed = 0;
+    if (g_inputMouseEnabled) {
         if (mouseRawInput) {
             /* Feed the raw device delta straight through: no OS pointer
              * acceleration, no warp-based emulation. Must be set before
@@ -2254,10 +1409,10 @@ int inputInit(void)
             SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_MODE_WARP, "0");
             sysLogPrintf(LOG_INFO, "input: raw mouse input (no OS pointer accel)");
         }
-        mouseRequestRelative(mouseGrabbed);
+        inputMouseRequestRelative(g_inputMouseGrabbed);
     }
 
-    applyCursorVisibility();   /* hide the OS cursor if we start focused */
+    inputApplyCursorVisibility();   /* hide the OS cursor if we start focused */
     inputApplyMouseRequests(); /* inputInit runs on the host thread */
 
     if (GE_ENVFLAG("GE_PADMAPTEST")) padMapSelfTest();   /* D469 */
@@ -2319,7 +1474,7 @@ void inputUpdate(void)
     /* D287: skip until the host thread has actually enabled relative mode
      * (a benign racy read of a host-thread int), so the few ms between the
      * logical grab and its application do not read absolute cursor motion. */
-    if (!mouseEnabled || !mouseGrabbed || s_appRelative != 1) {
+    if (!g_inputMouseEnabled || !g_inputMouseGrabbed || g_inputAppRelative != 1) {
         return;
     }
 
@@ -2328,105 +1483,14 @@ void inputUpdate(void)
 
     /* Raw px; per-mode sensitivity is applied in inputComputePad(). Accumulate
      * in case inputUpdate() is polled more than once between pad reads. */
-    mouseDX += dx;
-    mouseDY += dy;
+    g_inputMouseDX += dx;
+    g_inputMouseDY += dy;
 }
 
-/* D643 Input.N64StickFeel=1 (Original): the stick as a bare N64 pot. Linear
- * 32767 -> STICK_MAX (80, the N64 range), a small centre deadzone and nothing
- * else (no deadzone rescale, look sensitivity or smoothing). The ~7.6% centre
- * (2500/32767) is an assumption of typical N64 stick dead-centre jitter --
- * confirm against 1964 / the N64 manual. */
-#define N64_STICK_DZ 2500
-static int scaleAxis(int v, int dz);
-static int scaleAxisN64(int v)
-{
-    if (v > -N64_STICK_DZ && v < N64_STICK_DZ) return 0;
-    int out = (int)((long)v * STICK_MAX / 32767);
-    if (out >  STICK_MAX) out =  STICK_MAX;
-    if (out < -STICK_MAX) out = -STICK_MAX;
-    return out;
-}
-/* Modern/legacy deadzone scaling, or the accurate N64 response in Original. */
-static int padStickAxis(int v, int dz)
-{
-    return (controlScheme && n64StickFeel) ? scaleAxisN64(v) : scaleAxis(v, dz);
-}
-
-static int scaleAxis(int v, int dz)
-{
-    if (dz < 0) dz = 0;
-    if (dz > 30000) dz = 30000;
-    if (v > -dz && v < dz) {
-        return 0;
-    }
-    if (v < 0) v += dz; else v -= dz;
-    int out = (int)((long)v * STICK_MAX / (32767 - dz));
-    if (out >  STICK_MAX) out =  STICK_MAX;
-    if (out < -STICK_MAX) out = -STICK_MAX;
-    return out;
-}
-
-static int keyDown(const Uint8 *ks, SDL_Scancode sc)
-{
-    return ks && sc != SDL_SCANCODE_UNKNOWN && ks[sc];
-}
-
-/* ------------------------------------------------------------------------
- * D214 — keyboard rebinding (PD parity: config-string driven, no UI).
- *
- * Each gameplay action maps to a comma-separated list of SDL scancode names
- * (as printed by SDL_GetScancodeName: "W", "Up", "Left Ctrl", "Space", ...).
- * The defaults reproduce the previously-hardcoded FPS layout exactly, so a
- * fresh or [Bind]-less ini changes nothing. Parsed once in inputInit(), after
- * configLoad(). D385: buttons 1..5 share these slots with keyboard keys.
- * ---------------------------------------------------------------------- */
-enum {
-    IA_FORWARD, IA_BACK, IA_STRAFE_L, IA_STRAFE_R, IA_TURN_L, IA_TURN_R,
-    IA_FIRE, IA_AIM, IA_ACTION, IA_CANCEL, IA_LEAN_L, IA_START,
-    /* Reload and crouch use the port's dedicated action/stance paths in
-     * playable stages; the native B/C-down buttons have other meanings. */
-    IA_RELOAD, IA_CROUCH, IA_COUNT
-};
-
-static const struct { const char *key; const char *def; } kBindDefs[IA_COUNT] = {
-    [IA_FORWARD]  = { "Input.Bind.Forward",     "W,Up"          },
-    [IA_BACK]     = { "Input.Bind.Back",        "S,Down"        },
-    [IA_STRAFE_L] = { "Input.Bind.StrafeLeft",  "A"             },
-    [IA_STRAFE_R] = { "Input.Bind.StrafeRight", "D"             },
-    [IA_TURN_L]   = { "Input.Bind.TurnLeft",    "Left"          },
-    [IA_TURN_R]   = { "Input.Bind.TurnRight",   "Right"         },
-    [IA_FIRE]     = { "Input.Bind.Fire",        "Left Ctrl"     },
-    [IA_AIM]      = { "Input.Bind.Aim",         "Left Shift"    },
-    [IA_ACTION]   = { "Input.Bind.Action",      "Space,Z,E"     },
-    [IA_CANCEL]   = { "Input.Bind.Cancel",      "X,R,F,Escape"  },
-    [IA_LEAN_L]   = { "Input.Bind.LeanLeft",    "Q"             },
-    [IA_START]    = { "Input.Bind.Start",       "Return,Tab"    },
-    [IA_RELOAD]   = { "Input.Bind.Reload",      ""              },
-    [IA_CROUCH]   = { "Input.Bind.Crouch",      ""              },
-};
-
-/* Legacy pre-D380 N64 defaults (kBindDefs above) are only a migration
- * signature. The single PC layout is the GEPD/mouse default: Q = A
- * button (accept/next weapon), E = B button (use/cancel/reload),
- * R = dedicated reload, Ctrl = crouch). The preset is the effective default
- * for a one-time ini conversion only. On disk, every Bind key now stores
- * its actual effective value; `NONE` explicitly unbinds even a preset key.
- * Fire loses its Left Ctrl key (Mouse 1 fires; Ctrl crouches), LeanLeft unbound.
- * NULL entries retain their old defaults (movement etc.). */
-static const char *const kGepdPreset[IA_COUNT] = {
-    [IA_FIRE]   = "Mouse 1",
-    [IA_AIM]    = "Mouse 3,Left Shift",
-    [IA_ACTION] = "Q",
-    [IA_CANCEL] = "E",
-    [IA_LEAN_L] = "",
-    [IA_RELOAD] = "R",
-    [IA_CROUCH] = "Left Ctrl",
-};
 /* D416: crouch state is per controller slot (slot 0 only in solo). */
 static int s_crouchLatchA[4], s_crouchHeldPrevA[4], s_crouchAppliedA[4];
 static struct player *s_crouchPlayerA[4];
-#define CSLOT() (s_slot > 0 && s_slot < 4 ? s_slot : 0)
+#define CSLOT() (g_inputSlot > 0 && g_inputSlot < 4 ? g_inputSlot : 0)
 #define s_crouchLatch    (s_crouchLatchA[CSLOT()])
 #define s_crouchHeldPrev (s_crouchHeldPrevA[CSLOT()])
 #define s_crouchApplied  (s_crouchAppliedA[CSLOT()])   /* port-owned stance; not the native C-down crouch */
@@ -2441,154 +1505,16 @@ static void inputDropCrouch(void)
 {
     /* The engine can take over the stance (tank, respawn, etc.) between
      * polls; do not undo its new value or write into a different player. */
-    if (s_crouchApplied && slotPlayer() == s_crouchPlayer &&
-        slotPlayer()->crouchpos == CROUCH_SQUAT)
-        slotPlayer()->crouchpos = CROUCH_STAND;
+    if (s_crouchApplied && inputSlotPlayer() == s_crouchPlayer &&
+        inputSlotPlayer()->crouchpos == CROUCH_SQUAT)
+        inputSlotPlayer()->crouchpos = CROUCH_STAND;
     s_crouchApplied = 0;
     s_crouchPlayer = NULL;
 }
 
-#define BIND_MAX_KEYS INPUT_BIND_SLOTS
-static char         g_bindStr[IA_COUNT][64];
-static int          s_legacyBindWarned[IA_COUNT];
-static int g_bind[IA_COUNT][BIND_MAX_KEYS];
-
-/* Formerly LMB/RMB were unconditional, even for a NONE keyboard bind. Move
- * that effective behaviour into the two visible slots on first v2 load.
- * If both slots are already occupied, preserve both user keys and log the
- * mouse default that could not fit; never keep an invisible active third. */
-static void migrateMouseDefault(int a, int button)
-{
-    char old[sizeof(g_bindStr[0])];
-    snprintf(old, sizeof(old), "%s", g_bindStr[a]);
-    char name[16];
-    snprintf(name, sizeof(name), "Mouse %d", button);
-    if (strstr(old, name)) return;
-    const char *first = old;
-    const char *comma = strchr(old, ',');
-    if (comma && strchr(comma + 1, ',')) {
-        sysLogPrintf(LOG_WARNING, "input: %s has extra legacy keys; cannot add %s in two slots",
-                     kBindDefs[a].key, name);
-        return;
-    }
-    if (comma && strncmp(old, "NONE,", 5) != 0 &&
-        SDL_strcasecmp(comma + 1, "NONE") != 0) {
-        sysLogPrintf(LOG_WARNING, "input: %s already has two keys; rebind a slot to restore %s",
-                     kBindDefs[a].key, name);
-        return;
-    }
-    if (SDL_strcasecmp(first, "NONE") == 0 || !*old) first = "";
-    else if (comma && strncmp(old, "NONE,", 5) == 0) first = comma + 1;
-    else if (comma) {
-        /* A trailing NONE slot is empty; preserve the first key. */
-        char *end = strchr(old, ',');
-        *end = 0;
-        first = old;
-    }
-    if (strlen(name) + (*first ? 1 + strlen(first) : 0) >= sizeof(g_bindStr[a])) {
-        sysLogPrintf(LOG_WARNING, "input: %s too long to add %s; unchanged",
-                     kBindDefs[a].key, name);
-        return;
-    }
-    strcpy(g_bindStr[a], name);
-    if (*first) {
-        strcat(g_bindStr[a], ",");
-        strcat(g_bindStr[a], first);
-    }
-}
-
-static void inputMigrateBinds(void)
-{
-    if (bindsVersion >= 3) return;
-    if (bindsVersion == 2) {
-        /* D386: D385 called SDL button 2 "right" in its default, but SDL
-         * button 2 is middle; button 3 is right. Only fix the exact old
-         * default, never overwrite a user's custom Aim assignment. */
-        if (strcmp(g_bindStr[IA_AIM], "Mouse 2,Left Shift") == 0)
-            snprintf(g_bindStr[IA_AIM], sizeof(g_bindStr[IA_AIM]),
-                     "Mouse 3,Left Shift");
-    }
-    if (bindsVersion == 0) {
-        for (int a = 0; a < IA_COUNT; a++) {
-            const char *preset = kGepdPreset[a];
-            if (preset && strcmp(g_bindStr[a], kBindDefs[a].def) == 0)
-                snprintf(g_bindStr[a], sizeof(g_bindStr[a]), "%s", preset);
-        }
-    }
-    if (bindsVersion < 2) {
-        migrateMouseDefault(IA_FIRE, SDL_BUTTON_LEFT);
-        migrateMouseDefault(IA_AIM, SDL_BUTTON_RIGHT);
-    }
-    bindsVersion = 3;
-    configSave();
-    sysLogPrintf(LOG_INFO, "input: migrated binds to visible PC keyboard/mouse slots");
-}
-
-static void inputRebuildBinds(void)
-{
-    for (int a = 0; a < IA_COUNT; a++) {
-        for (int k = 0; k < BIND_MAX_KEYS; k++) {
-            g_bind[a][k] = SDL_SCANCODE_UNKNOWN;
-        }
-        /* D380: ini values ARE the effective bindings, not hidden defaults.
-         * NONE is an explicit unbind (PD-port convention). */
-        const char *def = SDL_strcasecmp(g_bindStr[a], "NONE") == 0 ? "" : g_bindStr[a];
-        /* D384: do not silently activate invisible 3rd/4th keys in the
-         * two-slot UI. Preserve the old ini text until the user edits this
-         * particular action, at which point only its visible pair is saved. */
-        const char *second = strchr(def, ',');
-        if (second && strchr(second + 1, ',') && !s_legacyBindWarned[a]) {
-            s_legacyBindWarned[a] = 1;
-            sysLogPrintf(LOG_WARNING, "input: %s has legacy extra keys (ignored; edit this action to remove)",
-                         kBindDefs[a].key);
-        }
-        char buf[64];
-        strncpy(buf, def, sizeof(buf) - 1);
-        buf[sizeof(buf) - 1] = 0;
-        /* An empty bind or NONE is intentionally unbound, not a typo. */
-        int hadInput = (def == g_bindStr[a] && g_bindStr[a][0] != 0);
-
-        int n = 0, valid = 0;
-        for (char *tok = strtok(buf, ","); tok && n < BIND_MAX_KEYS; tok = strtok(NULL, ",")) {
-            while (*tok == ' ' || *tok == '\t') tok++;
-            char *end = tok + strlen(tok);
-            while (end > tok && (end[-1] == ' ' || end[-1] == '\t')) *--end = 0;
-            if (!*tok) continue;
-            /* Explicit NONE preserves an empty slot before later keys. */
-            if (SDL_strcasecmp(tok, "NONE") == 0) { n++; continue; }
-            int sc;
-            if (!SDL_strncasecmp(tok, "Mouse ", 6) &&
-                tok[6] >= '1' && tok[6] <= '5' && tok[7] == 0) {
-                sc = INPUT_BIND_MOUSE(tok[6] - '0');
-            } else if (!strncmp(tok, "SC:", 3)) {
-                char *endnum;
-                long id = strtol(tok + 3, &endnum, 10);
-                sc = *endnum == 0 && id > 0 && id < SDL_NUM_SCANCODES
-                    ? (SDL_Scancode)id : SDL_SCANCODE_UNKNOWN;
-            } else {
-                sc = SDL_GetScancodeFromName(tok);
-            }
-            if (sc == SDL_SCANCODE_UNKNOWN) {
-                sysLogPrintf(LOG_WARNING, "input: %s: unknown binding '%s'",
-                             kBindDefs[a].key, tok);
-                continue;
-            }
-            g_bind[a][n++] = sc;
-            valid++;
-        }
-        /* v0.4.0 M3: an intentionally-empty string (a preset or default
-         * that leaves an action unbound, e.g. GEPD Fire) is silent --
-         * only a non-empty string that produced no valid keys warns. */
-        if (valid == 0 && hadInput) {
-            sysLogPrintf(LOG_WARNING, "input: %s has no valid keys; action unbound",
-                         kBindDefs[a].key);
-        }
-    }
-}
-
 /* Re-derive binds after an F10 input option or future key capture
  * (optionsoverlay rowSetCommit hook, scheduler thread).
- * g_bind is read per-frame by the game thread's actHeld(): a mid-poll
+ * g_inputBind is read per-frame by the game thread's inputActHeld(): a mid-poll
  * rebuild can at worst drop or add one scancode for one frame (the
  * D214 startup-rebuild is the same thread-pairing, just at boot).
  * Also drops the crouch latch on a layout/mode change. */
@@ -2602,164 +1528,13 @@ void inputBindingsApply(void)
                  crouchMode ? "toggle" : "hold");
 }
 
-/* D384/D385: the UI edits two honest keyboard/mouse slots. Legacy extra ini tokens
- * remain unmodified on disk until this action is explicitly edited; they
- * cannot fire invisibly while only two slots are displayed. */
-static int bindingAction(const char *key)
-{
-    if (!key) return -1;
-    for (int a = 0; a < IA_COUNT; a++)
-        if (!strcmp(kBindDefs[a].key, key)) return a;
-    return -1;
-}
-
-const char *inputBindingSlot(const char *key, int slot)
-{
-    int a = bindingAction(key);
-    if (a < 0 || slot < 0 || slot >= BIND_MAX_KEYS ||
-        g_bind[a][slot] == SDL_SCANCODE_UNKNOWN) return "NONE";
-    if (g_bind[a][slot] > SDL_NUM_SCANCODES &&
-        g_bind[a][slot] <= INPUT_BIND_MOUSE(5)) {
-        static const char *names[] = { "Mouse 1", "Mouse 2", "Mouse 3", "Mouse 4", "Mouse 5" };
-        return names[g_bind[a][slot] - INPUT_BIND_MOUSE(1)];
-    }
-    const char *name = SDL_GetScancodeName((SDL_Scancode)g_bind[a][slot]);
-    if (name && *name && !strchr(name, ',')) return name;
-    /* Rare SDL names contain commas (e.g. keypad comma), which the ini
-     * treats as separators. The stable numeric fallback remains bindable. */
-    static _Thread_local char fallback[16];
-    snprintf(fallback, sizeof(fallback), "SC:%d", (int)g_bind[a][slot]);
-    return fallback;
-}
-
-int inputBindingSetSlot(const char *key, int slot, int sc)
-{
-    int a = bindingAction(key);
-    if (a < 0 || slot < 0 || slot >= BIND_MAX_KEYS ||
-        sc < SDL_SCANCODE_UNKNOWN || sc == SDL_NUM_SCANCODES ||
-        sc > INPUT_BIND_MOUSE(5)) return 0;
-    int slots[BIND_MAX_KEYS];
-    memcpy(slots, g_bind[a], sizeof(slots));
-    if (sc != SDL_SCANCODE_UNKNOWN) {
-        for (int i = 0; i < BIND_MAX_KEYS; i++)
-            if (i != slot && slots[i] == sc) slots[i] = SDL_SCANCODE_UNKNOWN;
-    }
-    slots[slot] = sc;
-    char buf[sizeof(g_bindStr[0])] = {0};
-    int used = 0;
-    for (int i = 0; i < BIND_MAX_KEYS; i++) {
-        if (slots[i] == SDL_SCANCODE_UNKNOWN) {
-            /* Only serialize holes before a later bound slot. */
-            int later = 0;
-            for (int j = i + 1; j < BIND_MAX_KEYS; j++)
-                if (slots[j] != SDL_SCANCODE_UNKNOWN) later = 1;
-            if (!later) continue;
-            if (used + 5 + (used != 0) >= (int)sizeof(buf)) return 0;
-            if (used) buf[used++] = ',';
-            memcpy(buf + used, "NONE", 4);
-            used += 4;
-            buf[used] = 0;
-            continue;
-        }
-        const char *name;
-        char fallback[32];
-        if (slots[i] > SDL_NUM_SCANCODES) {
-            snprintf(fallback, sizeof(fallback), "Mouse %d", slots[i] - SDL_NUM_SCANCODES);
-            name = fallback;
-        } else name = SDL_GetScancodeName((SDL_Scancode)slots[i]);
-        if (!name || !*name || strchr(name, ',')) {
-            snprintf(fallback, sizeof(fallback), "SC:%d", (int)slots[i]);
-            name = fallback;
-        }
-        int len = (int)strlen(name);
-        if (used + len + (used != 0) >= (int)sizeof(buf)) return 0;
-        if (used) buf[used++] = ',';
-        memcpy(buf + used, name, len);
-        used += len;
-        buf[used] = 0;
-    }
-    snprintf(g_bindStr[a], sizeof(g_bindStr[a]), "%s", used ? buf : "NONE");
-    inputBindingsApply();
-    return 1;
-}
-
-int inputBindingResetKey(const char *key)
-{
-    int a = bindingAction(key);
-    if (a < 0) return 0;
-    const char *def = kGepdPreset[a] ? kGepdPreset[a] : kBindDefs[a].def;
-    snprintf(g_bindStr[a], sizeof(g_bindStr[a]), "%s", def);
-    return 1;
-}
-
-/* Isolated boot probe: validate multi-slot persistence without writing ini.
- * The entire original binding is restored before gameplay begins. */
-static void inputBindingProbe(void)
-{
-    const char *key = "Input.Bind.Crouch";
-    int a = bindingAction(key), ok = a >= 0;
-    char saved[sizeof(g_bindStr[0])];
-    if (!ok) return;
-    memcpy(saved, g_bindStr[a], sizeof(saved));
-    ok &= inputBindingSetSlot(key, 1, SDL_SCANCODE_KP_COMMA);
-    ok &= g_bind[a][1] == SDL_SCANCODE_KP_COMMA;
-    ok &= inputBindingSetSlot(key, 0, SDL_SCANCODE_UNKNOWN);
-    ok &= g_bind[a][0] == SDL_SCANCODE_UNKNOWN && g_bind[a][1] == SDL_SCANCODE_KP_COMMA;
-    ok &= strstr(g_bindStr[a], "NONE,") == g_bindStr[a];
-    ok &= inputBindingSetSlot(key, 1, SDL_SCANCODE_UNKNOWN);
-    ok &= strcmp(g_bindStr[a], "NONE") == 0;
-    memcpy(g_bindStr[a], saved, sizeof(saved));
-    inputBindingsApply();
-    /* Mouse buttons are real, serializable bindings; duplicate assignment
-     * clears the other visible slot rather than leaving a hidden action. */
-    key = "Input.Bind.Fire";
-    a = bindingAction(key);
-    memcpy(saved, g_bindStr[a], sizeof(saved));
-    ok &= inputBindingSetSlot(key, 0, INPUT_BIND_MOUSE(5));
-    ok &= strcmp(inputBindingSlot(key, 0), "Mouse 5") == 0;
-    ok &= inputBindingSetSlot(key, 1, INPUT_BIND_MOUSE(5));
-    ok &= g_bind[a][0] == 0 && g_bind[a][1] == INPUT_BIND_MOUSE(5);
-    ok &= strcmp(g_bindStr[a], "NONE,Mouse 5") == 0;
-    memcpy(g_bindStr[a], saved, sizeof(saved));
-    inputBindingsApply();
-    sysLogPrintf(ok ? LOG_INFO : LOG_ERROR,
-                 "GE_BINDPROBE: %s (2 slots, mouse 1-5, sparse/comma, ini restored)",
-                 ok ? "PASS" : "FAIL");
-}
-
-static int actHeld(const Uint8 *ks, int act)
-{
-    /* Front-end mouse clicks stay fixed UI controls. Click-to-lock while
-     * playing cannot fire a newly rebound button until the grab succeeds.
-     * D594: the in-stage test must match the file-wide `menuMode` semantics
-     * (RUN_STAGE *or* INVALID). A forced-level start (-level_NN) leaves
-     * current_menu at MENU_INVALID, so the old strict ==RUN_STAGE check
-     * silently disabled every mouse-driven action (fire, aim) in that path --
-     * the reason mouse look worked but the mouse button never did. PD has no
-     * such gate; a real front-end menu is a specific MENU_ id (menuMode 1),
-     * so it still stays a UI control. */
-    int inStage = (current_menu == GE_MENU_RUN_STAGE ||
-                   current_menu == GE_MENU_INVALID);
-    Uint32 mb = mouseEnabled && mouseGrabbed && inStage &&
-                !optionsOverlayIsOpen()
-              ? SDL_GetMouseState(NULL, NULL) : 0;
-    for (int k = 0; k < BIND_MAX_KEYS; k++) {
-        int code = g_bind[act][k];
-        if (code > SDL_NUM_SCANCODES && code <= INPUT_BIND_MOUSE(5)) {
-            if (mb & SDL_BUTTON(code - SDL_NUM_SCANCODES)) return 1;
-        } else if (code > SDL_SCANCODE_UNKNOWN && code < SDL_NUM_SCANCODES &&
-                   keyDown(ks, (SDL_Scancode)code)) return 1;
-    }
-    return 0;
-}
-
 /* Direct use/reload and modern face buttons share the same game-state gate.
  * In watch, pause, tank, front end or scripted cameras use native menu bits. */
 static int inputCanUseGameplayActions(int menuMode)
 {
-    return !menuMode && slotPlayer() && !slotPlayer()->bonddead &&
-           slotPlayer()->outside_watch_menu && !slotPlayer()->pause_state &&
-           !slotPlayer()->mpmenuon && !g_PlayerIsInTank &&
+    return !menuMode && inputSlotPlayer() && !inputSlotPlayer()->bonddead &&
+           inputSlotPlayer()->outside_watch_menu && !inputSlotPlayer()->pause_state &&
+           !inputSlotPlayer()->mpmenuon && !g_PlayerIsInTank &&
            !lvlGetControlsLockedFlag() && !gameScriptedCameraActive();
 }
 
@@ -2771,7 +1546,7 @@ static int inputCanUseGameplayActions(int menuMode)
 static void inputCycleGadget(void)
 {
     if (inputMpSplit()) return;   /* D419: acts on g_CurrentPlayer; solo only */
-    struct player *p = slotPlayer();
+    struct player *p = inputSlotPlayer();
     if (!p || !p->ptr_inventory_first_in_cycle) return;
 
     int current = get_next_weapon_in_cycle_for_hand(GUNRIGHT, 1);
@@ -2796,6 +1571,146 @@ static void inputCycleGadget(void)
     }
 }
 
+/* ------------------------------------------------------------------------
+ * The pad control styles: the adapter around port/src/input/style_*.c.
+ * Snapshot = the pad + the game's context; the strategy of the seat's style
+ * returns commands; the N64 bridge (input/n64bridge.c) turns them into the pad
+ * bits the game reads. What touches the game (aim models, crouch, the gadget
+ * cycle) stays here.
+ *   Original  (controlScheme 1)               g_inputStyleOriginal
+ *   Modern    (controlScheme 0, preset 5)     g_inputStyleModern
+ *   Enhanced  (controlScheme 0, preset 0..4)  g_inputStyleEnhanced
+ * ------------------------------------------------------------------------ */
+_Static_assert(PSM(PS_A) == INB_A && PSM(PS_B) == INB_B && PSM(PS_X) == INB_X && PSM(PS_Y) == INB_Y &&
+               PSM(PS_LB) == INB_LB && PSM(PS_RB) == INB_RB && PSM(PS_LS) == INB_LS && PSM(PS_RS) == INB_RS &&
+               PSM(PS_START) == INB_START && PSM(PS_DUP) == INB_DUP && PSM(PS_DDOWN) == INB_DDOWN &&
+               PSM(PS_DLEFT) == INB_DLEFT && PSM(PS_DRIGHT) == INB_DRIGHT &&
+               PSM(PS_LT) == INB_LT && PSM(PS_RT) == INB_RT, "pad source bits must match INB_*");
+_Static_assert((int)PA_FIRE == (int)INACT_FIRE && (int)PA_AIM == (int)INACT_AIM && (int)PA_USE == (int)INACT_USE && (int)PA_RELOAD == (int)INACT_RELOAD &&
+               (int)PA_CROUCH == (int)INACT_CROUCH && (int)PA_NEXTWPN == (int)INACT_NEXTWPN && (int)PA_PREVWPN == (int)INACT_PREVWPN &&
+               (int)PA_GADGET == (int)INACT_GADGET && (int)PA_START == (int)INACT_START && (int)PA_COUNT == (int)INACT_COUNT,
+               "pad actions must match INACT_*");
+_Static_assert((int)NB_A == (int)INNB_A && (int)NB_B == (int)INNB_B && (int)NB_Z == (int)INNB_Z && (int)NB_R == (int)INNB_R &&
+               (int)NB_L == (int)INNB_L && (int)NB_CU == (int)INNB_CU && (int)NB_CD == (int)INNB_CD && (int)NB_CL == (int)INNB_CL &&
+               (int)NB_CR == (int)INNB_CR && (int)NB_START == (int)INNB_START && (int)NB_DU == (int)INNB_DU &&
+               (int)NB_DD == (int)INNB_DD && (int)NB_DL == (int)INNB_DL && (int)NB_DR == (int)INNB_DR &&
+               (int)NB_COUNT == (int)INNB_COUNT, "N64 buttons must match INNB_*");
+_Static_assert(STICK_MAX == INPUT_STICK_MAX && RSTICK_THRESHOLD == INPUT_RSTICK_THRESHOLD, "stick constants");
+
+static InputStrategyState s_padState[MAX_PADS];   /* per slot: the look low-pass */
+
+static int padAimScale(void *user, int v, int sens)
+{
+    extern int nxAimStickP(int v, int sens, int slot);   /* nxgame.c: sens, Game.AimZoom, Game.AimAssist (D960: per slot) */
+    return nxAimStickP(v, sens, (int)(intptr_t)user);
+}
+
+/* The strategy of a seat's control style. */
+static const InputStrategy *padStrategyFor(int seat)
+{
+    if (controlScheme) return &g_inputStyleOriginal;
+    if (inputPadIsModern(seat)) return &g_inputStyleModern;
+    return &g_inputStyleEnhanced;
+}
+
+/* Builds the snapshot of slot idx and runs its seat's strategy. `pad` is
+ * slotPad(idx): NULL when the keyboard plays the seat, in which case only the
+ * Modern aim assists still read the pad (pads[idx]); the other styles have
+ * nothing to do then. Returns the strategy that ran (commands in *cmd), or NULL
+ * (commands untouched). */
+static const InputStrategy *padPoll(int idx, SDL_GameController *pad, int wheelOpen, InputCommands *cmd)
+{
+    const int seat = padSeatForSlot(idx);
+    const InputStrategy *strat = padStrategyFor(seat);
+    SDL_GameController *dev = pad ? pad : pads[idx];
+    if (!dev || (!pad && strat != &g_inputStyleModern)) return NULL;
+
+    InputSnapshot in;
+    memset(&in, 0, sizeof in);
+    u32 raw = padReadRaw(dev);
+    if (pad) raw = padLatchApply(seat, raw);   /* D961 */
+    in.buttons = raw;
+    in.lx = SDL_GameControllerGetAxis(dev, SDL_CONTROLLER_AXIS_LEFTX);
+    in.ly = SDL_GameControllerGetAxis(dev, SDL_CONTROLLER_AXIS_LEFTY);
+    in.rx = SDL_GameControllerGetAxis(dev, SDL_CONTROLLER_AXIS_RIGHTX);
+    in.ry = SDL_GameControllerGetAxis(dev, SDL_CONTROLLER_AXIS_RIGHTY);
+    in.triggerL = SDL_GameControllerGetAxis(dev, SDL_CONTROLLER_AXIS_TRIGGERLEFT);
+    in.triggerR = SDL_GameControllerGetAxis(dev, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
+    in.family = padFamily[seat];
+    in.prevActions = padActPrev[idx];
+
+    struct player *mp = inputSlotPlayer();
+    const int menu = (current_menu != GE_MENU_RUN_STAGE && current_menu != GE_MENU_INVALID);
+    in.ctx.menu = menu;
+    in.ctx.wheelOpen = wheelOpen;
+    in.ctx.padDrives = (pad != NULL);
+    if (pad) {
+        in.ctx.facePlayable = (idx == 0 || inputMpSplit()) && inputCanUseGameplayActions(menu);
+        in.ctx.tank = !in.ctx.facePlayable && idx == 0 && !menu && g_PlayerIsInTank == 1 &&
+                      mp && mp->outside_watch_menu && !mp->pause_state;
+    }
+    in.ctx.inStage = (current_menu == GE_MENU_RUN_STAGE);
+    in.ctx.aiming = mp && mp->insightaimmode;
+    in.ctx.dead = mp && mp->bonddead;
+    if (strat == &g_inputStyleModern && in.ctx.inStage && in.ctx.aiming && !in.ctx.dead)   /* weapon lookup only when it can matter */
+        in.ctx.scopedWeapon = bondwalkItemCheckBitflags(mp->hands[GUNRIGHT].weaponnum, WEAPONSTATBITFLAG_DISABLE_CROUCH) != 0;
+
+    in.cfg.deadzoneL = padDeadzoneL;
+    in.cfg.deadzoneR = padDeadzoneR;
+    in.cfg.lookSensX = padLookSensX;
+    in.cfg.lookSensY = padLookSensY;
+    in.cfg.aimLookSens = padAimLookSens;
+    in.cfg.lookSmooth = padLookSmooth;
+    in.cfg.lookInvertY = padLookInvertY;
+    in.cfg.triggerPct = padTriggerPct;
+    in.cfg.naturalPitch = styleIsSolitare(idx);
+    in.cfg.stickSwap = stickSwap(idx);   /* D498/D518: roles by slot, like stickSolitare (binds below go by seat) */
+    in.cfg.n64StickFeel = n64StickFeel;
+    {
+        const PadBinds *pb = &padTabGet()->seat[seat];
+        memcpy(in.cfg.bind, pb->mask, sizeof in.cfg.bind);
+        memcpy(in.cfg.n64Bind, pb->n64, sizeof in.cfg.n64Bind);
+    }
+    in.aimScale = padAimScale;
+    in.aimScaleUser = (void *)(intptr_t)idx;
+
+    strat->map(&in, &s_padState[idx], cmd);
+    {   /* GameDirect (#78): the harness (script / record / replay) is the sole source of its slot, so the pad stays digital there */
+        int w = 0, sd = 0;
+        cmd->direct = !(idx == 0 && (g_inputReplayActive || inputScriptIsActive(0) || g_inputRec != NULL)) &&
+                      inputDirectMoveDecide(&in.ctx, cmd, &w, &sd);
+        cmd->walk = w;
+        cmd->strafe = sd;
+    }
+    return strat;
+}
+
+/* GameDirect (#78): poll thread -> game thread, one cell per player (= N64 slot). The poll thread publishes
+ * the latest decision (never re-points g_CurrentPlayer, D419); the game thread reads it from the hook in
+ * bondview2.c. A stale cell (no poll for 250 ms: paused scheduler, detached pad) reads as "not direct". */
+static struct { int walk, strafe; Uint32 stamp; int valid; } s_direct[MAX_PADS];
+
+static void padDirectPublish(int idx, int direct, int walk, int strafe)
+{
+    if (idx < 0 || idx >= MAX_PADS) return;
+    __atomic_store_n(&s_direct[idx].walk, walk, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_direct[idx].strafe, strafe, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_direct[idx].stamp, SDL_GetTicks(), __ATOMIC_RELAXED);
+    __atomic_store_n(&s_direct[idx].valid, direct, __ATOMIC_RELEASE);
+}
+
+/* The hook in src/game/bondview2.c: the left stick's analog walk / strafe of `playernum`, in the game's stick
+ * scale (what analogWalk / analogStrafe hold). 0 = the game's own movement stands. */
+int portDirectMove(int playernum, int *walk, int *strafe)
+{
+    if (playernum < 0 || playernum >= MAX_PADS) return 0;
+    if (!__atomic_load_n(&s_direct[playernum].valid, __ATOMIC_ACQUIRE)) return 0;
+    if (SDL_GetTicks() - __atomic_load_n(&s_direct[playernum].stamp, __ATOMIC_RELAXED) > 250) return 0;
+    *walk = __atomic_load_n(&s_direct[playernum].walk, __ATOMIC_RELAXED);
+    *strafe = __atomic_load_n(&s_direct[playernum].strafe, __ATOMIC_RELAXED);
+    return 1;
+}
+
 /* Fill button mask + stick for controller idx. Returns the 16-bit mask. */
 static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *stick_y);
 unsigned inputComputePad(int idx, signed char *stick_x, signed char *stick_y)
@@ -2806,9 +1721,9 @@ unsigned inputComputePad(int idx, signed char *stick_x, signed char *stick_y)
         if (stick_y) *stick_y = 0;
         return 0;
     }
-    s_slot = idx;
+    g_inputSlot = idx;
     r = inputComputePadSlot(idx, stick_x, stick_y);
-    s_slot = -1;
+    g_inputSlot = -1;
     return r;
 }
 
@@ -2821,10 +1736,10 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
     /* D194/D238: self-correcting every poll -- cheap (plain field writes,
      * see options.c cur_player_set_control_type), and re-asserts itself if
      * anything else ever calls the setter (menu, save load) in between. */
-    if ((idx == 0 || inputMpSplit()) && slotPlayer() != NULL &&
+    if ((idx == 0 || inputMpSplit()) && inputSlotPlayer() != NULL &&
         (idx == 0 || idx < getPlayerCount())) {   /* D416: each slot rewrites only its own player's style */
         int wantSolitare = stickSolitare(idx) ? CONTROLLER_CONFIG_SOLITARE_ : CONTROLLER_CONFIG_HONEY_;   /* D498, D518 */
-        struct player *sp = slotPlayer();
+        struct player *sp = inputSlotPlayer();
         if (controlScheme) {
             /* D513 OG controls: the port never writes the style; the game's own
              * selection (watch / save / MP setup) stands. Log each change once. */
@@ -2915,8 +1830,8 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         const Uint8 *overlayKs = SDL_GetKeyboardState(NULL);
         /* D469: pad use/reload/edge state follows the bound actions, not fixed A/X/B/Y */
         u32 ovHeld = pads[0] ? padActHeld(&padTabGet()->seat[0], padReadRaw(pads[0])) : 0;
-        s_useHeldPrev = actHeld(overlayKs, IA_CANCEL) || (ovHeld & (1u << PA_USE));
-        s_reloadHeldPrev = actHeld(overlayKs, IA_RELOAD) || (ovHeld & (1u << PA_RELOAD));
+        s_useHeldPrev = inputActHeld(overlayKs, IA_CANCEL) || (ovHeld & (1u << PA_USE));
+        s_reloadHeldPrev = inputActHeld(overlayKs, IA_RELOAD) || (ovHeld & (1u << PA_RELOAD));
         s_crouchLatch = 0;
         s_crouchHeldPrev = 0;
         inputDropCrouch();
@@ -2938,7 +1853,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         /* D567: only while the mouse is the active input -- with a pad (Deck) the
          * untouched OS pointer sits at 0,0 and dragged the front end's own
          * crosshair to the top-left corner; it now stays where it was. */
-        if (mouseEnabled && current_menu != GE_MENU_RUN_STAGE && current_menu != GE_MENU_INVALID &&
+        if (g_inputMouseEnabled && current_menu != GE_MENU_RUN_STAGE && current_menu != GE_MENU_INVALID &&
             optionsOverlayMouseActive()) {
             overlayFrontEndCrosshair();   /* D519: the game cursor tracks the mouse (D555: the overlay pointer is drawn exactly over it) */
             /* D544: the OS cursor stays visible (inputSuspendForOverlay) -- the crosshair
@@ -2953,7 +1868,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
     /* ---- keyboard + mouse: controller 0 only (not when pads own P1, D416) ---- */
     if (idx == 0 && !inputMpPadsOwnP1() && !kbmBlockedForP1()) {
         const Uint8 *ks = SDL_GetKeyboardState(NULL);
-        Uint32 mb = mouseEnabled ? SDL_GetMouseState(NULL, NULL) : 0;
+        Uint32 mb = g_inputMouseEnabled ? SDL_GetMouseState(NULL, NULL) : 0;
         int menuMode = (current_menu != GE_MENU_RUN_STAGE &&
                         current_menu != GE_MENU_INVALID);
 
@@ -2973,39 +1888,39 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
          * for the whole hold. The earlier free-cursor experiment (suspend the
          * grab, read absolute position) is reverted: the visible cursor could
          * leave the window and OS micro-jitter read as view jitter.
-         * s_absAimSuspend therefore stays 0; the readers that honour it
-         * (reconcileGrab/applyCursorVisibility/button mask) behave exactly as
+         * g_inputAbsAimSuspend therefore stays 0; the readers that honour it
+         * (inputReconcileGrab/inputApplyCursorVisibility/button mask) behave exactly as
          * pre-D194. */
-        s_absAimSuspend = 0;
-        reconcileGrab(menuMode);
+        g_inputAbsAimSuspend = 0;
+        inputReconcileGrab(menuMode);
         /* D337 harness: scripted sustained mouse replaces the real deltas and
          * behaves as a grabbed mouse (headless windows are never focused). */
-        if (scriptIsActive(0)) {
-            scriptRefreshHolds(0);
-            if (scriptSlots[0].mouseOn) {
-                mouseDX = (double)scriptSlots[0].mdx;
-                mouseDY = (double)scriptSlots[0].mdy;
-                mouseGrabbed = 1;
+        if (inputScriptIsActive(0)) {
+            inputScriptRefreshHolds(0);
+            if (g_inputScriptSlots[0].mouseOn) {
+                g_inputMouseDX = (double)g_inputScriptSlots[0].mdx;
+                g_inputMouseDY = (double)g_inputScriptSlots[0].mdy;
+                g_inputMouseGrabbed = 1;
                 /* D597: scripted sustained mouse buttons (MLB/MRB) OR into the
                  * polled mask; a headless window has no real mouse state. */
-                if (scriptSlots[0].mlb) mb |= SDL_BUTTON(1);
-                if (scriptSlots[0].mrb) mb |= SDL_BUTTON(2);
+                if (g_inputScriptSlots[0].mlb) mb |= SDL_BUTTON(1);
+                if (g_inputScriptSlots[0].mrb) mb |= SDL_BUTTON(2);
             }
         }
         /* D196: the F10 options overlay forces the OS cursor visible via
          * inputSuspendForOverlay() but nothing re-hides it on close unless
-         * reconcileGrab() happens to re-grab (only true if you had already
+         * inputReconcileGrab() happens to re-grab (only true if you had already
          * clicked-to-lock in a stage). Re-assert the correct visibility
          * every poll here -- this line is unreachable while the overlay is
          * open (early return above), so it only fires once it has closed. */
-        applyCursorVisibility();
+        inputApplyCursorVisibility();
 
         /* Click-to-lock, in a stage, cursor free: the mouse buttons must not
          * reach the game (no phantom fire) -- the first click only re-locks
          * (handled in video.c -> inputNotifyClick). Menus keep their buttons. */
         /* ...but not while an aim hold has the cursor out for absolute aim:
          * then the buttons are intentional (RMB is the hold itself, LMB fires). */
-        if (!mouseGrabbed && !menuMode && !s_absAimSuspend) {
+        if (!g_inputMouseGrabbed && !menuMode && !g_inputAbsAimSuspend) {
             mb = 0;
         }
 
@@ -3025,19 +1940,19 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
          * driven vertically from the keyboard. Watch/pause keeps the C-button
          * mapping: it is current_menu==RUN_STAGE (menuMode 0), N64-style. */
         if (styleIsSolitare(idx) && !menuMode) {   /* D498, D513, D518 */
-            if (actHeld(ks, IA_FORWARD)) button |= GE_CONT_E;   /* C-up = forward   */
-            if (actHeld(ks, IA_BACK))    button |= GE_CONT_D;   /* C-down = back    */
+            if (inputActHeld(ks, IA_FORWARD)) button |= GE_CONT_E;   /* C-up = forward   */
+            if (inputActHeld(ks, IA_BACK))    button |= GE_CONT_D;   /* C-down = back    */
         } else {
-            if (actHeld(ks, IA_FORWARD))  sy =  STICK_MAX;
-            if (actHeld(ks, IA_BACK))     sy = -STICK_MAX;
+            if (inputActHeld(ks, IA_FORWARD))  sy =  STICK_MAX;
+            if (inputActHeld(ks, IA_BACK))     sy = -STICK_MAX;
         }
-        if (actHeld(ks, IA_STRAFE_L)) button |= GE_CONT_C;   /* strafe left  */
-        if (actHeld(ks, IA_STRAFE_R)) button |= GE_CONT_F;   /* strafe right */
-        if (actHeld(ks, IA_TURN_L))   sx = -STICK_MAX;       /* keyboard turn */
-        if (actHeld(ks, IA_TURN_R))   sx =  STICK_MAX;
-        if (sx) s_aimDevMouse = 0;   /* D337: keyboard stick turn is the active aim device */
+        if (inputActHeld(ks, IA_STRAFE_L)) button |= GE_CONT_C;   /* strafe left  */
+        if (inputActHeld(ks, IA_STRAFE_R)) button |= GE_CONT_F;   /* strafe right */
+        if (inputActHeld(ks, IA_TURN_L))   sx = -STICK_MAX;       /* keyboard turn */
+        if (inputActHeld(ks, IA_TURN_R))   sx =  STICK_MAX;
+        if (sx) g_inputAimDevMouse = 0;   /* D337: keyboard stick turn is the active aim device */
 
-        if (actHeld(ks, IA_FIRE))
+        if (inputActHeld(ks, IA_FIRE))
             button |= GE_CONT_G;
         /* aimButton = the Aim bind (emits the game's R);
          * aimHeld = "the game is in aim mode" for routing the mouse. D337: the
@@ -3047,42 +1962,42 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
          * found. Routing also follows the game's own insightaimmode, which
          * covers the Aim Control "Toggle" option and gamepad aim. The R emit
          * stays tied to the physical button so Toggle still sees edges. */
-        int aimButton = actHeld(ks, IA_AIM);
-        int aimHeld = aimButton || actHeld(ks, IA_LEAN_L) ||
-                      (slotPlayer() != NULL && slotPlayer()->insightaimmode);
+        int aimButton = inputActHeld(ks, IA_AIM);
+        int aimHeld = aimButton || inputActHeld(ks, IA_LEAN_L) ||
+                      (inputSlotPlayer() != NULL && inputSlotPlayer()->insightaimmode);
         int aimRisingEdgeAim = aimHeld && !AIMS.aimHeldPrev;
-        if (aimRisingEdgeAim && slotPlayer() && slotPlayer()->docentreupdown)
+        if (aimRisingEdgeAim && inputSlotPlayer() && inputSlotPlayer()->docentreupdown)
             AIMS.centreClearTicks = 2;   /* see D194 centre-spring note above */
         if (!aimHeld) {
             AIMS.centreClearTicks = 0;
             /* GEPD adopts the game's current crosshair pos every non-aim
              * frame so re-entry starts where the game left it. */
             AIMS.gepdHeldPrev = 0;
-            if (slotPlayer()) {
-                if (pdMouseAimEnabled()) {
+            if (inputSlotPlayer()) {
+                if (inputPdMouseAimEnabled()) {
                     /* D338: the accumulator is in GEPD units (±LIMIT = edge);
                      * adopt through the game's screen mapping (offset =
                      * pos*(1-damp), gunfire.c) and the aim-range scale, so aim
                      * entry starts exactly where the crosshair is drawn. */
-                    double k = (1.0 - (double) slotPlayer()->guncrossdamp) / 0.99
-                             * GEPD_CROSSHAIR_LIMIT / aimRangeScale();
-                    AIMS.crossX = (double) slotPlayer()->crosshair_x_pos * k;
-                    AIMS.crossY = (double) slotPlayer()->crosshair_y_pos * k;
+                    double k = (1.0 - (double) inputSlotPlayer()->guncrossdamp) / 0.99
+                             * GEPD_CROSSHAIR_LIMIT / inputAimRangeScale();
+                    AIMS.crossX = (double) inputSlotPlayer()->crosshair_x_pos * k;
+                    AIMS.crossY = (double) inputSlotPlayer()->crosshair_y_pos * k;
                 } else {
-                    AIMS.crossX = (double) slotPlayer()->crosshair_x_pos / aimRangeScale();
-                    AIMS.crossY = (double) slotPlayer()->crosshair_y_pos / aimRangeScale();
+                    AIMS.crossX = (double) inputSlotPlayer()->crosshair_x_pos / inputAimRangeScale();
+                    AIMS.crossY = (double) inputSlotPlayer()->crosshair_y_pos / inputAimRangeScale();
                 }
             }
         }
         AIMS.aimHeldPrev = aimHeld;
-        if (aimRisingEdgeAim && slotPlayer() && slotPlayer()->docentreupdown
+        if (aimRisingEdgeAim && inputSlotPlayer() && inputSlotPlayer()->docentreupdown
             && configGetInputLog()) {
             sysLogPrintf(LOG_NOTE,
                 "GE_INPUTLOG absaim centre-spring armed at aim entry; nudging to clear");
         }
         if (aimButton)
             button |= GE_CONT_R;
-        if (actHeld(ks, IA_ACTION))
+        if (inputActHeld(ks, IA_ACTION))
             button |= GE_CONT_A;
         if (wheelFwd > 0) {             /* wheel up: fresh A edge = cycle forward */
             button |= GE_CONT_A;
@@ -3116,11 +2031,11 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         u32 slot0Held = (slot0Pad && !controlScheme) ? padActHeld(&padTabGet()->seat[padSeatForSlot(0)], padReadRaw(slot0Pad)) : 0;
         int padUse = (slot0Held & (1u << PA_USE)) != 0;       /* D469: bound actions (Jinx 1.1: A / X) */
         int padReload = (slot0Held & (1u << PA_RELOAD)) != 0;
-        int useNow = scriptIsActive(0) ? scriptSlots[0].use : (actHeld(ks, IA_CANCEL) || padUse);
-        int reloadNow = scriptIsActive(0) ? scriptSlots[0].reload : (actHeld(ks, IA_RELOAD) || padReload);
-        replayFetch();
-        if (s_replayActive) { useNow = s_repCur.use; reloadNow = s_repCur.reload; }
-        s_recUse = useNow; s_recReload = reloadNow;
+        int useNow = inputScriptIsActive(0) ? g_inputScriptSlots[0].use : (inputActHeld(ks, IA_CANCEL) || padUse);
+        int reloadNow = inputScriptIsActive(0) ? g_inputScriptSlots[0].reload : (inputActHeld(ks, IA_RELOAD) || padReload);
+        inputReplayFetch();
+        if (g_inputReplayActive) { useNow = g_inputRepCur.use; reloadNow = g_inputRepCur.reload; }
+        g_inputRecUse = useNow; g_inputRecReload = reloadNow;
         int playable = inputCanUseGameplayActions(menuMode);
         /* D407: on the N64 the B bit also drives bondview2.c's tank
          * handlers (board when g_BondCanEnterTank, exit while
@@ -3160,7 +2075,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                 bool empty = bond_interact_object();
                 if (configGetInputLog()) sysLogPrintf(LOG_NOTE, "GE_INPUTLOG dedicated use (no target=%d)", empty);
             }
-        } else if ((scriptIsActive(0) ? scriptSlots[0].use : actHeld(ks, IA_CANCEL)) && !tankState) {
+        } else if ((inputScriptIsActive(0) ? g_inputScriptSlots[0].use : inputActHeld(ks, IA_CANCEL)) && !tankState) {
             /* A on the pad is still native accept outside playable stages.
              * D407: NOT in tank states -- there B must come only from the
              * locked edge path below. This mapping is level-triggered on E;
@@ -3180,10 +2095,10 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         }
         s_useHeldPrev = useNow;
         s_reloadHeldPrev = reloadNow;
-        crouchNow = actHeld(ks, IA_CROUCH);
-        if (actHeld(ks, IA_LEAN_L))
+        crouchNow = inputActHeld(ks, IA_CROUCH);
+        if (inputActHeld(ks, IA_LEAN_L))
             button |= GE_CONT_L;
-        if (actHeld(ks, IA_START))
+        if (inputActHeld(ks, IA_START))
             button |= GE_CONT_START;
 
         /* Mouse-look. Mode-dependent (see the tuning-constants comment):
@@ -3193,12 +2108,12 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
          * "look down" convention: mouse-down looks down by default; GE's
          * native pitch is inverted so hipfire down = C-up (GE_CONT_E) and
          * aim-mode down = +stick_y. MouseInvertY flips both. */
-        if (mouseEnabled) {
+        if (g_inputMouseEnabled) {
             double invert = mouseInvertY ? -1.0 : 1.0;
 
             /* Optional exponential low-pass (mouseSmoothing = blend % of the
              * previous poll). Off (0) => edx/edy are the raw deltas. */
-            double edx = mouseDX, edy = mouseDY;
+            double edx = g_inputMouseDX, edy = g_inputMouseDY;
             if (mouseSmoothing > 0) {
                 double a = mouseSmoothing / 100.0;
                 if (a > 0.90) a = 0.90;
@@ -3211,7 +2126,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
 
             double dyLook = edy * invert;   /* >0 => look down */
             if (!menuMode && (fabs(edx) > 0.01 || fabs(dyLook) > 0.01))
-                s_aimDevMouse = 1;          /* D337: mouse is the active aim device */
+                g_inputAimDevMouse = 1;          /* D337: mouse is the active aim device */
 
             /* D194(b): gameplay-look-only dt normalization -- see the
              * MOUSE_DT_REF comment above. Computed unconditionally (so the
@@ -3274,7 +2189,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                 }
 
                 int haveAbs = 0;
-                if (!mouseGrabbed) {
+                if (!g_inputMouseGrabbed) {
                     int mx = 0, my = 0;
                     SDL_GetMouseState(&mx, &my);
                     SDL_Window *w = SDL_GetMouseFocus();
@@ -3341,12 +2256,12 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                         "GE_INPUTLOG menuptr abs=%d cursor=(%.1f,%.1f) stick=(%d,%d)",
                         haveAbs, (double)cursor_h_pos, (double)cursor_v_pos, sx, sy);
                 }
-            } else if (slotPlayer() != NULL &&
-                       (!slotPlayer()->outside_watch_menu ||
-                        slotPlayer()->pause_state != 0)) {
+            } else if (inputSlotPlayer() != NULL &&
+                       (!inputSlotPlayer()->outside_watch_menu ||
+                        inputSlotPlayer()->pause_state != 0)) {
                 /* D330 (#103): in-stage watch / pause -- the mouse drives
                  * nothing. menuMode is 0 here (current_menu is still
-                 * RUN_STAGE) and hipDirectCompute declines on this same gate,
+                 * RUN_STAGE) and inputHipDirectCompute declines on this same gate,
                  * so the legacy stick fallbacks below used to turn mouse
                  * motion into stick deflection (and an RMB hold ran the GEPD
                  * aim writes, which GEPD itself gates on !watch): a ~15 px flick
@@ -3358,7 +2273,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                  * exactly as before. */
             } else if (aimHeld) {
                 /* D194 GEPD-mirror aim: direct crosshair/camera writes, no
-                 * look stick (see aimGepdCompute). Keyboard turn (sx/sy set
+                 * look stick (see inputAimGepdCompute). Keyboard turn (sx/sy set
                  * above) still works. Otherwise fall through to the legacy
                  * velocity stick below.
                  * D407 follow-up: in-tank the game aims the turret from raw
@@ -3367,24 +2282,24 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                  * direct-write models must be bypassed there and the legacy
                  * velocity stick emitted instead. */
                 int tankAimStick = (g_PlayerIsInTank == 1);
-                if (!tankAimStick && aimModeGet() == AIMMODE_CENTRED) {
+                if (!tankAimStick && inputAimModeGet() == AIMMODE_CENTRED) {
                     /* D333: FPS-style centred aim -- the camera takes the
                      * mouse (same path as hipfire, which also declines on
                      * the watch/pause/cutscene gates) and no stick is
                      * emitted, so the crosshair settles at centre. */
-                    hipDirectCompute(edx * lookDtScale, dyLook * lookDtScale);
-                } else if (!tankAimStick && pdMouseAimEnabled()) {
+                    inputHipDirectCompute(edx * lookDtScale, dyLook * lookDtScale);
+                } else if (!tankAimStick && inputPdMouseAimEnabled()) {
                     /* PD model: accumulate only. The game's own integrator is
                      * driven by the port-supplied turn through the
                      * sub_GAME_7F067FBC hook (see Input.PdMouseAim above). */
-                    aimGepdAccumulate(edx, dyLook);
+                    inputAimGepdAccumulate(edx, dyLook);
                     /* Edge-scroll belongs to the aim position, not to the
                      * crosshair model -- without this the camera stops
                      * following the crosshair at the screen edge. */
-                    aimGepdEdgeScroll();
-                } else if (tankAimStick || !aimGepdCompute(edx * lookDtScale, dyLook * lookDtScale)) {
+                    inputAimGepdEdgeScroll();
+                } else if (tankAimStick || !inputAimGepdCompute(edx * lookDtScale, dyLook * lookDtScale)) {
                 double aimEdx = edx * lookDtScale, aimDyLook = dyLook * lookDtScale;
-                double aimSens = (mouseAimSpeed / 100.0) * (mouseSensitivity / 100.0);
+                double aimSens = (mouseAimSpeed / 100.0) * (g_inputMouseSensitivity / 100.0);
                 if (tankAimStick) aimSens *= tankAimScale / 100.0;   /* D407 */
                 double gamma = aimCurveGamma / 100.0;
                 double normX = fabs(aimEdx) * aimSens / AIM_FULL_SPEED_PX;
@@ -3409,14 +2324,14 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                  * of ticks -- enough for bondview2's manual-input rule to clear
                  * docentreupdown, small enough (~0.1-0.3 deg) not to read as a
                  * jerk. Only when we are not already pitching this poll. */
-                if (AIMS.centreClearTicks > 0 && slotPlayer() &&
+                if (AIMS.centreClearTicks > 0 && inputSlotPlayer() &&
                     sy >= -60 && sy <= 60) {
-                    sy = (slotPlayer()->speedverta >= 0.0f) ? -61 : 61;
+                    sy = (inputSlotPlayer()->speedverta >= 0.0f) ? -61 : 61;
                     AIMS.centreClearTicks--;
                 }
             } else {
                 double hipEdx = edx * lookDtScale, hipDyLook = dyLook * lookDtScale;
-                double hipSens = (mouseTurnSpeed / 100.0) * (mouseSensitivity / 100.0);
+                double hipSens = (g_inputMouseTurnSpeed / 100.0) * (g_inputMouseSensitivity / 100.0);
                 /* WI-1: direct camera write, same linear px->degree model as
                  * aim mode (GEPD's hipfire branch) -- bypasses the N64 stick's
                  * quadratic natural-turn curve entirely (D238/#89: that curve
@@ -3428,9 +2343,9 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                  * is drive, so the direct camera write is ignored/overwritten -- emit
                  * mouse X as stick turn (scaled by Input.TankAimScale) and drop Y. */
                 int inTankHip = (g_PlayerIsInTank == 1);
-                if (!inTankHip && mouseDirectLook && hipDirectCompute(hipEdx, hipDyLook)) {
-                    swayFeedTheta(s_hipThetaDegOut);   /* D428: hipfire gun turn-lag */
-                    /* Pitch handled inside hipDirectCompute too; nothing left
+                if (!inTankHip && g_inputMouseDirectLook && inputHipDirectCompute(hipEdx, hipDyLook)) {
+                    inputSwayFeedTheta(g_inputHipThetaDegOut);   /* D428: hipfire gun turn-lag */
+                    /* Pitch handled inside inputHipDirectCompute too; nothing left
                      * to do for yaw/pitch this poll. Digital pitch-pulse
                      * (naturalPitchMode==0) still applies below only in the
                      * legacy path, so skip both branches here. */
@@ -3453,7 +2368,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                      * Input.NaturalPitch=0 escape hatch. */
                     double sp = fabs(hipDyLook);
                     if (sp >= MOUSE_PITCH_THRESH) {
-                        double duty = sp * (hipfirePitchSpeed / 100.0) * (mouseSensitivity / 100.0) / HIP_PITCH_FULL;
+                        double duty = sp * (hipfirePitchSpeed / 100.0) * (g_inputMouseSensitivity / 100.0) / HIP_PITCH_FULL;
                         if (duty > 1.0) duty = 1.0;
                         hipPitchPhase += duty;
                         if (hipPitchPhase >= 1.0) {
@@ -3464,11 +2379,11 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                         hipPitchPhase = 0.0;
                     }
                 }
-                } /* end mouseDirectLook fallback (WI-1) */
+                } /* end g_inputMouseDirectLook fallback (WI-1) */
             }
         }
 
-        if (menuMode && mouseEnabled) {
+        if (menuMode && g_inputMouseEnabled) {
             /* Clicks are select / back in the front end, not fire / aim. */
             button &= ~(GE_CONT_G | GE_CONT_R);
             if (mb & SDL_BUTTON(SDL_BUTTON_LEFT))  button |= GE_CONT_A;
@@ -3481,103 +2396,54 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
          * keys and Enter/Escape are fixed menu controls; mouse/pad still
          * work. Scripted QA input remains the sole source when active. */
         menuPrevActive = menuMode;
-        s_menuPointerLive = (menuMode && mouseEnabled && !mouseGrabbed) ? 1 : 0;
+        s_menuPointerLive = (menuMode && g_inputMouseEnabled && !g_inputMouseGrabbed) ? 1 : 0;
 
-        mouseDX = 0.0;
-        mouseDY = 0.0;
+        g_inputMouseDX = 0.0;
+        g_inputMouseDY = 0.0;
     }
 
     /* ---- gamepad ---- */
     SDL_GameController *pad = slotPad(idx);
+    InputCommands mc;
+    const InputStrategy *const strat = padPoll(idx, pad, wheelOpen, &mc);   /* the seat's control style decides, the blocks below apply it */
+    {
+        const int direct = (strat && pad) ? mc.direct : 0;
+        padDirectPublish(idx, direct, direct ? mc.walk : 0, direct ? mc.strafe : 0);
+    }
     if (pad) {
-        int lx = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX);
-        int ly = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTY);
-        int rx = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_RIGHTX);
-        int ry = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_RIGHTY);
-
         /* D282: front-end menus (main menu, file select, mission-select map)
-         * share this same stick_x/stick_y channel with in-game look/movement.
-         * naturalPitchMode (SOLITARE, default-on) routes that channel to the
-         * RIGHT stick for continuous look -- fine in a level, unintuitive in
-         * a menu, where the left stick is the expected primary-navigation
-         * input on a modern pad/Deck (matches the F10 overlay's own
-         * left-stick nav, optionsoverlay.c). Outside a running stage, always
-         * source stick_x/stick_y from the left stick, regardless of
-         * naturalPitchMode -- a menu-context input remap only, no game-logic
-         * change and no effect on in-level control feel. */
-        int padMenuMode = (current_menu != GE_MENU_RUN_STAGE &&
-                           current_menu != GE_MENU_INVALID);
-
-        /* D498: 1.3 Frost / 1.4 Elektra swap the two sticks; menus never swap. */
-        if (!padMenuMode && stickSwap(idx)) { int tx = lx, ty = ly; lx = rx; ly = ry; rx = tx; ry = ty; }   /* D518 */
-        if (wheelOpen) rx = ry = 0;   /* the open wheel has the aim */
-
-        if (padMenuMode) {
-            int px = padStickAxis(lx, padDeadzoneL);   /* D643: accurate N64 response in Original */
-            int py = -padStickAxis(ly, padDeadzoneL);    /* SDL up = negative -> N64 up = positive */
-            if (px) sx = px;
-            if (py) sy = py;
-        } else if (!controlScheme && styleIsSolitare(idx)) {   /* D498, D513, D518; D643: Original never swaps roles (left stick = analog stick, right = C) */
-            /* D194/D238: SOLITARE swaps stick roles -- left stick becomes
-             * digital-step movement (same analog-for-movement tradeoff as
-             * the keyboard remap above), right stick becomes continuous
-             * natural look (replacing its old digital-C-button emulation),
-             * matching how the mouse now drives look continuously too. */
-            if (ly < -RSTICK_THRESHOLD) button |= GE_CONT_E;   /* stick up = forward */
-            if (ly >  RSTICK_THRESHOLD) button |= GE_CONT_D;   /* stick down = back  */
-            if (lx < -RSTICK_THRESHOLD) button |= GE_CONT_C;   /* strafe left        */
-            if (lx >  RSTICK_THRESHOLD) button |= GE_CONT_F;   /* strafe right       */
-
-            /* Wave A (v0.5.0): right-stick look -- per-stick deadzone (right),
-             * per-axis sensitivity (% of native, 100 = unchanged, re-clamped to
-             * STICK_MAX), and an optional low-pass. All feel-only, identity at
-             * their defaults (sens 100%, smoothing off). */
-            int rxs = scaleAxis(rx, padDeadzoneR);
-            int rys = -scaleAxis(ry, padDeadzoneR);   /* SDL up = negative -> N64 up = positive */
-            if (padLookSensX != 100 && rxs) rxs = rxs * padLookSensX / 100;
-            if (padLookSensY != 100 && rys) rys = rys * padLookSensY / 100;
-            /* project-dam: aim sensitivity, a multiplier on the stick while the
-             * game is in aim mode (ZL held, or Toggle), like a shooter's ADS
-             * sensitivity: camera turn speed in Centered, crosshair speed in
-             * Original. */
-            if (slotPlayer() != NULL && slotPlayer()->insightaimmode) {
-                extern int nxAimStickP(int v, int sens, int slot);   /* nxgame.c: sens, Game.AimZoom, Game.AimAssist (D960: per slot) */
-                rxs = nxAimStickP(rxs, padAimLookSens, idx);
-                rys = nxAimStickP(rys, padAimLookSens, idx);
-            }
-            if (rxs >  STICK_MAX) rxs =  STICK_MAX; else if (rxs < -STICK_MAX) rxs = -STICK_MAX;
-            if (rys >  STICK_MAX) rys =  STICK_MAX; else if (rys < -STICK_MAX) rys = -STICK_MAX;
-            if (idx == 0 && (rxs || rys)) s_aimDevMouse = 0;   /* D337: pad aim active */
-            if (padLookSmooth > 0) {
-                double a = padLookSmooth * 0.09;   /* 10 -> 0.9 (heaviest); 0 = off */
-                padSmSX[idx] = padSmSX[idx] * a + (double)rxs * (1.0 - a);
-                padSmSY[idx] = padSmSY[idx] * a + (double)rys * (1.0 - a);
-                rxs = (int)lround(padSmSX[idx]);
-                rys = (int)lround(padSmSY[idx]);
-            }
-            if (padLookInvertY) rys = -rys;
-            if (idx == 0) { s_recPadDX = rxs; s_recPadDY = rys; s_recPadDirect = 0; }
-            if (idx >= 0) {   /* Game.AimEntry (nxgame.c): the view follows the crosshair into the aim (D960: every slot, state per player) */
+         * navigate with the left stick whatever the stick roles (the strategies
+         * do that: INMODE_MENU) -- a menu-context remap only, no effect on in-level
+         * control feel. */
+        /* Sticks from the strategy (input/style_*.c); the C bits go out through
+         * the bridge below. The aim models and their side effects stay here. */
+        if (mc.mode == INMODE_MENU) {
+            if (mc.moveX) sx = mc.moveX;
+            if (mc.moveY) sy = mc.moveY;
+        } else if (mc.mode == INMODE_SOLITARE) {
+            const int rxs = mc.lookX, rys = mc.lookY;
+            if (idx == 0 && mc.lookRawActive) g_inputAimDevMouse = 0;   /* D337: pad aim active */
+            if (idx == 0) { g_inputRecPadDX = rxs; g_inputRecPadDY = rys; g_inputRecPadDirect = 0; }
+            {   /* Game.AimEntry (nxgame.c): the view follows the crosshair into the aim (D960: every slot, state per player) */
                 extern void nxAimEntryStep(struct player *p);
-                nxAimEntryStep(slotPlayer());
+                nxAimEntryStep(inputSlotPlayer());
                 extern void nxAimStopStep(struct player *p, int moving);   /* Game.AimStop */
-                nxAimStopStep(slotPlayer(), ly < -RSTICK_THRESHOLD || ly > RSTICK_THRESHOLD ||
-                                            lx < -RSTICK_THRESHOLD || lx > RSTICK_THRESHOLD ||
+                nxAimStopStep(inputSlotPlayer(), mc.moveFwd || mc.moveBack || mc.strafeL || mc.strafeR ||
                                             gameScriptedCameraActive() || g_PlayerIsInTank == 1);
 #if defined(PLATFORM_SWITCH)
                 extern void nxLookAheadStep(struct player *p, int walkingForward, int lookIdle);   /* Look ahead, Extended controls */
-                nxLookAheadStep(slotPlayer(), ly < -RSTICK_THRESHOLD, rxs == 0 && rys == 0);
+                nxLookAheadStep(inputSlotPlayer(), mc.moveFwd, rxs == 0 && rys == 0);
 #endif
             }
-            if (aimModeGet() == AIMMODE_CENTRED && !(idx == 0 && s_replayActive) &&
-                padDirectCompute(rxs, rys)) {
-                if (idx == 0) s_recPadDirect = 1;
+            if (inputAimModeGet() == AIMMODE_CENTRED && !(idx == 0 && g_inputReplayActive) &&
+                inputPadDirectCompute(rxs, rys)) {
+                if (idx == 0) g_inputRecPadDirect = 1;   /* D404: the stick drives the camera directly, no stick emitted */
                 /* D404 (resolved by implementation, 2026-09-28): pad CENTRED
                  * aim -- the stick drives the camera directly (crosshair
                  * pinned at centre), the pad-side twin of the mouse CENTRED
                  * branch above, so the Aim-style toggle is no longer inert
                  * on a pad. No look stick is emitted this poll; when
-                 * padDirectCompute declines (dead/watch/pause/cutscene) the
+                 * inputPadDirectCompute declines (dead/watch/pause/cutscene) the
                  * legacy stick emission below runs, as the mouse branch
                  * falls back to its legacy path. AIMMODE_N64 keeps today's
                  * behaviour: the deflection feeds the game's crosshair
@@ -3587,28 +2453,10 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                 if (rxs) sx = rxs;
                 if (rys) sy = rys;
             }
-        } else {
-            int px = padStickAxis(lx, padDeadzoneL);   /* D643: accurate N64 response in Original */
-            int py = -padStickAxis(ly, padDeadzoneL);    /* SDL up = negative -> N64 up = positive */
-            /* #145: in the HONEY role the LEFT stick is the look stick (1.1/
-             * 1.3 -- and, after the D498/D518 physical swap for 1.3 Frost,
-             * this channel carries the physical right stick, the 1.3 look
-             * stick). Inverting it, not the right stick (which is the digital
-             * movement C-button source in this role), is what makes F10's
-             * "Invert look" affect in-game vertical aim under the game's own
-             * original styles. The SOLITARE branch above already inverts its
-             * (look) right-stick channel. */
-            /* D645: not in Original -- there the game's own "Look up/down"
-             * (mirrored from this row by watchsettings.c) inverts natively. */
-            if (padLookInvertY && !controlScheme) py = -py;
-            if (px) sx = px;
-            if (py) sy = py;
-            if (idx == 0 && (px || py)) s_aimDevMouse = 0;   /* D337: pad aim active */
-
-            if (rx >  RSTICK_THRESHOLD) button |= GE_CONT_F;
-            if (rx < -RSTICK_THRESHOLD) button |= GE_CONT_C;
-            if (ry >  RSTICK_THRESHOLD) button |= GE_CONT_D;
-            if (ry < -RSTICK_THRESHOLD) button |= GE_CONT_E;
+        } else {   /* INMODE_HONEY: the left stick is the analog stick (#145: the look stick in 1.1 / 1.3 roles; D645: not inverted in Original) */
+            if (mc.moveX) sx = mc.moveX;
+            if (mc.moveY) sy = mc.moveY;
+            if (idx == 0 && mc.moveActive) g_inputAimDevMouse = 0;   /* D337: pad aim active */
         }
 
         /* D469: triggers/faces/shoulders/Start/D-pad via the data-driven
@@ -3617,20 +2465,13 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
          * Start; menus keep native A/X accept + B/Y cancel). Xbox 1.1
          * Jinx-style; RB's remaster HD toggle is unavailable. */
         {
-            PadMapCtx pc;
-            PadMapOut po;
-            pc.facePlayable = (idx == 0 || inputMpSplit()) && inputCanUseGameplayActions(padMenuMode);
-            pc.slotNative = (idx > 0 || inputMpPadsOwnP1());
-            pc.southpaw = padSouthpaw;
-            pc.orig = controlScheme;   /* D643 */
-            pc.tank = !pc.facePlayable && idx == 0 && !padMenuMode && g_PlayerIsInTank == 1 &&
-                      slotPlayer() && slotPlayer()->outside_watch_menu && !slotPlayer()->pause_state;
-            const PadBinds *pb = &padTabGet()->seat[padSeatForSlot(idx)];
-            padMapPure(pb, padLatchApply(padSeatForSlot(idx), padReadRaw(pad)), padActPrev[idx], button, &pc, &po);   /* D961 */
-            button = po.button;
-            if (po.crouch) crouchNow = 1;
-            if (po.gadgetEdge) inputCycleGadget();
-            padActPrev[idx] = po.actHeld;
+            N64BridgeOpts bo;
+            bo.slotNative = (idx > 0 || inputMpPadsOwnP1());
+            bo.southpaw = padSouthpaw;
+            button = n64BridgeButtons(button, &mc, &bo);
+            if (mc.crouch) crouchNow = 1;
+            if (mc.gadgetEdge) inputCycleGadget();
+            padActPrev[idx] = mc.actionsHeld;
         }
 
         /* Select (BACK) opens the F10 options overlay -- the gamepad
@@ -3659,7 +2500,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         padSelectPrev[0] = selNow;
     }
 
-    if (idx == 0 && scriptIsActive(0)) crouchNow = scriptSlots[0].crouch;
+    if (idx == 0 && inputScriptIsActive(0)) crouchNow = g_inputScriptSlots[0].crouch;
 
     /* The GEPD preset's crouch key is independent of aim. Do not turn it
      * into C-down: outside aim C-down moves backwards in 1.2, and inside
@@ -3674,7 +2515,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
             s_crouchHeldPrev = crouchNow;
             crouchNow = s_crouchLatch;
         }
-        struct player *p = slotPlayer();
+        struct player *p = inputSlotPlayer();
         int canCrouch = stage && p && !p->bonddead && p->outside_watch_menu &&
                         !p->pause_state && !p->mpmenuon && !g_PlayerIsInTank &&
                         !lvlGetControlsLockedFlag() &&
@@ -3715,20 +2556,8 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
     }
 
     /* Modern: while aiming, D-pad up / down zoom a scoped weapon (the native C-up / C-down in aim mode) and the left
-     * stick strafes slowly (the native C-left / C-right). The port feeds the same bits the N64 pad would. */
-    if (idx >= 0 && idx < MAX_PADS && inputPadIsModern(padSeatForSlot(idx)) && pads[idx] &&
-        current_menu == GE_MENU_RUN_STAGE) {
-        struct player *mp = slotPlayer();
-        if (mp && mp->insightaimmode && !mp->bonddead) {
-            if (bondwalkItemCheckBitflags(mp->hands[GUNRIGHT].weaponnum, WEAPONSTATBITFLAG_DISABLE_CROUCH)) {
-                if (SDL_GameControllerGetButton(pads[idx], SDL_CONTROLLER_BUTTON_DPAD_UP)) button |= GE_CONT_E;
-                if (SDL_GameControllerGetButton(pads[idx], SDL_CONTROLLER_BUTTON_DPAD_DOWN)) button |= GE_CONT_D;
-            }
-            const int lx = SDL_GameControllerGetAxis(pads[idx], SDL_CONTROLLER_AXIS_LEFTX);
-            if (lx < -12000) button |= GE_CONT_C;
-            else if (lx > 12000) button |= GE_CONT_F;
-        }
-    }
+     * stick strafes slowly (the native C-left / C-right). After the crouch code above, which reads the C-down bit. */
+    if (strat) button = n64BridgeAssist(button, &mc);
 
     /* D541: front-end release hold-off. One physical press can reach the menu
      * through two OR'd sources a few ms apart -- on a Steam Deck in Desktop
@@ -3747,21 +2576,21 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         }
     }
 
-    if (idx == 0 && scriptIsActive(0)) {
+    if (idx == 0 && inputScriptIsActive(0)) {
         /* D263: apply BEFORE the stick is written out -- scripted stick
          * tokens (SUP/SDOWN/SLEFT/SRIGHT) used to be discarded. */
-        button = scriptApply(0, button);
-        sx = scriptSlots[0].curSX;
-        sy = scriptSlots[0].curSY;
-    } else if (idx > 0 && idx <= 3 && scriptIsActive(idx)) {
+        button = inputScriptApply(0, button);
+        sx = g_inputScriptSlots[0].curSX;
+        sy = g_inputScriptSlots[0].curSY;
+    } else if (idx > 0 && idx <= 3 && inputScriptIsActive(idx)) {
         /* Per-slot harness (GE_INPUTSCRIPT_P1..P3): same sole-source
          * semantics for a split-screen test seat. Virtual seats behind
          * GE_MPVIRT reach here with button/sx/sy still at their idle zeros
          * (the gamepad block above is guarded by `if (pad)`), so an
          * unscripted seat stays idle exactly as before. */
-        button = scriptApply(idx, button);
-        sx = scriptSlots[idx].curSX;
-        sy = scriptSlots[idx].curSY;
+        button = inputScriptApply(idx, button);
+        sx = g_inputScriptSlots[idx].curSX;
+        sy = g_inputScriptSlots[idx].curSY;
     }
 
     if (sx > STICK_MAX)  sx = STICK_MAX;
@@ -3770,7 +2599,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
     if (sy < -STICK_MAX) sy = -STICK_MAX;
 
     if (idx == 0) {
-        inputRecordReplay(&button, &sx, &sy);
+        inputRecordReplayStep(&button, &sx, &sy);
     }
 
     if (stick_x) *stick_x = (signed char)sx;
@@ -3778,13 +2607,13 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
 
     /* D337: GE_AIMLOG=1 -- per-poll aim-model trace (the game's own crosshair
      * state), for measuring jitter / range / edge-scroll headlessly. */
-    if (idx == 0 && slotPlayer() != NULL && GE_ENVFLAG("GE_AIMLOG") &&
+    if (idx == 0 && inputSlotPlayer() != NULL && GE_ENVFLAG("GE_AIMLOG") &&
         (current_menu == GE_MENU_RUN_STAGE || current_menu == GE_MENU_INVALID)) {
         sysLogPrintf(LOG_NOTE, "AIMLOG f=%ld aim=%d dev=%d drawx=%.3f cx=%.5f cy=%.5f theta=%.4f verta=%.4f acc=%.4f",
-                     scriptSlots[0].frame, (int)slotPlayer()->insightaimmode, s_aimDevMouse,
-                     (double)slotPlayer()->crosshair_angle.f[0],
-                     (double)slotPlayer()->crosshair_x_pos, (double)slotPlayer()->crosshair_y_pos,
-                     (double)slotPlayer()->vv_theta, (double)slotPlayer()->vv_verta, AIMS.crossX);
+                     g_inputScriptSlots[0].frame, (int)inputSlotPlayer()->insightaimmode, g_inputAimDevMouse,
+                     (double)inputSlotPlayer()->crosshair_angle.f[0],
+                     (double)inputSlotPlayer()->crosshair_x_pos, (double)inputSlotPlayer()->crosshair_y_pos,
+                     (double)inputSlotPlayer()->vv_theta, (double)inputSlotPlayer()->vv_verta, AIMS.crossX);
     }
     if (configGetInputLog() && (button || sx || sy)) {
         sysLogPrintf(LOG_NOTE, "GE_INPUTLOG cont%d: btn=%04x stick=(%d,%d)",
@@ -3807,83 +2636,8 @@ int inputMenuPointerLive(void)
            MENU_POINTER_REASSERT_MS;
 }
 
-static void applyGrab(int want)
-{
-    want = want && mouseEnabled;
-    if (want == mouseGrabbed) {
-        return;
-    }
-    mouseGrabbed = want;
-    mouseRequestRelative(want);   /* D287: applied on the host thread */
-    mouseDX = mouseDY = 0.0;
-}
-
-/* Reconcile the SDL grab state with what the current mode wants. Called once
- * per controller-0 poll (menuMode known there) and from the notify hooks. */
-static void reconcileGrab(int menuMode)
-{
-#ifdef PLATFORM_MACOS
-    /* D594: the FOCUS_GAINED-driven `windowFocused` gate is unreliable on
-     * macOS (AppKit key-window; no focus events over ssh), so a click-to-lock
-     * that waits on it never arms and the mouse button + look stay dead. PD
-     * keeps the mouse locked by default (MLOCK_ON); match it -- drop only the
-     * focus gate. Menus and aim-holds still free the cursor (menuMode /
-     * s_absAimSuspend, exactly as on every other platform). */
-    int want = captureArmed && !menuMode;
-#else
-    int want = captureArmed && windowFocused && !menuMode; /* click-to-lock */
-#endif
-    if (s_absAimSuspend) {
-        want = 0;   /* D194: an aim hold wants the free cursor for absolute aim */
-    }
-    applyGrab(want);
-}
-
-/* Hide the OS cursor while the game window is focused (normal PC-game
- * behaviour): in a stage the mouse drives the look axis, and in menus GE draws
- * its own crosshair that now tracks the pointer 1:1 -- a visible OS arrow on
- * top is just clutter. Show it again when focus is lost so the desktop behaves
- * normally. Relative-mouse mode hides the cursor too, but only while grabbed;
- * this covers the free-but-focused states (menus, pre-click stage). */
-static void applyCursorVisibility(void)
-{
-    /* D194: while an aim hold has the cursor out for absolute aim, show it --
-     * the user is pointing with it and needs to see where. */
-    int hide = windowFocused && mouseEnabled && !s_absAimSuspend;
-    mouseRequestCursor(!hide);    /* D287: applied on the host thread */
-}
-
-/* video.c focus events. Records focus and lets reconcileGrab() decide. */
-void inputSetMouseGrab(int on)
-{
-    windowFocused = on ? 1 : 0;
-    reconcileGrab(0);   /* menuMode re-checked on the next poll anyway */
-    applyCursorVisibility();
-}
-
-/* A mouse click landed in the game window (video.c): arm + grab. */
-void inputNotifyClick(void)
-{
-    if (mouseEnabled && windowFocused) {
-        captureArmed = 1;
-        reconcileGrab(0);
-    }
-}
-
-/* ESC pressed (video.c): release the cursor and report 1 so the caller can
- * swallow the key; reports 0 when there is nothing to release. */
-int inputReleaseCapture(void)
-{
-    if (mouseGrabbed) {
-        captureArmed = 0;
-        applyGrab(0);
-        return 1;
-    }
-    return 0;
-}
-
 /* F10 options overlay: while it owns controller 0 the inputComputePad poll
- * early-returns before reconcileGrab()/applyCursorVisibility(), so whatever
+ * early-returns before inputReconcileGrab()/inputApplyCursorVisibility(), so whatever
  * grab state was live when F10 was pressed (relative mode + hidden cursor in a
  * stage) would persist and the mouse UI would be unusable. Force the cursor
  * free + visible every poll; the normal reconcile resumes once the overlay
@@ -4019,15 +2773,15 @@ int inputFrontEndCursorUiFrac(double *fx, double *fy, double *xscale)
 
 void inputSuspendForOverlay(void)
 {
-    if (mouseGrabbed) {
-        mouseGrabbed = 0;
-        mouseRequestRelative(0);
-        mouseDX = mouseDY = 0.0;
+    if (g_inputMouseGrabbed) {
+        g_inputMouseGrabbed = 0;
+        inputMouseRequestRelative(0);
+        g_inputMouseDX = g_inputMouseDY = 0.0;
     }
     /* D544: the OS cursor is always shown while the overlay is open, so the
      * pointer draws OVER the menu (maintainer). The front-end path no longer
      * hides it, which also removes the show/hide race that flickered. */
-    mouseRequestCursor(1);
+    inputMouseRequestCursor(1);
 }
 
 void inputPostWheel(int notches)
@@ -4053,8 +2807,8 @@ void inputRescanPads(void)
     /* DNEW-mp-1: still-attached pads keep their open handle and seat;
      * inputOpenPads closes only detached ones and seats new ones. */
     for (int i = 0; i < MAX_PADS; ++i) {
-        padSmSX[i] = 0.0;     /* Wave A: clear the look-smoothing EMA so a stick
-        padSmSY[i] = 0.0;     * snap-back after re-plug can't lag from a stale value */
+        inputStrategyStateReset(&s_padState[i]);   /* Wave A: clear the look-smoothing EMA so a stick
+                                                    * snap-back after re-plug can't lag from a stale value */
     }
     inputOpenPads();
     sysLogPrintf(LOG_NOTE, "input: rescanned pads (mask=0x%x, %d controller(s))",
@@ -4152,458 +2906,6 @@ int inputGetNumControllers(void)
     return numControllers;
 }
 
-/* D194 absolute (cursor-anchored) aim mode -- GEPD "mouse injector" style.
- *
- * Instead of synthesizing a velocity stick from this poll's mouse delta
- * (which can only ever be one of ten discrete (stick-60)/10 speeds, with a
- * hard 10%-speed floor on the smallest nonzero nudge), drive the game's own
- * aim-speed plant as a closed position loop: the cursor's screen position IS
- * the desired aim direction. On RMB press / every mouse move we record the
- * view angles that would put the point under the cursor at screen center;
- * each poll we emit a stick proportional to the remaining angular error, so
- * the crosshair slews to the cursor and HOLDS there -- stationary cursor =
- * stationary aim (even while walking), no floor jump, no release snap.
- *
- * Returns 1 if it handled this poll (callers must use outSx/outSy); 0 means
- * fall back to the legacy velocity stick (grabbed mouse, menus, gamepad,
- * degenerate geometry).
- */
-/* D194 GEPD-mirror aim -- direct crosshair/camera writes.
- *
- * Mirrors MouseInjectorPlugin (games/goldeneye.c) in model:
- *   - mouse motion moves a crosshair POSITION accumulator (not the view),
- *     clamped to ±GEPD_CROSSHAIR_LIMIT (the screen edge);
- *   - the accumulator is written straight into crosshair_x/y_pos and the
- *     gun/arm pose (gun_azimuth_angle/turning) via GEPD's formulas;
- *   - the view only scrolls when the crosshair passes 72% toward the edge:
- *     cam += (ratio-0.72)*475*timestep*(fov/basefov);
- *   - no look stick is emitted while active. bondview2's damped crosshair
- *     auto-centre (caclulate_gun_crosshair_position_rotation) keeps RUNNING
- *     -- exactly like GEPD, which patches nothing there: the per-frame
- *     overwrite simply wins over the damping, and the game derives
- *     crosshair_angle (HUD crosshair + aim ray) and field_FFC (arm/gun
- *     screen offset in gunUpdateAndFire) from our written values. On aim
- *     release we stop writing and the game's damping eases everything back
- *     to centre itself.
- *
- * Sensitivity: Input.GepdSens (GEPD SENSITIVITY setting; default 20 ~= 1:1
- * window-px per crosshair-screen-px at full zoom).
- *
- * Returns 1 if it handled this poll (callers must NOT emit a look stick);
- * 0 means fall back to the legacy velocity stick.
- */
-/* Accumulate this poll's mouse delta into the aim position. Shared by both
- * aim models: GEPD pushes the result into crosshair_x/y_pos itself, PD feeds
- * it to the game's integrator as the turn (see Input.PdMouseAim). Returns 0
- * if aim is not usable this poll. */
-static int aimGepdAccumulate(double dxPx, double dyLook)
-{
-    struct player *p = slotPlayer();
-
-    /* Needs the grabbed-cursor relative deltas (capture mode, locked in a
-     * stage) and a live player. dxPx/dyLook are this poll's px. */
-    if (!aimAbsolute || !mouseGrabbed || p == NULL)
-        return 0;
-
-    /* On entry adopt the game's current position (GEPD adopts every
-     * non-aim frame; input.c does that in the !aimHeld branch). */
-    if (!AIMS.gepdHeldPrev) {
-        AIMS.crossX = (double) p->crosshair_x_pos;
-        AIMS.crossY = (double) p->crosshair_y_pos;
-    }
-    AIMS.gepdHeldPrev = 1;
-
-    /* Crosshair position: GEPD crosshairpos += delta/10 * (SENS/292). */
-    /* D194/D238: master sensitivity scales aim mode too, so MouseSensitivity
-     * moves BOTH hipfire and aim together ("in line"); GepdSens sets the
-     * aim-mode offset from that shared baseline. At master=100 this is
-     * exactly the M-123-calibrated feel. */
-    double sens = (double) gepdSens / 2920.0 * (mouseSensitivity / 100.0);
-    AIMS.crossX += dxPx * sens;
-    AIMS.crossY += dyLook * sens;      /* +dyLook = look down = crosshair down */
-    if (AIMS.crossX >  GEPD_CROSSHAIR_LIMIT) AIMS.crossX =  GEPD_CROSSHAIR_LIMIT;
-    if (AIMS.crossX < -GEPD_CROSSHAIR_LIMIT) AIMS.crossX = -GEPD_CROSSHAIR_LIMIT;
-    if (AIMS.crossY >  GEPD_CROSSHAIR_LIMIT) AIMS.crossY =  GEPD_CROSSHAIR_LIMIT;
-    if (AIMS.crossY < -GEPD_CROSSHAIR_LIMIT) AIMS.crossY = -GEPD_CROSSHAIR_LIMIT;
-    return 1;
-}
-
-/* Camera edge-scroll: past GEPD_EDGE_THRESHOLD (72%) of the way to the
- * crosshair limit, scroll the view proportionally to the overshoot, scaled by
- * zoom like GEPD's (fov/basefov). This belongs to the aim POSITION, not to
- * whichever model owns the crosshair, so both call it -- PD's model needs it
- * too, or dragging the crosshair to the edge no longer moves the camera. */
-static void aimGepdEdgeScroll(void)
-{
-    struct player *p = slotPlayer();
-    f32 fov = slotFovY();
-
-    double rX = AIMS.crossX / GEPD_CROSSHAIR_LIMIT;
-    double rY = AIMS.crossY / GEPD_CROSSHAIR_LIMIT;
-    double aimx = 0.0, aimy = 0.0;
-    const double th = aimEdgeThreshold();   /* D338 */
-    if (rX >  th) aimx = (rX - th) * GEPD_SCROLL_SPEED / 60.0;
-    else if (rX < -th) aimx = (rX + th) * GEPD_SCROLL_SPEED / 60.0;
-    if (rY >  th) aimy = (rY - th) * GEPD_SCROLL_SPEED / 60.0;
-    else if (rY < -th) aimy = (rY + th) * GEPD_SCROLL_SPEED / 60.0;
-
-    f32 scale = (fov > 0.0f) ? fov / GEPD_BASE_FOV : 1.0f;
-    if (aimx != 0.0) {
-        /* GEPD does a bare `camx += ...` -- no [0,360) wrap. The game never
-         * wraps vv_theta in on-foot play either (bondviewApplyVertaTheta only
-         * sin/cos's it; the tank code is the sole wraper), so keep the
-         * accumulator unbounded. Wrapping turned a small negative edge-scroll
-         * step into a one-tick +360 spike in the raw value (D194 playtest log,
-         * line 534: cam 0.5 -> 359.7). */
-        p->vv_theta += (f32) aimx * scale;
-    }
-    if (aimy != 0.0) {
-        p->vv_verta -= (f32) aimy * scale;   /* crosshair low -> look down */
-        if (p->vv_verta >  90.0f) p->vv_verta =  90.0f;
-        if (p->vv_verta < -90.0f) p->vv_verta = -90.0f;
-    }
-}
-
-static int aimGepdCompute(double dxPx, double dyLook)
-{
-    struct player *p = slotPlayer();
-
-    if (!aimGepdAccumulate(dxPx, dyLook))
-        return 0;
-
-    f32 fov = slotFovY();
-    f32 fovratio = (fov > 0.0f) ? fov / GEPD_BASE_FOV : 1.0f;
-
-    /* Pre-overwrite residue: what last tick's damped update left behind
-     * (crosshair_pos = pos*damp + turn, gunfire.c caclulate_gun_crosshair_...
-     * runs AFTER our write each tick). The gap between this and our write
-     * below is the game-side turn term (autoaimx/y or speedtheta*0.3) --
-     * logged for the D194 spazz diagnosis. */
-    double resX = (double) p->crosshair_x_pos;
-    double resY = (double) p->crosshair_y_pos;
-
-    /* Crosshair + gun/arm pose (GEPD formulas, RATIOFACTOR=1 for our 4:3
-     * viewport; failsafe weapon offsets 0.15/0 as in goldeneye.c). */
-    p->crosshair_x_pos = (f32) (AIMS.crossX * aimRangeScale());   /* D338 */
-    p->crosshair_y_pos = (f32) (AIMS.crossY * aimRangeScale());
-    p->gun_azimuth_angle   = (f32) (AIMS.crossX * (1.11f + 0.15f * 1.5f) + fovratio - 1.0f);
-    p->gun_azimuth_turning = (f32) (AIMS.crossY * 1.11f + fovratio - 1.0f);
-
-    aimGepdEdgeScroll();
-
-    if (configGetInputLog()) {
-        /* ct = g_ClockTimer: game ticks batched into this poll. If the
-         * displayed crosshair shrinks by damp^ct with ct varying tick to
-         * tick (frame-pacing catch-up), game= will show fluctuating shrink
-         * at d=(0,0) -- the multi-tick spazz hypothesis. */
-        sysLogPrintf(LOG_NOTE,
-            "GE_INPUTLOG gepdaim d=(%.1f,%.1f) cross=(%.2f,%.2f) game=(%.2f,%.2f) aa=(%.2f,%.2f) st=%.3f sv=%.3f ct=%d cam=(%.1f,%.1f)",
-            dxPx, dyLook, AIMS.crossX, AIMS.crossY, resX, resY,
-            (double)p->autoaimx, (double)p->autoaimy,
-            (double)p->speedtheta, (double)p->speedverta,
-            g_ClockTimer, (double)p->vv_theta, (double)p->vv_verta);
-    }
-    return 1;
-}
-
-/* WI-1 (GEPD-INPUT-PLAN.md #89): hipfire direct camera write.
- *
- * Mirrors GEPD's hipfire branch (games/goldeneye.c): `camx += XPOS/10 *
- * (SENS/40) * (fov/basefov)` degrees this poll -- linear in px, FOV-scaled,
- * no stick curve in between. We fold GEPD's SENS/40 into our own
- * MouseTurnSpeed*MouseSensitivity product (both already 100% at defaults,
- * same "in line" convention D238 established for aimGepdCompute's GepdSens):
- * at defaults this reduces to exactly GEPD's px/10 baseline.
- *
- * dxPx/dyLook are this poll's dt-scaled px (same convention as
- * aimGepdCompute -- callers pre-multiply by lookDtScale).
- *
- * GEPD's safety gates (`camera==4||0 && menupage==11 && !dead && !watch &&
- * !pause`) matter here in a way they didn't for aim mode: aim mode requires
- * RMB held, so it naturally can't fire during a death/cutscene/pause state a
- * player would be holding RMB through; hipfire looks are always live, so a
- * frozen or scripted-camera state (POSEND/INTRO cutscenes, death cam, pause)
- * must be checked explicitly or this would fight the game's own camera
- * control during those states. `current_menu` already gates menupage==11
- * (checked by the caller's menuMode branch, same as aim mode); the rest are
- * read here directly -- read-only, no logic change.
- *
- * Returns 1 if it handled this poll (caller must not also run the legacy
- * stick path); 0 to fall back (disabled, no player, or a safety gate is
- * closed -- e.g. mid-death or mid-cutscene, matching GEPD's !dead/!watch).
- */
-/* D428 (#117): the gun's turn-lag ("sway") is driven by player->speedtheta
- * (gunSetBondWeaponSway, bondview2.c), which the game derives from STICK
- * deflection. Direct mouse look writes vv_theta instead and leaves speedtheta
- * at ~0, so the gun stayed glued to the view. Accumulate the yaw degrees the
- * direct path applied (poll thread) and hand the game thread an equivalent
- * turn speed once per tick: the exact inverse of the game's own yaw
- * integration (see portGunSwayTheta). Hipfire only; display-side. */
-/* D428 follow-up (#99): one accumulator per player. Fed on the poll thread
- * for the polled slot (player N owns slot N), drained on the game thread for
- * the current player. Solo = slot/player 0 only, as before. The game-side hook
- * (bondview2.c, D428 Rule-2 block) still drains player 0 only; see findings
- * D428 "split-screen note" for the one-line widening it would need. */
-static SDL_atomic_t s_swayThetaMdeg[4];
-
-static void swayFeedTheta(double deg)
-{
-    SDL_AtomicAdd(&s_swayThetaMdeg[(s_slot > 0 && s_slot < 4) ? s_slot : 0],
-                  (int)lround(deg * 1000.0));
-}
-
-float portGunSwayTheta(float dt)
-{
-    extern s32 get_cur_playernum(void);
-    s32 pn = get_cur_playernum();
-    int m = SDL_AtomicSet(&s_swayThetaMdeg[(pn > 0 && pn < 4) ? pn : 0], 0);
-    if (dt <= 0.0f)
-        return 0.0f;
-    /* Exact inverse of the game's own yaw integration (bondview2.c:
-     * vv_theta += speedtheta * dt * 3.5) and of its natural-turn speed, which is
-     * set straight from the stick with no ramp: speedtheta = (stick/70)^2 * fov/60,
-     * i.e. |speedtheta| <= fov/60 (~1.0). So a mouse turn of X degrees/tick gives
-     * the same gun lag the stick turning at that speed did on the N64. (An earlier
-     * version used the vertical axis' delta/(2*dt) clamped to 0.7: too weak at full
-     * speed, too strong at slow speed.) */
-    f32 fov = viGetFovY();
-    double lim = (fov > 0.0f) ? (double)fov / 60.0 : 1.0;
-    double v = (m / 1000.0) / (3.5 * (double)dt);
-    if (v >  lim) v =  lim;
-    if (v < -lim) v = -lim;
-    if (m != 0 && configGetInputLog())
-        sysLogPrintf(LOG_NOTE, "GE_INPUTLOG gunsway theta=%.1f deg speed=%.3f", m / 1000.0, v);
-    return (float)v;
-}
-
-static int hipDirectCompute(double dxPx, double dyLook)
-{
-    struct player *p = slotPlayer();
-
-    if (!mouseDirectLook || !mouseGrabbed || p == NULL)
-        return 0;
-
-    /* GEPD: !dead && !watch && !pause. bonddead/outside_watch_menu/
-     * pause_state are the decomp-canonical equivalents (bondview.h). */
-    if (p->bonddead || !p->outside_watch_menu || p->pause_state != 0)
-        return 0;
-
-    /* M-190: the "frozen or scripted-camera state (POSEND/INTRO cutscenes...)
-     * must be checked explicitly" gate this function's own comment above has
-     * always documented, but never actually implemented -- found live: the
-     * mouse could still freely move the camera during the Dam intro flyover
-     * and the abseil-jump cutscene, both CAMERAMODE_INTRO/POSEND, which are
-     * supposed to be camera-locked. bondviewFrozenMoveBond (bondview2.c:7947)
-     * already calls bondviewProcessInput(0,0,0,0) to correctly ignore stick
-     * input during these modes, but that gate lives entirely inside the
-     * stick-based dispatch (MoveBond vs bondviewFrozenMoveBond,
-     * bondview2.c:8268) -- this function writes p->vv_theta/vv_verta
-     * directly, bypassing that dispatch entirely. Reuses the same
-     * scripted-camera test D243's clamps use (bondview2.c, gameScriptedCameraActive,
-     * formerly d243mCutsceneActive -- renamed since this isn't D243-specific). */
-    if (gameScriptedCameraActive())
-        return 0;
-
-    f32 fov = slotFovY();
-    f32 scale = (fov > 0.0f) ? fov / GEPD_BASE_FOV : 1.0f;
-    double sens = (mouseTurnSpeed / 100.0) * (mouseSensitivity / 100.0);
-
-    /* dyLook already carries MouseInvertY + MouseYScale (applied by the
-     * caller before dt-scaling, same as every other consumer of dyLook) --
-     * do not re-apply either here. */
-    s_hipThetaDegOut = dxPx * 0.1 * sens * scale;
-    p->vv_theta += (f32) s_hipThetaDegOut;
-    p->vv_verta -= (f32) (dyLook * 0.1 * sens * scale);
-    if (p->vv_verta >  90.0f) p->vv_verta =  90.0f;
-    if (p->vv_verta < -90.0f) p->vv_verta = -90.0f;
-
-    if (configGetInputLog()) {
-        sysLogPrintf(LOG_NOTE,
-            "GE_INPUTLOG hipdirect d=(%.1f,%.1f) cam=(%.1f,%.1f)",
-            dxPx, dyLook, (double)p->vv_theta, (double)p->vv_verta);
-    }
-    return 1;
-}
-
-/* D404 (resolved by implementation, 2026-09-28): the pad-side twin of
- * hipDirectCompute's CENTRED path -- the right stick drives the camera
- * directly and the crosshair stays pinned at centre, so the Aim-style
- * toggle is no longer inert on a pad (it used to be: the pad always
- * emitted deflection into the game's N64 crosshair integrator, i.e. it
- * was *always in N64 mode*). Same safety gates as hipDirectCompute
- * (dead / watch / pause / scripted camera); the mouseDirectLook/
- * mouseGrabbed gate is dropped -- it is meaningless for a pad. Input
- * units are stick deflection (STICK_MAX = full, the same unit the N64
- * path feeds the game's integrator).
- *
- * Gain = the N64 natural-turn curve VERBATIM (bondview2.c, canNaturalTurn
- * / canNaturalPitch branches): v = clamp(deflection/70, \u00b11); v =
- * sign(v)\u00b7v\u00b2; camera += v \u00b7 (fov/60) \u00b7 3.5 deg/poll. First pass used a
- * linear 2.0 deg/poll \u00b7 (fov/GEPD_BASE_FOV) gain, which the user measured
- * as a dramatic sensitivity loss in Centred mode (linear vs quadratic
- * curve, and the 60-vs-90 FOV base compounded it to ~2.6\u00d7 slower at full
- * stick). With the verbatim curve, full-stick Centred turns at exactly
- * the N64 path's top rate -- switching modes changes the crosshair
- * behaviour, not the feel. */
-/* project-dam: weapon sway for "Centered + sway". Off aim, the game itself
- * swings the weapon with the turn: bondview2.c feeds speedtheta * 0.3 and
- * -speedverta * 0.1 into the crosshair and weapon integrators every tick
- * (sub_GAME_7F067F58), and the weapon settles at its own AimLockSpeed. In
- * Centred the port turns the camera itself (padDirectCompute), speedtheta
- * stays 0 and the weapon never moves. This feeds a turn of the same size into
- * the weapon only (gun_azimuth_angle/_turning), against the turn, so the
- * weapon trails the view like a modern shooter's weapon lag; the crosshair
- * stays at the centre, and shots go to crosshair_angle (gunfire.c), so the
- * sway is visual. speedTheta/speedVerta are the camera's
- * turn rates after the natural-turn curve, as the game would hold them. */
-static void padAimSway(struct player *p, double speedTheta, double speedVerta)
-{
-    if (aimModeGet() != AIMMODE_CENTRED) {
-        return;
-    }
-    p->gun_azimuth_angle   -= (f32)(speedTheta * 0.3);    /* trails the turn */
-    p->gun_azimuth_turning -= (f32)(-speedVerta * 0.1);
-}
-
-#if defined(PLATFORM_SWITCH)
-/* project-dam: the Centred stick response. padLookCurveRadial(): |m|^(Input.
- * PadLookCurve / 100) on the stick's magnitude m; the game's natural turn is
- * v^2 (200), a higher exponent gives small deflections finer control at the
- * same top speed. padTurnAccelGain(): modern shooters' edge acceleration -- the stick
- * held at full deflection for 0.2 s ramps the horizontal turn up over 0.4 s,
- * to 1.5x (low) or 2x (high), so wide turns stay fast while the curve keeps
- * aim fine. */
-/* The curve on the stick's magnitude, not per axis: with v^3 on each axis a
- * full diagonal (0.7, 0.7) came out at 0.35 per axis, about half the speed of
- * a full horizontal or vertical push. Direction is kept; the magnitude is
- * capped at 1 so a full diagonal tops out like a full axis. */
-static void padLookCurveRadial(double *x, double *y)
-{
-    double m = sqrt(*x * *x + *y * *y);
-    if (m <= 0.0) {
-        return;
-    }
-    if (m > 1.0) {
-        *x /= m;
-        *y /= m;
-        m = 1.0;
-    }
-    const double s = pow(m, padLookCurve / 100.0) / m;
-    *x *= s;
-    *y *= s;
-}
-
-static double padTurnAccelGain(struct player *p, double vraw)
-{
-    static struct { struct player *p; Uint32 since; } st[4];
-    if (padTurnAccel <= 0) {
-        return 1.0;
-    }
-    int slot = 0;
-    for (int i = 0; i < 4; i++) {
-        if (st[i].p == p) { slot = i; break; }
-        if (st[i].p == NULL) { st[i].p = p; slot = i; break; }
-    }
-    const Uint32 now = SDL_GetTicks();
-    if (fabs(vraw) < 0.95) {
-        st[slot].since = 0;
-        return 1.0;
-    }
-    if (st[slot].since == 0) {
-        st[slot].since = now ? now : 1;
-    }
-    const double held = (now - st[slot].since) / 1000.0;
-    const double ramp = held <= 0.2 ? 0.0 : (held >= 0.6 ? 1.0 : (held - 0.2) / 0.4);
-    const double top = padTurnAccel >= 2 ? 2.0 : 1.5;
-    return 1.0 + (top - 1.0) * ramp;
-}
-#endif
-
-static int padDirectCompute(int dx, int dy)
-{
-    struct player *p = slotPlayer();
-
-    if (p == NULL)
-        return 0;
-    if (p->bonddead || !p->outside_watch_menu || p->pause_state != 0)
-        return 0;
-    if (gameScriptedCameraActive())
-        return 0;
-
-    if (dx == 0 && dy == 0)
-        return 1;   /* nothing to turn; caller simply emits no stick */
-
-    f32 fov = slotFovY();
-    double k = (fov > 0.0f) ? (double)fov / 60.0 : 1.0;   /* bondview2's base */
-    double v;
-#if defined(PLATFORM_SWITCH)
-    double vcx = (double)dx / 70.0, vcy = (double)dy / 70.0;   /* both axes curved together */
-    const double vrawx = vcx > 1.0 ? 1.0 : (vcx < -1.0 ? -1.0 : vcx);
-    padLookCurveRadial(&vcx, &vcy);
-#endif
-
-    v = (double)dx / 70.0;   /* analogTurn = raw stick \u00b1 5, /70 -- bondview2.c:6222 */
-    if (v > 1.0) v = 1.0; else if (v < -1.0) v = -1.0;
-#if defined(PLATFORM_SWITCH)
-    v = vcx * padTurnAccelGain(p, vrawx);
-#else
-    if (v >= 0.0) v *= v; else v = -v * v;
-#endif
-    p->vv_theta += (f32) (v * k * 3.5);
-    const double speedTheta = v * k;
-
-    v = (double)dy / 70.0;   /* analogPitch, /70 -- bondview2.c:6161 */
-    if (v > 1.0) v = 1.0; else if (v < -1.0) v = -1.0;
-#if defined(PLATFORM_SWITCH)
-    v = vcy;
-#else
-    if (v >= 0.0) v *= v; else v = -v * v;
-#endif
-    const double speedVerta = -v * k;
-    p->vv_verta -= (f32) (v * k * 3.5);   /* game: speedverta = -v\u00b7(fov/60) */
-    if (p->vv_verta >  90.0f) p->vv_verta =  90.0f;
-    if (p->vv_verta < -90.0f) p->vv_verta = -90.0f;
-    padAimSway(p, speedTheta, speedVerta);
-
-    if (configGetInputLog()) {
-        sysLogPrintf(LOG_NOTE,
-            "GE_INPUTLOG paddirect d=(%d,%d) cam=(%.1f,%.1f)",
-            dx, dy, (double)p->vv_theta, (double)p->vv_verta);
-    }
-    return 1;
-}
-
-/* --- Input.PdMouseAim: the port side of PD's mouse-aim model ----------------
- * See the flag's comment above for the design. PD's own implementation lives
- * in its GAME files (bondmove.c/bondgun.c) behind `#ifndef PLATFORM_N64`, with
- * the port supplying the input; we mirror that with `#ifdef PORT` hooks in
- * GE's aim path (sub_GAME_7F067FBC, gunfire.c).
- *
- * The port accumulates the mouse delta (aimGepdAccumulate, shared with GEPD's
- * model) and the game's own crosshair integrator does the rest. PD's range is
- * swivelpos in [-1,1] == the screen edge, which is what the game's display
- * formula maps to half a screen width; GEPD's crosshair limit is that same
- * edge in its own units, so dividing by it gives PD's units. */
-int portMouseAimPdActive(void)
-{
-    /* D337: only while the mouse is the device driving aim -- otherwise the
-     * pad's stick turn (the N64 path, weapon damp) must reach the game. */
-    return pdMouseAimEnabled() && mouseGrabbed && s_aimDevMouse;
-}
-
-int portMouseAimPdGetTurn(f32 *tx, f32 *ty)
-{
-    if (!portMouseAimPdActive() || g_CurrentPlayer == NULL)
-        return 0;
-    if (inputMpSplit() && player_num != 0)   /* D416: the mouse owns player 0 only */
-        return 0;
-    /* Game thread: never AIMS (s_slot belongs to the poll thread). The mouse
-     * lives on slot 0 (D422). */
-    if (tx) *tx = (f32) (s_aimSt[0].crossX / GEPD_CROSSHAIR_LIMIT * aimRangeScale());   /* D338 */
-    if (ty) *ty = (f32) (s_aimSt[0].crossY / GEPD_CROSSHAIR_LIMIT * aimRangeScale());
-    return 1;
-}
-
 /* ------------------------------------------------------------------------
  * D469: UI-facing pad binding API (F10 overlay + front-end PC Options) and
  * the GE_PADMAPTEST self-test.
@@ -4697,95 +2999,43 @@ int inputPadBindingReset(int act)
     return n;
 }
 
-/* GE_PADMAPTEST=1: boot-time proof (logs, then the game continues).
- *  1. preset 0 == the pre-D469 mapping, exhaustively (every raw source
- *     combination x prev A/B/X/Y x facePlayable/slotNative/southpaw x 5
- *     incoming masks);
- *  2. a per-source table for preset 0 (menu and playable);
- *  3. Custom remap moves the action; seats are independent; Start guard;
- *  4. published-table path (padTabGet) honours the preset/strings.
+/* GE_PADMAPTEST=1: boot-time proof of the BIND TABLES (logs, then the game
+ * continues). The mapping itself (sources -> commands -> N64 bits) is pure and
+ * unit-tested in tests/test_input_{modern,enhanced,original}.c; what only exists
+ * here is the string -> mask resolution:
+ *  1. Custom remap moves the action; seats are independent; Start guard;
+ *  2. a non-Custom preset ignores Input.Pad.*;
+ *  3. the binding API round trip;
+ *  4. Original: the default N64 table, per-seat remap, the unbound guards.
  * Config values are restored afterwards so nothing is persisted. */
 static void padMapSelfTest(void)
 {
     int fail = 0;
-    PadBinds p0;
-    int bad = 0;
-    padBuildBinds(&p0, 0, 0, &bad);
-    static const unsigned kIn[5] = { 0, GE_CONT_G, GE_CONT_R, GE_CONT_G | GE_CONT_R, 0xffffu };
-    long compared = 0, mism = 0;
-    for (u32 raw = 0; raw < (1u << PS_COUNT); raw++)
-        for (u32 pv = 0; pv < 16; pv++) {
-            u32 prevRaw = (pv & 1 ? PSM(PS_A) : 0) | (pv & 2 ? PSM(PS_B) : 0) |
-                          (pv & 4 ? PSM(PS_X) : 0) | (pv & 8 ? PSM(PS_Y) : 0);
-            for (int cx = 0; cx < 8; cx++) {
-                PadMapCtx c = { cx & 1, (cx >> 1) & 1, (cx >> 2) & 1 };
-                for (int k = 0; k < 5; k++) {
-                    PadMapOut a, b;
-                    padMapPure(&p0, raw, padActHeld(&p0, prevRaw), kIn[k], &c, &a);
-                    padMapLegacy(raw, prevRaw & PSM(PS_A), prevRaw & PSM(PS_B), prevRaw & PSM(PS_X),
-                                 prevRaw & PSM(PS_Y), kIn[k], &c, &b);
-                    compared++;
-                    if (a.button != b.button || a.crouch != b.crouch || a.gadgetEdge != b.gadgetEdge) {
-                        if (mism++ < 5)
-                            sysLogPrintf(LOG_ERROR, "GE_PADMAPTEST MISMATCH raw=%04x prev=%x ctx=%d in=%04x new=%04x/%d/%d old=%04x/%d/%d",
-                                         raw, pv, cx, kIn[k], a.button, a.crouch, a.gadgetEdge,
-                                         b.button, b.crouch, b.gadgetEdge);
-                    }
-                }
-            }
-        }
-    sysLogPrintf(mism ? LOG_ERROR : LOG_INFO, "GE_PADMAPTEST: preset0 == legacy: %ld cases compared, %ld mismatches", compared, mism);
-    fail += mism != 0;
-
-    for (int s = 0; s < PS_COUNT; s++)
-        for (int play = 0; play < 2; play++) {
-            PadMapCtx c = { play, 0, 0 };
-            PadMapOut a;
-            padMapPure(&p0, PSM(s), 0, 0, &c, &a);
-            sysLogPrintf(LOG_INFO, "GE_PADMAPTEST: preset0 %-13s %-8s -> mask=%04x crouch=%d gadget=%d",
-                         kPadSrc[s].name, play ? "playable" : "menu", a.button, a.crouch, a.gadgetEdge);
-        }
-
-    /* Custom: seat 0 Fire := a, seat 1 untouched, seat 2 Use := y. */
     int savedPreset[MAX_PADS];
     char saved[MAX_PADS][PA_COUNT][32];
     memcpy(savedPreset, padPreset, sizeof(savedPreset));
     memcpy(saved, padStr, sizeof(saved));
+    /* Custom: seat 0 Fire := a, seat 1 untouched, seat 2 Use := y. */
     for (int s = 0; s < MAX_PADS; s++) padPreset[s] = 3;
     snprintf(padStr[0][PA_FIRE], sizeof(padStr[0][0]), "a");
     snprintf(padStr[2][PA_USE], sizeof(padStr[0][0]), "y,none");
     snprintf(padStr[2][PA_NEXTWPN], sizeof(padStr[0][0]), "none");
     snprintf(padStr[3][PA_START], sizeof(padStr[0][0]), "none");
     const PadTable *t = padTabGet();
-    PadMapCtx play = { 1, 0, 0 };
-    PadMapOut o;
-    padMapPure(&t->seat[0], PSM(PS_A), 0, 0, &play, &o);
-    int c1 = (o.button & GE_CONT_G) != 0;
-    padMapPure(&t->seat[0], PSM(PS_RT), 0, 0, &play, &o);
-    int c2 = (o.button & GE_CONT_G) == 0;
-    padMapPure(&t->seat[1], PSM(PS_RT), 0, 0, &play, &o);
-    int c3 = (o.button & GE_CONT_G) != 0;       /* seat 1 still default */
-    padMapPure(&t->seat[1], PSM(PS_A), 0, 0, &play, &o);
-    int c4 = (o.button & GE_CONT_G) == 0;
-    PadMapCtx nat = { 1, 1, 0 };
-    padMapPure(&t->seat[2], PSM(PS_Y), 0, 0, &nat, &o);
-    int c5 = (o.button & GE_CONT_B) != 0 && !(o.button & GE_CONT_A);   /* Y is Use on seat 2 */
-    padMapPure(&t->seat[1], PSM(PS_Y), 0, 0, &nat, &o);
-    int c6 = (o.button & GE_CONT_A) != 0;       /* seat 1: Y still next weapon */
-    padMapPure(&t->seat[3], PSM(PS_START), 0, 0, &play, &o);
-    int c7 = (o.button & GE_CONT_START) != 0;   /* Start guard re-forces start */
-    sysLogPrintf(LOG_INFO, "GE_PADMAPTEST: custom: seat0 Fire=a moves(%d) RT-off(%d); seat1 independent RT(%d) A-off(%d); seat2 Use=y(%d); seat1 Y=next(%d); start guard(%d)",
-                 c1, c2, c3, c4, c5, c6, c7);
-    fail += !(c1 && c2 && c3 && c4 && c5 && c6 && c7);
+    int c1 = t->seat[0].mask[PA_FIRE] == PSM(PS_A);
+    int c3 = t->seat[1].mask[PA_FIRE] == PSM(PS_RT);       /* seat 1 still default */
+    int c5 = t->seat[2].mask[PA_USE] == PSM(PS_Y) && t->seat[2].mask[PA_NEXTWPN] == 0;
+    int c6 = t->seat[1].mask[PA_NEXTWPN] == PSM(PS_Y);
+    int c7 = t->seat[3].mask[PA_START] == PSM(PS_START);   /* Start guard re-forces start */
+    sysLogPrintf(LOG_INFO, "GE_PADMAPTEST: custom: seat0 Fire=a (%d); seat1 independent (%d); seat2 Use=y, Next none (%d); seat1 Y=next (%d); start guard (%d)",
+                 c1, c3, c5, c6, c7);
+    fail += !(c1 && c3 && c5 && c6 && c7);
     /* Preset != Custom ignores the strings. */
     for (int s = 0; s < MAX_PADS; s++) padPreset[s] = 0;
     t = padTabGet();
-    padMapPure(&t->seat[0], PSM(PS_RT), 0, 0, &play, &o);
-    int c8 = (o.button & GE_CONT_G) != 0;
-    padMapPure(&t->seat[0], PSM(PS_A), 0, 0, &play, &o);
-    int c9 = (o.button & GE_CONT_G) == 0;
-    sysLogPrintf(LOG_INFO, "GE_PADMAPTEST: preset0 ignores Input.Pad.* (RT fire %d, A not fire %d)", c8, c9);
-    fail += !(c8 && c9);
+    int c8 = t->seat[0].mask[PA_FIRE] == PSM(PS_RT);
+    sysLogPrintf(LOG_INFO, "GE_PADMAPTEST: preset0 ignores Input.Pad.* (%d)", c8);
+    fail += !c8;
     /* binding API round trip */
     inputPadBindingSet(1, PA_FIRE, 1, PS_RB);
     char tx[32], ty[32];
@@ -4798,61 +3048,36 @@ static void padMapSelfTest(void)
     sysLogPrintf(LOG_INFO, "GE_PADMAPTEST: binding API round trip (%d) clear keeps slot (%d) [%s]", c10, c11, padStr[1][PA_FIRE]);
     fail += !(c10 && c11);
 
-    /* D643: Original = strict virtual N64 pad. Per-source table (identical in
-     * stage / menu / tank), then remap, per-seat independence, guards. */
+    /* D643: Original = strict virtual N64 pad: the default table, then remap,
+     * per-seat independence, guards. */
     {
-        static const unsigned exp[PS_COUNT] = {
-            [PS_A] = GE_CONT_A, [PS_B] = 0, [PS_X] = GE_CONT_B, [PS_Y] = 0,
-            [PS_LB] = GE_CONT_L, [PS_RB] = GE_CONT_R, [PS_LS] = 0, [PS_RS] = 0,
-            [PS_START] = GE_CONT_START, [PS_DUP] = GE_CONT_UP, [PS_DDOWN] = GE_CONT_DOWN,
-            [PS_DLEFT] = GE_CONT_LEFT, [PS_DRIGHT] = GE_CONT_RIGHT,
-            [PS_LT] = GE_CONT_R, [PS_RT] = GE_CONT_G };
         char savedN[MAX_PADS][NB_COUNT][32];
-        int savedCs = controlScheme, savedSouth = padSouthpaw, o1 = 1, o2 = 1, o3 = 1;
+        int savedCs = controlScheme, o1 = 1, o2 = 1, o3 = 1;
         memcpy(savedN, n64Str, sizeof(savedN));
         controlScheme = 1;
-        padSouthpaw = 1;   /* must be ignored in Original */
         for (int s2 = 0; s2 < MAX_PADS; s2++) {
             padPreset[s2] = 0;
             for (int n = 0; n < NB_COUNT; n++) snprintf(n64Str[s2][n], sizeof(n64Str[0][0]), "%s", kN64Btn[n].def);
         }
         padTabValid = 0;
         const PadTable *ot = padTabGet();
-        for (int src = 0; src < PS_COUNT; src++)
-            for (int cx = 0; cx < 3; cx++) {   /* playable / menu / tank */
-                PadMapCtx c = { cx == 0, 1, 1, cx == 2, 1 };
-                padMapPure(&ot->seat[0], PSM(src), 0, 0, &c, &o);
-                int ok = o.button == exp[src] && !o.crouch && !o.gadgetEdge &&
-                         padActHeld(&ot->seat[0], PSM(src)) == 0;
-                o1 &= ok;
-                sysLogPrintf(ok ? LOG_INFO : LOG_ERROR, "GE_PADMAPTEST: original %-13s %-8s -> %04x (want %04x)",
-                             kPadSrc[src].name, cx == 0 ? "playable" : cx == 1 ? "menu" : "tank", o.button, exp[src]);
-            }
-        { PadMapCtx c = { 1, 0, 0, 0, 1 }; padMapPure(&ot->seat[0], PSM(PS_RT) | PSM(PS_A), 0, 0, &c, &o); o1 &= o.button == (GE_CONT_G | GE_CONT_A); }
-        /* remap: seat 1 B := y,b and CUp := b; seat 0 untouched */
+        o1 = ot->seat[0].n64[NB_A] == PSM(PS_A) && ot->seat[0].n64[NB_B] == PSM(PS_X) &&
+             ot->seat[0].n64[NB_Z] == PSM(PS_RT) && ot->seat[0].n64[NB_R] == (PSM(PS_LT) | PSM(PS_RB)) &&
+             ot->seat[0].n64[NB_L] == PSM(PS_LB) && ot->seat[0].n64[NB_START] == PSM(PS_START) &&
+             ot->seat[0].n64[NB_CU] == 0 && padActHeld(&ot->seat[0], ~0u) == 0;
         snprintf(n64Str[1][NB_B], sizeof(n64Str[0][0]), "y,b");
         snprintf(n64Str[1][NB_CU], sizeof(n64Str[0][0]), "rightstick");
-        /* guards: seat 2 Start none; seat 3 A and B both none */
         snprintf(n64Str[2][NB_START], sizeof(n64Str[0][0]), "none");
         snprintf(n64Str[3][NB_A], sizeof(n64Str[0][0]), "none");
         snprintf(n64Str[3][NB_B], sizeof(n64Str[0][0]), "none");
         ot = padTabGet();
-        PadMapCtx oc = { 1, 0, 0, 0, 1 };
-        padMapPure(&ot->seat[1], PSM(PS_Y), 0, 0, &oc, &o);  o2 &= o.button == GE_CONT_B;
-        padMapPure(&ot->seat[1], PSM(PS_B), 0, 0, &oc, &o);  o2 &= o.button == GE_CONT_B;
-        padMapPure(&ot->seat[1], PSM(PS_X), 0, 0, &oc, &o);  o2 &= o.button == 0;
-        padMapPure(&ot->seat[1], PSM(PS_RS), 0, 0, &oc, &o); o2 &= o.button == GE_CONT_E;
-        padMapPure(&ot->seat[0], PSM(PS_X), 0, 0, &oc, &o);  o2 &= o.button == GE_CONT_B;
-        padMapPure(&ot->seat[0], PSM(PS_Y), 0, 0, &oc, &o);  o2 &= o.button == 0;
-        padMapPure(&ot->seat[2], PSM(PS_START), 0, 0, &oc, &o); o3 &= o.button == GE_CONT_START;
-        padMapPure(&ot->seat[3], PSM(PS_A), 0, 0, &oc, &o);  o3 &= o.button == GE_CONT_A;
-        padMapPure(&ot->seat[3], PSM(PS_X), 0, 0, &oc, &o);  o3 &= o.button == GE_CONT_B;
-        int st = scaleAxisN64(2499) == 0 && scaleAxisN64(32767) == STICK_MAX && scaleAxisN64(-32768) == -STICK_MAX &&
-                 scaleAxisN64(16384) == 40 && padStickAxis(5000, 7500) == scaleAxisN64(5000);
-        sysLogPrintf(LOG_INFO, "GE_PADMAPTEST: original table (%d) remap/seat-independence (%d) unbound-fallback (%d) stick (%d)", o1, o2, o3, st);
-        fail += !(o1 && o2 && o3 && st);
+        o2 = ot->seat[1].n64[NB_B] == (PSM(PS_Y) | PSM(PS_B)) && ot->seat[1].n64[NB_CU] == PSM(PS_RS) &&
+             ot->seat[0].n64[NB_B] == PSM(PS_X);
+        o3 = ot->seat[2].n64[NB_START] == PSM(PS_START) &&
+             ot->seat[3].n64[NB_A] == PSM(PS_A) && ot->seat[3].n64[NB_B] == PSM(PS_X);
+        sysLogPrintf(LOG_INFO, "GE_PADMAPTEST: original table (%d) remap/seat-independence (%d) unbound-fallback (%d)", o1, o2, o3);
+        fail += !(o1 && o2 && o3);
         controlScheme = savedCs;
-        padSouthpaw = savedSouth;
         memcpy(n64Str, savedN, sizeof(savedN));
     }
 
@@ -4891,37 +3116,37 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
     configRegisterString("Input.Player2Pad", padPref[1], sizeof(padPref[1]));
     configRegisterString("Input.Player3Pad", padPref[2], sizeof(padPref[2]));
     configRegisterString("Input.Player4Pad", padPref[3], sizeof(padPref[3]));
-    configRegisterInt("Input.MouseEnabled", &mouseEnabled, 0, 1);
-    configRegisterInt("Input.CrosshairCursor", &cfgCrosshairCursor, 0, 1);   /* D555 */
+    configRegisterInt("Input.MouseEnabled", &g_inputMouseEnabled, 0, 1);
+    configRegisterInt("Input.CrosshairCursor", &g_inputCfgCrosshairCursor, 0, 1);   /* D555 */
     configRegisterInt("Input.MouseAimSpeed", &mouseAimSpeed, 1, 500);
-    configRegisterInt("Input.PdMouseAim",     &pdMouseAim,     0, 1);   /* legacy -> AimStyle 1 */
-    configRegisterInt("Input.AimStyle",       &aimStyleLegacy, 0, 2);   /* D333 legacy -> AimMode */
-    configRegisterInt("Input.AimMode",        &aimMode,        0, 1);   /* D337 */
+    configRegisterInt("Input.PdMouseAim",     &g_inputPdMouseAim,     0, 1);   /* legacy -> AimStyle 1 */
+    configRegisterInt("Input.AimStyle",       &g_inputAimStyleLegacy, 0, 2);   /* D333 legacy -> AimMode */
+    configRegisterInt("Input.AimMode",        &g_inputAimMode,        0, 1);   /* D337 */
 #if defined(PLATFORM_SWITCH)
     configRegisterInt("Input.NxDefaultsRev",  &nxDefaultsRev,  0, 2);   /* project-dam */
 #endif
-    configRegisterInt("Input.AimLegacyGepd",  &aimLegacyGepd,  0, 1);   /* D337 hidden fallback */
-    configRegisterInt("Input.AimRange",       &aimRange,       0, 1);   /* D338 PC / N64 */
-    configRegisterInt("Input.AimAbsolute", &aimAbsolute, 0, 1);  /* D194 */
-    configRegisterInt("Input.MouseDirectLook", &mouseDirectLook, 0, 1);  /* WI-1 */
+    configRegisterInt("Input.AimLegacyGepd",  &g_inputAimLegacyGepd,  0, 1);   /* D337 hidden fallback */
+    configRegisterInt("Input.AimRange",       &g_inputAimRange,       0, 1);   /* D338 PC / N64 */
+    configRegisterInt("Input.AimAbsolute", &g_inputAimAbsolute, 0, 1);  /* D194 */
+    configRegisterInt("Input.MouseDirectLook", &g_inputMouseDirectLook, 0, 1);  /* WI-1 */
     /* D194: renamed Input.GepdSens -> Input.AimModeSens (community name for
      * the RMB aim mode; "GEPD" is internal provenance jargon). The old key
      * stays registered against the same variable as a deprecated alias --
      * if both appear in an ini, the later line wins. */
     /* D304: widened from the old (1,80) clamp to match Input.MouseTurnSpeed's
      * (1,500) range exactly -- both are the same underlying "reference SENS
-     * passthrough" unit (see aimGepdCompute/hipDirectCompute), consumed by
+     * passthrough" unit (see inputAimGepdCompute/inputHipDirectCompute), consumed by
      * two different, intentional per-mode divisor constants (2920 vs the
      * turn-speed path's /100*0.1), so a shared range lets the two sliders be
      * directly comparable ("1:1" in the menu) instead of arbitrarily capped
      * at different, mismatched ceilings. Old 80 cap was well below even this
      * value's own reference-model native ceiling (100 raw = 500% in the
      * source GEPD injector's own display convention). */
-    configRegisterInt("Input.AimModeSens", &gepdSens, 1, 500);
-    configRegisterInt("Input.GepdSens",    &gepdSens, 1, 500);   /* deprecated alias */
+    configRegisterInt("Input.AimModeSens", &g_inputGepdSens, 1, 500);
+    configRegisterInt("Input.GepdSens",    &g_inputGepdSens, 1, 500);   /* deprecated alias */
     configRegisterInt("Input.AimBand", &aimBand, 5, 40);
     configRegisterInt("Input.TankAimScale", &tankAimScale, 10, 300);   /* D407 */
-    configRegisterInt("Input.MouseTurnSpeed", &mouseTurnSpeed, 1, 500);
+    configRegisterInt("Input.MouseTurnSpeed", &g_inputMouseTurnSpeed, 1, 500);
     configRegisterInt("Input.SensLink", &sensLink, 0, 1);
     configRegisterInt("Input.HipfirePitchSpeed", &hipfirePitchSpeed, 10, 500);
     configRegisterInt("Input.MouseInvertY", &mouseInvertY, 0, 1);
@@ -4929,7 +3154,7 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
     configRegisterInt("Input.MouseSmoothing", &mouseSmoothing, 0, 90);
     configRegisterInt("Input.MouseRawInput", &mouseRawInput, 0, 1);
     configRegisterInt("Input.MouseDtDecouple", &mouseDtDecouple, 0, 1);  /* D194(b) */
-    configRegisterInt("Input.MouseSensitivity", &mouseSensitivity, 1, 500);  /* D238 */
+    configRegisterInt("Input.MouseSensitivity", &g_inputMouseSensitivity, 1, 500);  /* D238 */
     configRegisterInt("Input.MouseAimCurve", &aimCurveGamma, 50, 400);  /* D194(a), x100 */
     configRegisterInt("Input.NaturalPitch", &naturalPitchMode, 0, 1);  /* D194/D238 */
     configRegisterInt("Input.ControlScheme", &controlScheme, 0, 1);    /* D513: 0 Modern, 1 OG controls */
@@ -4941,8 +3166,8 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
     configRegisterInt("Input.PadLookSensY", &padLookSensY, 25, 200);
     configRegisterInt("Input.PadAimLookSens", &padAimLookSens, 25, 200);   /* project-dam */
 #if defined(PLATFORM_SWITCH)
-    configRegisterInt("Input.PadLookCurve", &padLookCurve, 100, 400);      /* project-dam */
-    configRegisterInt("Input.PadTurnAccel", &padTurnAccel, 0, 2);          /* project-dam */
+    configRegisterInt("Input.PadLookCurve", &g_inputPadLookCurve, 100, 400);      /* project-dam */
+    configRegisterInt("Input.PadTurnAccel", &g_inputPadTurnAccel, 0, 2);          /* project-dam */
 #endif   /* Wave A: look vertical (pitch) sensitivity (%) */
     configRegisterInt("Input.PadSouthpaw", &padSouthpaw, 0, 1);        /* Wave A: swap fire/grenade triggers */
     configRegisterInt("Input.PadLookSmooth", &padLookSmooth, 0, 10);   /* Wave A: look low-pass strength, 0-10 (0 = off) */
@@ -4956,14 +3181,14 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
     configRegisterFloat("Input.RumbleScale", &gRumbleScale, 0.f, 1.f);
     /* D380: single PC layout. Old Input.Layout is ignored and removed on
      * configSave; BindingsVersion marks the one-time stale-default migration. */
-    configRegisterInt("Input.BindingsVersion", &bindsVersion, 0, 3);
+    configRegisterInt("Input.BindingsVersion", &g_inputBindsVersion, 0, 3);
     configRegisterInt("Input.CrouchMode", &crouchMode, 0, 1);
 
     /* Seed fresh ini files with the REAL PC binding strings. Older ini
      * values are migrated at inputInit after configLoad, exactly once. */
     for (int a = 0; a < IA_COUNT; a++) {
-        const char *def = kGepdPreset[a] ? kGepdPreset[a] : kBindDefs[a].def;
-        strncpy(g_bindStr[a], def, sizeof(g_bindStr[a]) - 1);
-        configRegisterString(kBindDefs[a].key, g_bindStr[a], sizeof(g_bindStr[a]));
+        const char *def = g_inputGepdPreset[a] ? g_inputGepdPreset[a] : g_inputBindDefs[a].def;
+        strncpy(g_inputBindStr[a], def, sizeof(g_inputBindStr[a]) - 1);
+        configRegisterString(g_inputBindDefs[a].key, g_inputBindStr[a], sizeof(g_inputBindStr[a]));
     }
 }

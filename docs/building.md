@@ -217,6 +217,25 @@ unchanged):
 In a git worktree the version line says `build : unknown`: the container
 cannot follow the worktree's `.git` file. A normal clone shows the hash.
 
+### Tests
+
+Off the Switch the game is also built as the `ge007_core` object library
+(everything but `port/src/main.c`), and `tests/` holds CTest binaries that link
+it, one binary per area so that each starts with clean game globals. They need
+no ROM, no window and no audio device (SDL's dummy drivers, a virtual gamepad
+and a null fast3d backend in `tests/platform/`):
+
+```sh
+cmake --build <host build dir> && ctest --test-dir <host build dir> --output-on-failure
+```
+
+The `tests` job of `.github/workflows/switch.yml` does exactly that on every
+push. `-DGE007_BUILD_TESTS=OFF` skips them; the Switch build never has them.
+`-DGE007_ROM_TESTS=ON` is the hook for tests that need the ROM (local only; the
+ROM is never in the repo, tests read its path from `GE007_ROM`); none exist yet.
+A test is a `tests/test_<area>.c` with a `main()` (helpers in `tests/ge_test.h`)
+and one `ge_add_test()` line in `tests/CMakeLists.txt`.
+
 ---
 
 ## 4. Generate the PC asset sidecars (required to run)
