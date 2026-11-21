@@ -47,6 +47,8 @@ int optionsMenuUpdateBusy(void);
 const char* optionsMenuUpdateStatus(void);
 int optionsMenuWheel(void);
 float portFovHorizDegrees(int pct);
+void portCrosshairTint(int* r, int* g, int* b);
+int portCrosshairPicture(int style, const unsigned char** px);
 int inputCrosshairCursorOn(void);
 int optionsMenuProfileAvailable(void);
 }
@@ -290,6 +292,8 @@ extern "C" void menuBindGame(void) {   /* the menu reads and writes the game's v
     menu::setKeyBinding(keyText, keyBegin, keyActive);
     menu::setActionHandler(doAction);
     menu::setReadout(readout);
+    menu::setTint(portCrosshairTint);
+    menu::setPicture(portCrosshairPicture);
 }
 
 extern "C" int menuTakeCloseRequest(void) {

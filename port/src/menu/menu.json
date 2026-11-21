@@ -143,7 +143,7 @@
         { "id": "dzr", "key": "Input.PadDeadzoneR", "label": "Right stick deadzone", "type": "slider", "min": 0, "max": 100, "step": 1, "per": 300, "suffix": "%" },
         { "id": "south", "key": "Input.PadSouthpaw", "label": "Southpaw", "type": "toggle" },
         { "id": "trigger", "key": "Input.PadTriggerPct", "label": "Trigger threshold", "type": "slider", "min": 1, "max": 99, "step": 1, "suffix": "%" },
-        { "id": "rumble", "key": "Input.RumbleScale", "label": "Vibration", "type": "slider", "min": 0, "max": 100, "step": 5, "div": 100, "suffix": "%" },
+        { "id": "rumble", "key": "Input.RumbleScale", "label": "Vibration", "type": "slider", "min": 0, "max": 100, "step": 5, "per": 0.01, "suffix": "%" },
         { "id": "reset_lookandsticks", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
       ] },
       { "group": "Keyboard and mouse", "show": "platform == 'pc'" },
@@ -204,6 +204,7 @@
         { "id": "reset_screen", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
       ] },
       { "name": "Crosshair", "controls": [
+        { "id": "xpreview", "type": "diagram", "widget": "crosshair", "label": "" },
         { "id": "xshow", "key": "Video.CrosshairHide", "label": "Show crosshair", "type": "choice",
           "options": [ { "id": "on", "label": "On", "value": 0 }, { "id": "off", "label": "Off", "value": 1 } ] },
         { "id": "xalways", "key": "Video.CrosshairPersistent", "label": "Always on", "type": "toggle" },
@@ -212,7 +213,7 @@
         { "id": "xred", "key": "Video.CrosshairRed", "label": "Red", "type": "slider", "min": 0, "max": 255, "step": 5, "show": "xcolor == 'custom'" },
         { "id": "xgreen", "key": "Video.CrosshairGreen", "label": "Green", "type": "slider", "min": 0, "max": 255, "step": 5, "show": "xcolor == 'custom'" },
         { "id": "xblue", "key": "Video.CrosshairBlue", "label": "Blue", "type": "slider", "min": 0, "max": 255, "step": 5, "show": "xcolor == 'custom'" },
-        { "id": "xsize", "key": "Video.CrosshairSize", "label": "Size", "type": "slider", "min": 50, "max": 200, "step": 5, "suffix": "%" },
+        { "id": "xsize", "key": "Video.CrosshairSize", "label": "Size", "type": "slider", "min": 10, "max": 100, "step": 5, "suffix": "%" },
         { "id": "xstyle", "key": "Video.CrosshairStyle", "label": "Style", "type": "choice",
           "options": [ { "id": "original", "label": "Original", "value": 0 }, { "id": "thin", "label": "Thin cross", "value": 1 } ] },
         { "id": "xalpha", "key": "Video.CrosshairAlpha", "label": "Opacity", "type": "slider", "min": 0, "max": 100, "step": 5, "suffix": "%" },

@@ -48,6 +48,9 @@ std::string g_actionFired;   /* the id of the last action control activated (the
 std::string g_selId;         /* the select whose list is open, or "" */
 int g_ownerSeat = -1;
 float g_padUv[4] = { 0, 0, 0, 0 }, g_padAspect = 0;
+/* how far a wheel notch scrolls an area that has nothing to select (the release text, a form of text only) */
+float wheelScrollStep(float wheel, float u) { return wheel * 6.0f * u; }
+
 bool g_updPanel = false; /* the release text is open (in the first menu) */
 bool g_root = true;     /* the first menu: Resume / Options / Restart / Quit */
 int g_rootSel = 0, g_rootArmed = -1;
@@ -59,6 +62,8 @@ std::string g_capId;
 int g_capSlot = 0, g_slotSel = 0;
 bool g_capturing = false;   /* a key or button is being captured: the menu keeps still */
 bool (*g_bindGet)(const char*, double*) = nullptr;
+int (*g_picture)(int, const unsigned char**) = nullptr;   /* the crosshair sprite: 32x32 texels of RGBA */
+void (*g_tint)(int*, int*, int*) = nullptr;   /* the crosshair colour the game would draw now (colour, custom, health) */
 const char* (*g_readout)(const char*, double) = nullptr;   /* a note computed by the game for a slider ("hfov") */
 void (*g_bindSet)(const char*, double) = nullptr;
 std::map<std::string, double> g_synced;   /* control id -> the value last agreed with the game */
@@ -190,8 +195,9 @@ void drawToggle(ImDrawList* dl, const Control& c, int fi, float x, float y, floa
     if (on) {
         const float k = s * 0.18f;
         const ImU32 col = disabled ? kDisabled : kGold;
-        dl->AddLine(ImVec2(x + s * 0.2f, y + s * 0.52f), ImVec2(x + s * 0.42f, y + s * 0.74f), col, k);
-        dl->AddLine(ImVec2(x + s * 0.42f, y + s * 0.74f), ImVec2(x + s * 0.82f, y + s * 0.26f), col, k);
+        /* one polyline, so the two strokes join at the corner (two thick lines leave a notch there) */
+        const ImVec2 tick[3] = { ImVec2(x + s * 0.2f, y + s * 0.52f), ImVec2(x + s * 0.42f, y + s * 0.74f), ImVec2(x + s * 0.82f, y + s * 0.26f) };
+        dl->AddPolyline(tick, 3, col, ImDrawFlags_None, k);
     }
     text(dl, g_body, 1.6f * u, ImVec2(x + s + 0.9f * u, y + (s - 1.6f * u) * 0.5f - 0.1f * u), disabled ? kDisabled : kInk, on ? tr("ON").c_str() : tr("OFF").c_str());
 }
@@ -262,8 +268,59 @@ void drawBind(ImDrawList* dl, const Control& c, int fi, float x, float y, float 
     }
 }
 
+/* The crosshair as the game draws it: a square of (32 / 240) of the screen height times the size, in the chosen style, colour
+ * and opacity (the game draws it at 0x6E / 255, times the opacity). The shape is a drawing of it, not the game's sprite. */
+void drawCrosshairPreview(ImDrawList* dl, float x, float y, float w, float h, float u) {
+    const float screenH = ImGui::GetIO().DisplaySize.y;
+    const float side = screenH * (32.0f / 240.0f) * (float)g_state.get("xsize") / 100.0f;
+    const int style = (int)g_state.get("xstyle");
+    int r = 255, g = 0, b = 0;
+    if (g_tint) g_tint(&r, &g, &b);
+    const int tintR = r, tintG = g, tintB = b;   /* what the game multiplies the sprite by */
+    if ((int)g_state.get("xcolor") == 0 && (int)g_state.get("xhealth") == 0) { r = 255; g = 0; b = 0; }   /* the drawn cross: Original is red (its tint is the identity) */
+    const float a = (110.0f / 255.0f) * (float)g_state.get("xalpha") / 100.0f;
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), IM_COL32(8, 9, 7, 200));
+    dl->AddRect(ImVec2(x, y), ImVec2(x + w, y + h), kRule);
+    const ImVec2 c(x + w * 0.5f, y + h * 0.5f);
+    const float half = side * 0.5f;
+    const ImU32 col = IM_COL32(r, g, b, (int)(a * 255.0f + 0.5f));
+    const unsigned char* tex = nullptr;
+    if (g_picture && g_picture(style, &tex) && tex) {
+        /* the game's own sprite (red in the original): the Original colour is the texel's own colour times the identity tint; any
+         * other colour (or the health colour) replaces it and keeps the texel's alpha as the shape */
+        const bool recolor = (int)g_state.get("xcolor") != 0 || (int)g_state.get("xhealth") != 0;
+        const float t = side / 32.0f, ox = c.x - half, oy = c.y - half;
+        dl->PushClipRect(ImVec2(x, y), ImVec2(x + w, y + h), true);
+        for (int j = 0; j < 32; j++)
+            for (int i = 0; i < 32; i++) {
+                const unsigned char* tp = tex + 4 * (j * 32 + i);
+                const int al = tp[3];
+                if (al == 0) continue;
+                const int cr = recolor ? tintR : tp[0] * tintR / 255, cg = recolor ? tintG : tp[1] * tintG / 255, cb = recolor ? tintB : tp[2] * tintB / 255;
+                const int ca = (int)((al / 255.0f) * a * 255.0f + 0.5f);
+                dl->AddRectFilled(ImVec2(ox + i * t, oy + j * t), ImVec2(ox + (i + 1) * t + 0.6f, oy + (j + 1) * t + 0.6f), IM_COL32(cr, cg, cb, ca));
+            }
+        dl->PopClipRect();
+        const std::string note2 = tr("The size the game draws it at") + ": " + std::to_string((int)g_state.get("xsize")) + "%";
+        dl->AddText(g_body, 1.4f * u, ImVec2(x + 1.0f * u, y + h - 2.2f * u), kMut, note2.c_str());
+        return;
+    }
+    const float th = style == 1 ? maxf(1.0f, half * 0.05f) : maxf(1.0f, half * 0.12f);
+    const float in = style == 1 ? 0.0f : half * 0.30f;   /* the original has a gap at the centre, the thin cross is whole */
+    const float out = half * 0.9f;
+    dl->PushClipRect(ImVec2(x, y), ImVec2(x + w, y + h), true);
+    dl->AddLine(ImVec2(c.x - out, c.y), ImVec2(c.x - in, c.y), col, th);
+    dl->AddLine(ImVec2(c.x + in, c.y), ImVec2(c.x + out, c.y), col, th);
+    dl->AddLine(ImVec2(c.x, c.y - out), ImVec2(c.x, c.y - in), col, th);
+    dl->AddLine(ImVec2(c.x, c.y + in), ImVec2(c.x, c.y + out), col, th);
+    dl->PopClipRect();
+    const std::string note = tr("The size the game draws it at") + ": " + std::to_string((int)g_state.get("xsize")) + "%";
+    dl->AddText(g_body, 1.4f * u, ImVec2(x + 1.0f * u, y + h - 2.2f * u), kMut, note.c_str());
+}
+
 /* the gamepad drawn with what each button does in the chosen layout: the left half's labels on the left, the right half's on the right */
 void drawDiagram(ImDrawList* dl, const Control& c, float x, float y, float w, float u) {
+    if (c.widget == "crosshair") { drawCrosshairPreview(dl, x, y, w, 16.0f * u, u); return; }
     auto fit = g_model.byId.find(c.follows);
     if (fit == g_model.byId.end()) return;
     const Control& f = *fit->second;
@@ -454,6 +511,8 @@ void setKeyBinding(std::string (*text)(const char*, int), void (*begin)(const ch
 void setActionHandler(void (*handler)(const char*)) { g_actionHandler = handler; }
 
 void setReadout(const char* (*f)(const char*, double)) { g_readout = f; }
+void setTint(void (*f)(int*, int*, int*)) { g_tint = f; }
+void setPicture(int (*f)(int, const unsigned char**)) { g_picture = f; }
 
 void setBinding(bool (*get)(const char*, double*), void (*set)(const char*, double)) {
     g_bindGet = get;
@@ -510,7 +569,7 @@ double g_updArmedAt = 0.0;
 
 /* a release's text: the version, then the notes, scrolled with up / down; A opens the page, B goes back */
 void drawUpdatePanel(ImDrawList* dl, float W, float H, float u, float hh) {
-    const float footH = 5.0f * u, px = 1.9f * u, lineH = px * 1.35f;
+    const float footH = 4.0f * u, px = 1.9f * u, lineH = px * 1.35f;
     const bool up = pressed(ImGuiKey_UpArrow, ImGuiKey_GamepadDpadUp, ImGuiKey_GamepadLStickUp, true);
     const bool down = pressed(ImGuiKey_DownArrow, ImGuiKey_GamepadDpadDown, ImGuiKey_GamepadLStickDown, true);
     const bool ok = pressed(ImGuiKey_Enter, ImGuiKey_GamepadFaceDown, ImGuiKey_None, false);
@@ -576,7 +635,7 @@ void drawUpdatePanel(ImDrawList* dl, float W, float H, float u, float hh) {
     while (!lines.empty() && lines.back().s.empty()) lines.pop_back();
     const float y0 = top + 4.2f * u, areaH = H - footH - y0 - 1.0f * u;
     const int visible = (int)(areaH / lineH), total = (int)lines.size(), maxScroll = total > visible ? total - visible : 0;
-    g_updScroll += ImGui::GetIO().MouseWheel * -3.0f;
+    g_updScroll -= wheelScrollStep(ImGui::GetIO().MouseWheel, u) / lineH;   /* the release text has nothing to select: the wheel scrolls it */
     if (up) g_updScroll -= 1.0f;
     if (down) g_updScroll += 1.0f;
     if (g_updScroll < 0) g_updScroll = 0;
@@ -603,7 +662,7 @@ void drawRoot(ImDrawList* dl, float W, float H, float u, float hh) {
     for (int i = 0; i < 6; i++)
         if (i != 4 || g_state.pc) shown.push_back(i);
     const int n = (int)shown.size();
-    const float footH = 5.0f * u, bw = 30.0f * u, bh = 5.4f * u, gap = 1.2f * u;
+    const float footH = 4.0f * u, bw = 30.0f * u, bh = 5.4f * u, gap = 1.2f * u;
     const bool up = !g_capturing && pressed(ImGuiKey_UpArrow, ImGuiKey_GamepadDpadUp, ImGuiKey_GamepadLStickUp, true);
     const bool down = !g_capturing && pressed(ImGuiKey_DownArrow, ImGuiKey_GamepadDpadDown, ImGuiKey_GamepadLStickDown, true);
     const bool ok = pressed(ImGuiKey_Enter, ImGuiKey_GamepadFaceDown, ImGuiKey_None, false);
@@ -725,7 +784,7 @@ void draw(float W, float H) {
                                 IM_COL32(16, 17, 14, 245), IM_COL32(26, 28, 22, 240));
 
     /* ---- header ---- */
-    const float hh = 5.6f * u;
+    const float hh = 4.6f * u;
     dl->AddRectFilled(ImVec2(0, 0), ImVec2(W, hh), IM_COL32(13, 14, 12, 208));
     dl->AddLine(ImVec2(0, hh), ImVec2(W, hh), kGoldDim, 1.0f);
     {
@@ -747,7 +806,7 @@ void draw(float W, float H) {
     if (!g_root && !g_capturing && (ImGui::IsKeyPressed(ImGuiKey_GamepadL1) || ImGui::IsKeyPressed(ImGuiKey_PageUp))) g_tab = (g_tab + nTabs - 1) % nTabs, g_entry = 0, g_focus = -1;
     if (!g_root && !g_capturing && (ImGui::IsKeyPressed(ImGuiKey_GamepadR1) || ImGui::IsKeyPressed(ImGuiKey_PageDown))) g_tab = (g_tab + 1) % nTabs, g_entry = 0, g_focus = -1;
     {
-        const float tw = 12.0f * u, th = 3.6f * u, gap = 0.9f * u;
+        const float tw = 12.0f * u, th = 2.8f * u, gap = 0.9f * u;   /* the tabs: shorter buttons, same place */
         float x = (W - (nTabs * tw + (nTabs - 1) * gap)) * 0.5f;
         for (int i = 0; i < (g_root ? 0 : nTabs); i++) {
             char id[16];
@@ -781,7 +840,7 @@ void draw(float W, float H) {
     if (g_root) {
         drawRoot(dl, W, H, u, hh);
         static const char* rootHints[2][2] = { { "A", "Select" }, { "B", "Resume" } };
-        if (!g_updPanel) drawFooter(dl, W, H, 5.0f * u, u, rootHints, 2);   /* the release text has its own */
+        if (!g_updPanel) drawFooter(dl, W, H, 4.0f * u, u, rootHints, 2);   /* the release text has its own */
         ImGui::End();
         return;
     }
@@ -798,7 +857,7 @@ void draw(float W, float H) {
     auto controlsOf = [&](int visEntry) {
         std::vector<const Control*> cs;
         for (const Control& c : tab.items[vis.entries[visEntry]].controls)
-            if (controlVisible(c, g_model, g_state)) cs.push_back(&c);
+            if (controlVisible(c, g_model, g_state) && c.widget != "crosshair") cs.push_back(&c);   /* the preview is pinned on the left */
         return cs;
     };
     vis.controls = controlsOf(g_entry);
@@ -812,6 +871,19 @@ void draw(float W, float H) {
         bool ok = pressed(ImGuiKey_Enter, ImGuiKey_GamepadFaceDown, ImGuiKey_None, false);
         bool back = pressed(ImGuiKey_Backspace, ImGuiKey_GamepadFaceRight, ImGuiKey_None, false);
         if (g_capturing) up = down = left = right = ok = back = false;
+        {   /* The mouse wheel: where there is something to select it is the up / down keys, and the scroll follows the
+             * selection (the one thing that moves the scroll); where there is nothing to select (text only) it scrolls. */
+            const ImGuiIO& wio = ImGui::GetIO();
+            if (wio.MouseWheel != 0 && g_selId.empty() && !g_capturing) {
+                const bool overForm = wio.MousePos.x > 32.9f * u;   /* right of the entries' column */
+                if (overForm && controlsOf(g_entry).empty()) g_scrollTarget -= wheelScrollStep(wio.MouseWheel, u);   /* a form with no control in it */
+                else if (overForm && g_focus < 0) g_focus = 0;   /* the first notch takes the first control */
+                else {
+                    if (!overForm && g_focus >= 0) g_focus = -1;   /* over the entries: back to the list */
+                    if (wio.MouseWheel < 0) down = true; else up = true;
+                }
+            }
+        }
         if (!g_selId.empty()) {   /* an open list takes the keys: up / down move in it, A picks, B closes it */
             auto sit = g_model.byId.find(g_selId);
             const std::vector<int> offered = sit == g_model.byId.end() ? std::vector<int>() : visibleOptions(*sit->second, g_model, g_state);
@@ -825,7 +897,7 @@ void draw(float W, float H) {
         } else if (g_focus < 0) {
             if (up && g_entry > 0) { g_entry--; g_scrollTarget = 0; }
             if (down && g_entry < (int)vis.entries.size() - 1) { g_entry++; g_scrollTarget = 0; }
-            if ((right || ok) && !controlsOf(g_entry).empty()) g_focus = 0;
+            if (ok && !controlsOf(g_entry).empty()) g_focus = 0;   /* A goes into the form; Right does not, since Left would not come back */
             if (back) { g_root = true; g_rootSel = 1; g_rootArmed = -1; }
             vis.controls = controlsOf(g_entry);
         } else {
@@ -847,7 +919,7 @@ void draw(float W, float H) {
         }
     }
 
-    const float footH = 5.0f * u, bodyTop = hh, bodyBot = H - footH;
+    const float footH = 4.0f * u, bodyTop = hh, bodyBot = H - footH;
     const float leftX = 3.1f * u, leftW = 28.0f * u, divX = leftX + leftW + 1.8f * u;
     dl->AddLine(ImVec2(divX, bodyTop + 1.2f * u), ImVec2(divX, bodyBot - 1.2f * u), kGoldDim, 1.0f);
 
@@ -885,13 +957,23 @@ void draw(float W, float H) {
         }
     }
 
+    /* ---- the crosshair preview, pinned under the entries where the changes show while they are made ---- */
+    {
+        const Item& pe = tab.items[vis.entries[g_entry]];
+        for (const Control& pc : pe.controls)
+            if (pc.widget == "crosshair" && controlVisible(pc, g_model, g_state)) {
+                drawCrosshairPreview(dl, leftX, bodyBot - 14.4f * u, leftW, 13.2f * u, u);
+                break;
+            }
+    }
+
     /* ---- the form of the selected entry, scrolled to keep the focused control in view ---- */
     {
         const Item& e = tab.items[vis.entries[g_entry]];
         const float fx = divX + 2.6f * u, fw = W - fx - 2.6f * u;
         float y = bodyTop + 2.2f * u;
-        text(dl, g_head, 2.9f * u, ImVec2(fx, y), kInk, upper(tr(e.name)).c_str());
-        y += 3.6f * u;
+        text(dl, g_head, 1.3f * u, ImVec2(fx, y + 0.4f * u), kInk, upper(tr(e.name)).c_str());
+        y += 2.6f * u;
         dl->AddLine(ImVec2(fx, y), ImVec2(fx + fw, y), kGold, 1.0f);
         y += 1.0f * u;
         const float top = y, bottom = bodyBot - 1.4f * u;
@@ -903,7 +985,7 @@ void draw(float W, float H) {
         for (const Control* c : vis.controls) {
             const std::string help = tr(helpFor(*c, g_state.get(c->id)));
             float rowH = 4.6f * u;
-            if (c->type == CT_DIAGRAM) rowH = 27.0f * u;
+            if (c->type == CT_DIAGRAM) rowH = (c->widget == "crosshair" ? 17.0f : 27.0f) * u;
             if (c->type == CT_CHOICE) {
                 std::vector<Slot> slots;
                 const float ch = layoutChoice(*c, 0, availW, u, &slots);
@@ -914,14 +996,13 @@ void draw(float W, float H) {
             rows.push_back({ cy, total, helpH });
             cy += total + 0.4f * u;
         }
-        if (g_focus >= 0 && g_focus < (int)rows.size()) {   /* keep the focused row in view */
+        if (g_focus >= 0 && g_focus < (int)rows.size()) {   /* keep the focused row in view: the only thing that moves the scroll */
             const float rt = rows[g_focus].y, rb = rt + rows[g_focus].h;
             if (rt < g_scrollTarget) g_scrollTarget = rt;
             if (rb > g_scrollTarget + (bottom - top)) g_scrollTarget = rb - (bottom - top);
         }
         const float maxScroll = maxf(0.0f, cy - (bottom - top));
         ImGuiIO& io = ImGui::GetIO();
-        if (io.MouseWheel != 0 && io.MousePos.x > divX && io.MousePos.y > top && io.MousePos.y < bottom) g_scrollTarget -= io.MouseWheel * 6.0f * u;
         if (g_scrollTarget > maxScroll) g_scrollTarget = maxScroll;
         if (g_scrollTarget < 0) g_scrollTarget = 0;
         g_scroll += (g_scrollTarget - g_scroll) * 0.35f;

@@ -673,7 +673,7 @@ PD_CONSTRUCTOR static void videoConfigInit(void)
     configRegisterInt("Video.CrosshairRed",   &cfgCrosshairRed,   0, 255);
     configRegisterInt("Video.CrosshairGreen", &cfgCrosshairGreen, 0, 255);
     configRegisterInt("Video.CrosshairBlue",  &cfgCrosshairBlue,  0, 255);
-    configRegisterInt("Video.CrosshairSize",  &cfgCrosshairSize, 50, 200);
+    configRegisterInt("Video.CrosshairSize",  &cfgCrosshairSize, 10, 100);
     configRegisterInt("Video.CrosshairStyle", &cfgCrosshairStyle, 0, 1);
     configRegisterInt("Video.CrosshairAlpha", &cfgCrosshairAlpha, 0, 100);        /* D511 */
     configRegisterInt("Video.CrosshairHealthColor", &cfgCrosshairHealth, 0, 1);   /* D511 */

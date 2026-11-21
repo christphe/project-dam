@@ -30,6 +30,8 @@ void setOptionLabels(const char* id, const std::vector<std::string>& labels);   
 void setKeyBinding(std::string (*text)(const char* key, int slot), void (*begin)(const char* key, int slot), bool (*active)());
 /* An action control was activated: the game does it (centre the window, reset a section...). */
 void setReadout(const char* (*f)(const char* name, double cfg));   /* a note beside a slider value, computed by the game */
+void setPicture(int (*f)(int style, const unsigned char** texels));   /* the crosshair sprite, for the preview */
+void setTint(void (*f)(int* r, int* g, int* b));   /* the crosshair colour in use, for the preview */
 void setActionHandler(void (*handler)(const char* key));
 /* The weapon / gadget wheel of the Modern control style, drawn over the game: the item names, the picked one (-1 = none). */
 void drawWheel(float W, float H, int seat, float x0, float y0, float x1, float y1, const char* title, const std::vector<std::string>& names, int sel);

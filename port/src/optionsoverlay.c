@@ -2757,7 +2757,7 @@ int optionsMenuUpdateInstallable(void)   /* the console downloads and replaces t
 int optionsMenuUpdateBusy(void) { return !updateInstallIdle(); }   /* downloading, or done */
 const char *optionsMenuUpdateStatus(void) { return updateInstallStatus(); }
 const char *optionsMenuVersion(void) { return updateCheckRunning(); }
-int optionsMenuInStage(void) { return current_menu == GE_MENU_RUN_STAGE; }
+int optionsMenuInStage(void) { return current_menu == GE_MENU_RUN_STAGE || current_menu == MENU_INVALID; }   /* MENU_INVALID: a level started directly (-level_XX), the front end never ran */
 
 int optionsMenuAudioCount(void) { return 1 + audioDeviceRefresh(); }
 
@@ -3859,6 +3859,62 @@ static Gfx *overlayEmitLocked(void);
  * this 320-wide overlay canvas, with gunDrawSight's native-widescreen x fix.
  * Drawn after the card (and outside the centred-aspect block) so it floats over
  * everything and follows the real mouse across the whole window. */
+/* The crosshair sprite the game draws (32x32, RGBA per texel), for the menu's preview: texSelect builds the display list the
+ * game would, and its G_SETTIMG says where the texels are and how they are packed; they are read the way the renderer's own
+ * import_texture_* read them. Decoded once per style. Returns 0 when it cannot be read. */
+#include "portaddr.h"
+int portCrosshairPicture(int style, const unsigned char **px)
+{
+    static unsigned char cache[2][32 * 32 * 4];
+    static int state[2];   /* 0 not tried, 1 read, -1 failed */
+    extern struct sImageTableEntry *betacrosshairimage;
+    if (style != 1) style = 0;
+    if (state[style] == 0) {
+        state[style] = -1;
+        struct sImageTableEntry *e = (style == 1 && betacrosshairimage) ? betacrosshairimage : crosshairimage;
+        if (e && e->width == 32 && e->height == 32) {
+            Gfx buf[96];
+            memset(buf, 0, sizeof buf);
+            Gfx *p = buf;
+            texSelect(&p, e, 4, 0, 0);
+            for (Gfx *q = buf; q < p && q < buf + 96; q++) {
+                if ((unsigned char)(q->words.w0 >> 24) != (unsigned char)G_SETTIMG) continue;
+                const int fmt = (int)((q->words.w0 >> 21) & 7), siz = (int)((q->words.w0 >> 19) & 3);
+                const uintptr_t w1 = (uintptr_t)q->words.w1;
+                /* a host pointer as it is, an N64 address (RAM below 8 MB, or a 32-bit one) through the port's window */
+                const unsigned char *a = w1 > 0xFFFFFFFFu ? (const unsigned char *)w1
+                                       : (const unsigned char *)portN64ToHost(w1 < 0x800000 ? (uint32_t)(w1 + 0x80000000u) : (uint32_t)w1);
+                sysLogPrintf(LOG_NOTE, "crosshair preview: style %d image format %d size %d", style, fmt, siz);
+                unsigned char *o = cache[style];
+                int ok = a != NULL;
+                for (int k = 0; k < 32 * 32 && ok; k++) {
+                    int r, g, b, al;
+                    if (fmt == 0 && siz == 3) {   /* RGBA32: a word the renderer swaps (PD_BE32), then R G B A from its low byte up */
+                        uint32_t wd;
+                        memcpy(&wd, a + 4 * k, 4);
+                        wd = __builtin_bswap32(wd);   /* PD_BE32 on a little-endian host */
+                        r = wd & 255; g = (wd >> 8) & 255; b = (wd >> 16) & 255; al = (wd >> 24) & 255;
+                    }
+                    else if (fmt == 0 && siz == 2) { const int v = (a[2 * k] << 8) | a[2 * k + 1]; r = ((v >> 11) & 31) * 255 / 31; g = ((v >> 6) & 31) * 255 / 31; b = ((v >> 1) & 31) * 255 / 31; al = (v & 1) * 255; }   /* RGBA16 */
+                    else if (fmt == 3 && siz == 2) { r = g = b = a[2 * k]; al = a[2 * k + 1]; }                                   /* IA16 */
+                    else if (fmt == 3 && siz == 1) { r = g = b = (a[k] >> 4) * 17; al = (a[k] & 15) * 17; }                       /* IA8 */
+                    else if (fmt == 3 && siz == 0) { const int v = (a[k / 2] >> (4 - (k % 2) * 4)) & 15; r = g = b = (v >> 1) * 255 / 7; al = (v & 1) * 255; }   /* IA4 */
+                    else if (fmt == 4 && siz == 1) { r = g = b = al = a[k]; }                                                      /* I8 */
+                    else if (fmt == 4 && siz == 0) { const int v = (a[k / 2] >> (4 - (k % 2) * 4)) & 15; r = g = b = al = v * 17; }   /* I4 */
+                    else { ok = 0; break; }
+                    o[4 * k] = (unsigned char)r; o[4 * k + 1] = (unsigned char)g; o[4 * k + 2] = (unsigned char)b; o[4 * k + 3] = (unsigned char)al;
+                }
+                if (ok) state[style] = 1;
+                else sysLogPrintf(LOG_NOTE, "crosshair preview: format %d size %d is not read", fmt, siz);
+                break;
+            }
+        }
+    }
+    if (state[style] != 1) return 0;
+    *px = cache[style];
+    return 1;
+}
+
 static Gfx *drawCrosshairPointer(Gfx *gdl, s32 W, s32 H)
 {
     if (!inputCrosshairCursorOn() || !crosshairimage || !SDL_GetMouseFocus()) return gdl;
