@@ -1,0 +1,61 @@
+# CTest binaries. One executable per area (each its own process, so the
+# game globals start clean), all linking the game core objects (ge007_core)
+# plus the same libraries as the shipping executable. The global linker flags
+# (no-PIE, -Ttext-segment, ...) are CMAKE_EXE_LINKER_FLAGS and apply here too.
+# Not configured on the Switch (see the top-level CMakeLists.txt).
+
+# GE_CORE_LIBS: LIBS plus (Vulkan builds) volk and the SPIR-V pack.
+function(ge_add_test name)
+  add_executable(${name} ${ARGN} platform/null_host.c $<TARGET_OBJECTS:ge007_core>)
+  target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                                             "${CMAKE_CURRENT_SOURCE_DIR}/platform"
+                                             "${CMAKE_SOURCE_DIR}/port/src"
+                                             "${CMAKE_SOURCE_DIR}/port/fast3d")
+  target_link_libraries(${name} ${GE_CORE_LIBS})
+  # The tests have their own int main(void): keep SDL from renaming it to
+  # SDL_main on Windows.
+  target_compile_definitions(${name} PRIVATE SDL_MAIN_HANDLED)
+  set_target_properties(${name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  add_test(NAME ${name} COMMAND ${name})
+  # No window, no audio device: SDL's dummy drivers (also set by tests/platform).
+  set_tests_properties(${name} PROPERTIES
+    ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
+    TIMEOUT 60)
+endfunction()
+
+# A PURE test: links only the sources it is given (+ libm), never the core.
+# For the code that is pure by design (port/src/input/*.c: no SDL, no game
+# globals), so it needs no platform, no ROM, no game state.
+function(ge_add_pure_test name)
+  add_executable(${name} ${ARGN})
+  target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                                             "${CMAKE_SOURCE_DIR}/port/src")
+  target_link_libraries(${name} m)
+  set_target_properties(${name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  add_test(NAME ${name} COMMAND ${name})
+  set_tests_properties(${name} PROPERTIES TIMEOUT 60)
+endfunction()
+
+# The platform the tests run on: a null graphics backend, a fake joystick feed.
+set(GE_TEST_PLATFORM platform/null_platform.c platform/null_gfx.c)
+
+ge_add_test(test_core_link   test_core_link.c)
+ge_add_test(test_platform    test_platform.c ${GE_TEST_PLATFORM})
+ge_add_test(test_updatecheck test_updatecheck.c)
+ge_add_test(test_defaults    test_defaults.c ${GE_TEST_PLATFORM})
+
+# Input strategies (port/src/input/): pure, no core.
+set(GE_INPUT_DIR "${CMAKE_SOURCE_DIR}/port/src/input")
+ge_add_pure_test(test_input_modern test_input_modern.c
+  ${GE_INPUT_DIR}/input_common.c ${GE_INPUT_DIR}/style_modern.c ${GE_INPUT_DIR}/n64bridge.c)
+ge_add_pure_test(test_input_enhanced test_input_enhanced.c
+  ${GE_INPUT_DIR}/input_common.c ${GE_INPUT_DIR}/style_enhanced.c ${GE_INPUT_DIR}/n64bridge.c)
+ge_add_pure_test(test_input_original test_input_original.c
+  ${GE_INPUT_DIR}/input_common.c ${GE_INPUT_DIR}/style_original.c ${GE_INPUT_DIR}/n64bridge.c)
+
+if(GE007_ROM_TESTS)
+  # Tests that read the ROM: local opt-in only (the ROM is never in the repo).
+  # Add them here with ge_add_test() and make them skip unless GE007_ROM names
+  # the .z64; none exist yet.
+  message(STATUS "GE007_ROM_TESTS=ON: ROM-backed tests enabled (set GE007_ROM=<.z64>)")
+endif()

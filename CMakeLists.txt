@@ -342,8 +342,9 @@ if(MINGW AND CMAKE_CROSSCOMPILING)
   # external ("undefined reference to objectiveGetStatus_WEAK", chrai.c ->
   # objective_status.c); MSYS2's patched binutils does. Define the one
   # cross-TU alias at link time instead (same idea as macho_weak_aliases.s).
-  set(CMAKE_EXE_LINKER_FLAGS
-      "${CMAKE_EXE_LINKER_FLAGS} -Wl,--defsym=objectiveGetStatus_WEAK=get_status_of_objective")
+  # Only on the binaries that contain the game (ge007, the core tests): a
+  # --defsym to a symbol the link does not have fails (the pure tests).
+  set(GE_GAME_LINK_FLAGS "-Wl,--defsym=objectiveGetStatus_WEAK=get_status_of_objective")
 endif()
 switch_host_headers()   # goldeneye-nx hook: newlib header paths
 configure_file(
@@ -945,8 +946,29 @@ add_subdirectory(port/convert)
 list(INSERT LIBS 0 ge007_convert)
 
 set(BIN_NAME "ge007${BIN_REGION}.${TARGET_ARCH}")
-add_executable(ge007 ${SRC})
-target_link_libraries(ge007 ${LIBS})
+
+# Off the Switch the game is an OBJECT library (everything but main) plus the
+# executable. OBJECT, not STATIC: several port files register their config only
+# through PD_CONSTRUCTOR, and a static archive would drop those objects. The
+# executable links exactly the same objects as before; the CTest binaries
+# (tests/) link the same objects with their own main.
+# The Switch build is untouched: no library, one executable from SRC (an object
+# library would compile the objects -fPIC instead of the executable's -fPIE).
+set(GE_CORE_LIBS ${LIBS} ${GE_GAME_LINK_FLAGS})   # what a binary containing the core objects links
+if(GE_SWITCH)
+  add_executable(ge007 ${SRC})
+  target_link_libraries(ge007 ${LIBS})
+else()
+  set(SRC_CORE ${SRC})
+  list(FILTER SRC_CORE EXCLUDE REGEX "/port/src/main[.]c$")
+  set(SRC_MAIN "${CMAKE_SOURCE_DIR}/port/src/main.c")
+  add_library(ge007_core OBJECT ${SRC_CORE})
+  # Compile-time usage requirements of the libraries (include dirs, defines).
+  # An object library is not linked.
+  target_link_libraries(ge007_core PRIVATE ${LIBS})
+  add_executable(ge007 ${SRC_MAIN} $<TARGET_OBJECTS:ge007_core>)
+  target_link_libraries(ge007 ${LIBS} ${GE_GAME_LINK_FLAGS})
+endif()
 if(GE_VULKAN)
   # volk is plain host C: its own target, without the decomp's shadow headers
   # (port/shim, include/) or the forced versioninfo.h.
@@ -956,6 +978,7 @@ if(GE_VULKAN)
   target_link_libraries(ge007 ge_volk ${CMAKE_DL_LIBS})
   include("${CMAKE_SOURCE_DIR}/cmake/VulkanShaders.cmake")
   vulkan_shaders(ge007)   # SPIR-V shader pack (dkshgen + glslangValidator)
+  list(APPEND GE_CORE_LIBS ge_volk ${CMAKE_DL_LIBS} ge_vkpack)
 endif()
 set_target_properties(ge007 PROPERTIES OUTPUT_NAME "${BIN_NAME}")
 switch_package(ge007)   # goldeneye-nx hook: .nro (no-op off Switch)
@@ -970,3 +993,12 @@ if(WIN32)
 endif()
 
 message(STATUS "Output binary: ${BIN_NAME}")
+
+# Tests (docs/building.md, Tests): CTest binaries linking the core.
+# Never on the Switch (the console build is unchanged).
+option(GE007_BUILD_TESTS "Build the CTest test binaries (tests/)" ON)
+option(GE007_ROM_TESTS "Also build the tests that need a ROM (run with GE007_ROM=<path to the .z64>)" OFF)
+if(GE007_BUILD_TESTS AND NOT GE_SWITCH)
+  enable_testing()
+  add_subdirectory(tests)
+endif()

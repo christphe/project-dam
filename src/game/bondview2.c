@@ -5340,6 +5340,23 @@ void bondviewProcessInput(s8 stick_x, s8 stick_y, u16 buttons, u16 oldbuttons)
                         moveData.digitalStepBack = (!g_CurrentPlayer->insightaimmode)
                             && ((buttons & (D_JPAD | D_CBUTTONS)));
 
+#ifdef PORT
+                        /* #78 GameDirect: the port's left stick walks / strafes analog (not the digital C steps).
+                         * canLookAhead / canTurnTank make the movement below read analogWalk / analogStrafe. */
+                        {
+                            extern int portDirectMove(int playernum, int *walk, int *strafe);
+                            int dwalk, dstrafe;
+                            if (!g_CurrentPlayer->insightaimmode && g_PlayerIsInTank != 1
+                                && portDirectMove(get_cur_playernum(), &dwalk, &dstrafe)) {
+                                moveData.analogWalk = dwalk;
+                                moveData.analogStrafe = dstrafe;
+                                moveData.canLookAhead = moveData.canTurnTank = 1;
+                                moveData.digitalStepForward = moveData.digitalStepBack = 0;
+                                moveData.digitalStepLeft = moveData.digitalStepRight = 0;
+                            }
+                        }
+#endif
+
                         moveData.canNaturalPitch = !g_CurrentPlayer->insightaimmode;
 
                         if (g_PlayerIsInTank == 1)

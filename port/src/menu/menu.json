@@ -103,7 +103,7 @@
           "help": { "modern": "Right trigger fires, left trigger aims. Left face button reloads, top one switches weapon, bottom one uses. Click the right stick to crouch. Hold the left bumper for the weapon wheel and the right one for the gadget wheel, then pick with the right stick.", "enhanced": "The remastered layouts, with a free look stick.", "original": "The N64 control styles, as the game shipped them." } },
         { "id": "padmap_modern", "type": "diagram", "follows": "scheme", "label": "", "show": "scheme == 'modern'",
           "layouts": { "modern": { "_by": "position", "lt": "Aim", "rt": "Fire", "lb": "Weapon wheel", "rb": "Gadget wheel", "a": "Use", "x": "Reload", "y": "Next weapon", "rs": "Crouch", "lstick": "Move (slow strafe)", "rstick": "Look", "dpad": "Up / down: zoom"} } },
-        { "id": "preset", "key": "Input.PadPreset", "label": "Layout", "type": "choice", "show": "scheme == 'enhanced'",
+        { "id": "preset", "key": "Input.PadPreset", "label": "Layout", "type": "choice", "default": "jinx", "show": "scheme == 'enhanced'",
           "options": [ { "id": "jinx", "label": "1.1 Jinx", "value": 0 }, { "id": "christmas", "label": "1.2 Christmas", "value": 1 }, { "id": "frost", "label": "1.3 Frost", "value": 2 }, { "id": "elektra", "label": "1.4 Elektra", "value": 4 } ],
           "help": { "frost": "The two sticks swap roles.", "elektra": "The two sticks swap roles." } },
         { "id": "padmap", "type": "diagram", "follows": "preset", "label": "", "show": "scheme == 'enhanced'",
