@@ -206,7 +206,9 @@ def cmd_native(a, kind):
     data = ensure_native_data(exe)
     args = game_args(a)
     if kind == "linux" and os.name == "nt":
-        wsl = subprocess.run(["wsl", "wslpath", "-a", str(exe)], capture_output=True, text=True).stdout.strip()
+        wsl = subprocess.run(["wsl", "wslpath", "-a", exe.as_posix()], capture_output=True, text=True).stdout.strip()
+        if not wsl:                                         # backslashes would be eaten by the WSL shell
+            sys.exit("WSL could not translate " + str(exe))
         p = subprocess.Popen(["wsl", wsl] + args, cwd=str(exe.parent))
     else:
         p = subprocess.Popen([str(exe)] + args, cwd=str(exe.parent))
