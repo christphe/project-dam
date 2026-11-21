@@ -7,9 +7,12 @@
  * nothing for several seconds. This is a tiny stand-alone surface for that
  * window of time:
  *
- *   PC     a small SDL window: a progress bar, the percentage in the title bar.
- *          Messages use a native message box.
- *   Switch the libnx text console: a text progress bar. Messages wait for A.
+ * One 640x360 software canvas (bootscreen.c), shown the platform's own way:
+ *   PC     an SDL window with the game's own size (videoBootWindowGeometry).
+ *   Switch the libnx framebuffer, pixel-doubled to 1280x720.
+ * Progress, done and message screens are drawn on it; messages and the done
+ * screen wait for A (a key or a click on PC). With no window possible, PC
+ * messages fall back to a native message box.
  *
  * Everything degrades to the log when no display is available. Never touches
  * the game's renderer; bootscreenClose() releases it all before videoInit().

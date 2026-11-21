@@ -156,6 +156,9 @@ docker compose run --rm linux
 upstream's N64 matching-build environment, unrelated to these. When both
 files are present, `docker compose` reads `compose.yaml`.)
 
+For day-to-day work, `python tools/dev.py` wraps these builds and the runs that follow them
+(console over nxlink, Switch emulator, native builds): see [`docs/wiki/dev-py.md`](wiki/dev-py.md).
+
 #### Nintendo Switch
 
 `.github/workflows/switch.yml` runs the same build in the same pinned image on

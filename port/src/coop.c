@@ -1,5 +1,5 @@
 /*
- * coop.c -- opt-in 2 to 4 player split-screen co-op campaign (Switch only; D960).
+ * coop.c -- opt-in 2 to 4 player split-screen co-op campaign (D960; Switch and PC since #84).
  *
  * The engine has no mode flag: "mission or versus" is inferred from
  * getPlayerCount(). Co-op runs the solo campaign with 2 to 4 players, so the
@@ -7,7 +7,7 @@
  * in src/game/player.h) instead of the raw count. Every other behaviour of
  * co-op is in this file; src/game only carries one-line hooks.
  *
- * Off (option off, no second pad, a non-mission stage, any non-Switch build)
+ * Off (option off, no second pad, a non-mission stage)
  * s_active stays 0 and every function below returns what the original
  * expression gave.
  *
