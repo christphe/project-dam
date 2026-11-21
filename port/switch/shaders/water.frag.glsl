@@ -114,6 +114,19 @@ layout(std140, binding = 2) uniform Sky {
 
 layout(location = 0) out vec4 outColor;
 
+#ifdef WATER_FAR
+/* deko3d's half-size water pass only (cmake/SwitchPort.cmake defines WATER_FAR for that pack entry; Vulkan and GL never do):
+ * beyond the near distance the waves come from the far sea baked by skyplus.frag.glsl (pass 4, the same panorama as Frigate's
+ * sea, baked for a fixed eye height over a fake plane; uWater4.w is that plane). */
+layout(binding = 5) uniform sampler2D uSeaPano;   /* rgb = the reflection + glints weighted, a = the reflection's weight (body 0) */
+#define uBakeX uC1_.w   /* where (and how high over the fake plane) the panorama was baked from; > 0 once it is settled */
+#define uBakeZ uC2_.w
+#define uBakeH uC3_.w
+#define WATER_NEAR_Z0 600.0    /* the live water gives way to the baked one between these depths along the view */
+#define WATER_NEAR_Z1 6000.0
+#define WATER_PANO_MAX 0.8     /* skyplus.frag.glsl panoMax */
+#endif
+
 #pragma skycommon
 
 #define TEX_OFFSET(tex, uv, texSize, off) texture(tex, uv - (off)/texSize)
@@ -124,6 +137,19 @@ vec4 filter3point(in sampler2D tex, in vec2 texCoord, in vec2 texSize) {
     vec4 c1 = TEX_OFFSET(tex, texCoord, texSize, vec2(offset.x - sign(offset.x), offset.y));
     vec4 c2 = TEX_OFFSET(tex, texCoord, texSize, vec2(offset.x, offset.y - sign(offset.y)));
     return c0 + abs(offset.x)*(c1-c0) + abs(offset.y)*(c2-c0);
+}
+
+/* the tone rules on a shaded colour w (waterShade's result, or the baked one): reflectLit scales only the reflection's weight
+ * (0 = the lighting does not dim it, 1 = GE's rule); toneKeep pulls the reflection's brightness into the body's hue so the sky's
+ * blue does not repaint the water (the original's tone stays); reflectGain is its weight */
+vec3 waterTone(vec3 w, vec3 body, vec3 ge, float lit, bool mapOn) {
+    if (mapOn) {
+        const vec3 LUM = vec3(0.299, 0.587, 0.114);
+        vec3 wt = body * (dot(w, LUM) / max(dot(body, LUM), 1e-3));
+        w = mix(w, wt, clamp(uWX3.x, 0.0, 1.0));
+        return mix(body, w, clamp(mix(1.0, lit, uWX1.w) * uWX3.y, 0.0, 1.0));
+    }
+    return mix(ge, w, lit);
 }
 
 void main() {
@@ -170,7 +196,6 @@ void main() {
     if (uWave4.z > 0.5 && vClip.z > 0.0) {
         float dist = length(d) * vClip.z * wscale;
         vec3 nd = normalize(d);
-        vec3 n = waterNormal(p.xz, dist);
         /* GE's rule: the reflection and glints are dimmed by the vertex colour,
          * so dark water stays dark (Complex's pits are lit black) */
         float lit = clamp(max(max(shade.r, shade.g), shade.b) * 1.4, 0.0, 1.0);
@@ -182,18 +207,34 @@ void main() {
             gLite = true;
             gGlint = 0.0;
         }
-        vec3 w = waterShade(nd, n, body, dist);   /* the Fresnel weight of the reflection, as it is */
-        if (mapOn) {
-            /* reflectLit scales only the reflection's weight: 0 = the lighting does not dim it, 1 = GE's rule */
-            /* toneKeep: the reflection's brightness in the body's hue, so the sky's blue does not repaint the water (the
-             * original's tone stays); reflectGain: its weight */
-            const vec3 LUM = vec3(0.299, 0.587, 0.114);
-            vec3 wt = body * (dot(w, LUM) / max(dot(body, LUM), 1e-3));
-            w = mix(w, wt, clamp(uWX3.x, 0.0, 1.0));
-            c = mix(body, w, clamp(mix(1.0, lit, uWX1.w) * uWX3.y, 0.0, 1.0));
-        } else {
-            c = mix(ge, w, lit);
+#ifdef WATER_FAR
+        /* the live waves (the moving set only: the far set is the baked sea) up to NEAR_Z1 of depth along the view, the baked far
+         * sea from NEAR_Z0 on, blended in between; no bake yet (uBakeH = 0): the live waves everywhere, both sets, as before. The
+         * body (the patch map) stays the level's own everywhere: the panorama gives only the reflection's weight and colour, so
+         * the tone is the near water's across the blend */
+        bool farOn = uBakeH > 0.0;
+        float kf = farOn ? smoothstep(WATER_NEAR_Z0, WATER_NEAR_Z1, wz * wscale) : 0.0;   /* wz * wscale: the depth in the eye's units */
+        vec3 liveC = c, farC = c;
+        if (kf < 1.0) {
+            gSeaMode = farOn ? 1 : 0;
+            vec3 n = waterNormal(p.xz, dist);
+            liveC = waterTone(waterShade(nd, n, body, dist), body, ge, lit, mapOn);
         }
+        if (kf > 0.0) {
+            /* the panorama was baked from another eye over a fake plane (uBake*): the point under this pixel is looked up as the
+             * baked eye saw it, as the far sea does (skyplus.frag.glsl); the point is on this water's own surface, the plane is
+             * the fake one: a fixed height, which shows nowhere far away */
+            vec3 rd = normalize(vec3(p.x - uBakeX, -uBakeH, p.z - uBakeZ));
+            float pu = atan(rd.x, rd.z) / 6.2831853 + 0.5, pv = min(sqrt(max(-rd.y, 0.0)) / WATER_PANO_MAX, 1.0);
+            vec4 pn = textureLod(uSeaPano, vec2(pu, 1.0 - pv), 0.0);   /* a render target is stored top row first */
+            /* the shade waterShade gives, linear in the body: body * (1 - reflection weight) + the reflection and glints */
+            farC = waterTone(body * (1.0 - pn.a) + pn.rgb, body, ge, lit, mapOn);
+        }
+        c = mix(liveC, farC, kf);
+#else
+        vec3 n = waterNormal(p.xz, dist);
+        c = waterTone(waterShade(nd, n, body, dist), body, ge, lit, mapOn);   /* the Fresnel weight of the reflection, as it is */
+#endif
     }
 #endif
     if ((flags & CF_FOG) != 0u) {

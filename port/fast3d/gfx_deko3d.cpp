@@ -458,6 +458,13 @@ DkImage s_wmap_img;
 DkHeapBlock s_wmap_blk;
 int s_wmap_slot = -1;
 int s_wmap_gen = -1;
+/* the far sea baked for the level's own water surfaces (#79): the pano (s_pano_fb) read with its alpha (the reflection's weight: a
+ * framebuffer's own descriptor reads alpha 1), bound at water.frag's binding 5 while this frame's pass has it settled */
+int s_far_slot = -1;
+DkHeapBlock s_far_blk = {};
+uint32_t s_far_w = 0;
+bool s_far_ready = false;
+DkResHandle s_far_h = 0;
 
 /* GE+ water at half resolution (#79, docs/dev/shaders-sea.md). With the GE+ water on, the main pass draws each water draw with the
  * cheap body variant of water.frag (no waves, no reflection) and records the draw (its vertices, state and textures). The record is
@@ -831,6 +838,8 @@ void bind_program(ShaderProgram* p, const DkShader* frag = nullptr, const DkDraw
                                                                     DkWrapMode_Repeat, DkWrapMode_Repeat, 1 }))
             : dkMakeTextureHandle(s_dummy_slot, 0);
         dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 4, &mh, 1);   /* the water colour map (patches) */
+        const DkResHandle fh = s_far_ready ? s_far_h : dkMakeTextureHandle(s_dummy_slot, 0);
+        dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 5, &fh, 1);   /* the far sea (the water.frag variant with WATER_FAR) */
     }
     s_st_pushes++;
 }
@@ -1475,6 +1484,7 @@ void dk_on_resize(void) {}
 void dk_start_frame(void) {
     s_frame_count++;
     check_dock();
+    s_far_ready = false;
     s_wfx_sky_on = false;   /* until this frame's sky pass sets the water uniforms */
     s_wfx_flushes = 0;
     {
@@ -1803,9 +1813,13 @@ void draw_fullscreen(const DkShader* frag, const void* uni, uint32_t uni_size, D
 
 DkHeapBlock s_wfx_blk = {};
 
-/* The half-size target (colour + depth) for target fb, its colour descriptor with alpha. False = not usable (the full water.frag). */
+/* The reduced target is a quarter of the width and half the height, as Frigate's sea target (SKY_HALF_SCALE): the waves are
+ * the heavy part, and at 1/2 x 1/2 Dam facing the lake still took ~10-11.5 ms GPU per frame on the console (handheld) */
+#define WFX_SX 0.25f
+#define WFX_SY 0.5f
+/* The reduced target (colour + depth) for target fb, its colour descriptor with alpha. False = not usable (the full water.frag). */
 bool wfx_prepare(int fb) {
-    const uint32_t hw = fb_width(fb) / 2, hh = fb_height(fb) / 2;
+    const uint32_t hw = (uint32_t)(fb_width(fb) * WFX_SX), hh = (uint32_t)(fb_height(fb) * WFX_SY);
     if (hw < 16 || hh < 16) return false;
     if (s_wfx_hfb < 0) {
         s_wfx_hfb = dk_create_framebuffer();
@@ -1929,10 +1943,10 @@ void wfx_flush(void) {
         depth(r.test, r.mask, r.func);
         bind_program(r.prg, &s_water_frag, &r.uni);
         dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 0, r.h, 2);
-        DkViewport v = { r.vp[0] * 0.5f, (float)Hh - (r.vp[1] + r.vp[3]) * 0.5f, r.vp[2] * 0.5f, r.vp[3] * 0.5f, r.zn, r.zf };
+        DkViewport v = { r.vp[0] * WFX_SX, (float)Hh - (r.vp[1] + r.vp[3]) * WFX_SY, r.vp[2] * WFX_SX, r.vp[3] * WFX_SY, r.zn, r.zf };
         dkCmdBufSetViewports(s_cmd, 0, &v, 1);
-        const int x0 = r.sc[0] >> 1, y0 = r.sc[1] >> 1;
-        set_scissor_rect(x0, y0, ((r.sc[0] + r.sc[2] + 1) >> 1) - x0, ((r.sc[1] + r.sc[3] + 1) >> 1) - y0);
+        const int x0 = r.sc[0] >> 2, y0 = r.sc[1] >> 1;
+        set_scissor_rect(x0, y0, ((r.sc[0] + r.sc[2] + 3) >> 2) - x0, ((r.sc[1] + r.sc[3] + 1) >> 1) - y0);
         dkCmdBufBindVtxBuffer(s_cmd, 0, vaddr + r.voff * 4, r.nfloats * 4);
         dkCmdBufDraw(s_cmd, DkPrimitive_Triangles, r.nfloats * 4 / r.prg->stride, 1, 0, 0);
         s_st_draws++;
@@ -1954,7 +1968,7 @@ void wfx_flush(void) {
         dkCmdBufBindVtxAttribState(s_cmd, r.prg->attribs, DK_ATTR_COUNT);
         DkVtxBufferState vb = { r.prg->stride, 0 };
         dkCmdBufBindVtxBufferState(s_cmd, &vb, 1);
-        float comp[8] = { r.vp[0] * 0.5f, (float)Hh - (r.vp[1] + r.vp[3]) * 0.5f, r.vp[2] * 0.5f, r.vp[3] * 0.5f,
+        float comp[8] = { r.vp[0] * WFX_SX, (float)Hh - (r.vp[1] + r.vp[3]) * WFX_SY, r.vp[2] * WFX_SX, r.vp[3] * WFX_SY,
                           (float)Wh, (float)Hh, 0.0f, 0.0f };
         dkCmdBufPushConstants(s_cmd, s_ubo.gpu, 256, 0, sizeof comp, comp);
         dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 0, &half_h, 1);
@@ -2206,11 +2220,14 @@ void gfx_deko3d_skyplus_pass(int slot) {
     v3(12, p.sunCol, p.chop);
     v3(13, p.moonDir, p.speed);
     const bool sea = p.sea && s_wtex_slot >= 0;
-    v3(14, p.water, p.seaY);
+    /* the level's own water surfaces with a sky (Dam, Complex): Frigate's baked far sea, of a fake plane (skyplus.c farSeaY); no sea
+     * is drawn here, the water draws read the panorama */
+    const bool farOnly = !sea && !p.sea && p.farBake && !p.waterOnly && s_wtex_slot >= 0;
+    v3(14, p.water, farOnly ? p.farSeaY : p.seaY);
     u.v[15][0] = p.time;
     u.v[15][1] = sea ? 1.0f : 0.0f;
     u.v[15][2] = 1.0f;   /* the level's water draws: GE+ water on */
-    u.v[15][3] = 0.0f;
+    u.v[15][3] = farOnly ? 1.0f : 0.0f;   /* the bake: no body, the reflection's weight in alpha */
     /* water draws read the pixel's y from its clip position: mirrored on a target drawn y-inverted */
     u.v[1][2] = (!win && s_fbs[s_cur_fb].invert_y) ? 1.0f : 0.0f;
     dkCmdBufPushConstants(s_cmd, s_ubo.gpu + WATER_UBO_OFS, 512, 0, sizeof u, &u);
@@ -2246,7 +2263,7 @@ void gfx_deko3d_skyplus_pass(int slot) {
          * along the horizon instead of blurring into a mirror */
         const int wsmp = sampler_slot(SmpKey{ DkFilter_Linear, DkFilter_Linear, DkMipFilter_Linear,
                                               DkWrapMode_Repeat, DkWrapMode_Repeat, 2 });   /* 8 cost the console ~7 ms */
-        const DkResHandle wh = dkMakeTextureHandle(sea ? s_wtex_slot : s_dummy_slot, wsmp);
+        const DkResHandle wh = dkMakeTextureHandle((sea || farOnly) ? s_wtex_slot : s_dummy_slot, wsmp);
         dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 1, &wh, 1);   /* restore_state rebinds the game's */
     }
     /* the reflection sky, once per pass, into its small panorama; the sea reads it */
@@ -2275,14 +2292,14 @@ void gfx_deko3d_skyplus_pass(int slot) {
             lut = true;
         }
     }
-    if (sea && !lut) {
+    if ((sea || farOnly) && !lut) {
         /* no panorama (framebuffers off, or the pack lacks it): the sea would read an unbound texture */
         const DkResHandle dh = dkMakeTextureHandle(s_dummy_slot, 0);
         dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 2, &dh, 1);
     }
     /* the far sea, baked into its panorama when the sun (or the level's sky and water) changes */
     bool pano = false;
-    if (sea && lut) {
+    if ((sea && lut) || (farOnly && gfx_framebuffers_enabled)) {
         if (s_pano_fb < 0) {
             s_pano_fb = dk_create_framebuffer();
             s_fbs[s_pano_fb].smp = SmpKey{ DkFilter_Linear, DkFilter_Linear, DkMipFilter_None, DkWrapMode_Repeat, DkWrapMode_ClampToEdge, 1 };
@@ -2336,12 +2353,33 @@ void gfx_deko3d_skyplus_pass(int slot) {
                 s_pano_valid = true;
                 s_pano_bakes++;
                 s_pano_frame = s_frame_count;
+                if (farOnly) {
+                    sysLogPrintf(LOG_NOTE, "DK: GE+ water: far sea baked (#%d) for the level's surfaces: plane y %.0f, %.0f under the eye", s_pano_bakes,
+                                 p.farSeaY, p.bakeEye[1] - p.farSeaY);
+                }
             }
             if (s_pano_valid && s_pano_bakes >= 2) { u.v[3][3] = s_pano_ex; u.v[4][3] = s_pano_ez; u.v[5][3] = s_pano_eyey - u.v[14][3]; }   /* where the panorama was baked from (uBake*) */
             else { u.v[3][3] = 0.0f; u.v[4][3] = 0.0f; u.v[5][3] = 0.0f; }   /* not baked yet: the shader draws the whole sea live */
             const DkResHandle ph = dkMakeTextureHandle(s_fbs[s_pano_fb].color_slot, sampler_slot(s_fbs[s_pano_fb].smp));
             dkCmdBufBindTextures(s_cmd, DkStage_Fragment, 4, &ph, 1);
             pano = true;
+            if (farOnly) {
+                /* the water draws read the panorama with its alpha: its own descriptor, and the bake's values in the water block
+                 * (the block was pushed above, before they were known) */
+                Fb& pf = s_fbs[s_pano_fb];
+                if (s_far_slot < 0 || s_far_w != pf.w || s_far_blk.chunk != pf.blk_color.chunk || s_far_blk.offset != pf.blk_color.offset) {
+                    if (s_far_slot >= 0) s_imgSlots.release_after(s_far_slot, s_serial);
+                    s_far_slot = write_img_desc(&pf.color, false);
+                    if (s_far_slot == s_dummy_slot) s_far_slot = -1;
+                    s_far_w = pf.w;
+                    s_far_blk = pf.blk_color;
+                }
+                if (s_far_slot >= 0 && s_pano_valid && s_pano_bakes >= 2) {
+                    s_far_h = dkMakeTextureHandle(s_far_slot, sampler_slot(pf.smp));
+                    s_far_ready = true;
+                    dkCmdBufPushConstants(s_cmd, s_ubo.gpu + WATER_UBO_OFS, 512, 0, sizeof u, &u);   /* uBake* now set */
+                }
+            }
         }
     }
     if (!pano) {

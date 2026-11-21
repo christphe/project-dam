@@ -70,6 +70,11 @@ typedef struct PortSkyPlus {
     float reflectGain;    /* the reflection's weight, x the Fresnel */
     float worldScale;     /* bg.c room_data_float2 (1 / the level's scale): turns the water draws' depth into the eye's units */
     int waterOnly;        /* 1: no sky (a level without one: Caverns): this command only sets the water block, nothing is drawn */
+    /* Switch: the far sea baked for the level's own water surfaces (Dam, Complex; #79): the same panorama as Frigate's sea, of a
+     * plane farHeight under the player's start eye (a fixed height: far away the height does not show), read by the water draws
+     * beyond the near distance. farSeaY = that plane's world height, kept from the level's start so the bake is not redone. */
+    int farBake;
+    float farHeight, farSeaY;
 } PortSkyPlus;
 
 #define gSPSkyPlusExt(pkt, ptr)                                       \

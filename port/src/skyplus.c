@@ -98,6 +98,8 @@ static void screenRay(f32 x, f32 y, coord3d *out)
 static unsigned char s_tex[SKYPLUS_TEX_W * SKYPLUS_TEX_H];
 static int s_texGen;
 static int s_texNum = -1;
+static int s_farHave;      /* the far sea's plane height is latched for this level */
+static float s_farY;
 
 /* The cloud image as 8-bit intensity. texLoad writes the loaded address back
  * into the word it is given, so it gets a copy of the image number (as
@@ -177,6 +179,7 @@ static float wnoise(float x, float y, int n)   /* x, y in 0..n cells, wraps at n
  *     Light = 0.3, 0.5, 0.5       (default: the mean colour of its lighter half)
  *     ReflectLit = 0.0            (0..1, 1 = the vertex lighting dims the reflection as GE's does)
  *     PatchScale = 6.0            (the patch map's size in water-texture repeats)
+ *     FarHeight = 300             (the eye height over the fake plane the far sea is baked for, world units; Switch)
  * Keys are not case-sensitive.                                                 */
 struct WaterSettings {
     float tint[3], swell, chop, speed;
@@ -186,6 +189,7 @@ struct WaterSettings {
     int deepSet, lightSet;
     float reflectLit, patchScale;
     float toneKeep, reflectGain;   /* the reflection pulled into the body's hue (0..1), and its strength */
+    float farHeight;               /* Switch: the far sea's baked plane lies this far under the player's start eye */
 };
 
 static const char *waterLevelName(int stage)
@@ -221,6 +225,7 @@ static void waterSettingsLoad(int stage, struct WaterSettings *w)
     w->patchScale = 6.0f;
     w->toneKeep = 0.0f;
     w->reflectGain = 1.0f;
+    w->farHeight = 300.0f;
     if (stage == LEVELID_FRIGATE) {   /* open sea: a real swell, not an oil-flat sea */
         w->swell = 2.0f;
         w->chop = 1.2f;
@@ -266,6 +271,7 @@ static void waterSettingsLoad(int stage, struct WaterSettings *w)
             else if (keyeq(key, "ToneKeep")) w->toneKeep = a < 0.0f ? 0.0f : a > 1.0f ? 1.0f : a;
             else if (keyeq(key, "ReflectGain")) w->reflectGain = a < 0.0f ? 0.0f : a > 2.0f ? 2.0f : a;
             else if (keyeq(key, "PatchScale")) w->patchScale = a < 0.5f ? 0.5f : a > 64.0f ? 64.0f : a;
+            else if (keyeq(key, "FarHeight")) w->farHeight = a < 20.0f ? 20.0f : a > 3000.0f ? 3000.0f : a;
         }
     }
     fclose(f);
@@ -663,6 +669,16 @@ Gfx *skyPlusRender(Gfx *gdl)
             s_wsStage = stage;
             s_wbaked = 0;   /* a new level: its water texture is captured again */
             s_wbakeWanted = waterLevelName(stage) != NULL && gfx_water_surfaces;
+            s_farHave = 0;
+#if defined(PLATFORM_SWITCH)
+            if (waterLevelName(stage) != NULL && !env->IsWater && gfx_water_surfaces) {
+                if (waterOnly) {
+                    sysLogPrintf(LOG_NOTE, "GE+ water: %s: far sea not baked (no sky on this level: the live waves everywhere)", waterLevelName(stage));
+                } else {
+                    sysLogPrintf(LOG_NOTE, "GE+ water: %s: far sea baked from a fake plane %.0f under the start eye (FarHeight)", waterLevelName(stage), s_ws.farHeight);
+                }
+            }
+#endif
         }
         p->swell = s_ws.swell;
         p->chop = s_ws.chop;
@@ -679,6 +695,12 @@ Gfx *skyPlusRender(Gfx *gdl)
         p->toneKeep = s_ws.toneKeep;
         p->worldScale = get_room_data_float2();
         p->reflectGain = s_ws.reflectGain;
+#if defined(PLATFORM_SWITCH)
+        /* the levels with their own water surfaces and a sky (Dam, Complex) get Frigate's baked far sea; Frigate has its own sea,
+         * Caverns no sky (its water is live everywhere) and the other levels no water at all (no bake, no cost) */
+        p->farBake = (!waterOnly && !env->IsWater && waterLevelName(stage) != NULL && gfx_water_surfaces) ? 1 : 0;
+        p->farHeight = s_ws.farHeight;
+#endif
         if (s_wbaked) {
             static int s_wlogStage = -1, s_wlogGen = -1;
             for (i = 0; i < 3; i++) {
@@ -725,6 +747,13 @@ Gfx *skyPlusRender(Gfx *gdl)
         p->bakeReset = g_CameraMode == CAMERAMODE_INTRO && prev != CAMERAMODE_INTRO;
         prev = g_CameraMode;
         p->bakeEye[0] = start->x; p->bakeEye[1] = start->y; p->bakeEye[2] = start->z;
+        if (p->farBake) {   /* the fake plane's height is fixed from the level's start (the bake's key must not move with the player) */
+            if (p->bakeReset || !s_farHave) {
+                s_farY = start->y - p->farHeight;
+                s_farHave = 1;
+            }
+            p->farSeaY = s_farY;
+        }
     }
     gSPSkyPlusExt(gdl++, p);
     if (waterOnly) {

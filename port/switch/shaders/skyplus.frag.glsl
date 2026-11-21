@@ -70,6 +70,14 @@ void main() {
         gSeaMode = 2;
         gLite = true;   /* no reflection of the sky out there: the horizon's colour only */
         vec3 bn = waterNormal(bp, bt);
+        if (uWave4.w > 0.5) {
+            /* the far sea of the level's own water surfaces (water.frag.glsl, WATER_FAR): baked without a body, so each surface
+             * puts its own (the patch map) under it. waterShade is linear in the body, body * (1 - w) + the reflection and
+             * glints: rgb = the latter (body 0), a = the reflection's weight w (1 - the response to a body of 1) */
+            vec3 c0 = waterShade(bd, bn, vec3(0.0), bt), c1 = waterShade(bd, bn, vec3(1.0), bt);
+            o = vec4(clamp(c0, 0.0, 1.0), clamp(1.0 - (c1.g - c0.g), 0.0, 1.0));
+            return;
+        }
         o = vec4(clamp(waterShade(bd, bn, uSea, bt), 0.0, 1.0), 1.0);
         return;
     }
