@@ -18,6 +18,7 @@
 ### Fixed
 - PC: the optional update check (Game.CheckUpdates, off by default) looked at the upstream port's releases and compared them with the upstream version; it now looks at Project Dam's releases and only announces one that has a PC build
 - The button that closes the menu no longer reaches the game as a press
+- Switch: the controllers vibrate when the game uses the Rumble Pak (shots, hits, explosions), with the Vibration setting (#40)
 
 ## [0.3.0] - 2026-11-19
 

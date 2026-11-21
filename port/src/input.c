@@ -1375,6 +1375,10 @@ static int    s_menuPointerLive = 0;
 static void padDetectRumble(int i)
 {
     padRumbleOn[i] = 0;
+#ifdef __SWITCH__
+    padRumbleOn[i] = 1;   /* #40: rumble goes through libnx, SDL reports none */
+    return;
+#endif
     /* D401: haptics detection (PD pattern, pd_port input.c:320-324).
      * SDL_GameControllerHasRumble() landed in SDL 2.0.18 even though
      * SDL_GameControllerRumble() is from 2.0.9. */
@@ -1417,6 +1421,74 @@ static int nxPadAllowedMask(void)
         if (forced > 0) sysLogPrintf(LOG_NOTE, "input: GE_PADS forces %d controller(s)", e[0] - '0');
     }
     return forced > 0 ? forced : nxPadConnectedMask();
+}
+
+static int padDev[MAX_PADS] = { -1, -1, -1, -1 };   /* D974: SDL device index of each seat */
+
+/* #40: devkitPro's SDL2 reports no rumble on Switch pads, so the Rumble Pak
+ * goes to the controllers through libnx. Tuning knobs for the console test:
+ * the two linear motors' frequencies (Hz) and each one's share of the
+ * amplitude (multiplied with strength * Input.RumbleScale, then clamped). */
+#define NX_RUMBLE_FREQ_LOW   100.0f
+#define NX_RUMBLE_FREQ_HIGH  200.0f
+#define NX_RUMBLE_AMP_LOW    1.0f
+#define NX_RUMBLE_AMP_HIGH   0.15f
+
+extern void nxRumbleSend(int seat, int dev, float amp, float ampLow, float ampHigh,
+                         float freqLow, float freqHigh);
+extern void nxRumbleForget(int seat);
+
+static SDL_SpinLock s_nxRumLock;          /* game thread, poll thread, atexit */
+static SDL_atomic_t s_nxRumActive[MAX_PADS];     /* 1 = a deadline is pending */
+static SDL_atomic_t s_nxRumDeadline[MAX_PADS];   /* SDL_GetTicks() value */
+
+/* Send amp (0..1) to the seat's controller; zero only reaches cached handles.
+ * Caller holds s_nxRumLock. */
+static void nxRumSendLocked(int s, float amp)
+{
+    nxRumbleSend(s, padDev[s], amp, NX_RUMBLE_AMP_LOW, NX_RUMBLE_AMP_HIGH,
+                 NX_RUMBLE_FREQ_LOW, NX_RUMBLE_FREQ_HIGH);
+}
+
+/* Game thread: strength already scaled, 0..1; time in seconds. */
+static void nxRumbleSet(int s, float amp, float time)
+{
+    if (amp > 1.f) amp = 1.f;
+    if (amp <= 0.f || time <= 0.f) {
+        SDL_AtomicSet(&s_nxRumActive[s], 0);
+        SDL_AtomicLock(&s_nxRumLock);
+        nxRumSendLocked(s, 0.f);
+        SDL_AtomicUnlock(&s_nxRumLock);
+        return;
+    }
+    SDL_AtomicSet(&s_nxRumDeadline[s], (int)(SDL_GetTicks() + (Uint32)(time * 1000.f)));
+    SDL_AtomicSet(&s_nxRumActive[s], 1);
+    SDL_AtomicLock(&s_nxRumLock);
+    nxRumSendLocked(s, amp);
+    SDL_AtomicUnlock(&s_nxRumLock);
+}
+
+/* Poll thread: stop seats whose time ran out. */
+static void nxRumbleTick(void)
+{
+    for (int s = 0; s < MAX_PADS; ++s) {
+        if (!SDL_AtomicGet(&s_nxRumActive[s])) continue;
+        if ((int)(SDL_GetTicks() - (Uint32)SDL_AtomicGet(&s_nxRumDeadline[s])) < 0) continue;
+        if (!SDL_AtomicCAS(&s_nxRumActive[s], 1, 0)) continue;
+        SDL_AtomicLock(&s_nxRumLock);
+        nxRumSendLocked(s, 0.f);
+        SDL_AtomicUnlock(&s_nxRumLock);
+    }
+}
+
+/* Seat dropped or moved: silence it and forget its handles. */
+static void nxRumbleReset(int s)
+{
+    SDL_AtomicSet(&s_nxRumActive[s], 0);
+    SDL_AtomicLock(&s_nxRumLock);
+    nxRumSendLocked(s, 0.f);
+    nxRumbleForget(s);
+    SDL_AtomicUnlock(&s_nxRumLock);
 }
 #endif
 
@@ -1554,7 +1626,6 @@ static void inputOpenPads(void)
 {
     const int inMatch = inputMpSplit();
 #ifdef __SWITCH__
-    static int padDev[MAX_PADS] = { -1, -1, -1, -1 };   /* D974: SDL device index of each seat */
     const int allowed = nxPadAllowedMask();
     s_nxPadMask = allowed;
 #endif
@@ -1579,6 +1650,7 @@ static void inputOpenPads(void)
             padFamily[s] = PADFAM_XBOX;
 #ifdef __SWITCH__
             padDev[s] = -1;
+            nxRumbleReset(s);   /* #40 */
 #endif
             if (inMatch) s_seatCompactOwed = 1;
         }
@@ -1596,6 +1668,7 @@ static void inputOpenPads(void)
                 padFamily[d] = padFamily[s]; padFamily[s] = PADFAM_XBOX;   /* D471 */
 #ifdef __SWITCH__
                 padDev[d] = padDev[s];       padDev[s] = -1;
+                nxRumbleReset(s); nxRumbleReset(d);   /* #40 */
 #endif
                 sysLogPrintf(LOG_NOTE, "input: pad '%s' moved seat %d -> %d",
                              SDL_GameControllerName(pads[d]), s, d);
@@ -2222,6 +2295,7 @@ void inputUpdate(void)
             if (s_nxPadMask >= 0 && nxPadAllowedMask() != s_nxPadMask) inputRescanPads();
         }
     }
+    nxRumbleTick();   /* #40 */
 #endif
     SDL_GameControllerUpdate();
     if (s_seatCompactOwed && !inputMpSplit()) {
@@ -3999,6 +4073,10 @@ void inputRumble(int idx, f32 strength, f32 time)
     if (gRumbleScale <= 0.f) return;
     if (padRumbleOn[rIdx]) {
         strength *= gRumbleScale;
+#ifdef __SWITCH__
+        nxRumbleSet(rIdx, strength, time);   /* #40 */
+        return;
+#endif
         if (strength <= 0.f) {
             strength = 0.f;
             time = 0.f;
@@ -4019,6 +4097,13 @@ void inputRumbleStopAll(void)
 {
     SDL_AtomicSet(&s_rumbleStopped, 1);
     for (int i = 0; i < MAX_PADS; ++i) {
+#ifdef __SWITCH__
+        SDL_AtomicSet(&s_nxRumActive[i], 0);   /* #40 */
+        SDL_AtomicLock(&s_nxRumLock);
+        nxRumSendLocked(i, 0.f);
+        SDL_AtomicUnlock(&s_nxRumLock);
+        continue;
+#endif
         if (pads[i] && padRumbleOn[i]) {
             SDL_GameControllerRumble(pads[i], 0, 0, 0);
         }
