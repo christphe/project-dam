@@ -1,8 +1,8 @@
 /*
- * coop.c -- opt-in 2-player split-screen co-op campaign (Switch only; D960).
+ * coop.c -- opt-in 2 to 4 player split-screen co-op campaign (Switch only; D960).
  *
  * The engine has no mode flag: "mission or versus" is inferred from
- * getPlayerCount(). Co-op runs the solo campaign with two players, so the
+ * getPlayerCount(). Co-op runs the solo campaign with 2 to 4 players, so the
  * rule sites in src/game ask coopIsMission() / coopRuleMulti() (macros GE_RULE_*
  * in src/game/player.h) instead of the raw count. Every other behaviour of
  * co-op is in this file; src/game only carries one-line hooks.
@@ -11,7 +11,7 @@
  * s_active stays 0 and every function below returns what the original
  * expression gave.
  *
- *  - coopStageNumPlayers: stage start (src/boss.c) asks for 2 players.
+ *  - coopStageNumPlayers: stage start (src/boss.c) asks for the chosen 2 to 4 players.
  *  - coopAiTick: a guard's AI tick runs with the nearest LIVING player as
  *    "Bond" (the AI reads g_CurrentPlayer through getCurrentPlayerProp()).
  *  - coopSimOwner: chrTick runs once per VIEW (propsTick is inside the render
@@ -53,15 +53,16 @@ void bondviewFrozenCameraTick(u16 buttons, u16 oldbuttons, struct coord3d *pos, 
 #define COOP_REVIVE_TICKS   600     /* 10 s at 60 ticks per second */
 #define COOP_REVIVE_RADIUS  120.0f  /* horizontal distance to the body, game units */
 #define COOP_REVIVE_HEIGHT  100.0f
-#define COOP_SPAWN_OFFSET      90.0f  /* player 2's offset from start pad 0, game units */
+#define COOP_SPAWN_OFFSET      90.0f  /* a partner's offset from start pad 0, game units */
 #define COOP_SPAWN_OFFSET_NEAR 65.0f  /* second try, still outside player 1's radius */
+#define COOP_MAX_PLAYERS 4
+#define COOP_PLAYER_SEP 70.0f   /* two players closer than this (horizontally) overlap and block each other */
 
 static int s_intent = 0;      /* the mode menu's Co-op entry was chosen (cleared on the mode menu, after a co-op stage) */
-static int s_health  = 1;     /* Game.CoopEnemyHealth: 0 = 100 %, 1 = 150 %, 2 = 200 % */
+static int s_health  = 1;     /* Game.CoopEnemyHealth: bonus per partner, 0 = +0 %, 1 = +50 %, 2 = +100 % */
 static int s_active  = 0;     /* the running stage is a co-op campaign stage */
 static int s_nTaken = 0;   /* per-player pickups taken by one player so far (see coopPickupOp) */
 static struct { struct ChrRecord *chr; int player; } s_stick[96];
-static int s_spawnLogged = 0;
 static int s_sawMp = 0, s_fpDone = 0;   /* the spawn swirl (CAMERAMODE_MP) was seen / the switch to FP was made */
 static int s_cineDriver = -1;   /* the player the running cinematic script belongs to, -1 = none latched */
 
@@ -69,18 +70,39 @@ struct CoopRevive {
     int  active;
     f32  timer;       /* ticks left */
     int  lastShown;   /* seconds last put on screen, -1 = none */
+    int  reviver;     /* the player who is reviving this one while active */
 };
-static struct CoopRevive s_rv[2];
+static struct CoopRevive s_rv[COOP_MAX_PLAYERS];
 
-static int coopForced(void)
+/* The number of players of the running stage, clamped to what the arrays hold. */
+static int coopN(void)
+{
+    int n = (int)getPlayerCount();
+    return n < 1 ? 1 : (n > COOP_MAX_PLAYERS ? COOP_MAX_PLAYERS : n);
+}
+
+/* GE_COOP (test path, no menu): "3" / "4" -> that many players, any other non-zero value -> 2, unset or "0" -> 0. */
+static int coopForcedN(void)
 {
     static int forced = -1;
     if (forced < 0) {
         const char *e = getenv("GE_COOP");
-        forced = (e != NULL && e[0] != '\0' && e[0] != '0');
+        if (e == NULL || e[0] == '\0' || e[0] == '0') {
+            forced = 0;
+        } else {
+            forced = (e[0] == '3') ? 3 : (e[0] == '4') ? 4 : 2;
+        }
     }
     return forced;
 }
+#define coopForced() (coopForcedN() != 0)
+
+static int s_lastN = 2;       /* the player count last chosen in the modal (this session, not saved) */
+static int s_modal = 0, s_modalSel = 0, s_modalStick = 0;
+static volatile int s_modalPtrRow = -1, s_modalPtrClick = 0;   /* the mouse, from the render thread (coopModalPointer) */
+static struct { f32 x, z; } s_spots[COOP_MAX_PLAYERS];   /* where players 1.. were placed this stage */
+static int s_nSpots = 0;
+static unsigned s_padsUsed = 0;
 
 static int coopIsMissionStage(s32 stage)
 {
@@ -90,12 +112,13 @@ static int coopIsMissionStage(s32 stage)
 /* src/boss.c: stage start. Solo missions arrive with < 2; versus with >= 2. */
 s32 coopStageNumPlayers(s32 stage, s32 selected)
 {
-    int i;
+    int i, n = 0;
     if (s_intent || coopForced()) {
         sysLogPrintf(LOG_NOTE, "coop: stage load stage=%d selected=%d gamemode=%d selected_num_players=%d intent=%d forced=%d "
-                               "player_char=%d/%d pads=%d",
-                     (int)stage, (int)selected, (int)gamemode, (int)selected_num_players, s_intent, coopForced(),
-                     (int)player_char[0], (int)player_char[1], (int)joyGetControllerCount());
+                               "chosen=%d player_char=%d/%d/%d/%d pads=%d",
+                     (int)stage, (int)selected, (int)gamemode, (int)selected_num_players, s_intent, coopForcedN(), s_lastN,
+                     (int)player_char[0], (int)player_char[1], (int)player_char[2], (int)player_char[3],
+                     (int)joyGetControllerCount());
     }
     if (s_active) {
         sysLogPrintf(LOG_NOTE, "coop: leaving a co-op stage, next stage %d (selected %d)", (int)stage, (int)selected);
@@ -106,15 +129,21 @@ s32 coopStageNumPlayers(s32 stage, s32 selected)
     s_nTaken = 0;
     s_sawMp = 0;
     s_fpDone = 0;
-    s_spawnLogged = 0;
-    for (i = 0; i < 2; i++) { s_rv[i].active = 0; s_rv[i].lastShown = -1; }
+    s_nSpots = 0;
+    s_padsUsed = 0;
+    for (i = 0; i < COOP_MAX_PLAYERS; i++) { s_rv[i].active = 0; s_rv[i].lastShown = -1; s_rv[i].reviver = -1; }
     if (selected >= 2 || gamemode != GAMEMODE_SOLO || !coopIsMissionStage(stage)) {
         return selected;
     }
-    if (coopForced() || (s_intent && joyGetControllerCount() >= 2)) {
+    if (coopForcedN() != 0) {
+        n = coopForcedN();
+    } else if (s_intent && joyGetControllerCount() >= s_lastN) {
+        n = s_lastN;
+    }
+    if (n >= 2) {
         s_active = 1;
-        sysLogPrintf(LOG_NOTE, "coop: co-op stage %d, 2 players", (int)stage);
-        return 2;
+        sysLogPrintf(LOG_NOTE, "coop: co-op stage %d, %d players", (int)stage, n);
+        return n;
     }
     return selected;
 }
@@ -124,36 +153,44 @@ int coopActive(void)
     return s_active;
 }
 
-/* bondview2.c solo_char_load: which player gets the solo Bond body and head. Player 1 always; player 2 only when
+/* bondview2.c solo_char_load: which player gets the solo Bond body and head. Player 1 always; the others only when
  * no character was chosen (GE_COOP=1 without the menu), otherwise the character picked on the multiplayer
- * character select (get_player_mp_char_head / body, slot 1). */
+ * character select (get_player_mp_char_head / body, their slot). */
 s32 coopBondBody(void)
 {
     int cur = get_cur_playernum();
     if (!s_active) {
         return 0;
     }
-    return cur == 0 || player_char[1] < 0;
+    return cur == 0 || cur >= COOP_MAX_PLAYERS || player_char[cur] < 0;
 }
 
-/* initmttex.c: the stage texture pool. When it fills, textures load at the pool start (garbage, D336). A player 2 with a
- * character of their own (menu choice) adds that character's body and head textures, which the level's -mt budget (solo
- * Bond, shared with player 1) does not include. */
+/* initmttex.c: the stage texture pool. When it fills, textures load at the pool start (garbage, D336). Each player 2..N
+ * with a character of their own (menu choice) adds that character's body and head textures, which the level's -mt
+ * budget (solo Bond, shared with player 1) does not include. */
 #define COOP_TEX_EXTRA (384 * 1024)
 s32 coopTexExtra(s32 bytes)
 {
-    if (s_active && player_char[1] >= 0) {
-        sysLogPrintf(LOG_NOTE, "coop: texture pool %d + %d bytes for player 2's character %d", (int)bytes, COOP_TEX_EXTRA,
-                     (int)player_char[1]);
-        return bytes + COOP_TEX_EXTRA;
+    int i, extra = 0, n = coopN();
+    if (!s_active) {
+        return bytes;
     }
-    return bytes;
+    for (i = 1; i < n; i++) {
+        if (player_char[i] >= 0) {
+            extra += COOP_TEX_EXTRA;
+        }
+    }
+    if (extra != 0) {
+        sysLogPrintf(LOG_NOTE, "coop: texture pool %d + %d bytes for the partners' characters %d/%d/%d", (int)bytes, extra,
+                     (int)player_char[1], (int)player_char[2], (int)player_char[3]);
+    }
+    return bytes + extra;
 }
 
 s32 coopIsMission(void)
 {
     s32 c = getPlayerCount();
-    return c == 1 || (s_active && c == 2);
+    return c == 1 || (s_active && c >= 2);
 }
 
 s32 coopRuleMulti(void)
@@ -161,7 +198,7 @@ s32 coopRuleMulti(void)
     return getPlayerCount() >= 2 && !s_active;
 }
 
-/* Friendly fire: in co-op a player's bullets hit the partner (chrprop.c, GE_PVP_ALLOWED), and the hit goes through the
+/* Friendly fire: in co-op a player's bullets hit the partners (chrprop.c, GE_PVP_ALLOWED), and the hit goes through the
  * versus damage path (chraction.c: record_damage_kills on the partner); a partner shot down is revived as after any
  * death. Explosions already hurt both players. Auto-aim never picks the partner: coopAutoAimAtPlayer. */
 s32 coopPvpAllowed(void)
@@ -176,11 +213,22 @@ s32 coopAutoAimAtPlayer(void)
     return !s_active;
 }
 
-/* The player who is not the current one is down (bonddead is non-zero from the moment of death). */
+/* Every player other than the current one is down (bonddead is non-zero from the moment of death): a death is final
+ * only then. 0 when there is no other player. */
 static int coopPartnerDown(void)
 {
-    struct player *o = g_playerPointers[1 - get_cur_playernum()];
-    return o != NULL && o->bonddead != 0;
+    int i, n = coopN(), cur = get_cur_playernum(), others = 0;
+    for (i = 0; i < n; i++) {
+        struct player *o = g_playerPointers[i];
+        if (i == cur || o == NULL) {
+            continue;
+        }
+        others++;
+        if (o->bonddead == 0) {
+            return 0;
+        }
+    }
+    return others > 0;
 }
 
 s32 coopDeathFinal(void)
@@ -213,7 +261,7 @@ s32 coopMissionEndOk(void)
     if (!s_active) {
         return 1;
     }
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < coopN(); i++) {
         if (g_playerPointers[i] != NULL && g_playerPointers[i]->bonddead != 0) {
             down = 1;
         }
@@ -256,18 +304,43 @@ s32 coopSimOwner(void)
     return get_player_position_in_shuffled(get_cur_playernum()) == 0;
 }
 
-/* Player 2 starts beside player 1, clear of player 1's collision radius.
- * The offset is walked across the floor tiles from the start pad so the
- * player's tile follows its position; a direction that hits a wall or leaves
- * the floor is skipped. Tries right, left, behind, ahead, far then near. */
+/* Players 2..N start around start pad 0 (where player 1 stands), each on a different spot: player 2 tries right first,
+ * player 3 left, player 4 behind, then the other directions. The offset is walked across the floor tiles from the
+ * start pad so the player's tile follows its position; a direction that hits a wall or leaves the floor is skipped,
+ * and so is a spot closer than COOP_PLAYER_SEP to a spot already given to a partner this stage. */
+static int coopSpotFree(f32 x, f32 z)
+{
+    int i;
+    f32 dx, dz;
+    for (i = 0; i < s_nSpots; i++) {
+        dx = x - s_spots[i].x;
+        dz = z - s_spots[i].z;
+        if (dx * dx + dz * dz < COOP_PLAYER_SEP * COOP_PLAYER_SEP) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void coopSpotTaken(f32 x, f32 z)
+{
+    if (s_nSpots < COOP_MAX_PLAYERS) {
+        s_spots[s_nSpots].x = x;
+        s_spots[s_nSpots].z = z;
+        s_nSpots++;
+    }
+}
+
 void coopSpawnOffset(f32 *x, f32 *z, void *pstan, f32 lookx, f32 lookz)
 {
     static const f32 dist[5] = { COOP_SPAWN_OFFSET, COOP_SPAWN_OFFSET_NEAR, 45.0f, 120.0f, 150.0f };
+    /* directions (0 right, 1 left, 2 behind, 3 ahead of the pad's look) in the order each player tries them */
+    static const int order[4][4] = { { 0, 1, 2, 3 }, { 0, 1, 2, 3 }, { 1, 0, 2, 3 }, { 2, 0, 1, 3 } };
     f32 px, pz;
     StandTile **stan = (StandTile **)pstan;
     f32 len, fx, fz, dx[4], dz[4];
-    int d, i;
-    if (!s_active || get_cur_playernum() != 1 || stan == NULL || *stan == NULL) {
+    int d, i, cur = get_cur_playernum();
+    if (!s_active || cur < 1 || cur >= COOP_MAX_PLAYERS || stan == NULL || *stan == NULL) {
         return;
     }
     len = sqrtf(lookx * lookx + lookz * lookz);
@@ -280,12 +353,14 @@ void coopSpawnOffset(f32 *x, f32 *z, void *pstan, f32 lookx, f32 lookz)
     pz = *z;
     for (d = 0; d < 5; d++) {
         for (i = 0; i < 4; i++) {
+            int k = order[cur][i];
             StandTile *t = *stan;
-            f32 nx = *x + dx[i] * dist[d];
-            f32 nz = *z + dz[i] * dist[d];
-            if (walkTilesBetweenPoints_NoCallback(&t, *x, *z, nx, nz)) {
+            f32 nx = *x + dx[k] * dist[d];
+            f32 nz = *z + dz[k] * dist[d];
+            if (walkTilesBetweenPoints_NoCallback(&t, *x, *z, nx, nz) && coopSpotFree(nx, nz)) {
                 *x = nx; *z = nz; *stan = t;
-                if (!s_spawnLogged) { s_spawnLogged = 1; sysLogPrintf(LOG_NOTE, "coop: player 2 spawn: offset %d units from pad 0", (int)dist[d]); }
+                coopSpotTaken(nx, nz);
+                sysLogPrintf(LOG_NOTE, "coop: player %d spawn: offset %d units from pad 0 (direction %d)", cur + 1, (int)dist[d], k);
                 return;
             }
         }
@@ -298,13 +373,13 @@ void coopSpawnOffset(f32 *x, f32 *z, void *pstan, f32 lookx, f32 lookz)
         for (k = 0; k < startpadcount && k < 16; k++) {
             PadRecord *pad = g_Startpad[k];
             f32 ddx, ddz, dd;
-            if (pad == NULL || pad->stan == NULL) {
+            if (pad == NULL || pad->stan == NULL || (s_padsUsed & (1u << k))) {
                 continue;
             }
             ddx = pad->pos.f[0] - px;
             ddz = pad->pos.f[2] - pz;
             dd = ddx * ddx + ddz * ddz;
-            if (dd >= 100.0f * 100.0f && (best < 0 || dd < bd)) {
+            if (dd >= 100.0f * 100.0f && coopSpotFree(pad->pos.f[0], pad->pos.f[2]) && (best < 0 || dd < bd)) {
                 best = k;
                 bd = dd;
             }
@@ -313,11 +388,13 @@ void coopSpawnOffset(f32 *x, f32 *z, void *pstan, f32 lookx, f32 lookz)
             *x = g_Startpad[best]->pos.f[0];
             *z = g_Startpad[best]->pos.f[2];
             *stan = g_Startpad[best]->stan;
-            if (!s_spawnLogged) { s_spawnLogged = 1; sysLogPrintf(LOG_NOTE, "coop: player 2 spawn: start pad %d (no walkable offset from pad 0)", best); }
+            s_padsUsed |= 1u << best;
+            coopSpotTaken(*x, *z);
+            sysLogPrintf(LOG_NOTE, "coop: player %d spawn: start pad %d (no walkable offset from pad 0)", cur + 1, best);
             return;
         }
     }
-    if (!s_spawnLogged) { s_spawnLogged = 1; sysLogPrintf(LOG_NOTE, "coop: player 2 spawn: stacked on pad 0 (no offset and no other start pad)"); }
+    sysLogPrintf(LOG_NOTE, "coop: player %d spawn: stacked on pad 0 (no offset and no other start pad)", cur + 1);
 }
 
 static int coopDriver(void);
@@ -331,18 +408,18 @@ static int coopNearestLiving(const struct ChrRecord *chr, int fallback)
         /* A script chr without a prop (a trigger / background list such as Dam's exit list) has no position: keep the
          * current player if it is alive, else the living one. Never a dead one: "if_bond_is_dead" would send the list
          * to its idle list for good (a solo death ends the mission, so the scripts never expect to continue). */
-        struct player *c = (fallback >= 0 && fallback < 2) ? g_playerPointers[fallback] : NULL;
+        struct player *c = (fallback >= 0 && fallback < COOP_MAX_PLAYERS) ? g_playerPointers[fallback] : NULL;
         if (c != NULL && c->bonddead == 0) {
             return fallback;
         }
-        for (i = 0; i < 2; i++) {
+        for (i = 0; i < coopN(); i++) {
             if (g_playerPointers[i] != NULL && g_playerPointers[i]->bonddead == 0) {
                 return i;
             }
         }
         return fallback;
     }
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < coopN(); i++) {
         struct player *p = g_playerPointers[i];
         f32 dx, dy, dz, d;
         if (p == NULL || p->prop == NULL || p->bonddead != 0) {
@@ -389,10 +466,12 @@ static void coopLogTest(void *list, s32 off, int result, int player)
     s_aiLog[slot].list = list;
     s_aiLog[slot].off = off;
     s_aiLog[slot].result = result;
-    sysLogPrintf(LOG_NOTE, "coop: ai player test list=%p offset=%d cmd=%d result=%d player=%d (alive %d/%d)", list, (int)off,
+    sysLogPrintf(LOG_NOTE, "coop: ai player test list=%p offset=%d cmd=%d result=%d player=%d (alive %d/%d/%d/%d)", list, (int)off,
                  (int)((u8 *)list)[off], result, player,
                  g_playerPointers[0] ? g_playerPointers[0]->bonddead == 0 : -1,
-                 g_playerPointers[1] ? g_playerPointers[1]->bonddead == 0 : -1);
+                 g_playerPointers[1] ? g_playerPointers[1]->bonddead == 0 : -1,
+                 g_playerPointers[2] ? g_playerPointers[2]->bonddead == 0 : -1,
+                 g_playerPointers[3] ? g_playerPointers[3]->bonddead == 0 : -1);
 }
 static struct { int pending, rewound, orig; void *list; s32 off; unsigned tried; } s_ai;
 extern s32 chraiitemsize(u8 *AIList, s32 offset);
@@ -409,7 +488,7 @@ s32 coopAiStep(void *list, s32 offset, s32 isPlayerTest)
         }
         if (list == s_ai.list && offset == s_ai.off + chraiitemsize((u8 *)s_ai.list, s_ai.off)) {   /* it fell through: false */
             int n;
-            for (n = 0; n < 2; n++) {
+            for (n = 0; n < coopN(); n++) {
                 struct player *p = g_playerPointers[n];
                 if (!(s_ai.tried & (1u << n)) && p != NULL && p->prop != NULL && p->bonddead == 0) {
                     s_ai.tried |= 1u << n;
@@ -431,7 +510,7 @@ s32 coopAiStep(void *list, s32 offset, s32 isPlayerTest)
          * exit camera aimed at him from the jump platform, into the void. */
         if (((u8 *)list)[offset] == if_bond_y_pos_less_than_ID) {
             int n, low = -1;
-            for (n = 0; n < 2; n++) {
+            for (n = 0; n < coopN(); n++) {
                 struct player *p = g_playerPointers[n];
                 if (p != NULL && p->prop != NULL && p->bonddead == 0 &&
                     (low < 0 || p->prop->pos.f[1] < g_playerPointers[low]->prop->pos.f[1])) {
@@ -455,7 +534,7 @@ s32 coopAiStep(void *list, s32 offset, s32 isPlayerTest)
 /*
  * Which player is "Bond" for an NPC's tick. Enemies: the nearest living player, as before. An ESCORT (Natalya, the one ally
  * whose list follows Bond: `if_guard_distance_to_bond_*`, `guard_try_running_to_bond_position`) keeps ONE player while
- * that player is alive: with two players moving, "the nearest" flips from tick to tick, the distance tests and the run
+ * that player is alive: with several players moving, "the nearest" flips from tick to tick, the distance tests and the run
  * target then belong to different players and the escort stops or jitters between them. She only switches when the
  * other player is less than half as far away (or hers is down). The change of the chosen player is logged, at most one
  * line per second.
@@ -564,35 +643,33 @@ static void coopShow(int player, const char *text)
     set_cur_player(save);
 }
 
-/* The bottom HUD message lives for bondmesscnt ticks after it was set; a negative value hides it. The revive
- * texts used to linger on both views after the revive (or a cancel), so every exit from a revive clears them. */
-static void coopClearMsgs(void)
-{
-    int i;
-    for (i = 0; i < 2; i++) {
-        if (g_playerPointers[i] != NULL) {
-            g_playerPointers[i]->bondmesscnt = -1;
-        }
-    }
-}
 
-static void coopEndRevive(struct CoopRevive *rv)
+/* The bottom HUD message lives for bondmesscnt ticks after it was set; a negative value hides it. Every exit from a
+ * revive clears the revive texts, but only for the two players of that revive: another one may be counting down. */
+static void coopEndRevive(struct CoopRevive *rv, int d)
 {
     if (rv->active) {
+        int r = rv->reviver;
         rv->active = 0;
-        coopClearMsgs();
+        if (g_playerPointers[d] != NULL) {
+            g_playerPointers[d]->bondmesscnt = -1;
+        }
+        if (r >= 0 && r < COOP_MAX_PLAYERS && g_playerPointers[r] != NULL) {
+            g_playerPointers[r]->bondmesscnt = -1;
+        }
     }
     rv->lastShown = -1;
+    rv->reviver = -1;
 }
 
 /* What each player was holding while alive: the game empties both hands once a player has died
  * (bondview2.c, "bonddead && !redbloodfinished"), and a revive has to give them back. */
-static s32 s_held[2][2];
+static s32 s_held[COOP_MAX_PLAYERS][2];
 
 static void coopSnapshotHeld(void)
 {
     int i, save = get_cur_playernum();
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < coopN(); i++) {
         struct player *p = g_playerPointers[i];
         if (p == NULL || p->bonddead != 0) {
             continue;
@@ -603,8 +680,6 @@ static void coopSnapshotHeld(void)
     }
     set_cur_player(save);
 }
-
-#define COOP_PLAYER_SEP 70.0f   /* two players closer than this (horizontally) overlap and block each other */
 
 /* Put a player on a spot, the fields mp_respawn_handler sets for a spawn (height, collision, prop, room tile). */
 static void coopPlaceAt(int idx, f32 x, f32 z, StandTile *tile)
@@ -696,10 +771,10 @@ static int coopFindSpotAway(const struct player *body, const struct player *move
     return 0;
 }
 
-static void coopRevive(int d)
+static void coopRevive(int d, int ri)
 {
     struct player *p = g_playerPointers[d];
-    struct player *r = g_playerPointers[1 - d];
+    struct player *r = (ri >= 0 && ri < COOP_MAX_PLAYERS) ? g_playerPointers[ri] : NULL;
     int save = get_cur_playernum();
     f32 sx, sz;
     StandTile *st;
@@ -710,7 +785,7 @@ static void coopRevive(int d)
         f32 ox = r->prop->pos.f[0] - p->prop->pos.f[0];
         f32 oz = r->prop->pos.f[2] - p->prop->pos.f[2];
         if (ox * ox + oz * oz < COOP_PLAYER_SEP * COOP_PLAYER_SEP && coopFindSpotAway(p, r, &sx, &sz, &st)) {
-            coopPlaceAt(1 - d, sx, sz, st);
+            coopPlaceAt(ri, sx, sz, st);
         }
     }
 
@@ -752,49 +827,75 @@ static void coopRevive(int d)
     set_cur_player(save);
 }
 
+/* One reviver revives one body at a time. */
+static int coopIsReviving(int r)
+{
+    int i;
+    for (i = 0; i < COOP_MAX_PLAYERS; i++) {
+        if (s_rv[i].active && s_rv[i].reviver == r) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int coopReviverNear(const struct player *dn, const struct player *pt)
+{
+    f32 dx = pt->prop->pos.f[0] - dn->prop->pos.f[0];
+    f32 dy = pt->prop->pos.f[1] - dn->prop->pos.f[1];
+    f32 dz = pt->prop->pos.f[2] - dn->prop->pos.f[2];
+    return (dx * dx + dz * dz) < (COOP_REVIVE_RADIUS * COOP_REVIVE_RADIUS) &&
+           dy < COOP_REVIVE_HEIGHT && dy > -COOP_REVIVE_HEIGHT;
+}
+
+/* Any living player can revive any downed one: near the body, their B button (Switch A on a pad other than the first),
+ * 10 s. The countdown belongs to the player who started it and stops when that player walks away or goes down. */
 static void coopReviveTick(void)
 {
-    int d;
+    int d, n = coopN();
     if (g_ClockTimer <= 0) {
         return;     /* paused or controls locked */
     }
-    for (d = 0; d < 2; d++) {
+    for (d = 0; d < n; d++) {
         struct player *dn = g_playerPointers[d];
-        struct player *pt = g_playerPointers[1 - d];
         struct CoopRevive *rv = &s_rv[d];
-        f32 dx, dy, dz;
-        int near;
 
-        if (dn == NULL || pt == NULL || dn->prop == NULL || pt->prop == NULL) {
+        if (dn == NULL || dn->prop == NULL) {
             continue;
         }
-        if (dn->bonddead == 0 || pt->bonddead != 0) {
-            coopEndRevive(rv);   /* the player is up (or the partner is down too): nothing to revive */
+        if (dn->bonddead == 0) {
+            coopEndRevive(rv, d);   /* the player is up: nothing to revive */
             continue;
-        }
-        dx = pt->prop->pos.f[0] - dn->prop->pos.f[0];
-        dy = pt->prop->pos.f[1] - dn->prop->pos.f[1];
-        dz = pt->prop->pos.f[2] - dn->prop->pos.f[2];
-        near = (dx * dx + dz * dz) < (COOP_REVIVE_RADIUS * COOP_REVIVE_RADIUS) &&
-               dy < COOP_REVIVE_HEIGHT && dy > -COOP_REVIVE_HEIGHT;
-
-        if (!rv->active) {
-            /* Switch A is the N64 B button on a second player's pad (use / open). */
-            if (near && dn->bonddead != 0 && dn->deathanimfinished &&
-                (joyGetButtonsPressedThisFrame((s8)(1 - d), B_BUTTON) & B_BUTTON)) {
-                rv->active = 1;
-                rv->timer = (f32)COOP_REVIVE_TICKS;
-                rv->lastShown = -1;
-            }
-        } else if (!near) {
-            coopEndRevive(rv);   /* walked away: the countdown text goes with it */
         }
         if (rv->active) {
-            int secs;
+            struct player *pt = (rv->reviver >= 0 && rv->reviver < n) ? g_playerPointers[rv->reviver] : NULL;
+            if (pt == NULL || pt->prop == NULL || pt->bonddead != 0 || !coopReviverNear(dn, pt)) {
+                coopEndRevive(rv, d);   /* walked away or went down: the countdown text goes with it */
+            }
+        }
+        if (!rv->active && dn->deathanimfinished) {
+            int r;
+            for (r = 0; r < n; r++) {
+                struct player *pt = g_playerPointers[r];
+                if (r == d || pt == NULL || pt->prop == NULL || pt->bonddead != 0 || coopIsReviving(r)) {
+                    continue;
+                }
+                /* Switch A is the N64 B button on a pad (use / open). */
+                if (coopReviverNear(dn, pt) && (joyGetButtonsPressedThisFrame((s8)r, B_BUTTON) & B_BUTTON)) {
+                    rv->active = 1;
+                    rv->reviver = r;
+                    rv->timer = (f32)COOP_REVIVE_TICKS;
+                    rv->lastShown = -1;
+                    break;
+                }
+            }
+        }
+        if (rv->active) {
+            int secs, r = rv->reviver;
             rv->timer -= (f32)g_ClockTimer;
             if (rv->timer <= 0.0f) {
-                coopEndRevive(rv);
-                coopRevive(d);
+                coopEndRevive(rv, d);
+                coopRevive(d, r);
                 continue;
             }
             secs = (int)((rv->timer + 59.0f) / 60.0f);
@@ -802,7 +903,7 @@ static void coopReviveTick(void)
                 char buf[32];
                 rv->lastShown = secs;
                 snprintf(buf, sizeof(buf), "Reviving: %d", secs);
-                coopShow(1 - d, buf);
+                coopShow(r, buf);
                 snprintf(buf, sizeof(buf), "Being revived: %d", secs);
                 coopShow(d, buf);
             }
@@ -811,7 +912,7 @@ static void coopReviveTick(void)
 }
 
 /*
- * Pause and watch. In a 2-player stage the game's own START handler would open the versus watch (Scores / Pause /
+ * Pause and watch. In a multi-player stage the game's own START handler would open the versus watch (Scores / Pause /
  * Exit); co-op wants the SOLO watch (inventory, objectives, mission status, abort). Hooks: START opens the solo
  * watch for player 1 only (GE_WATCH_START; the watch screens read PLAYER_1's pad, options.c), mpwatchMenuTick is
  * turned off (mpmenu.c 589), and the controls lock the solo watch raises while it is open is not cleared by the
@@ -822,13 +923,17 @@ s32 coopWatchStart(void)
 {
     /* Each player opens their own watch, but only one at a time: the watch screens keep their state (selected page,
      * inventory cursor, abort prompt) in globals. */
-    struct player *o;
-    int cur = get_cur_playernum();
-    if (!s_active || cur < 0 || cur > 1) {
+    int i, n = coopN(), cur = get_cur_playernum();
+    if (!s_active || cur < 0 || cur >= n) {
         return 0;
     }
-    o = g_playerPointers[1 - cur];
-    return o == NULL || o->watch_animation_state == WATCH_ANIMATION_0x0;
+    for (i = 0; i < n; i++) {
+        struct player *o = g_playerPointers[i];
+        if (i != cur && o != NULL && o->watch_animation_state != WATCH_ANIMATION_0x0) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /* options.c: every watch screen reads this pad (it used to read PLAYER_1's). The watch code runs in the tick of
@@ -839,8 +944,13 @@ s32 coopWatchStart(void)
  * projectile owned by anything but a player is simulated by the usual one-view-per-frame owner. */
 s32 coopProjSimOwner(s32 ownedByCurrent, struct PropRecord *ownerprop, s32 viewOwner)
 {
-    if (s_active && ownerprop != NULL && ownerprop != g_playerPointers[0]->prop &&
-        (g_playerPointers[1] == NULL || ownerprop != g_playerPointers[1]->prop)) {
+    if (s_active && ownerprop != NULL) {
+        int i;
+        for (i = 0; i < coopN(); i++) {
+            if (g_playerPointers[i] != NULL && ownerprop == g_playerPointers[i]->prop) {
+                return ownedByCurrent;
+            }
+        }
         return viewOwner;
     }
     return ownedByCurrent;
@@ -873,7 +983,7 @@ s32 coopAnyHasPropInInv(struct PropRecord *prop)
     if (!s_active) {
         return bondinvHasPropInInv(prop);
     }
-    for (i = 0; i < 2 && !has; i++) {
+    for (i = 0; i < coopN() && !has; i++) {
         if (g_playerPointers[i] != NULL && g_playerPointers[i]->ptr_inventory_first_in_cycle != NULL) {
             g_CurrentPlayer = g_playerPointers[i];
             has = bondinvHasPropInInv(prop);
@@ -887,7 +997,7 @@ s32 coopAnyHasPropInInv(struct PropRecord *prop)
  * Objective "copy item" (objective_status.c, PROPDEF_OBJECTIVE_COPY_ITEM) asks get_keyanalyzer_flag(), i.e.
  * g_CurrentPlayer->copiedgoldeneye, set on the player who used the key analyzer (gunfire.c analyzeGEKey). Polled from
  * both players' ticks it flipped every frame once the key was copied (Bunker 1 on the console, issue #17), as the
- * collect / deposit objectives did (above). In co-op the key is copied when either player copied it. Hook
+ * collect / deposit objectives did (above). In co-op the key is copied when any player copied it. Hook
  * GE_KEY_COPIED.
  */
 s32 coopAnyCopiedGoldenEye(void)
@@ -896,7 +1006,7 @@ s32 coopAnyCopiedGoldenEye(void)
     if (!s_active) {
         return get_keyanalyzer_flag();
     }
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < coopN(); i++) {
         if (g_playerPointers[i] != NULL && g_playerPointers[i]->copiedgoldeneye) {
             return 1;
         }
@@ -931,8 +1041,8 @@ void coopNpcHurt(struct ChrRecord *chr, f32 damage, f32 subroty, s32 item)
  * weapons lying in the level and guard-dropped ones: propobj.c propPickupByPlayer, op == TICKOP_FREE) exists once per
  * player in co-op: the player who collects it gets it exactly as in solo (the item code runs for g_CurrentPlayer), the
  * prop is NOT freed, it is marked "taken by player N" here; it then disappears from that player's view (objTick:
- * GE_PICKUP_VISIBLE) and cannot be collected again by that player (objTickPlayer: GE_PICKUP_TAKEN) but stays for the other
- * one; when the other player collects it too the prop is freed as the original code does. Keys and the other objects
+ * GE_PICKUP_VISIBLE) and cannot be collected again by that player (objTickPlayer: GE_PICKUP_TAKEN) but stays for the
+ * others; when every player has collected it the prop is freed as the original code does. Keys and the other objects
  * that move into an inventory (TICKOP_GIVETOPLAYER, INV_ITEM_PICKUP: keycards, objective items, tagged props) stay a
  * single prop, because a world prop can be in only one inventory list and cloning an arbitrary object record is not
  * possible from here; doors check the keys of EITHER player (GE_HAS_KEY_FLAGS) and the objective code already asks
@@ -999,7 +1109,7 @@ s32 coopPickupTaken(struct PropRecord *prop)
         return 0;
     }
     cur = get_cur_playernum();
-    if (cur < 0 || cur > 1) {
+    if (cur < 0 || cur >= COOP_MAX_PLAYERS) {
         return 0;
     }
     e = coopFindTaken(prop);
@@ -1011,9 +1121,10 @@ s32 coopPickupOp(struct PropRecord *prop, s32 op)
 {
     struct ObjectRecord *obj;
     struct CoopTaken *e;
-    int cur, other;
+    int cur;
+    unsigned all;
     char what[40];
-    if (!s_active || op != TICKOP_FREE || getPlayerCount() != 2) {
+    if (!s_active || op != TICKOP_FREE || getPlayerCount() < 2) {
         return op;
     }
     obj = prop->obj;
@@ -1021,10 +1132,10 @@ s32 coopPickupOp(struct PropRecord *prop, s32 op)
         return op;   /* objective / script props stay single */
     }
     cur = get_cur_playernum();
-    if (cur < 0 || cur > 1) {
+    if (cur < 0 || cur >= COOP_MAX_PLAYERS) {
         return op;
     }
-    other = 1 - cur;
+    all = (1u << coopN()) - 1u;
     e = coopFindTaken(prop);
     if (e == NULL) {
         if (s_nTaken >= 256) {
@@ -1045,16 +1156,16 @@ s32 coopPickupOp(struct PropRecord *prop, s32 op)
         case PROPDEF_ARMOUR:      snprintf(what, sizeof(what), "body armour %d", (int)((struct BodyArmourRecord *)obj)->amount); break;
         default:                  snprintf(what, sizeof(what), "object type %d", (int)obj->type); break;
     }
-    if (e->mask & (1u << other)) {
-        sysLogPrintf(LOG_NOTE, "coop: player %d took %s @%p (other player: also taken -> removed)", cur, what, (void *)prop);
+    if ((e->mask & all) == all) {
+        sysLogPrintf(LOG_NOTE, "coop: player %d took %s @%p (all players took it -> removed)", cur, what, (void *)prop);
         *e = s_taken[--s_nTaken];   /* the prop is freed now: forget it */
         return op;
     }
-    sysLogPrintf(LOG_NOTE, "coop: player %d took %s @%p (other player: still available)", cur, what, (void *)prop);
-    return TICKOP_NONE;   /* keep the prop for the other player */
+    sysLogPrintf(LOG_NOTE, "coop: player %d took %s @%p (others: still available)", cur, what, (void *)prop);
+    return TICKOP_NONE;   /* keep the prop for the other players */
 }
 
-/* propobj.c door key test: the keys of either player open a door. */
+/* propobj.c door key test: the keys of any player open a door. */
 extern bool bondinvCheckHasKeyFlags(u32 wantkeyflags);
 s32 coopHasKeyFlags(u32 flags)
 {
@@ -1064,7 +1175,7 @@ s32 coopHasKeyFlags(u32 flags)
         return bondinvCheckHasKeyFlags(flags);
     }
     save = get_cur_playernum();
-    for (i = 0; i < 2 && !ret; i++) {
+    for (i = 0; i < coopN() && !ret; i++) {
         if (g_playerPointers[i] != NULL) {
             set_cur_player(i);
             ret = bondinvCheckHasKeyFlags(flags) != 0;
@@ -1086,7 +1197,7 @@ s32 coopWatchLock(s32 lock)
     if (!s_active) {
         return lock;
     }
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < coopN(); i++) {
         struct player *p = g_playerPointers[i];
         if (p != NULL && (p->watch_animation_state == WATCH_ANIMATION_0x5 || p->watch_animation_state == WATCH_ANIMATION_0xc)) {
             return 1;
@@ -1098,20 +1209,18 @@ s32 coopWatchLock(s32 lock)
 /*
  * Cinematics (scripted end-of-mission cameras, the death cam): g_CameraMode and its helpers are global and
  * advanced by whichever player's tick runs. In co-op player 1 (or the surviving player) is the DRIVER: scripted AI
- * runs as the driver, the camera is computed once for the driver, and the other view copies it.
+ * runs as the driver, the camera is computed once for the driver, and the other views copy it.
  */
 static int coopDriver(void)
 {
-    struct player *p0 = g_playerPointers[0];
+    int i;
     if (s_cineDriver >= 0 && g_playerPointers[s_cineDriver] != NULL) {
         return s_cineDriver;
     }
-    struct player *p1 = g_playerPointers[1];
-    if (p0 != NULL && p0->bonddead == 0) {
-        return 0;
-    }
-    if (p1 != NULL && p1->bonddead == 0) {
-        return 1;
+    for (i = 0; i < coopN(); i++) {
+        if (g_playerPointers[i] != NULL && g_playerPointers[i]->bonddead == 0) {
+            return i;   /* the first living player */
+        }
     }
     return 0;
 }
@@ -1160,8 +1269,8 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 /*
  * One full-screen view while a cinematic camera or the watch is up (GE_COOP_SPLIT=1 keeps the split). The player
  * who owns the picture (the one whose watch is open, else the cinematic driver) gets the solo viewport sizes
- * (GE_SPLIT_GE2 / GE_SPLIT_EQ2 in the viewport getters, bondview2.c) and is drawn LAST (coopViewOrder, boss.c,
- * after the per-frame shuffle), so it covers the other half. The other view still ticks and renders underneath:
+ * (GE_SPLIT_GE2 / GE_SPLIT_EQ2 / GE_SPLIT_GE3 in the viewport getters, bondview2.c) and is drawn LAST (coopViewOrder, boss.c,
+ * after the per-frame shuffle), so it covers the other views. The other view still ticks and renders underneath:
  * every per-view sim/tick path keeps running, nothing is skipped, and no buffer sized for the split changes.
  */
 static int coopForceSplit(void)
@@ -1177,10 +1286,10 @@ static int coopForceSplit(void)
 static int coopFullPlayer(void)
 {
     int i;
-    if (!s_active || coopForceSplit() || getPlayerCount() != 2) {
+    if (!s_active || coopForceSplit() || getPlayerCount() < 2) {
         return -1;
     }
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < coopN(); i++) {
         struct player *p = g_playerPointers[i];
         if (p != NULL && p->watch_animation_state != WATCH_ANIMATION_0x0) {
             return i;
@@ -1204,49 +1313,55 @@ s32 coopSplitView(void)
     return !(f >= 0 && f == get_cur_playernum());
 }
 
+/* The full-screen player's entry moves to the last of the first N slots (drawn last, covers the others). */
 void coopViewOrder(void)
 {
-    int f = coopFullPlayer(), pf = -1, po = -1, i;
+    int f = coopFullPlayer(), pf = -1, i, n = coopN();
     if (f < 0) {
         return;
     }
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < n; i++) {
         if (array_PLAYER_IDs[i] == f) {
             pf = i;
-        } else if (array_PLAYER_IDs[i] == 1 - f) {
-            po = i;
         }
     }
-    if (pf >= 0 && po >= 0 && pf < po) {
+    if (pf >= 0 && pf < n - 1) {
         PLAYER_ID t = array_PLAYER_IDs[pf];
-        array_PLAYER_IDs[pf] = array_PLAYER_IDs[po];
-        array_PLAYER_IDs[po] = t;
+        for (i = pf; i < n - 1; i++) {
+            array_PLAYER_IDs[i] = array_PLAYER_IDs[i + 1];
+        }
+        array_PLAYER_IDs[n - 1] = t;
     }
 }
 
-/* The scripted screen fades (AI_ScreenFadeToBlack ...) hit the driver only; the other view follows. */
+/* The scripted screen fades (AI_ScreenFadeToBlack ...) hit the driver only; the other views follow. */
 static void coopMirrorFade(void)
 {
-    int d = coopDriver();
+    int i, d = coopDriver();
     struct player *src = g_playerPointers[d];
-    struct player *dst = g_playerPointers[1 - d];
-    if (src == NULL || dst == NULL || !coopMirrorCamera() || stop_time_flag == 2) {
+    if (src == NULL || !coopMirrorCamera() || stop_time_flag == 2) {
         return;
     }
-    dst->colourscreenred = src->colourscreenred;
-    dst->colourscreengreen = src->colourscreengreen;
-    dst->colourscreenblue = src->colourscreenblue;
-    dst->colourscreenfrac = src->colourscreenfrac;
-    dst->colourfadetime60 = src->colourfadetime60;
-    dst->colourfadetimemax60 = src->colourfadetimemax60;
-    dst->colourfaderedold = src->colourfaderedold;
-    dst->colourfaderednew = src->colourfaderednew;
-    dst->colourfadegreenold = src->colourfadegreenold;
-    dst->colourfadegreennew = src->colourfadegreennew;
-    dst->colourfadeblueold = src->colourfadeblueold;
-    dst->colourfadebluenew = src->colourfadebluenew;
-    dst->colourfadefracold = src->colourfadefracold;
-    dst->colourfadefracnew = src->colourfadefracnew;
+    for (i = 0; i < coopN(); i++) {
+        struct player *dst = g_playerPointers[i];
+        if (i == d || dst == NULL) {
+            continue;
+        }
+        dst->colourscreenred = src->colourscreenred;
+        dst->colourscreengreen = src->colourscreengreen;
+        dst->colourscreenblue = src->colourscreenblue;
+        dst->colourscreenfrac = src->colourscreenfrac;
+        dst->colourfadetime60 = src->colourfadetime60;
+        dst->colourfadetimemax60 = src->colourfadetimemax60;
+        dst->colourfaderedold = src->colourfaderedold;
+        dst->colourfaderednew = src->colourfaderednew;
+        dst->colourfadegreenold = src->colourfadegreenold;
+        dst->colourfadegreennew = src->colourfadegreennew;
+        dst->colourfadeblueold = src->colourfadeblueold;
+        dst->colourfadebluenew = src->colourfadebluenew;
+        dst->colourfadefracold = src->colourfadefracold;
+        dst->colourfadefracnew = src->colourfadefracnew;
+    }
 }
 
 /* src/game/lv.c, once per frame right after lvlSetMultipliersForDifficulty (which resets g_AiHealthModifier). */
@@ -1255,30 +1370,41 @@ static void coopMirrorFade(void)
 static void coopLogChanges(void)
 {
     static int init = 0;
-    static s32 mission, cam, stopt, lock, mainstage, full, driver, w0, w1, d0, d1, od;
+    static s32 mission, cam, stopt, lock, mainstage, full, driver, od;
+    static s32 w[COOP_MAX_PLAYERS], dd[COOP_MAX_PLAYERS];
+    s32 nw[COOP_MAX_PLAYERS], nd[COOP_MAX_PLAYERS];
+    int i, same;
     s32 nmission = (s32)get_mission_state(), ncam = (s32)bondviewGetCameraMode(), nstop = stop_time_flag;
     s32 nlock = lvlGetControlsLockedFlag(), nmain = g_MainStageNum, nfull = coopFullPlayer(), ndriver = coopDriver();
-    s32 nw0 = g_playerPointers[0] ? (s32)g_playerPointers[0]->watch_animation_state : -1;
-    s32 nw1 = g_playerPointers[1] ? (s32)g_playerPointers[1]->watch_animation_state : -1;
-    s32 nd0 = g_playerPointers[0] ? (s32)g_playerPointers[0]->bonddead : -1;
-    s32 nd1 = g_playerPointers[1] ? (s32)g_playerPointers[1]->bonddead : -1;
     s32 nod = (s32)objectiveIsAllComplete();
-    if (init && nmission == mission && ncam == cam && nstop == stopt && nlock == lock && nmain == mainstage &&
-        nfull == full && ndriver == driver && nw0 == w0 && nw1 == w1 && nd0 == d0 && nd1 == d1 && nod == od) {
+    for (i = 0; i < COOP_MAX_PLAYERS; i++) {
+        nw[i] = g_playerPointers[i] ? (s32)g_playerPointers[i]->watch_animation_state : -1;
+        nd[i] = g_playerPointers[i] ? (s32)g_playerPointers[i]->bonddead : -1;
+    }
+    same = init && nmission == mission && ncam == cam && nstop == stopt && nlock == lock && nmain == mainstage &&
+           nfull == full && ndriver == driver && nod == od;
+    for (i = 0; i < COOP_MAX_PLAYERS && same; i++) {
+        same = nw[i] == w[i] && nd[i] == dd[i];
+    }
+    if (same) {
         return;
     }
     sysLogPrintf(LOG_NOTE, "coop: state missionstate=%d cameramode=%d stop_time_flag=%d locked=%d mainstage=%d fullscreen=%d driver=%d "
-                           "watch=%d/%d dead=%d/%d scripted=%d objectives_complete=%d",
-                 (int)nmission, (int)ncam, (int)nstop, (int)nlock, (int)nmain, (int)nfull, (int)ndriver, (int)nw0, (int)nw1,
-                 (int)nd0, (int)nd1, gameScriptedCameraActive(), (int)nod);
+                           "watch=%d/%d/%d/%d dead=%d/%d/%d/%d scripted=%d objectives_complete=%d",
+                 (int)nmission, (int)ncam, (int)nstop, (int)nlock, (int)nmain, (int)nfull, (int)ndriver,
+                 (int)nw[0], (int)nw[1], (int)nw[2], (int)nw[3], (int)nd[0], (int)nd[1], (int)nd[2], (int)nd[3],
+                 gameScriptedCameraActive(), (int)nod);
     init = 1;
-    mission = nmission; cam = ncam; stopt = nstop; lock = nlock; mainstage = nmain; full = nfull; driver = ndriver;
-    w0 = nw0; w1 = nw1; d0 = nd0; d1 = nd1; od = nod;
+    mission = nmission; cam = ncam; stopt = nstop; lock = nlock; mainstage = nmain; full = nfull; driver = ndriver; od = nod;
+    for (i = 0; i < COOP_MAX_PLAYERS; i++) {
+        w[i] = nw[i];
+        dd[i] = nd[i];
+    }
 }
 
 void coopFrameTick(void)
 {
-    static const f32 kHealth[3] = { 1.0f, 1.5f, 2.0f };
+    static const f32 kBonus[3] = { 0.0f, 0.5f, 1.0f };   /* enemy health bonus per partner */
     if (!s_active) {
         return;
     }
@@ -1286,7 +1412,7 @@ void coopFrameTick(void)
         s_cineDriver = -1;
     }
     coopLogChanges();
-    if (getPlayerCount() != 2) {
+    if (getPlayerCount() < 2) {
         return;
     }
     /* A solo mission leaves its intro in CAMERAMODE_FP; the versus swirl co-op starts with leaves CAMERAMODE_NONE. The
@@ -1301,7 +1427,7 @@ void coopFrameTick(void)
         } else if (s_sawMp && !s_fpDone && m == CAMERAMODE_NONE) {
             int i, save = get_cur_playernum();
             s_fpDone = 1;
-            for (i = 0; i < 2; i++) {
+            for (i = 0; i < coopN(); i++) {
                 if (g_playerPointers[i] != NULL) {
                     set_cur_player(i);
                     bondviewSetCameraMode(CAMERAMODE_FP);
@@ -1311,18 +1437,19 @@ void coopFrameTick(void)
             sysLogPrintf(LOG_NOTE, "coop: spawn swirl over, camera mode set to FP like a solo mission");
         }
     }
-    /* A lower g_AiHealthModifier makes the player's shots weaker against guards. */
-    g_AiHealthModifier /= kHealth[(s_health < 0 || s_health > 2) ? 1 : s_health];
+    /* A lower g_AiHealthModifier makes the players' shots weaker against guards: 1 + bonus * (partners). */
+    g_AiHealthModifier /= 1.0f + kBonus[(s_health < 0 || s_health > 2) ? 1 : s_health] * (f32)(coopN() - 1);
     coopMirrorFade();
     coopReviveTick();
     coopSnapshotHeld();
 }
 
 /*
- * Mode menu (front.c, "Co-op" between Select Mission and Multiplayer) and the character select for player 2.
- * Choosing Co-op runs the multiplayer character select for two players with slot 0 pre-selected as Bond
- * (mp_chr_setup[0]) and only slot 1 free (pad 2 picks; a duplicate of Bond is refused by the screen itself), then
- * continues exactly like Select Mission with gamemode solo; the intent makes the next stage start a co-op stage.
+ * Mode menu (front.c, "Co-op" between Select Mission and Multiplayer) and the character select for players 2 to N.
+ * Choosing Co-op opens a small modal for the player count (2 to 4; coopModal* below), then runs the multiplayer
+ * character select for N players with slot 0 pre-selected as Bond (mp_chr_setup[0]) and slots 1..N-1 free (each on
+ * their own pad; a duplicate is refused by the screen itself), then continues exactly like Select Mission with
+ * gamemode solo; the intent makes the next stage start a co-op stage.
  * B on the screen goes back to the mode menu. The multiplayer state the screen borrows (gamemode,
  * selected_num_players) is put back on every exit.
  */
@@ -1347,8 +1474,100 @@ int coopMenuIntent(void)
     return s_intent || s_coopCursor;
 }
 
+/* The player count last chosen (2 initially, kept for the session, not saved). */
+int coopMenuPlayers(void)
+{
+    return s_lastN;
+}
+
+/*
+ * The player-count modal over the mode menu (the new menu draws it, interface_menu06_modesel feeds it). It owns the input
+ * while open: the mode menu returns right after coopModalTick, so the press that confirms or cancels is not seen
+ * by the rows underneath. Up / left and down / right (d-pad or stick of the first pad) move, A / START / Z confirm,
+ * B cancels. The selection starts on the last chosen count.
+ */
+int coopModalActive(void)
+{
+    return s_modal;
+}
+
+int coopModalSel(void)
+{
+    return s_modalSel;    /* 0..2: 2, 3 or 4 players */
+}
+
+/* Render thread: the row the mouse moved onto (-1 none) and whether it was clicked; coopModalTick applies it. */
+void coopModalPointer(int row, int click)
+{
+    if (row < 0 || row > 2) {
+        return;
+    }
+    s_modalPtrRow = row;
+    if (click) {
+        s_modalPtrClick = 1;
+    }
+}
+
+void coopModalOpen(void)
+{
+    s_modalPtrRow = -1;
+    s_modalPtrClick = 0;
+    s_modal = 1;
+    s_modalSel = s_lastN - 2;
+    s_modalStick = 1;     /* a stick already held does not move the cursor until it has been released */
+}
+
+/* 0 = still open, 2..4 = confirmed with that many players, -1 = cancelled. */
+int coopModalTick(void)
+{
+    int move = 0, stick;
+    s8 sx, sy;
+    if (!s_modal) {
+        return 0;
+    }
+    if (s_modalPtrRow >= 0) {
+        s_modalSel = s_modalPtrRow;
+        s_modalPtrRow = -1;
+    }
+    if (s_modalPtrClick) {
+        s_modalPtrClick = 0;
+        s_modal = 0;
+        s_lastN = s_modalSel + 2;
+        return s_lastN;
+    }
+    if (joyGetButtonsPressedThisFrame(0, B_BUTTON)) {
+        s_modal = 0;
+        return -1;
+    }
+    if (joyGetButtonsPressedThisFrame(0, A_BUTTON | START_BUTTON | Z_TRIG)) {
+        s_modal = 0;
+        s_lastN = s_modalSel + 2;
+        return s_lastN;
+    }
+    if (joyGetButtonsPressedThisFrame(0, U_JPAD | L_JPAD)) {
+        move = -1;
+    } else if (joyGetButtonsPressedThisFrame(0, D_JPAD | R_JPAD)) {
+        move = 1;
+    }
+    sx = joyGetStickX(0);
+    sy = joyGetStickY(0);
+    stick = (sy > 40 || sx < -40) ? -1 : ((sy < -40 || sx > 40) ? 1 : 0);
+    if (stick != 0 && !s_modalStick) {
+        move = stick;
+    }
+    s_modalStick = stick != 0;
+    s_modalSel += move;
+    if (s_modalSel < 0) {
+        s_modalSel = 0;
+    } else if (s_modalSel > 2) {
+        s_modalSel = 2;
+    }
+    return 0;
+}
+
 void coopMenuClear(void)
 {
+    s_modal = 0;
     s_coopCursor = 0;
     s_intent = 0;
     s_chosen = 0;
@@ -1365,6 +1584,7 @@ void coopMenuSelect(void)
 
 int coopMenuTake(void)
 {
+    int i;
     if (!s_chosen) {
         return 0;
     }
@@ -1373,22 +1593,49 @@ int coopMenuTake(void)
     s_charsel = 1;
     s_savedNum = selected_num_players;
     gamemode = GAMEMODE_MULTI;     /* the character select asks get_selected_num_players() */
-    selected_num_players = 2;
+    selected_num_players = s_lastN;
     player_char[0] = 0;            /* Bond */
-    if (player_char[1] < 0 || player_char[1] == 0) {
-        player_char[1] = 1;
+    /* slots 1..N-1: a valid character other than Bond, different for every slot */
+    for (i = 1; i < s_lastN; i++) {
+        int j, ok = player_char[i] > 0;
+        for (j = 1; j < i && ok; j++) {
+            if (player_char[j] == player_char[i]) {
+                ok = 0;
+            }
+        }
+        if (!ok) {
+            int c;
+            for (c = 1; c < 64; c++) {
+                int dup = 0;
+                for (j = 1; j < i; j++) {
+                    if (player_char[j] == c) {
+                        dup = 1;
+                    }
+                }
+                if (!dup) {
+                    player_char[i] = c;
+                    break;
+                }
+            }
+        }
     }
     return 1;
 }
 
-/* Start of interface_menu0F_mpcharsel: slot 0 stays ready as Bond, B leaves. Returns 1 when the frame is done. */
+/* Start of interface_menu0F_mpcharsel: slot 0 stays ready as Bond, B on pad 1 (or on the pad of a slot that has not
+ * chosen yet) leaves. Returns 1 when the frame is done. */
 int coopCharSelectPre(void)
 {
     if (!s_charsel) {
         return 0;
     }
-    if (joyGetButtonsPressedThisFrame(0, B_BUTTON) ||
-        (!player_has_selected_char[1] && joyGetButtonsPressedThisFrame(1, B_BUTTON))) {
+    int i, back = joyGetButtonsPressedThisFrame(0, B_BUTTON);
+    for (i = 1; i < s_lastN; i++) {
+        if (!player_has_selected_char[i] && joyGetButtonsPressedThisFrame(i, B_BUTTON)) {
+            back = 1;
+        }
+    }
+    if (back) {
         s_charsel = 0;
         s_coopCursor = 1;
         selected_num_players = s_savedNum;
@@ -1406,7 +1653,7 @@ int coopCharSelectPre(void)
     return 0;
 }
 
-/* End of interface_menu0F_mpcharsel, both ready: on to the mission select instead of the multiplayer options. */
+/* End of interface_menu0F_mpcharsel, all ready: on to the mission select instead of the multiplayer options. */
 int coopCharSelectDone(void)
 {
     if (!s_charsel) {

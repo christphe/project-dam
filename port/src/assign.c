@@ -37,6 +37,7 @@ static int s_armed = 0;              /* every button released since the screen o
 static int s_switchAsked = 0;
 static SDL_atomic_t s_forced;        /* the menu asked for the screen (to swap the controllers) */
 static int s_manual = 0;             /* the screen was asked for by the menu: it stays whatever the screen the game is on */
+static SDL_atomic_t s_drain;         /* the screen closed: the game still ignores input until every button and key is up */
 
 #define ASSIGN_MENU_RUN_STAGE 11   /* current_menu while a mission runs (input.c's GE_MENU_RUN_STAGE) */
 static int frontEnd(void)
@@ -105,6 +106,11 @@ void portAssignTick(void)
     }
     return;   /* the front end asks through portNeedPads, when a mode needs more pads than are connected */
 #else
+    if (SDL_AtomicGet(&s_drain) && !SDL_AtomicGet(&s_active)) {
+        /* the press that closed the screen must not reach the next one (a character select would take it) */
+        if (inputAnyPadHeld() || anyKeyDown() || SDL_GetKeyboardState(NULL)[SDL_SCANCODE_ESCAPE]) return;
+        SDL_AtomicSet(&s_drain, 0);
+    }
     if (!SDL_AtomicGet(&s_active) && SDL_AtomicSet(&s_forced, 0)) {   /* the menu asked: start over, for the players there are */
         int n = frontEnd() ? get_selected_num_players() : getPlayerCount();
         if (SDL_AtomicGet(&s_want) > 0) n = SDL_AtomicGet(&s_want);
@@ -132,6 +138,7 @@ void portAssignTick(void)
     if (SDL_GetKeyboardState(NULL)[SDL_SCANCODE_ESCAPE]) {   /* skip: the game's own order stays */
         if (!s_manual) s_dismissedCount = count;
         s_manual = 0;
+        SDL_AtomicSet(&s_drain, 1);
         SDL_AtomicSet(&s_active, 0);
         return;
     }
@@ -168,6 +175,7 @@ void portAssignTick(void)
     if (done) {
         configSave();
         s_manual = 0;
+        SDL_AtomicSet(&s_drain, 1);
         SDL_AtomicSet(&s_active, 0);
         sysLogPrintf(LOG_INFO, "assign: devices chosen and saved");
     }
@@ -176,7 +184,7 @@ void portAssignTick(void)
 
 int portAssignBlocks(void)
 {
-    return SDL_AtomicGet(&s_active);
+    return SDL_AtomicGet(&s_active) || SDL_AtomicGet(&s_drain);
 }
 
 int portAssignState(char names[][48], int *step, int *count)

@@ -2852,9 +2852,9 @@ Gfx *constructor_menu05_fileselect(Gfx *DL)
 //********************************************************************************************************
 //MODE SELECT
 //********************************************************************************************************
-#if defined(PORT) && defined(__SWITCH__)
-/* D960: a "Co-op" row between Select Mission and Multiplayer (port/src/coop.c). The other rows move down, at 24
- * instead of 32 units, so four of them fit. Other builds keep the original numbers. */
+#ifdef PORT
+/* D960: a "Co-op" row (2 to 4 players) between Select Mission and Multiplayer (port/src/coop.c). The other rows move
+ * down, at 24 instead of 32 units, so four of them fit. The N64 build keeps the original numbers. */
 #define COOP_MODEMENU 1
 void coopMenuClear(void);
 void coopMenuSelect(void);
@@ -2862,6 +2862,10 @@ int  coopMenuTake(void);
 int  coopCharSelectPre(void);
 int  coopCharSelectDone(void);
 int  coopMenuIntent(void);
+int  coopModalActive(void);
+int  coopModalSel(void);
+void coopModalOpen(void);
+int  coopModalTick(void);
 #define MODE_V_COOP      239.0f
 #define MODE_V_MULTI     263.0f
 #define MODE_V_CHEAT     287.0f
@@ -2890,10 +2894,20 @@ int  coopMenuIntent(void);
 #define MODE_LBL_CHEAT   "3.\n"
 #endif
 
+#ifdef COOP_MODEMENU
+/* Pressing CO-OP opens a modal for the player count (state and input in coop.c). Fewer pads than players: the
+ * controller screen opens, and the character select follows by itself once there are enough. The modal is drawn by
+ * the new menu (port/src/menu, menu::drawCoopCount), over the game's picture. */
+static s32 coop_pads_wait = 0;
+static s32 coop_wait_n = 2;
+
+#endif
+
 void init_menu06_modeselect(void)
 {
 #ifdef COOP_MODEMENU
     coopMenuClear();
+    coop_pads_wait = 0;
 #endif
     gamemode = GAMEMODE_INTRO;
     tab_next_selected = FALSE;
@@ -2913,6 +2927,50 @@ void interface_menu06_modesel(void)
 {
     u32 i;
 
+#ifdef COOP_MODEMENU
+    if (coopModalActive())
+    {
+        /* the modal owns the input: the rows underneath (and B, and the cursor) do not see this frame */
+        s32 coop_n = coopModalTick();
+        if (coop_n > 0)
+        {
+            coop_wait_n = coop_n;
+            if (GE_NEED_PADS(coop_n))
+            {
+                coopMenuSelect();
+                sndPlaySfx(g_musicSfxBufferPtr, DOOR_METAL_CLOSE_SFX, 0);
+                if (coopMenuTake())
+                {
+                    frontChangeMenu(MENU_MP_CHAR_SELECT, FALSE);
+                }
+            }
+            else
+            {
+                coop_pads_wait = 180;   /* ~3 s for the pads to come back */
+            }
+        }
+        else if (coop_n < 0)
+        {
+            sndPlaySfx(g_musicSfxBufferPtr, DOOR_METAL_CLOSE2_SFX, 0);
+        }
+        return;
+    }
+    if (coop_pads_wait > 0)
+    {
+        coop_pads_wait--;
+        if (joyGetControllerCount() >= coop_wait_n)   /* no request here: only the confirm asks */
+        {
+            coop_pads_wait = 0;
+            coopMenuSelect();
+            sndPlaySfx(g_musicSfxBufferPtr, DOOR_METAL_CLOSE_SFX, 0);
+            if (coopMenuTake())
+            {
+                frontChangeMenu(MENU_MP_CHAR_SELECT, FALSE);
+                return;
+            }
+        }
+    }
+#endif
     is_cheat_menu_available = FALSE;
     for (i=CHEAT_EXTRA_MP_CHARS; i != CHEAT_INVALID; i++)
     {
@@ -2971,22 +3029,9 @@ void interface_menu06_modesel(void)
     else if ((MODE_V_COOP <= cursor_v_pos) && (GE_MP_AVAIL() >= 2))
     {
         mission_difficulty_highlighted = 1;
-        /* fewer than 2 pads: the controller screen opens, and the character select follows by itself once there are 2 */
-        static s32 coop_pads_wait = 0;
-        s32 coop_go = 0;
-        if (coop_pads_wait > 0)
+        if (coop_pads_wait == 0 && joyGetButtonsPressedThisFrame(PLAYER_1, START_BUTTON|Z_TRIG|A_BUTTON))
         {
-            coop_pads_wait--;
-            coop_go = (joyGetControllerCount() >= 2) ? 1 : 0;   /* no request here: only the press asks */
-            if (coop_go) coop_pads_wait = 0;
-        }
-        else if (joyGetButtonsPressedThisFrame(PLAYER_1, START_BUTTON|Z_TRIG|A_BUTTON))
-        {
-            if (GE_NEED_PADS(2)) coop_go = 1; else coop_pads_wait = 180;   /* ~3 s for the pads to come back */
-        }
-        if (coop_go)
-        {
-            coopMenuSelect();
+            coopModalOpen();   /* the player count; the modal's confirm continues at the top of this function */
             sndPlaySfx(g_musicSfxBufferPtr, DOOR_METAL_CLOSE_SFX, 0);
         }
     }
@@ -3197,6 +3242,12 @@ Gfx* constructor_menu06_modesel(Gfx* DL)
     }
 
     DL = frontAddPreviousTabText(DL);
+#ifdef COOP_MODEMENU
+    if (coopModalActive())
+    {
+        return DL;   /* no cursor while the modal is up: the new menu draws it (menu::drawCoopCount) */
+    }
+#endif
     DL = frontDrawCursor(DL);
     return DL;
 }

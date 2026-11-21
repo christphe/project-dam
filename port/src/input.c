@@ -365,6 +365,13 @@ static int inputMpKbmP1(void)
 {
     return (mpRoute() & MPR_KBMP1) != 0;
 }
+#define GE_MENU_MP_CHAR_SELECT 15
+/* Pads move up one slot behind the keyboard/mouse player 1: in a 2+ player stage, and on the character select (MP and
+ * co-op), where each player picks with their own device; other menus keep the first pad on controller 0. */
+static int inputSeatShift(void)
+{
+    return (inputMpSplit() || current_menu == GE_MENU_MP_CHAR_SELECT) && inputMpKbmP1();
+}
 /* Pads own P1 (2+ pads, not KbmP1): the keyboard/mouse block is skipped. */
 static int inputMpPadsOwnP1(void)
 {
@@ -388,7 +395,7 @@ static int kbmBlockedForP1(void) { return 0; }
 static SDL_GameController *slotPad(int idx)
 {
     if (idx < 0 || idx >= MAX_PADS) return NULL;
-    if (inputMpSplit() && inputMpKbmP1()) return idx == 0 ? NULL : pads[idx - 1];
+    if (inputSeatShift()) return idx == 0 ? NULL : pads[idx - 1];
     if (idx == 0 && !inputMpSplit() && padBlockedForP1()) return NULL;
     return pads[idx];
 }
@@ -942,7 +949,7 @@ static int padSeatForSlot(int idx)
 {
     if (idx < 0) idx = 0;
     if (idx >= MAX_PADS) idx = MAX_PADS - 1;
-    if (inputMpSplit() && inputMpKbmP1() && idx > 0) return idx - 1;
+    if (inputSeatShift() && idx > 0) return idx - 1;
     return idx;
 }
 
@@ -1540,6 +1547,13 @@ void inputPadPrefSet(int player, const char *id)
 int inputP1Type(void) { return p1Type; }
 
 /* A pad whose button went down since the last call: its id (as the Controller row stores it). 0 = none. */
+int inputAnyPadHeld(void)
+{
+    for (int s = 0; s < MAX_PADS; ++s)
+        if (pads[s] && padReadRaw(pads[s])) return 1;
+    return 0;
+}
+
 int inputPadNewPress(char *id, int n)
 {
     static u32 prev[MAX_PADS];
@@ -2862,17 +2876,23 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
     const int wheelOpen = portWheelBlocks(idx);
 
     /* The press that closed the menu (Resume, Back...) must not reach the game as a new press: after the menu closes,
-     * every pad stays neutral until its buttons are let go. */
+     * every pad stays neutral until its buttons are let go. Same when the pads move one slot behind the keyboard
+     * (inputSeatShift: the co-op / MP character select): the A that confirmed the mode menu on slot 0 would otherwise
+     * reach the next slot as a new press and pick that player's character. */
     {
-        static int s_menuWasOpen = 0;
+        static int s_menuWasOpen = 0, s_shiftWas = 0;
         static u8 s_untilRelease[MAX_PADS];
         if (idx == 0) {
             const int open = optionsOverlayIsOpen();
             if (s_menuWasOpen && !open) memset(s_untilRelease, 1, sizeof s_untilRelease);
             s_menuWasOpen = open;
+            const int shift = inputSeatShift();
+            if (shift != s_shiftWas) memset(s_untilRelease, 1, sizeof s_untilRelease);
+            s_shiftWas = shift;
         }
         if (idx >= 0 && idx < MAX_PADS && s_untilRelease[idx]) {
-            const u32 held = pads[idx] ? padActHeld(&padTabGet()->seat[padSeatForSlot(idx)], padReadRaw(pads[idx])) : 0;
+            SDL_GameController *sp = slotPad(idx);
+            const u32 held = sp ? padActHeld(&padTabGet()->seat[padSeatForSlot(idx)], padReadRaw(sp)) : 0;
             if (held) {
                 padActPrev[idx] = held;
                 if (stick_x) *stick_x = 0;

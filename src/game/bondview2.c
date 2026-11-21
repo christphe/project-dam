@@ -7913,7 +7913,7 @@ s16 bondviewGetCurrentPlayerViewportWidth(void)
         return VIEWPORT_WIDTH_4P;   /* two players side by side: half the width, the full height */
     }
 
-    if (getPlayerCount() >= 3)
+    if (GE_SPLIT_GE3())
     {
         return VIEWPORT_WIDTH_4P;
     }
@@ -7943,7 +7943,7 @@ s16 get_curplayer_viewport_ulx(void)
         return get_cur_playernum() == 1 ? 0xa1 : 0;
     }
 
-    if (2 < getPlayerCount())
+    if (GE_SPLIT_GE3())
     {
         if ((get_cur_playernum() == 1) || (get_cur_playernum() == 3))
         {
@@ -8024,7 +8024,7 @@ s16 bondviewGetCurrentPlayerViewportUly(void)
         return VIEWPORT_ULY_2P_PLAYER_2;
     }
 
-    if (getPlayerCount() >= 3)
+    if (GE_SPLIT_GE3())
     {
         if (get_cur_playernum() < 2)
         {

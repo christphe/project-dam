@@ -109,6 +109,7 @@ const char *inputPadListName(int k);
 const char *inputPadListId(int k);
 const char *inputPadPref(int player);              /* "" = first free */
 void inputPadPrefSet(int player, const char *id);
+int  inputAnyPadHeld(void);                        /* a button of any gamepad is down */
 unsigned inputPadHeldSources(int seat);            /* bit i = source i held */
 int  inputPadPresetStep(int cur, int dir);
 int *inputPadPresetPtr(int seat);                 /* D518: per-seat preset value */

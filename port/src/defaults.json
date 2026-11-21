@@ -270,7 +270,7 @@
   },
   "Game.CoopEnemyHealth": {
    "value": 1,
-   "why": "project-dam: = 150% (coop.c)"
+   "why": "project-dam: = +50% per extra player (coop.c)"
   },
   "Game.NoHitFlash": {
    "value": 0,

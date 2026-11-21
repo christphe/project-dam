@@ -7,7 +7,8 @@
 - Modern control style: right trigger fires, left trigger aims, the face buttons reload, switch weapon and use (by position, so a Nintendo pad gets the same hands), a click of the right stick crouches. Hold the left bumper for a weapon wheel or the right one for a gadget wheel and pick with the right stick: you keep walking, the wheel only takes the aim
 - Check for updates in the first menu (PC and Switch): "Update available" opens the release notes, and on the Switch installs the new version (A twice: it downloads, checks the hash and replaces the NRO, #68). The version is shown beside the title
 - Aspect ratio Auto, Fit, 4:3, 16:9 or 21:9, and a split screen with the two players side by side
-- Co-op and Multiplayer stay open with one controller: Co-op asks for the second controller when it is chosen, Multiplayer asks for as many as there are players when Start is pressed (the Controllers button does the same any time, the system's controller screen on the Switch)
+- Co-op for 2, 3 or 4 players (#75), and the Co-op row of the mode menu now also on PC: choosing Co-op asks how many players, each partner picks a character, and the mission runs in a split screen of two or four views; any player standing at a downed player's body can revive them, and the mission fails when everyone is down; Co-op enemy health is now a bonus per extra player (+0, +50 or +100%, so +50% gives 150% at 2 players, 200% at 3 and 250% at 4)
+- Co-op and Multiplayer stay open with one controller: Co-op asks for the controllers it needs when it is chosen, Multiplayer asks for as many as there are players when Start is pressed (the Controllers button does the same any time, the system's controller screen on the Switch)
 - Vertical field of view in degrees (60 is the original) with the horizontal one shown for the window's aspect ratio; a crosshair page with a preview of the sprite at its real size, colour and opacity; the crosshair size goes from 10 to 100%
 
 ### Changed
@@ -18,6 +19,7 @@
 ### Fixed
 - PC: the optional update check (Game.CheckUpdates, off by default) looked at the upstream port's releases and compared them with the upstream version; it now looks at Project Dam's releases and only announces one that has a PC build
 - The button that closes the menu no longer reaches the game as a press
+- PC, character select with the keyboard and mouse as player 1: the first pad now picks for player 2 (it drove player 1 with the keyboard, and the last player had no device); the button that closes the "who plays with what" screen, or that confirms the mode menu, no longer picks a character on the next screen
 - Switch: the controllers vibrate when the game uses the Rumble Pak (shots, hits, explosions), with the Vibration setting (#40)
 
 ## [0.3.0] - 2026-11-19

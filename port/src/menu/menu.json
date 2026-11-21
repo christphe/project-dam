@@ -190,7 +190,7 @@
         { "id": "aiview", "key": "Game.AIWideView", "label": "Gameplay view area", "type": "choice",
           "options": [ { "id": "original", "label": "Original", "value": 0 }, { "id": "extended", "label": "Extended", "value": 1 } ] },
         { "id": "coop", "key": "Game.CoopEnemyHealth", "label": "Co-op enemy health", "type": "choice",
-          "options": [ { "id": "h100", "label": "100%", "value": 0 }, { "id": "h150", "label": "150%", "value": 1 }, { "id": "h200", "label": "200%", "value": 2 } ] },
+          "options": [ { "id": "h100", "label": "+0%", "value": 0 }, { "id": "h150", "label": "+50%", "value": 1 }, { "id": "h200", "label": "+100%", "value": 2 } ] },
         { "id": "noflash", "key": "Game.NoHitFlash", "label": "No hit flash", "type": "toggle" },
         { "id": "timer", "key": "Game.MissionTimer", "label": "Mission timer", "type": "toggle" },
         { "id": "skip", "key": "Game.SkipIntro", "label": "Skip intro", "type": "toggle" },
