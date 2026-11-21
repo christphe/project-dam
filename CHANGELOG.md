@@ -18,6 +18,7 @@
 - The mouse always aims Centered; Input.AimMode is the gamepad's. Escape no longer frees the mouse
 
 ### Fixed
+- PC, 2 or more players: the options menu opens on the pages of the player who opened it, and only that player's device drives it (any pad's Select opens it, in the menus too). Each player's pad settings (preset, bindings, Modern) are that player's even with the keyboard and mouse as player 1, and the Modern wheels read the right pad (#83)
 - PC: the optional update check (Game.CheckUpdates, off by default) looked at the upstream port's releases and compared them with the upstream version; it now looks at Project Dam's releases and only announces one that has a PC build
 - The button that closes the menu no longer reaches the game as a press
 - PC, character select with the keyboard and mouse as player 1: the first pad now picks for player 2 (it drove player 1 with the keyboard, and the last player had no device); the button that closes the "who plays with what" screen, or that confirms the mode menu, no longer picks a character on the next screen

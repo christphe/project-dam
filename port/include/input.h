@@ -70,8 +70,9 @@ int   inputPadNewPress(char *id, int n);   /* a pad button went down: that pad's
 const char *inputPadNameForId(const char *id);
 int   inputPadCount(void);
 int   inputPadIsModern(int seat);       /* the seat plays with the Modern layout (LB / RB open the wheels) */
-int   inputOverlayOwnerSeat(void);  /* the player (seat 0..3) whose pad opened the menu */
-int   inputOverlayOwnerPad(void);   /* D472: pad driving the F10 overlay */
+int   inputSlotPadSeat(int slot);   /* pads[] seat of the pad that plays this slot (player), -1 = none */
+int   inputOverlayOwnerSeat(void);  /* the player (0..3) who opened the menu; its pages are edited */
+int   inputOverlayOwnerPad(void);   /* D472: pads[] seat driving the menu, -1 = keyboard + mouse only */
 short inputPadAxis(int idx, SDL_GameControllerAxis a);
 
 /* Queue a mouse-wheel weapon-cycle input (one short A-button press). Sign is
