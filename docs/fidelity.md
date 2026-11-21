@@ -7,6 +7,8 @@ modified_time: '2026-10-05'
 
 ## Fidelity status
 
+> This page is the upstream port's audit, which aims to keep the game's logic intact. Project Dam does not have that goal: it adds quality-of-life changes and design choices of its own, some of them in the game code (see the README, "Where it differs from upstream"). The audit below was not re-run for them.
+
 This page answers one question plainly: *how faithfully does the port
 actually reproduce the original N64 game's logic*?
 The audit was run end-to-end on 2026-09-15 and re-verified for the v0.3.0

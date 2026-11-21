@@ -13,9 +13,10 @@ Stages:
    a plain `git clone` already has what the PC build compiles.)*
 2. **Build the port** (§3): a CMake build compiling the game sources plus the
    `port/` layer into a native executable. Needs no ROM.
-3. **Generate the PC asset sidecars** (§4): the C converter (`port/convert/`) turns
+3. **The PC asset sidecars** (§4): the C converter (`port/convert/`) turns
    ROM model / stage data into the PC-layout `data/pcmodels-*` / `data/pccg-*`
-   files the port loads at runtime. **Required to run.**
+   files the port loads at runtime. The game does this itself on first launch,
+   so you only run the converter by hand to pre-generate them.
 
 You need a GoldenEye 007 N64 ROM you legally own (`.z64`, big-endian). See the
 [ROM table in the user guide](user-guide.md#whats-a-rom)
@@ -241,14 +242,15 @@ and one `ge_add_test()` line in `tests/CMakeLists.txt`.
 
 ---
 
-## 4. Generate the PC asset sidecars (required to run)
+## 4. The PC asset sidecars (made on first launch)
 
 The port does **not** read model geometry, stage bg/stan data, or per-level
 setup data from the raw ROM at runtime; it reads them from PC-layout *sidecar*
-files under `data/`, produced offline by three converters. **Without them the
-game shows the intro logos and then crashes** in
-`modelPromoteNodeOffsetsToPointers` (finding D179) or on the first level load
-(missing stage setup).
+files under `data/`, produced by three converters. The game runs them itself
+on first launch (a boot screen shows the progress) and stops with a message if
+it cannot, rather than crashing later in
+`modelPromoteNodeOffsetsToPointers` (finding D179) or on the first level load.
+[First launch and the ROM conversion](wiki/first-launch.md) has the details.
 
 Put your ROM in `data/` first (same file the game runs from):
 
@@ -303,8 +305,8 @@ for each pass is in the header comments of `port/convert/conv_d43.c`,
 ./build-pc/ge007.x86_64          # run from the repo root
 ```
 
-The ROM in `data/` (from step 4) and the sidecars are both required at
-runtime. `ge007.ini` is written under `data/` on first launch.
+The ROM in `data/` (from step 4) is required at runtime; the sidecars are made
+from it on first launch if they are missing. `ge007.ini` is written under `data/` on first launch.
 
 ### Useful flags / env
 

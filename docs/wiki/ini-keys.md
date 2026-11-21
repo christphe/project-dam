@@ -6,7 +6,7 @@ sources:
   - port/src/config.c
   - port/src/menu/menu.json
   - port/src/switch/nxgame.c
-verified: 7d15f029
+verified: e2fda9e2
 ---
 
 # ini keys
@@ -30,8 +30,8 @@ that edits them. How the menu binds them: [options-menu.md](options-menu.md).
   `Dev.Mode` (shows the menu's dev rows), `Menu.Language`, the `Debug.*` keys, and
   `Game.LookAheadLevel` (0..3, `port/src/switch/nxgame.c`: the Original / Low / Medium / High part
   of the per-profile Look ahead, written by the menu; one value for every profile).
-- **Per-profile settings** (`Bond.*` in the menu: music and FX volume, aim control, auto-aim, look ahead on or off,
-  sight and ammo on screen, control style of the Original scheme) are not in the ini: they live
+- **Per-profile settings** (`Bond.*` in the menu: music and FX volume, aim control, auto-aim, look ahead (Off, Original, Low, Medium or High; only Off / Original is in the save, the level is `Game.LookAheadLevel` above),
+  sight and ammo on screen, control style of the Original scheme) are not in the ini, apart from that level: they live
   in the save file, as on the N64.
 - **One-off override (test builds):** `GE_CFG="Key=value;Key2=value2"` sets values for one run and
   the ini is not written back. See [testing-on-switch.md](testing-on-switch.md).
