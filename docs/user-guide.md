@@ -1,6 +1,6 @@
 ---
 title: User guide
-description: Controls, settings, files, ROM check, updating, emulator saves, macOS setup and troubleshooting for the GoldenEye 007 PC port.
+description: Controls, settings, files, ROM check, updating, emulator saves, macOS setup and troubleshooting for Project Dam, a Switch-first fork of the GoldenEye 007 PC port.
 ---
 
 # User guide
@@ -35,17 +35,19 @@ controls, every setting and file, and fixes for common problems.
 | Start               | `Enter` / `Tab`          | Start         |
 | Options overlay     | `F10`                    | Select        |
 
-The keyboard defaults are a GEPD-style layout. The controller layout matches
-Rare's Xbox 1.1 (Jinx) button roles; the other Xbox styles (1.2 Christmas,
-1.3 Frost, 1.4 Elektra, which swap the stick roles) are selectable under
-*Controller* (pick a player first, then *Layout presets*). PlayStation and Nintendo controllers
-show their own button names in the menus.
+The keyboard defaults are a GEPD-style layout. The table shows the **Modern**
+control style, the default: right trigger fires, left trigger aims, and the
+face buttons reload, switch weapon and use by position (so a Nintendo pad keeps
+the same hands as an Xbox one); LB and RB open the weapon and gadget wheels, and
+while aiming the D-pad zooms a scope and the left stick strafes slowly.
+PlayStation and Nintendo controllers show their own button names in the menus.
 
-**Control style:** *Controller → Control style* (named after the watch's own
-setting, with **Extended**, after Perfect Dark's "Ext", for the port's controls) picks how the
-game's controller style (the watch's 1.1–1.4 selector) is treated. **Extended**
-(the default) keeps the port's feel and fixes the style itself, so the watch's
-selector has no effect. **Original** stops the port from touching the style:
+**Control style:** *Controller → Control style* picks one of three. **Modern**
+is the default. **Enhanced** uses Rare's Xbox layouts (1.1 Jinx, 1.2 Christmas,
+1.3 Frost, 1.4 Elektra, which swap the stick roles), selectable under
+*Controller* (pick a player first, then *Layout presets*); it fixes the game's own controller style
+(the watch's 1.1–1.4 selector), so the watch's selector has no effect. Enhanced
+and Modern walk at the speed of the left stick's tilt. **Original** stops the port from touching the style:
 pick 1.1, 1.2, 1.3 or 1.4 on the watch (or in the multiplayer setup) and it
 behaves as on the N64, and the Controller page then offers the game's own
 styles ("Controller style", 1.1 Honey to 2.4 Goodhead, saved in the Bond file
@@ -103,7 +105,8 @@ are always players 2–4; with *Gamepad* they take players 1–4 (one controller
 alone leaves multiplayer locked, as on the console). A controller unplugged
 mid-match keeps its player when plugged back in.
 
-**Options overlay with a controller** (also how it works on the Deck):
+**Options overlay with a controller** (also how it works on the Switch and the Deck):
+it covers the whole screen, semi-transparent over the paused game, and
 **Select** opens it, the D-pad or left stick moves between rows and
 left/right adjusts the selected value, **A** opens a page or toggles a row,
 **B** goes back one page (and closes from the top), and **Start** (or Select
@@ -114,24 +117,27 @@ Backspace.
 ## Feature list
 
 - **Split-screen multiplayer for up to 4 players**, with the N64's own setup
-  flow and per-player HUD.
-- **Native widescreen** at any aspect ratio: the world is undistorted, the HUD
+  flow and per-player HUD, and **co-op for 2 to 4 players** on a solo mission
+  (revive, friendly fire), on the Switch and the PC. Co-op and Multiplayer ask
+  for the controllers they need when you choose them.
+- **Native widescreen** at any aspect ratio (*Aspect ratio*: Auto, Fit, 4:3,
+  16:9 or 21:9): the world is undistorted, the HUD
   sits at the screen edges, and 4:3 menus are pillarboxed. FOV and draw/LOD
   distance are adjustable, and AI behaviour stays as on the N64 whatever you
   set them to.
 - **The original look in one click:** the *Display mode* row (F10 → *Video*) switches
-  between *Modern* and *Original N64* (it reads *Custom* once you edit a setting it covers),
+  between *Enhanced* and *Original* (it reads *Custom* once you edit a setting it covers),
   and *Aspect ratio → Original* shows the exact 4:3 frame.
 - **A steady 60 fps**, with VSync and a frame cap (30 or 60), including on
   the low-end GPUs I test on.
 - **Frame rates above 60:** 90, 120, 144, 165 or 240 fps, or **Auto** to match
   your display (up to 240). Extra frames are blended between game ticks (the game still runs at
   its original rate), at the cost of one tick of latency. It has no effect on
-  a 60 Hz display, and the *Original N64* preset keeps 60. See
+  a 60 Hz display, and the *Original* display mode keeps 60. See
   [framerate and pacing](framerate-and-pacing.md).
-- **macOS (Apple Silicon), experimental:** a `macos-arm64` download, not
-  notarized (one Terminal command to unblock it, see [macOS](#macos-apple-silicon-experimental)),
-  or build from source. I'd like test reports.
+- **macOS (Apple Silicon), experimental:** the upstream port ships a
+  `macos-arm64` download; this fork ships none, so build from source (see
+  [macOS](#macos-apple-silicon-experimental)).
 - **Graphics options:** resolution, borderless or exclusive fullscreen,
   a Center window action while windowed, MSAA (up to 16×), anisotropic
   filtering, and nearest, bilinear, trilinear or the N64's own 3-point
@@ -150,17 +156,20 @@ Backspace.
 - **An in-game options overlay** (F10 / pad Select) for all of the above,
   saved automatically; the game's crosshair is the mouse pointer, and
   each page has a *Reset to defaults* row.
-- **Faithful N64 progression by default.** Opt-in extras: *Skip intro* and
+- **N64 progression by default.** Opt-in extras: *Skip intro* and
   *All unlocked* (every level, 007 mode and the full cheat menu, without
   touching your save), and *Check for updates* (off
   by default; one request to GitHub per launch when on, see [Security](security.md)).
+  On the Switch, an available update can be installed from the first menu.
 - **Saves in a plain file** next to the game, so backing up is a file copy;
   1964 and Project64 saves load directly ([details](#using-an-emulator-save)).
 
 ## Settings and files
 
 **Options overlay:** press **F10** (pad: **Select**) in game or in the menus;
-on the file-select screen the *PC Options* entry opens it too.
+on the file-select screen the *PC Options* entry opens it too. The first menu
+has Resume, Options, Controllers, Check for updates, Restart (not on the Switch)
+and Quit.
 Changes are saved automatically. Most settings live in `ge007.ini`; the
 ones that come from the game's own watch menu (auto-aim, aim
 control, sight, look ahead, ammo on screen, screen size, screen ratio, music
@@ -174,7 +183,7 @@ never writes to `%APPDATA%`, the registry or any system location.
 
 | File | What it is |
 |---|---|
-| `data/ge007.ntsc-final.z64` | Your ROM (you put it there). |
+| `data/ge007.ntsc-final.z64` | Your ROM (you put it there). On the Switch, `sdmc:/switch/project-dam/data/`. |
 | `data/ge007.eep` | Your game progress (the N64 save). |
 | `data/ge007.ini` | Settings, written on first start. |
 | `data/pcmodels-<region>/`, `data/pccg-<region>/` | Asset files generated from your ROM on first start. Safe to delete: they are made again on the next start. |
@@ -235,6 +244,10 @@ To check which file you have, compute its SHA-1: on Windows,
 
 ## macOS (Apple Silicon, experimental)
 
+This section is the upstream port's: this fork ships no macOS build, so the
+download below comes from
+[upstream's releases](https://github.com/jkdansereau/goldeneye-pc-port/releases).
+
 **Download:** `goldeneye-pc-port-<version>-macos-arm64.tar.gz` from the release
 page, for Apple Silicon (M1 or later), macOS 14 or newer. It bundles SDL2 and the
 C++ runtime, so Homebrew is not needed. The app is experimental and **not
@@ -266,7 +279,18 @@ happened) are very welcome.
 
 ## Updating
 
-Extract the new release into a new folder, then copy your ROM, `ge007.eep`
+**Switch:** turn on *Check for updates* in the options, then choose it in the
+first menu. When a newer release exists the row reads "Update available";
+choosing it again downloads `project-dam.nro`, checks its sha256 against the
+one GitHub lists, and replaces the running NRO. Restart the game afterwards. It
+needs at least 5% battery or the charger, and it only works when the game was
+started as `project-dam.nro` (not from an nxlink test build). Your `data/`
+folder is not touched. Without the option, copy the new `switch/` folder of the
+release over the old one.
+
+**PC:** *Check for updates* tells you a new release exists and opens its notes;
+it installs nothing. This fork has no PC release yet, so you build from source.
+Extract or build the new version into a new folder, then copy your ROM, `ge007.eep`
 and `ge007.ini` from the old `data/` folder into the new one. Don't copy the
 generated `pcmodels-*` and `pccg-*` folders: the new version makes its own on first start, and
 stale ones from an older version can cause glitches.
@@ -295,13 +319,14 @@ which convention the file uses.
 
 ## Uninstalling
 
-Delete the folder. The port writes nothing anywhere else, so that removes the
+Delete the folder (on the Switch, `switch/project-dam/` on the SD card). The port writes nothing anywhere else, so that removes the
 game, your save and your settings; back up `data/ge007.eep` first if you
 want to keep your progress.
 
 ## Troubleshooting
 
-- **The game says the ROM is missing or wrong:** check it is in `data/`, named
+- **The game says the ROM is missing or wrong:** the first launch converts the ROM
+  and shows a boot screen with the file name it expects. Check the ROM is in `data/`, named
   `ge007.ntsc-final.z64`, in `.z64` byte order, and that its SHA-1 matches the
   US row in [What's a ROM?](#whats-a-rom). PAL and JP ROMs are not supported
   yet.
@@ -313,7 +338,7 @@ want to keep your progress.
 - **Where are my saves?** `data/ge007.eep`. Copy it somewhere safe while the
   game is not running to back it up.
 - **The game crashes:** open an
-  [issue](https://github.com/jkdansereau/goldeneye-pc-port/issues/new/choose)
+  [issue](https://github.com/christphe/project-dam-nx/issues/new)
   and attach `ge007.crash.log` (in the folder you launched from), the output of
   `--version`, your OS, your GPU and your ROM's SHA-1. **Never attach the ROM
   itself.**

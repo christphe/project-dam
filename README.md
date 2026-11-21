@@ -151,10 +151,16 @@ styles, rebinding and split-screen.
   anti-aliasing (MSAA, FXAA). **Original** is the game's own picture. Custom
   exposes the individual options: aspect, widescreen, VSync, frame cap,
   texture filter, anisotropy, and draw, fog and LOD distance.
-- **Faithful logic.** It is the game's own reconstructed source compiled
-  natively, so levels, guards and weapons behave the way the N64 cartridge
-  does. The few changes to game code keep N64 behavior where the platform would
-  otherwise differ, or are opt-in extras.
+- **Where it differs from upstream.** The upstream port's goal is to keep the
+  game's logic intact: its changes to game code only keep N64 behavior where
+  the platform would otherwise differ. This fork does not have that goal. It
+  builds on the same reconstructed source and adds quality-of-life changes and
+  design choices of its own: analog walking speed, Modern controls, look
+  ahead, the options menu, co-op for up to four players, a Switch-first
+  renderer. Some of them change how the game plays, and they live in the game
+  code as well as in the port layer. The **Original** display mode and control
+  style bring back the N64's picture and controls, not necessarily every
+  behavior.
 - **Switch and PC from one source.** Switch is the main target and is
   what the releases ship; Windows and Linux builds come from the same code.
 
@@ -172,9 +178,12 @@ layer.
 Yes. You need a ROM of the US (NTSC-U) version, dumped from a cartridge you own.
 
 **Does it play like the original?**
-Yes. Levels, guards and weapons run on the game's own logic at its original
-speed. The **Original** display mode and the **Original** control style give
-you the N64 picture and controls whenever you want them.
+Mostly, but that is not this fork's goal. Levels, guards and weapons come from
+the game's own reconstructed source, at its original speed, and the
+**Original** display mode and **Original** control style give you the N64
+picture and controls. The fork also makes changes of its own (see *Where it
+differs from upstream*), so if you want the logic kept intact, use the
+[upstream port](https://github.com/jkdansereau/goldeneye-pc-port).
 
 **Does it run on the Steam Deck or macOS?**
 Not tested in this fork. The [upstream port](https://github.com/jkdansereau/goldeneye-pc-port)
@@ -254,7 +263,7 @@ unmodified PC port.
 | [Building](docs/building.md) | Full build guide, and the ROM conversion. |
 | [Internals](docs/internals.md) | Architecture and the software RSP. |
 | [Porting notes](docs/porting-notes.md) | The recurring N64-to-PC bug classes, with fixes. |
-| [Security](docs/security.md) and [Fidelity](docs/fidelity.md) | What a release installs, and how closely it tracks the original game's logic. |
+| [Security](docs/security.md) and [Fidelity](docs/fidelity.md) | What a release installs, and how closely the upstream port tracks the original game's logic (this fork departs from it on purpose). |
 | [`docs/dev/`](docs/dev/) | The engineering record: the finding log and development process. |
 
 ## Contributing and forking
