@@ -204,6 +204,8 @@ enum {
     DK_PACK_SKYPLUS = 4,    /* GE+ sky frag (vert unused) */
     DK_PACK_WATER = 5,      /* GE+ water frag (pairs with the uber vert) */
     DK_PACK_SKYLUT = 6,     /* GE+ reflection-sky panorama frag (vert unused) */
+    DK_PACK_WATERBODY = 7,  /* water.frag.glsl #define WATER_BODY: the cheap body colour of the main pass (deko3d only, #79) */
+    DK_PACK_WATERCOMP = 8,  /* watercomp.frag.glsl: the half-resolution water drawn over the body (deko3d only, #79) */
     DK_PACK_NAMED_MAX = 16
 };
 

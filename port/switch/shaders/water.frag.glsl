@@ -143,6 +143,16 @@ void main() {
     ge = clamp(mod(ge + 0.51, 2.02) - 0.51, 0.0, 1.0);
     vec3 c = ge;
 
+#ifdef WATER_BODY
+    /* deko3d's half-resolution water (#79): the main pass draws only the body colour (GE's draw: no waves, no reflection); the
+     * same draws are replayed at half size by the full variant of this shader (no define) and drawn over this colour by
+     * watercomp.frag.glsl. Where that fails (a silhouette, the pass off) this is what shows. cmake/SwitchPort.cmake adds the
+     * define after the #version line of the pack entry DK_PACK_WATERBODY. */
+    if (uWave4.z > 0.5) {
+        bool mapOn = uWX2.x > 0.5;
+        if (mapOn) c = clamp(mix(uWX0.rgb, uWX1.rgb, wpatch) * shade.rgb, 0.0, 1.0) * uSea;
+    }
+#else
     /* the pixel's world ray from its screen position (the sky's corner rays),
      * computed in uniform control flow (the texture reads need its derivatives) */
     float wz = max(vClip.z, 1e-4);
@@ -185,6 +195,7 @@ void main() {
             c = mix(ge, w, lit);
         }
     }
+#endif
     if ((flags & CF_FOG) != 0u) {
         float fogA = fog_pixel != 0 ? clamp(vFogW * gl_FragCoord.w, 0.0, 1.0) : clamp(vFog.a, 0.0, 1.0);
         c = mix(c, vFog.rgb, fogA);

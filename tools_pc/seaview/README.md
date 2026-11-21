@@ -59,12 +59,29 @@ level-water vec4s (`uWX0..uWX2`: deep colour + patch size, light colour + reflec
 - The plane is a 256x256 grid, 60000 units wide, denser near the eye (the fog is per vertex). The camera is the viewer's usual one:
   eye height is the "Eye height" value of the Sun tab.
 
+### Half resolution and the test scene
+
+Menu **Water** > "Half resolution" (`--half 0|1`, `.ini` `__half`) draws the water the way the Switch (deko3d) path does, with the game's
+own shader files: (1) the main pass draws the water with `water.frag.glsl` + `#define WATER_BODY` (the cheap body colour), depth written;
+(2) the same water draws are replayed into a half-size RGBA8 target (linear, clamp, cleared to 0, own half-size depth) with the full
+`water.frag.glsl`; (3) they are replayed once more at full size with `watercomp.frag.glsl`, alpha-blended over the scene, depth test
+LEQUAL against the scene depth with writes off. Off = one full-size `water.frag.glsl` pass. Menu **Debug view** (`--dbgview
+final|fx|mask|cheap`): the final image, the half-size target as the composite reads it, a mask of step 3 (green = the half-size colour
+is used, red = `watercomp` discards, the cheap body stays), or the cheap body only (step 1).
+
+Menu **Water** > "Test scene" (`--scene 0|1`, default on): a pier slab half in the water, three boxes and a thin pole standing in it, a
+wall the plane ends against, and a raised second pool with a rim, all drawn with depth, in a frame fixed to the capture's eye.
+`--view overview|pier|boxes|shore|pool|far` puts the camera at a ready-made spot of that scene (relative to the scene, so the shots are
+reproducible); `--cam` stays absolute. `--seahalf N` is the old `--half N` (the Sea mode's target width divisor).
+
 ### Screenshots, unattended
 
 ```sh
 python tools_pc/seaview/seaview.py pc --shot out.png                                   # the Sea view (Frigate dump)
 python tools_pc/seaview/seaview.py pc --shot out.png --mode water --level dam          # Water surface, Dam preset
 python tools_pc/seaview/seaview.py pc --shot out.png --mode water --level caverns --cam 100,160,100,40,-8 --w 1280 --h 720
+python tools_pc/seaview/seaview.py pc --shot out.png --mode water --level dam --wtex data/water_dam.tga --view pier --half 1   # the game's 3 steps
+python tools_pc/seaview/seaview.py pc --shot out.png --mode water --level dam --view boxes --half 1 --dbgview mask       # where the composite takes the half-size colour
 python tools_pc/seaview/seaview.py pc --mode water --level complex --wtex data/water_complex.png   # interactive
 ```
 

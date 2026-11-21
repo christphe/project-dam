@@ -36,6 +36,14 @@ ${_uo}${_ue}")
     file(WRITE "${DK_OUT}/glsl/${_sc}.frag.glsl" "${_scsrc}")
     _dk_uam(frag "${DK_OUT}/glsl/${_sc}.frag.glsl" "${DK_OUT}/glsl/${_sc}.frag.dksh")
   endforeach()
+  # GE+ water at half resolution (#79): the cheap body variant of water.frag.glsl (#define WATER_BODY after its #version line,
+  # the same file, no fork) and the composite that draws the half-size result over it
+  file(READ "${DK_SRC}/port/switch/shaders/water.frag.glsl" _wbsrc)
+  string(REPLACE "#version 460" "#version 460\n#define WATER_BODY" _wbsrc "${_wbsrc}")
+  string(REPLACE "#pragma skycommon" "${_skycommon}" _wbsrc "${_wbsrc}")
+  file(WRITE "${DK_OUT}/glsl/waterbody.frag.glsl" "${_wbsrc}")
+  _dk_uam(frag "${DK_OUT}/glsl/waterbody.frag.glsl" "${DK_OUT}/glsl/waterbody.frag.dksh")
+  _dk_uam(frag "${DK_SRC}/port/switch/shaders/watercomp.frag.glsl" "${DK_OUT}/glsl/watercomp.frag.dksh")
   string(APPEND _pack "0 1 ${DK_OUT}/glsl/uber.vert.dksh ${DK_OUT}/glsl/uber.frag.dksh -
 ")
   string(APPEND _pack "0 2 ${DK_OUT}/glsl/fullscreen.vert.dksh - -
@@ -47,6 +55,10 @@ ${_uo}${_ue}")
   string(APPEND _pack "0 5 - ${DK_OUT}/glsl/water.frag.dksh -
 ")
   string(APPEND _pack "0 6 - ${DK_OUT}/glsl/skylut.frag.dksh -
+")
+  string(APPEND _pack "0 7 - ${DK_OUT}/glsl/waterbody.frag.dksh -
+")
+  string(APPEND _pack "0 8 - ${DK_OUT}/glsl/watercomp.frag.dksh -
 ")
   file(STRINGS "${DK_OUT}/glsl/list.txt" _lines)
   set(_n 0)
