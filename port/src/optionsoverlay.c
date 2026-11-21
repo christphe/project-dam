@@ -143,10 +143,10 @@ static const char *const kControlScheme[] = { "Enhanced", "Original", NULL };   
 static const char *const kAimMode[]   = { "Original", "Centered", NULL };   /* D337; project-dam: the weapon sway is part of Centered */
 static const char *const kTurnAccel[] = { "Off", "Low", "High", NULL };   /* project-dam */
 static const char *const kAimZoom[]   = { "Off", "1.5x", "2x", NULL };    /* project-dam */
-static const char *const kLookAhead[] = { "Off", "Low", "Medium", "High", NULL };   /* project-dam */
 #else
 static const char *const kAimMode[]   = { "Original", "Centered", NULL };   /* D337 */
 #endif
+static const char *const kLookAhead[] = { "Off", "Original", "Low", "Medium", "High", NULL };   /* project-dam #85: Bond.LookAhead */
 static int displayModeNow(void);   /* defined with the preset helpers below */
 static const char *const kDisplayModeName[3];
 static const char *const kAimRange[]  = { "Extended", "Original", NULL };             /* D338 */
@@ -464,7 +464,6 @@ static struct Row rows[] = {
 #if defined(__SWITCH__)
     { .key="Input.PadLookCurve", .label="Look precision", .kind=ROW_SLIDER, .step=25, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },    /* project-dam */
     { .key="Input.PadTurnAccel", .label="Turn acceleration", .kind=ROW_ENUM, .step=1, .names=kTurnAccel, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },
-    { .key="Game.LookAhead", .label="Look ahead (Extended)", .kind=ROW_ENUM, .step=1, .names=kLookAhead, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },   /* project-dam: nxgame.c */
 #endif
     { .key="Input.PadLookSmooth", .label="Look smoothing", .kind=ROW_SLIDER, .step=1 },   /* D506: raw 0-10, shown as whole % */
     { .key="Input.PadSouthpaw", .label="Southpaw", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
@@ -520,8 +519,8 @@ static struct Row rows[] = {
       .names=kHold, .found=1, .uiMax=1, .cfgMax=1, .saveScoped=1 },
     { .key="Bond.AutoAim", .label="Auto-aim", .kind=ROW_TOGGLE,
       .names=kOnOff, .found=1, .uiMax=1, .cfgMax=1, .saveScoped=1 },
-    { .key="Bond.LookAhead", .label="Look ahead", .kind=ROW_TOGGLE,
-      .names=kOnOff, .found=1, .uiMax=1, .cfgMax=1, .saveScoped=1 },
+    { .key="Bond.LookAhead", .label="Look ahead", .kind=ROW_ENUM, .step=1,
+      .names=kLookAhead, .found=1, .uiMax=4, .cfgMax=4, .saveScoped=1 },   /* #85: Off / Original / Low / Medium / High */
     { .key="Bond.Sight", .label="Sight on screen", .kind=ROW_TOGGLE,
       .names=kOnOff, .found=1, .uiMax=1, .cfgMax=1, .saveScoped=1 },
     { .key="Bond.Ammo", .label="Ammo on screen", .kind=ROW_TOGGLE,
@@ -4761,8 +4760,7 @@ static const struct { const char *key, *help; } kRowHelp[] = {
     { "Input.PadPreset", "Xbox Series-style presets, or your own custom layout." },
     { "Input.PadSouthpaw", "Swaps the fire and aim triggers." },
     { "Bond.AutoAim", "Bond automatically aims at nearby targets." },
-    { "Bond.LookAhead", "Tilts the view up or down on slopes." },
-    { "Game.LookAhead", "Levels the view as you walk (Extended controls). Sets how fast." },
+    { "Bond.LookAhead", "Tilts the view to the slope. Low/Medium/High: how fast." },
     { "Bond.Sight", "Shows or hides the game's own crosshair, saved per profile." },
     { "Video.FovScale", "Sets the vertical view angle in degrees. 60 is the original." },
     { "Game.AIWideView", "Extends guard behavior to any widescreen view." },

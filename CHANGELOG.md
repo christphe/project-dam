@@ -13,6 +13,7 @@
 - Vertical field of view in degrees (60 is the original) with the horizontal one shown for the window's aspect ratio; a crosshair page with a preview of the sprite at its real size, colour and opacity; the crosshair size goes from 10 to 100%
 
 ### Changed
+- Look ahead (Game page, per profile) is Off, Original, Low, Medium or High, and follows the floor slope ahead with every control style (#85). Original is the game's own; Low, Medium and High wait for the look stick to rest (1, 0.7 or 0.5 s), then level the view at 45, 60 or 90 degrees per second, toward the slope and level on flat ground. It replaces Look ahead (Extended) on the Controller page, which only levelled to the horizon; Look ahead is off by default
 - Enhanced and Modern walk and strafe at the speed of the left stick's tilt instead of the N64's full-step moves, for every player in split screen (#78). Modern with inverted look is the default control style on a fresh install
 - Auto-aim is off while the mouse is the device that aims, and comes back when a stick is pushed
 - GE_LOWLAT (lower input latency) is on by default on the PC too; GE_LOWLAT=0 turns it off

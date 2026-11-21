@@ -1693,11 +1693,12 @@ static const InputStrategy *padPoll(int idx, SDL_GameController *pad, int wheelO
 /* GameDirect (#78): poll thread -> game thread, one cell per player (= N64 slot). The poll thread publishes
  * the latest decision (never re-points g_CurrentPlayer, D419); the game thread reads it from the hook in
  * bondview2.c. A stale cell (no poll for 250 ms: paused scheduler, detached pad) reads as "not direct". */
-static struct { int walk, strafe; Uint32 stamp; int valid; } s_direct[MAX_PADS];
+static struct { int walk, strafe, look; Uint32 stamp; int valid; } s_direct[MAX_PADS];   /* look: the look stick is deflected */
 
-static void padDirectPublish(int idx, int direct, int walk, int strafe)
+static void padDirectPublish(int idx, int direct, int walk, int strafe, int look)
 {
     if (idx < 0 || idx >= MAX_PADS) return;
+    __atomic_store_n(&s_direct[idx].look, look, __ATOMIC_RELAXED);
     __atomic_store_n(&s_direct[idx].walk, walk, __ATOMIC_RELAXED);
     __atomic_store_n(&s_direct[idx].strafe, strafe, __ATOMIC_RELAXED);
     __atomic_store_n(&s_direct[idx].stamp, SDL_GetTicks(), __ATOMIC_RELAXED);
@@ -1714,6 +1715,23 @@ int portDirectMove(int playernum, int *walk, int *strafe)
     *walk = __atomic_load_n(&s_direct[playernum].walk, __ATOMIC_RELAXED);
     *strafe = __atomic_load_n(&s_direct[playernum].strafe, __ATOMIC_RELAXED);
     return 1;
+}
+
+/* #85 Look ahead under GameDirect, read by the hook in src/game/bondview2.c after the 1.x styles set
+ * disableLookAhead. The game's own look-ahead is off in SOLITARE / GOODNIGHT (the N64 stick is the view
+ * there); with GameDirect the left stick walks and the right stick looks, so the reason is gone.
+ *   0 not GameDirect: the game's own rules stand (Original controls, HONEY roles, scripted slot 0)
+ *   1 Original level, look stick at rest: the game's look-ahead runs (slope target, thresholds, centring)
+ *   2 Original level, look stick deflected: the game's look-ahead runs, the hook treats the stick as a
+ *     manual pitch (C-up / C-down on the N64: cancel, disarm, block until the walk stick is released)
+ *   3 Low / Medium / High: the game's centre stays off, nxLookAheadStep (nxgame.c) eases instead */
+int portLookAheadMode(int playernum)
+{
+    extern int nxLookAheadLevel(void);   /* nxgame.c: 0 Original, 1 Low, 2 Medium, 3 High */
+    int w, sd;
+    if (!portDirectMove(playernum, &w, &sd)) return 0;
+    if (nxLookAheadLevel() != 0) return 3;
+    return __atomic_load_n(&s_direct[playernum].look, __ATOMIC_RELAXED) ? 2 : 1;
 }
 
 /* Fill button mask + stick for controller idx. Returns the 16-bit mask. */
@@ -2412,7 +2430,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
     const InputStrategy *const strat = padPoll(idx, pad, wheelOpen, &mc);   /* the seat's control style decides, the blocks below apply it */
     {
         const int direct = (strat && pad) ? mc.direct : 0;
-        padDirectPublish(idx, direct, direct ? mc.walk : 0, direct ? mc.strafe : 0);
+        padDirectPublish(idx, direct, direct ? mc.walk : 0, direct ? mc.strafe : 0, direct ? mc.lookRawActive : 0);
     }
     if (pad) {
         /* D282: front-end menus (main menu, file select, mission-select map)
@@ -2434,10 +2452,8 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                 extern void nxAimStopStep(struct player *p, int moving);   /* Game.AimStop */
                 nxAimStopStep(inputSlotPlayer(), mc.moveFwd || mc.moveBack || mc.strafeL || mc.strafeR ||
                                             gameScriptedCameraActive() || g_PlayerIsInTank == 1);
-#if defined(PLATFORM_SWITCH)
-                extern void nxLookAheadStep(struct player *p, int walkingForward, int lookIdle);   /* Look ahead, Extended controls */
+                extern void nxLookAheadStep(struct player *p, int walkingForward, int lookIdle);   /* Look ahead Low / Medium / High (#85) */
                 nxLookAheadStep(inputSlotPlayer(), mc.moveFwd, rxs == 0 && rys == 0);
-#endif
             }
             if (inputAimModeGet() == AIMMODE_CENTRED && !(idx == 0 && g_inputReplayActive) &&
                 inputPadDirectCompute(rxs, rys)) {

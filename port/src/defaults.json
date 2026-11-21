@@ -112,10 +112,6 @@
    "value": 1,
    "why": "project-dam: = on"
   },
-  "Game.LookAhead": {
-   "switch": 3,
-   "why": "project-dam: = High"
-  },
   "Input.PadLookCurve": {
    "value": 200,
    "why": "the game's own curve (2.0)"
