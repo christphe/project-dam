@@ -48,7 +48,8 @@ std::string g_actionFired;   /* the id of the last action control activated (the
 std::string g_selId;         /* the select whose list is open, or "" */
 int g_ownerSeat = -1;
 float g_padUv[4] = { 0, 0, 0, 0 }, g_padAspect = 0;
-bool g_root = true;      /* the first menu: Resume / Options / Restart / Quit */
+bool g_updPanel = false; /* the release text is open (in the first menu) */
+bool g_root = true;     /* the first menu: Resume / Options / Restart / Quit */
 int g_rootSel = 0, g_rootArmed = -1;
 std::string (*g_keyText)(const char*, int) = nullptr;
 void (*g_keyBegin)(const char*, int) = nullptr;
@@ -58,6 +59,7 @@ std::string g_capId;
 int g_capSlot = 0, g_slotSel = 0;
 bool g_capturing = false;   /* a key or button is being captured: the menu keeps still */
 bool (*g_bindGet)(const char*, double*) = nullptr;
+const char* (*g_readout)(const char*, double) = nullptr;   /* a note computed by the game for a slider ("hfov") */
 void (*g_bindSet)(const char*, double) = nullptr;
 std::map<std::string, double> g_synced;   /* control id -> the value last agreed with the game */
 int g_selCursor = 0, g_selScroll = 0, g_selOpenFrame = -1;
@@ -221,7 +223,9 @@ void drawSlider(ImDrawList* dl, const Control& c, int fi, float x, float y, floa
         }
     const float kx = x + 0.45f * u + (w - 0.9f * u) * f;
     box(dl, ImVec2(kx - 0.45f * u, ty - 0.95f * u), ImVec2(kx + 0.45f * u, ty + 0.95f * u), disabled ? kDisabled : kInk, IM_COL32(13, 14, 12, 255));
-    text(dl, g_head, 1.7f * u, ImVec2(x + w + 1.4f * u, ty - 0.85f * u), disabled ? kDisabled : kGold, sliderText(c, val).c_str());
+    std::string shown = sliderText(c, val);
+    if (!c.readout.empty() && g_readout) shown += "   " + std::string(g_readout(c.readout.c_str(), controlToConfig(c, val)));
+    text(dl, g_head, 1.7f * u, ImVec2(x + w + 1.4f * u, ty - 0.85f * u), disabled ? kDisabled : kGold, shown.c_str());
 }
 
 void drawAction(ImDrawList* dl, const Control& c, int fi, float x, float y, float u, bool disabled) {
@@ -278,21 +282,51 @@ void drawDiagram(ImDrawList* dl, const Control& c, float x, float y, float w, fl
     /* where each element is on the drawing, as fractions of it */
     auto at = [&](float fx, float fy) { return ImVec2(px + fx * pw, py + fy * ph); };
     const ImVec2 ls = at(0.333f, 0.62f), rs = at(0.656f, 0.62f), dp = at(0.24f, 0.33f);
-    /* the labels: one row each, a leader line to the element */
+    /* PC draws an Xbox pad, the Switch a Pro Controller: same places, other names. A layout is written with Xbox names;
+     * one that goes by letter ("_by" absent) puts a Nintendo letter where that letter is printed, one that goes by position
+     * ("_by": "position") keeps the place. */
+    const bool nin = !g_state.pc;
+    auto byPos = L.find("_by");
+    const bool positional = byPos != L.end() && byPos->second == "position";
+    auto place = [&](const std::string& slot) -> std::string {   /* where a slot's button sits, in Xbox names */
+        if (!nin || positional) return slot;
+        if (slot == "x") return "y";   /* the Nintendo X is on top */
+        if (slot == "y") return "x";
+        if (slot == "a") return "b";   /* the Nintendo A is on the right */
+        if (slot == "b") return "a";
+        return slot;
+    };
+    std::map<std::string, std::string> at_;   /* place -> text */
+    for (const auto& kv : L)
+        if (kv.first != "_by") at_[place(kv.first)] = kv.second;
+    auto nameAt = [&](const char* pos, const char* xbox) -> const char* {
+        if (!nin) return xbox;
+        static const char* const kNin[][2] = { { "lt", "ZL" }, { "rt", "ZR" }, { "lb", "L" }, { "rb", "R" },
+                                               { "y", "X" }, { "x", "Y" }, { "b", "A" }, { "a", "B" } };
+        for (const auto& p : kNin) if (!strcmp(p[0], pos)) return p[1];
+        return xbox;
+    };
+    /* the letters printed on the face buttons */
+    const struct { const char* pos; float fx, fy; } faces[4] = { { "y", .735f, .2226f }, { "x", .6566f, .3435f }, { "b", .8142f, .3435f }, { "a", .735f, .45f } };
+    for (const auto& f : faces) {
+        const char* letter = nameAt(f.pos, f.pos[0] == 'y' ? "Y" : f.pos[0] == 'x' ? "X" : f.pos[0] == 'b' ? "B" : "A");
+        const ImVec2 c0 = at(f.fx, f.fy), ts = textSize(g_head, 1.15f * u, letter);
+        text(dl, g_head, 1.15f * u, ImVec2(c0.x - ts.x * 0.5f, c0.y - ts.y * 0.5f), kMut, letter);
+    }
     struct Lab { const char* slot; const char* name; bool left; ImVec2 to; };
     const Lab labs[] = {
         { "lt", "LT", true, at(0.27f, 0.0f) }, { "lb", "LB", true, at(0.30f, 0.07f) },
         { "lstick", "Left stick", true, ls }, { "ls", "L3", true, at(0.333f, 0.70f) }, { "dpad", "D-pad", true, dp },
         { "rt", "RT", false, at(0.73f, 0.0f) }, { "rb", "RB", false, at(0.70f, 0.07f) },
-        { "y", "Y", false, at(0.733f, 0.222f) }, { "x", "X", false, at(0.656f, 0.333f) },
-        { "b", "B", false, at(0.808f, 0.333f) }, { "a", "A", false, at(0.733f, 0.438f) },
+        { "y", "Y", false, at(0.735f, 0.2226f) }, { "x", "X", false, at(0.6566f, 0.3435f) },
+        { "b", "B", false, at(0.8142f, 0.3435f) }, { "a", "A", false, at(0.735f, 0.45f) },
         { "rstick", "Right stick", false, rs }, { "rs", "R3", false, at(0.656f, 0.70f) },
     };
     int rowL = 0, rowR = 0;
     for (const Lab& lb : labs) {
-        auto it = L.find(lb.slot);
-        if (it == L.end() || it->second.empty()) continue;
-        const std::string t = std::string(lb.name) + ": " + tr(it->second);
+        auto it = at_.find(lb.slot);
+        if (it == at_.end() || it->second.empty()) continue;
+        const std::string t = std::string(nameAt(lb.slot, lb.name)) + ": " + tr(it->second);
         const float ry = y + 0.6f * u + (lb.left ? rowL++ : rowR++) * 2.9f * u;
         if (lb.left) {
             const ImVec2 ts = textSize(g_body, fs, t.c_str());
@@ -386,8 +420,16 @@ void setContext(bool fileSelect, bool inStage, bool updateAvailable, bool profil
     g_state.inStage = inStage;
 }
 
+void setUpdate(int state, const char* tag, const char* notes, const char* version) {
+    g_state.updateState = state;
+    g_state.updateTag = tag ? tag : "";
+    g_state.updateNotes = notes ? notes : "";
+    g_state.version = version ? version : "";
+}
+
 void showRoot() {
     g_root = true;
+    g_updPanel = false;
     g_rootSel = 0;
     g_rootArmed = -1;
     g_selId.clear();
@@ -407,6 +449,8 @@ void setKeyBinding(std::string (*text)(const char*, int), void (*begin)(const ch
 }
 
 void setActionHandler(void (*handler)(const char*)) { g_actionHandler = handler; }
+
+void setReadout(const char* (*f)(const char*, double)) { g_readout = f; }
 
 void setBinding(bool (*get)(const char*, double*), void (*set)(const char*, double)) {
     g_bindGet = get;
@@ -457,13 +501,91 @@ void drawFooter(ImDrawList* dl, float W, float H, float footH, float u, const ch
     }
 }
 
+float g_updScroll = 0.0f;  /* lines scrolled */
+
+/* a release's text: the version, then the notes, scrolled with up / down; A opens the page, B goes back */
+void drawUpdatePanel(ImDrawList* dl, float W, float H, float u, float hh) {
+    const float footH = 5.0f * u, px = 1.9f * u, lineH = px * 1.35f;
+    const bool up = pressed(ImGuiKey_UpArrow, ImGuiKey_GamepadDpadUp, ImGuiKey_GamepadLStickUp, true);
+    const bool down = pressed(ImGuiKey_DownArrow, ImGuiKey_GamepadDpadDown, ImGuiKey_GamepadLStickDown, true);
+    const bool ok = pressed(ImGuiKey_Enter, ImGuiKey_GamepadFaceDown, ImGuiKey_None, false);
+    const bool back = pressed(ImGuiKey_Backspace, ImGuiKey_GamepadFaceRight, ImGuiKey_None, false);
+    if (back) { g_updPanel = false; return; }
+    if (ok && g_actionHandler) g_actionHandler("__UpdateOpen");
+    const float x0 = 10.0f * u, w = W - 2 * x0, top = hh + 2.0f * u;
+    {   /* one line: the release, then what you have */
+        const std::string title = upper(tr("Update available") + ": " + g_state.updateTag);
+        const float tp = 2.0f * u;
+        text(dl, g_head, tp, ImVec2(x0, top), kGold, title.c_str());
+        const std::string have = "(" + tr("you have") + " " + g_state.version + ")";
+        text(dl, g_body, px * 0.9f, ImVec2(x0 + textSize(g_head, tp, title.c_str()).x + 1.2f * u, top + tp * 0.18f), kMut, have.c_str());
+    }
+    /* the notes: wrapped to the width; # / ## / ### lines are headings (the only markdown handled); runs of blank
+     * lines count as one, and a heading has one above it */
+    struct PLine { std::string s; int lvl; };
+    std::vector<PLine> lines;
+    auto blank = [&]() { if (!lines.empty() && !lines.back().s.empty()) lines.push_back({ "", 0 }); };
+    const std::string& n = g_state.updateNotes;
+    size_t i = 0;
+    while (i <= n.size()) {
+        size_t e = n.find('\n', i);
+        if (e == std::string::npos) e = n.size();
+        std::string para = n.substr(i, e - i);
+        i = e + 1;
+        while (!para.empty() && (para.back() == ' ' || para.back() == '\t')) para.pop_back();
+        if (para.empty()) { blank(); continue; }
+        int lvl = 0;
+        if (para[0] == '#') {
+            size_t h = 0;
+            while (h < para.size() && para[h] == '#') h++;
+            lvl = h > 3 ? 3 : (int)h;
+            while (h < para.size() && para[h] == ' ') h++;
+            para = para.substr(h);
+            if (para.empty()) continue;
+            blank();
+        }
+        const float wpx = lvl == 1 ? 2.4f * u : lvl == 2 ? 2.1f * u : px;
+        ImFont* wf = lvl ? g_head : g_body;
+        std::string cur;
+        size_t k = 0;
+        while (k < para.size()) {
+            size_t sp = para.find(' ', k);
+            if (sp == std::string::npos) sp = para.size();
+            const std::string word = para.substr(k, sp - k), tryS = cur.empty() ? word : cur + " " + word;
+            if (!cur.empty() && textSize(wf, wpx, tryS.c_str()).x > w) { lines.push_back({ cur, lvl }); cur = word; }
+            else cur = tryS;
+            k = sp + 1;
+        }
+        if (!cur.empty()) lines.push_back({ cur, lvl });
+    }
+    while (!lines.empty() && lines.back().s.empty()) lines.pop_back();
+    const float y0 = top + 4.2f * u, areaH = H - footH - y0 - 1.0f * u;
+    const int visible = (int)(areaH / lineH), total = (int)lines.size(), maxScroll = total > visible ? total - visible : 0;
+    g_updScroll += ImGui::GetIO().MouseWheel * -3.0f;
+    if (up) g_updScroll -= 1.0f;
+    if (down) g_updScroll += 1.0f;
+    if (g_updScroll < 0) g_updScroll = 0;
+    if (g_updScroll > maxScroll) g_updScroll = (float)maxScroll;
+    dl->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + w, y0 + areaH), true);
+    for (int l = (int)g_updScroll; l < total && l - (int)g_updScroll <= visible; l++)
+    {
+        const PLine& pl = lines[l];
+        const float lp = pl.lvl == 1 ? 2.4f * u : pl.lvl == 2 ? 2.1f * u : px;
+        text(dl, pl.lvl ? g_head : g_body, lp, ImVec2(x0, y0 + (l - (int)g_updScroll) * lineH + (lineH - lp) * 0.3f), pl.lvl ? kGold : kInk, pl.s.c_str());
+    }
+    dl->PopClipRect();
+    static const char* hints[3][2] = { { "A", "Open the page" }, { "Up/Down", "Scroll" }, { "B", "Back" } };
+    drawFooter(dl, W, H, footH, u, hints, 3);
+}
+
 /* the first menu: what a pause menu offers, then the options */
 void drawRoot(ImDrawList* dl, float W, float H, float u, float hh) {
-    static const char* const ids[5] = { "Resume", "Options", "Controllers", "Restart", "Quit" };
-    static const char* const actions[5] = { "", "", "__AssignDevices", "__RestartGame", "__QuitToDesktop" };
-    std::vector<int> shown;   /* no self-relaunch on the Switch: no Restart there */
-    for (int i = 0; i < 5; i++)
-        if (i != 3 || g_state.pc) shown.push_back(i);
+    if (g_updPanel) { drawUpdatePanel(dl, W, H, u, hh); return; }
+    static const char* const ids[6] = { "Resume", "Options", "Controllers", "Updates", "Restart", "Quit" };
+    static const char* const actions[6] = { "", "", "__AssignDevices", "__UpdateCheck", "__RestartGame", "__QuitToDesktop" };
+    std::vector<int> shown;   /* no self-relaunch and no network on the Switch: no Restart or update check there */
+    for (int i = 0; i < 6; i++)
+        if ((i != 3 && i != 4) || g_state.pc) shown.push_back(i);
     const int n = (int)shown.size();
     const float footH = 5.0f * u, bw = 30.0f * u, bh = 5.4f * u, gap = 1.2f * u;
     const bool up = !g_capturing && pressed(ImGuiKey_UpArrow, ImGuiKey_GamepadDpadUp, ImGuiKey_GamepadLStickUp, true);
@@ -482,10 +604,18 @@ void drawRoot(ImDrawList* dl, float W, float H, float u, float hh) {
         char id[24];
         snprintf(id, sizeof id, "##root%d", i);
         if (hit(id, a, ImVec2(bw, bh))) { g_rootSel = k; fire = k; }
+        else if ((ImGui::GetIO().MouseDelta.x != 0 || ImGui::GetIO().MouseDelta.y != 0) && ImGui::IsMouseHoveringRect(a, b)) {
+            if (g_rootSel != k) g_rootArmed = -1;
+            g_rootSel = k;   /* the mouse over a row selects it, as the pad does */
+        }
         const bool on = k == g_rootSel, armed = i == g_rootArmed;
         box(dl, a, b, on ? kGoldFill : IM_COL32(21, 22, 15, 255), on ? kGold : kRule);
         if (on) dl->AddRectFilled(ImVec2(a.x, a.y), ImVec2(a.x + 0.4f * u, b.y), kGold);
-        std::string label = upper(tr(ids[i]));
+        std::string label;
+        if (i == 3) {   /* the update button says where the check stands */
+            static const char* const upd[5] = { "Check for updates", "Checking...", "Up to date: check again", "Update available", "Could not check: try again" };
+            label = upper(tr(upd[g_state.updateState >= 0 && g_state.updateState < 5 ? g_state.updateState : 0]));
+        } else label = upper(tr(ids[i]));
         if (armed) label += "?  " + upper(tr("Press again"));
         textCenter(dl, g_head, 2.3f * u, a, b, armed ? kGold : kInk, label.c_str());
     }
@@ -494,6 +624,11 @@ void drawRoot(ImDrawList* dl, float W, float H, float u, float hh) {
         if (i == 0) { g_closeReq = true; return; }
         if (i == 1) { g_root = false; g_rootArmed = -1; return; }
         if (i == 2) { if (g_actionHandler) g_actionHandler(actions[i]); return; }   /* the device screen replaces the menu */
+        if (i == 3) {   /* the update button: the release text when there is one, else a check */
+            if (g_state.updateState == 3) { g_updPanel = true; g_updScroll = 0; }
+            else if (g_state.updateState != 1 && g_actionHandler) g_actionHandler(actions[i]);
+            return;
+        }
         if (g_rootArmed == i) { g_rootArmed = -1; if (g_actionHandler) g_actionHandler(actions[i]); }   /* a second press confirms */
         else g_rootArmed = i;
     }
@@ -507,6 +642,28 @@ void sincosApprox(float a, float* s, float* c) {
     const float a2 = a * a;
     *s = a * (1 - a2 / 6 * (1 - a2 / 20 * (1 - a2 / 42 * (1 - a2 / 72))));
     *c = 1 - a2 / 2 * (1 - a2 / 12 * (1 - a2 / 30 * (1 - a2 / 56 * (1 - a2 / 90))));
+}
+
+/* Input.CrosshairCursor: a crosshair replaces the system pointer over the menu (the game hides the system one then).
+ * It shows while the mouse is the device in use: a pad or keyboard press hides it until the mouse moves again. */
+void drawPointer(bool crosshair, float W, float H) {
+    static bool mouseOn = true;
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.MouseDelta.x != 0 || io.MouseDelta.y != 0 || ImGui::IsMouseClicked(0)) mouseOn = true;
+    for (ImGuiKey k : { ImGuiKey_UpArrow, ImGuiKey_DownArrow, ImGuiKey_LeftArrow, ImGuiKey_RightArrow, ImGuiKey_Enter,
+                        ImGuiKey_GamepadDpadUp, ImGuiKey_GamepadDpadDown, ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight,
+                        ImGuiKey_GamepadFaceDown, ImGuiKey_GamepadFaceRight })
+        if (ImGui::IsKeyPressed(k, false)) mouseOn = false;
+    if (!crosshair || !mouseOn || io.MousePos.x < 0 || io.MousePos.x > W || io.MousePos.y < 0 || io.MousePos.y > H) return;
+    const float u = W / 100.0f, r = 1.1f * u, gap = 0.35f * u, th = 0.28f * u;
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImVec2 c = io.MousePos;
+    const ImVec2 d[4][2] = { { ImVec2(-r, 0), ImVec2(-gap, 0) }, { ImVec2(gap, 0), ImVec2(r, 0) },
+                             { ImVec2(0, -r), ImVec2(0, -gap) }, { ImVec2(0, gap), ImVec2(0, r) } };
+    for (int pass = 0; pass < 2; pass++)   /* a dark outline, then the white lines */
+        for (const auto& s : d)
+            dl->AddLine(ImVec2(c.x + s[0].x, c.y + s[0].y), ImVec2(c.x + s[1].x, c.y + s[1].y),
+                        pass == 0 ? IM_COL32(0, 0, 0, 200) : IM_COL32(255, 255, 255, 235), pass == 0 ? th * 2.4f : th);
 }
 
 void draw(float W, float H) {
@@ -559,6 +716,10 @@ void draw(float W, float H) {
         const float px = 2.4f * u;
         text(dl, g_head, px, ImVec2(2.4f * u, (hh - px) * 0.5f), kInk, "PROJECT");
         text(dl, g_head, px, ImVec2(2.4f * u + textSize(g_head, px, "PROJECT ").x, (hh - px) * 0.5f), kGold, "DAM");
+        if (!g_state.version.empty()) {   /* very small, at the bottom right of the title */
+            const float vp = 1.15f * u, tx = 2.4f * u + textSize(g_head, px, "PROJECT DAM").x + 0.6f * u;
+            text(dl, g_body, vp, ImVec2(tx, (hh - px) * 0.5f + px - vp * 0.75f), kMut, g_state.version.c_str());
+        }
     }
     const int nTabs = (int)g_model.tabs.size();
     if (nTabs == 0) {   /* the content did not load: say why */
@@ -604,7 +765,7 @@ void draw(float W, float H) {
     if (g_root) {
         drawRoot(dl, W, H, u, hh);
         static const char* rootHints[2][2] = { { "A", "Select" }, { "B", "Resume" } };
-        drawFooter(dl, W, H, 5.0f * u, u, rootHints, 2);
+        if (!g_updPanel) drawFooter(dl, W, H, 5.0f * u, u, rootHints, 2);   /* the release text has its own */
         ImGui::End();
         return;
     }

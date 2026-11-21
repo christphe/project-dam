@@ -698,6 +698,7 @@ static SDL_atomic_t s_backPending; /* ESC is received on the host thread */
 static int  s_visIdx[NUM_ROWS];
 static int  s_visN = 0;
 static int  s_scroll = 0;
+static SDL_atomic_t s_menuWheel;      /* notches for the ImGui menu (drained by optionsMenuWheel) */
 static SDL_atomic_t s_wheelPending;   /* D314: host-thread wheel notches */
 static int  s_mouseActive = 0;   /* last input was the mouse: hover cues a row + the hint line hides */
 static int  s_hover = -1;        /* visible-list index under the pointer while s_mouseActive (cue only, never selection) */
@@ -2736,6 +2737,16 @@ int optionsMenuResCount(void) { return s_resFitN; }
 int optionsMenuFileSelect(void) { return current_menu == MENU_FILE_SELECT; }
 int optionsMenuProfileAvailable(void) { return watchSettingsAvailable(); }
 int optionsMenuUpdateAvailable(void) { return updateCheckAvailable() != NULL; }
+int optionsMenuUpdateState(void) { return updateCheckState(); }
+/* "project-dam-v0.3.0" shows as "v0.3.0" */
+const char *optionsMenuUpdateTag(void)
+{
+    const char *t = updateCheckAvailable();
+    if (!t) return "";
+    return strncmp(t, "project-dam-", 12) == 0 ? t + 12 : t;
+}
+const char *optionsMenuUpdateNotes(void) { return updateCheckNotes(); }
+const char *optionsMenuVersion(void) { return updateCheckRunning(); }
 int optionsMenuInStage(void) { return current_menu == GE_MENU_RUN_STAGE; }
 
 int optionsMenuAudioCount(void) { return 1 + audioDeviceRefresh(); }
@@ -2770,6 +2781,7 @@ void optionsMenuAction(const char *key)
 {
     if (!strcmp(key, "__AssignDevices")) { portAssignRequest(); return; }
     if (!strcmp(key, "__UpdateOpen")) { updateCheckOpenReleases(); return; }
+    if (!strcmp(key, "__UpdateCheck")) { updateCheckRun(); return; }
     if (!strcmp(key, "__RestartGame")) {   /* D443: the orderly D344 quit, then main.c relaunches */
         sysLogPrintf(LOG_INFO, "menu: restart game requested");
         configSave();
@@ -2819,7 +2831,10 @@ void optionsOverlayScroll(int dir)
      * drawing a half-rebuilt list. Queue the notches instead (D287 pattern);
      * optionsOverlayHandleInput() applies them on the scheduler thread. */
     SDL_AtomicAdd(&s_wheelPending, dir);
+    SDL_AtomicAdd(&s_menuWheel, dir);
 }
+
+int optionsMenuWheel(void) { return SDL_AtomicSet(&s_menuWheel, 0); }
 
 /* Scheduler thread: apply wheel notches queued by optionsOverlayScroll().
  * wheel-up -> move up the list; clamps at both ends like a normal PC settings
@@ -2919,14 +2934,16 @@ static void overlayHandleInputLocked(void)
         extern int menuNewActive(void);
         if (menuNewActive()) {
             extern int menuTakeCloseRequest(void);
+            extern void menuPostBack(void);
             if (portAssignBlocks()) { SDL_AtomicSet(&s_backPending, 0); return; }   /* the device screen takes every press, Esc included */
             if (optionsBindingCaptureTick()) return;   /* a key is being captured for a binding: nothing else reacts */
             const int owner = inputOverlayOwnerPad();
             const int st = inputPadButton(owner, SDL_CONTROLLER_BUTTON_START) != 0;
             const int esc = SDL_AtomicSet(&s_backPending, 0);
-            /* B closes only from the list of entries: the menu decides (menuTakeCloseRequest), so a B that leaves
-             * a form never closes it too. Start and Esc always close. */
-            const int close = menuTakeCloseRequest() || (st && !s_nmPrevStart) || esc;
+            /* B (and Esc) close only from the first menu: the menu decides (menuTakeCloseRequest), so a press that
+             * leaves a form never closes it too. Start always closes. */
+            if (esc) menuPostBack();   /* Esc goes back inside the menu, and closes it from the first menu */
+            const int close = menuTakeCloseRequest() || (st && !s_nmPrevStart);
             s_nmPrevStart = st;
             if (close) optionsOverlayToggle();
             return;

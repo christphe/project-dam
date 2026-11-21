@@ -22,6 +22,13 @@ def main():
     h = round(im.size[1] * w / im.size[0])
     rgb = bg.convert("RGB").resize((w, h), Image.LANCZOS)
     px = rgb.load()
+    # the face buttons' printed letters (Xbox order) are cleared: the menu prints the platform's own
+    for fx, fy in ((0.735, 0.2226), (0.6566, 0.3435), (0.8142, 0.3435), (0.735, 0.45)):
+        cx, cy, r = fx * w, fy * h, 0.022 * w
+        for y in range(int(cy - r) - 1, int(cy + r) + 2):
+            for x in range(int(cx - r) - 1, int(cx + r) + 2):
+                if 0 <= x < w and 0 <= y < h and (x - cx) ** 2 + (y - cy) ** 2 <= r * r:
+                    px[x, y] = (255, 255, 255)
     mask = bytearray()
     for y in range(h):
         for x in range(w):

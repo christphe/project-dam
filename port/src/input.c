@@ -512,6 +512,13 @@ static const char *const kPadModern[PA_COUNT] = {
     [PA_NEXTWPN] = "y", [PA_PREVWPN] = "none", [PA_GADGET] = "none", [PA_START] = "start",
 };
 #define PAD_PRESET_MODERN 5
+/* Modern goes by position, not by letter: a Nintendo pad prints Y where Xbox has X (left), X where Xbox has Y (top),
+ * B at the bottom and A on the right. Same hands on every pad. */
+static const char *const kPadModernNin[PA_COUNT] = {
+    [PA_FIRE] = "righttrigger", [PA_AIM] = "lefttrigger", [PA_USE] = "b", [PA_RELOAD] = "y", [PA_CROUCH] = "rightstick",
+    [PA_NEXTWPN] = "x", [PA_PREVWPN] = "none", [PA_GADGET] = "none", [PA_START] = "start",
+};
+static u8 padFamily[MAX_PADS];   /* defined with its notes below (D471); 2 = Nintendo */
 
 /* D643 (#145 b/c, #149): Original control scheme = a STRICT virtual N64
  * controller. Each native N64 button is bound to up to two pad sources
@@ -613,7 +620,7 @@ static u32 padParseMask(const char *s, int *bad)
 static void padBuildBinds(PadBinds *b, int seat, int custom, int *bad)
 {
     for (int a = 0; a < PA_COUNT; a++)
-        b->mask[a] = padParseMask(custom ? padStr[seat][a] : (padPreset[seat] == PAD_PRESET_MODERN ? kPadModern[a] : kPadAct[a].def), bad);
+        b->mask[a] = padParseMask(custom ? padStr[seat][a] : (padPreset[seat] == PAD_PRESET_MODERN ? (padFamily[seat] == 2 ? kPadModernNin[a] : kPadModern[a]) : kPadAct[a].def), bad);
     if (!b->mask[PA_START]) b->mask[PA_START] = PSM(PS_START);   /* lockout guard: keep a pause path */
     for (int n = 0; n < NB_COUNT; n++) b->n64[n] = 0;
 }
@@ -690,6 +697,7 @@ static unsigned padComputeSig(void)
                 for (const char *p = n64Str[s][n]; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
     for (int s = 0; s < MAX_PADS; s++) {
         h ^= (unsigned)padPreset[s] * 16777619u;
+        h = (h ^ (unsigned)padFamily[s]) * 16777619u;   /* Modern follows the pad's family (by position) */
         if (padPresetCustom(s)) anyCustom = 1;
     }
     if (anyCustom)
@@ -950,7 +958,6 @@ static int padRumbleOn[MAX_PADS];
  * GAMECONTROLLER_USE_BUTTON_LABELS=1 means BUTTON_A is the button printed
  * "A" on a Nintendo pad, so only shoulders/triggers/Back/Start differ there. */
 enum { PADFAM_XBOX = 0, PADFAM_PS = 1, PADFAM_NINTENDO = 2 };
-static u8 padFamily[MAX_PADS];
 
 static void padDetectFamily(int seat)
 {
@@ -2770,6 +2777,28 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         if (stick_x) *stick_x = 0;
         if (stick_y) *stick_y = 0;
         return 0;
+    }
+
+    /* The press that closed the menu (Resume, Back...) must not reach the game as a new press: after the menu closes,
+     * every pad stays neutral until its buttons are let go. */
+    {
+        static int s_menuWasOpen = 0;
+        static u8 s_untilRelease[MAX_PADS];
+        if (idx == 0) {
+            const int open = optionsOverlayIsOpen();
+            if (s_menuWasOpen && !open) memset(s_untilRelease, 1, sizeof s_untilRelease);
+            s_menuWasOpen = open;
+        }
+        if (idx >= 0 && idx < MAX_PADS && s_untilRelease[idx]) {
+            const u32 held = pads[idx] ? padActHeld(&padTabGet()->seat[padSeatForSlot(idx)], padReadRaw(pads[idx])) : 0;
+            if (held) {
+                padActPrev[idx] = held;
+                if (stick_x) *stick_x = 0;
+                if (stick_y) *stick_y = 0;
+                return 0;
+            }
+            s_untilRelease[idx] = 0;
+        }
     }
 
     /* Modern: a wheel is open on this pad (LB / RB held): nothing reaches the game, the wheel reads the stick itself */

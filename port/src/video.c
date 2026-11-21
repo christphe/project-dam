@@ -1758,18 +1758,13 @@ void videoPumpEvents(void)
             } else if (ev.key.keysym.sym == SDLK_F12 && !ev.key.repeat) {
                 screenshotReq = 1;
             } else if (ev.key.keysym.sym == SDLK_F10 && !ev.key.repeat) {
-                /* F10: port-layer options overlay (the one PC options UI). */
+                /* F10: the menu (the one PC options UI). */
                 optionsOverlayToggle();
             } else if (ev.key.keysym.sym == SDLK_ESCAPE && !ev.key.repeat) {
-                /* Overlay open: ESC backs out of a category, then closes (swallowed). Otherwise
-                 * WI-1: in click-to-lock mode ESC frees the captured cursor
-                 * (and is swallowed); else it falls through to input.c where
-                 * it feeds the N64 B button (D145). */
-                if (optionsOverlayIsOpen()) {
-                    optionsOverlayBack();
-                } else {
-                    inputReleaseCapture();
-                }
+                /* Menu open: ESC goes back inside it, and closes it from the first menu (the menu reads the
+                 * key itself, menu_game.cpp feedInput). Otherwise ESC is the game's B button (input.c, D145);
+                 * it no longer frees the mouse. */
+                if (optionsOverlayIsOpen()) optionsOverlayBack();
             }
             break;
         case SDL_MOUSEBUTTONDOWN:

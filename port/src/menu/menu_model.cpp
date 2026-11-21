@@ -211,6 +211,7 @@ bool readControl(const Json& j, Control* c, std::string* err) {
     if (c->div < 1) c->div = 1;
     c->decimals = (int)j.num("decimals", 0);
     c->suffix = j.str("suffix");
+    c->readout = j.str("readout");
     if (const Json* h = j.get("help")) {
         if (h->t == Json::Str) c->help = h->s;
         else if (h->t == Json::Obj)

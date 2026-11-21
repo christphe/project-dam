@@ -38,6 +38,7 @@ struct Control {
     double per = 1;                    /* config units in one control unit (before "div") */
     int div = 1, decimals = 0;         /* slider text: value / div with this many decimals */
     std::string suffix;
+    std::string readout;               /* a note drawn after the value, computed by the game ("hfov") */
     double def[2] = { 0, 0 };          /* default per platform: [0] Switch, [1] PC (choice index, toggle 0/1, slider value) */
     std::string show;     /* visibility expression ("" = always) */
     std::string disabled; /* greyed-out expression */
@@ -82,6 +83,8 @@ struct State {
     bool fileSelect = false;           /* the game is on the file select screen (the profile can be chosen) */
     bool profile = false;              /* a save file is selected: the per-profile settings can be read and written */
     bool updateAvailable = false;      /* the update check found a newer release */
+    int updateState = 0;               /* 0 idle, 1 checking, 2 up to date, 3 available, 4 failed */
+    std::string updateTag, updateNotes, version;   /* the release found, its text, and this build's version */
     bool inStage = false;              /* a mission is running */
     std::map<std::string, double> v;   /* control id -> value */
 

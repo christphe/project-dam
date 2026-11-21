@@ -38,11 +38,19 @@ void optionsMenuSetSeat(int seat);
 int optionsMenuFileSelect(void);
 int optionsMenuInStage(void);
 int optionsMenuUpdateAvailable(void);
+int optionsMenuUpdateState(void);
+const char* optionsMenuUpdateTag(void);
+const char* optionsMenuUpdateNotes(void);
+const char* optionsMenuVersion(void);
+int optionsMenuWheel(void);
+float portFovHorizDegrees(int pct);
+int inputCrosshairCursorOn(void);
 int optionsMenuProfileAvailable(void);
 }
 
 namespace {
 
+SDL_atomic_t s_back;   // Esc pressed while the menu is open
 ImGuiContext* s_ctx = nullptr;
 std::vector<GfxUiVertex> s_vtx;
 std::vector<uint32_t> s_idx;
@@ -58,7 +66,7 @@ void init() {
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
-    io.MouseDrawCursor = true;   /* the game hides the OS cursor while the overlay is open: draw our own */
+    io.MouseDrawCursor = false;   /* the pointer is drawn by menu::drawPointer, only when Input.CrosshairCursor is on */
     menu::init(kMenuBodyTtf, kMenuBodyTtfLen, kMenuHeadTtf, kMenuHeadTtfLen);
 #ifdef __SWITCH__
     menu::setPlatform(false);
@@ -131,6 +139,12 @@ void feedInput(ImGuiIO& io, float W, float H) {
     io.AddKeyEvent(ImGuiKey_LeftArrow, ks[SDL_SCANCODE_LEFT] != 0);
     io.AddKeyEvent(ImGuiKey_RightArrow, ks[SDL_SCANCODE_RIGHT] != 0);
     io.AddKeyEvent(ImGuiKey_Enter, ks[SDL_SCANCODE_RETURN] != 0 || ks[SDL_SCANCODE_KP_ENTER] != 0);
+    {   /* Backspace and Esc go back: Esc arrives as an event (menuPostBack), held for two frames so the menu sees a press */
+        static int escPulse = 0;
+        if (SDL_AtomicSet(&s_back, 0)) escPulse = 2;
+        io.AddKeyEvent(ImGuiKey_Backspace, ks[SDL_SCANCODE_BACKSPACE] != 0 || escPulse > 0);
+        if (escPulse > 0) escPulse--;
+    }
     io.AddKeyEvent(ImGuiKey_PageUp, ks[SDL_SCANCODE_PAGEUP] != 0);
     io.AddKeyEvent(ImGuiKey_PageDown, ks[SDL_SCANCODE_PAGEDOWN] != 0);
 
@@ -148,6 +162,8 @@ void feedInput(ImGuiIO& io, float W, float H) {
 }
 
 }  // namespace
+
+extern "C" void menuPostBack(void) { SDL_AtomicSet(&s_back, 1); }
 
 extern "C" int menuNewActive(void) {   /* the menu is this one: the C-era overlay no longer draws or reads input */
     return 1;
@@ -167,7 +183,9 @@ static void runFrame(int mode) {   /* 0 the menu, 1 the wheel, 2 the device assi
         menu::setOwner(inputOverlayOwnerSeat());
         optionsMenuSetSeat(inputOverlayOwnerSeat());
         menu::setContext(optionsMenuFileSelect() != 0, optionsMenuInStage() != 0, optionsMenuUpdateAvailable() != 0, optionsMenuProfileAvailable() != 0);
+        menu::setUpdate(optionsMenuUpdateState(), optionsMenuUpdateTag(), optionsMenuUpdateNotes(), optionsMenuVersion());
         feedInput(io, W, H);
+        io.AddMouseWheelEvent(0.0f, (float)optionsMenuWheel());   /* the mouse wheel: the lists and the release text scroll */
     }
     ImGui::NewFrame();
     if (mode == 2) {   /* who plays with which device */
@@ -180,6 +198,7 @@ static void runFrame(int mode) {   /* 0 the menu, 1 the wheel, 2 the device assi
         }
     } else if (mode == 0) {
         menu::draw(W, H);
+        menu::drawPointer(inputCrosshairCursorOn() != 0, W, H);
     } else {   /* the Modern weapon / gadget wheel, over the running game */
         for (int seat = 0; seat < 4; seat++) {   /* every player with a wheel open, in that player's own picture */
             char names[16][24];
@@ -244,6 +263,14 @@ static void keyBegin(const char* key, int slot) { optionsMenuBindBegin(key, slot
 static bool keyActive() { return optionsMenuBindActive() != 0; }
 static void doAction(const char* key) { optionsMenuAction(key); }
 
+/* "hfov": the horizontal view angle that a vertical one gives at the window's aspect ratio (the picture's, right now) */
+static const char* readout(const char* name, double cfg) {
+    static char buf[32];
+    buf[0] = 0;
+    if (!strcmp(name, "hfov")) snprintf(buf, sizeof buf, "(%d deg horizontal)", (int)(portFovHorizDegrees((int)(cfg + 0.5)) + 0.5f));
+    return buf;
+}
+
 extern "C" void menuBindGame(void) {   /* the menu reads and writes the game's values */
     std::vector<std::string> res;
     for (int i = 0; i < optionsMenuResCount(); i++) {
@@ -258,6 +285,7 @@ extern "C" void menuBindGame(void) {   /* the menu reads and writes the game's v
     menu::setBinding(bindGet, bindSet);
     menu::setKeyBinding(keyText, keyBegin, keyActive);
     menu::setActionHandler(doAction);
+    menu::setReadout(readout);
 }
 
 extern "C" int menuTakeCloseRequest(void) {
