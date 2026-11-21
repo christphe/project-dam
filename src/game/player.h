@@ -197,6 +197,8 @@ extern int portNeedPads(int n);
 #define GE_MP_AVAIL()            4
 #define GE_NEED_PADS(n)          portNeedPads(n)
 extern int coopMenuIntent(void);
+extern int portAimIsMouse(void);
+#define GE_AUTOAIM_ON()          (cur_player_get_autoaim() && !portAimIsMouse())   /* no auto-aim while the mouse aims */
 #define GE_COOP_WAIT()           (coopMenuIntent() && !portNeedPads(2))   /* co-op chosen, fewer than 2 pads */
 #else
 #define GE_RULE_SOLO()           (getPlayerCount() == 1)
@@ -226,6 +228,7 @@ extern int coopMenuIntent(void);
 #define GE_MP_AVAIL()            joyGetControllerCount()
 #define GE_NEED_PADS(n)          (joyGetControllerCount() >= (n))
 #define GE_COOP_WAIT()           0
+#define GE_AUTOAIM_ON()          cur_player_get_autoaim()
 #define GE_PICKUP_TAKEN(prop)    0
 #define GE_PICKUP_VISIBLE(prop)  1
 #define GE_PICKUP_OP(prop, op)   (op)

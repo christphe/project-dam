@@ -8193,8 +8193,8 @@ void bondviewMovePlayerUpdateViewport(s8 stick_x, s8 stick_y, u16 buttons)
     viSetViewPosition(get_curplayer_viewport_ulx(), bondviewGetCurrentPlayerViewportUly());
     currentPlayerUpdateColourScreenProperties();
     currentPlayerTickChrFade();
-    currentPlayerSetYAutoAimEnabled(cur_player_get_autoaim());
-    currentPlayerSetXAutoAimEnabled(cur_player_get_autoaim());
+    currentPlayerSetYAutoAimEnabled(GE_AUTOAIM_ON());
+    currentPlayerSetXAutoAimEnabled(GE_AUTOAIM_ON());
     currentPlayerSetLookAheadSetting(cur_player_get_lookahead());
     gunSetGunAmmoVisible(GUNAMMOREASON_OPTION, cur_player_get_ammo_onscreen_setting());
 

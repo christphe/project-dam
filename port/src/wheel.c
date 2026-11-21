@@ -16,6 +16,7 @@
 #include "gun.h"
 #include "player.h"
 #include "input.h"
+#include "system.h"
 #include "optionsoverlay.h"
 #include "wheel.h"
 extern int portSplitVertical;
@@ -101,6 +102,16 @@ static void equip(struct player *p, const struct WheelItem *w)
 
 static int s_openKind[4], s_openSel[4];
 
+/* a shoulder button is held and the wheel does not open: say why (one line per second at most) */
+static void wheelWhy(int seat, const char *why, struct player *p)
+{
+    static Uint32 last = 0;
+    const Uint32 now = SDL_GetTicks();
+    if (now - last < 1000) return;
+    last = now;
+    sysLogPrintf(LOG_NOTE, "wheel: seat %d: %s (player %s, count %d)", seat, why, p ? "there" : "missing", (int)getPlayerCount());
+}
+
 void portWheelGameTick(void)
 {
     /* the stage is running and the menu is closed */
@@ -123,6 +134,7 @@ void portWheelGameTick(void)
             const int want = lb ? KIND_WEAPONS : (rb ? KIND_GADGETS : KIND_NONE);
             if (want != KIND_NONE) {
                 n = build(p, want, items);
+                if (n == 0) wheelWhy(seat, "nothing to pick from", p);
                 if (n > 0) {   /* nothing to pick from: the button does nothing */
                     kind = want;
                     mask |= 1 << seat;
@@ -141,6 +153,15 @@ void portWheelGameTick(void)
                 const int was = s_openKind[seat], sel = s_openSel[seat];
                 const int m = build(p, was, items);
                 if (sel >= 0 && sel < m) equip(p, &items[sel]);
+            }
+        }
+        {   /* a shoulder button is held: say what the wheel saw (one line a second at most) */
+            const int rl = inputPadButton(seat, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) != 0, rr = inputPadButton(seat, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) != 0;
+            static Uint32 lastAll = 0;
+            if ((rl || rr) && SDL_GetTicks() - lastAll > 1000) {
+                lastAll = SDL_GetTicks();
+                sysLogPrintf(LOG_NOTE, "wheel: seat %d LB=%d RB=%d player=%d modern=%d kind=%d items=%d count=%d", seat, rl, rr, p != NULL,
+                             inputPadIsModern(seat), kind, n, (int)getPlayerCount());
             }
         }
         if (kind == KIND_NONE) s_openKind[seat] = KIND_NONE;

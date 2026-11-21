@@ -1194,6 +1194,10 @@ static int aimModeGet(void)
     return dev;
 }
 
+/* Auto-aim is for a pad: while the mouse is the device that aims (player 1), the game gets it off (GE_AUTOAIM_ON). */
+extern s32 get_cur_playernum(void);
+int portAimIsMouse(void) { return s_aimDevMouse && get_cur_playernum() == 0; }
+
 /* D337: which device drove aim last. PD picks its crosshair damp per input
  * device; the mouse integration must not swallow a gamepad's stick aim just
  * because the mouse happens to be grabbed. Set by mouse motion, cleared by a
@@ -2779,6 +2783,10 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         return 0;
     }
 
+    /* Modern: a wheel is open on this pad (LB / RB held). The pad goes on walking and pressing; only the aim is the
+     * wheel's: the right stick is read by the wheel itself (wheel.c), so the game sees it at rest. */
+    const int wheelOpen = portWheelBlocks(idx);
+
     /* The press that closed the menu (Resume, Back...) must not reach the game as a new press: after the menu closes,
      * every pad stays neutral until its buttons are let go. */
     {
@@ -2801,8 +2809,8 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         }
     }
 
-    /* Modern: a wheel is open on this pad (LB / RB held): nothing reaches the game, the wheel reads the stick itself */
-    if (portWheelBlocks(idx) || portAssignBlocks()) {
+    /* the device screen takes every press */
+    if (portAssignBlocks()) {
         padActPrev[idx] = pads[idx] ? padActHeld(&padTabGet()->seat[padSeatForSlot(idx)], padReadRaw(pads[idx])) : 0;
         if (stick_x) *stick_x = 0;
         if (stick_y) *stick_y = 0;
@@ -3408,6 +3416,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
 
         /* D498: 1.3 Frost / 1.4 Elektra swap the two sticks; menus never swap. */
         if (!padMenuMode && stickSwap(idx)) { int tx = lx, ty = ly; lx = rx; ly = ry; rx = tx; ry = ty; }   /* D518 */
+        if (wheelOpen) rx = ry = 0;   /* the open wheel has the aim */
 
         if (padMenuMode) {
             int px = padStickAxis(lx, padDeadzoneL);   /* D643: accurate N64 response in Original */
