@@ -351,25 +351,49 @@ static void append_formula(char* buf, size_t* len, uint8_t c[2][4], bool do_sing
     }
 }
 
+/* GE+ sky and sea, and the water of the level's own water surfaces: the Switch's shaders (gl_skyplus_glsl, gl_skylut_glsl,
+ * gl_water_glsl), embedded by CMake with skycommon.glsl pasted in. */
+#include "gl_sky_src.inc"
+static bool s_water_gl = false;   /* desktop GL 4.6: the water surfaces are drawn with gl_water_glsl (set by skyplus2_init) */
+static GLuint s_wat_ubo, s_sp2_wmap;   /* the Sky block (binding 2) of the water draws, and the colour map (unit 4) */
+#define WATER_UBO_BYTES 320            /* 20 vec4: the sky block's 16 and uWX0..3 */
+
+/* the water fragment shader of a combiner program: gl_water_glsl with this program's inputs defined */
+static std::string gfx_opengl_water_fs(const struct CCFeatures& f) {
+    const char* nl = strchr(gl_water_glsl, '\n');   /* the first line is `#version 460`, written here */
+    std::string s = "#version 460\n#define GE_GL 1\n";
+    const char* shadeq = gfx_rdp_affine ? "noperspective" : "";
+    if (f.opt_fog) s += "#define WATER_FOG 1\n";
+    if (!gfx_fog_vertex) s += "#define WATER_PIXEL_FOG 1\n";
+    if (current_filter_mode == FILTER_THREE_POINT) s += "#define WATER_TPF 1\n";
+    s += std::string("#define WATER_SHADEQ ") + shadeq + "\n";
+    s += std::string("#define WATER_FOGQ ") + (gfx_fog_vertex ? shadeq : "") + "\n";
+    s += f.opt_alpha ? "#define WATER_IVEC vec4\n" : "#define WATER_IVEC vec3\n";
+    s += nl ? nl + 1 : gl_water_glsl;
+    return s;
+}
+
 #define SHADER_VS_MAX 4096   /* issue #10: the GPU-transform twin is longer */
 #define SHADER_FS_MAX 12288
 
 /* Generates the vertex + fragment shader text of a combiner program. */
 static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_buf, size_t* vs_len_out,
-                                      char* fs_buf, size_t* fs_len_out, size_t* num_floats_out, bool mesh = false) {
+                                      char* fs_buf, size_t* fs_len_out, size_t* num_floats_out, bool mesh = false,
+                                      bool water = false) {
     size_t vs_len = 0;
     size_t fs_len = 0;
     size_t num_floats = 4;
 
     // Vertex shader
 
-    vs_len += sprintf(vs_buf + vs_len, "#version %s\n", gl_glsl_version_str);
+    /* a water program is one 4.60 program: its vertex shader is at that version too */
+    vs_len += sprintf(vs_buf + vs_len, "#version %s\n", water ? "460" : gl_glsl_version_str);
 
     if (gl_es) {
         append_line(vs_buf, &vs_len, "precision mediump float;");
     }
 
-    if (gl_glsl_version >= 130) {
+    if (gl_glsl_version >= 130 || water) {
         append_line(vs_buf, &vs_len, "#define INPUT in");
         append_line(vs_buf, &vs_len, "#define OUTPUT out");
     } else {
@@ -429,6 +453,9 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
         vs_len += sprintf(vs_buf + vs_len, "uniform vec4 uMeshEnv[%d];\n", GFX_MESH_MAX_INPUTS);
         vs_len += sprintf(vs_buf + vs_len, "uniform vec4 uMeshEnvMask[%d];\n", GFX_MESH_MAX_INPUTS);
     }
+    if (water) {
+        append_line(vs_buf, &vs_len, "OUTPUT vec3 vClip;");   /* water.frag.glsl: the pixel's screen position */
+    }
     append_line(vs_buf, &vs_len, "void main() {");
     if (mesh) {
         append_line(vs_buf, &vs_len, "    vec4 mp = uMeshMtx[int(aVtxPos.w + 0.5)] * vec4(aVtxPos.xyz, 1.0);");
@@ -475,6 +502,9 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
     }
 
     append_line(vs_buf, &vs_len, mesh ? "    gl_Position = mp;" : "    gl_Position = aVtxPos;");
+    if (water) {
+        append_line(vs_buf, &vs_len, "    vClip = vec3(gl_Position.xy, gl_Position.w);");
+    }
     if (!GLAD_GL_ARB_depth_clamp) {
         // HACK: workaround for no GL_DEPTH_CLAMP
         append_line(vs_buf, &vs_len, "    gl_Position.z *= 0.3f;");
@@ -768,22 +798,36 @@ static void gfx_opengl_compile_program(uint64_t shader_id0, uint32_t shader_id1,
     struct CCFeatures cc_features = { 0 };
     gfx_cc_get_features(shader_id0, shader_id1, &cc_features);
 
-
+    /* GE+ water on the level's own water surfaces (SHADER_OPT_WATER): water.frag.glsl instead of the generated fragment shader.
+     * If it does not build, the generated one is used (GE's own water). */
+    bool water = (shader_id1 & SHADER_OPT_WATER) && s_water_gl && cc_features.used_textures[0] && cc_features.used_textures[1] &&
+                 cc_features.num_inputs >= 2;
+retry:
     char vs_buf[SHADER_VS_MAX];
     char fs_buf[SHADER_FS_MAX];
     size_t vs_len = 0;
     size_t fs_len = 0;
     size_t num_floats = 4;
-    gfx_opengl_gen_shader_src(cc_features, vs_buf, &vs_len, fs_buf, &fs_len, &num_floats, mesh);
+    gfx_opengl_gen_shader_src(cc_features, vs_buf, &vs_len, fs_buf, &fs_len, &num_floats, mesh, water);
+    std::string water_fs;
+    if (water) water_fs = gfx_opengl_water_fs(cc_features);
 
-    const GLchar* sources[2] = { vs_buf, fs_buf };
-    const GLint lengths[2] = { (GLint)vs_len, (GLint)fs_len };
+    const GLchar* sources[2] = { vs_buf, water ? water_fs.c_str() : fs_buf };
+    const GLint lengths[2] = { (GLint)vs_len, water ? (GLint)water_fs.size() : (GLint)fs_len };
     GLint success;
 
     GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vertex_shader, 1, &sources[0], &lengths[0]);
     glCompileShader(vertex_shader);
     glGetShaderiv(vertex_shader, GL_COMPILE_STATUS, &success);
+    if (!success && water) {
+        char log[1024] = "";
+        glGetShaderInfoLog(vertex_shader, sizeof log, NULL, log);
+        sysLogPrintf(LOG_ERROR, "GL: GE+ water vertex shader (%016llx %x): %s", (unsigned long long)shader_id0, shader_id1, log);
+        glDeleteShader(vertex_shader);
+        water = false;
+        goto retry;
+    }
     if (!success) {
         GLint max_length = 1024;
         glGetShaderiv(vertex_shader, GL_INFO_LOG_LENGTH, &max_length);
@@ -797,6 +841,15 @@ static void gfx_opengl_compile_program(uint64_t shader_id0, uint32_t shader_id1,
     glShaderSource(fragment_shader, 1, &sources[1], &lengths[1]);
     glCompileShader(fragment_shader);
     glGetShaderiv(fragment_shader, GL_COMPILE_STATUS, &success);
+    if (!success && water) {
+        char log[2048] = "";
+        glGetShaderInfoLog(fragment_shader, sizeof log, NULL, log);
+        sysLogPrintf(LOG_ERROR, "GL: GE+ water fragment shader (%016llx %x): %s", (unsigned long long)shader_id0, shader_id1, log);
+        glDeleteShader(vertex_shader);
+        glDeleteShader(fragment_shader);
+        water = false;
+        goto retry;
+    }
     if (!success) {
         GLint max_length = 1024;
         glGetShaderiv(fragment_shader, GL_INFO_LOG_LENGTH, &max_length);
@@ -810,6 +863,20 @@ static void gfx_opengl_compile_program(uint64_t shader_id0, uint32_t shader_id1,
     glAttachShader(shader_program, vertex_shader);
     glAttachShader(shader_program, fragment_shader);
     glLinkProgram(shader_program);
+    if (water) {
+        GLint linked = 0;
+        glGetProgramiv(shader_program, GL_LINK_STATUS, &linked);
+        if (!linked) {
+            char log[2048] = "";
+            glGetProgramInfoLog(shader_program, sizeof log, NULL, log);
+            sysLogPrintf(LOG_ERROR, "GL: GE+ water program link (%016llx %x): %s", (unsigned long long)shader_id0, shader_id1, log);
+            glDeleteProgram(shader_program);
+            glDeleteShader(vertex_shader);
+            glDeleteShader(fragment_shader);
+            water = false;
+            goto retry;
+        }
+    }
 
     glDetachShader(shader_program, vertex_shader);
     glDetachShader(shader_program, fragment_shader);
@@ -877,6 +944,11 @@ static void gfx_opengl_compile_program(uint64_t shader_id0, uint32_t shader_id1,
     if (cc_features.used_textures[1]) {
         GLint sampler_location = glGetUniformLocation(shader_program, "uTex1");
         glUniform1i(sampler_location, 1);
+    }
+    if (water) {   /* the reflection's cloud texture, the wave heights and the colour map: units 2, 3, 4 (sp2_water_bind) */
+        glUniform1i(glGetUniformLocation(shader_program, "uCloudTex"), 2);
+        glUniform1i(glGetUniformLocation(shader_program, "uWaveTex"), 3);
+        glUniform1i(glGetUniformLocation(shader_program, "uWMap"), 4);
     }
 
     prg->frame_count_location = glGetUniformLocation(shader_program, "frame_count");
@@ -1919,6 +1991,11 @@ extern "C" void gfx_opengl_frame_count_rewind(void) {
 
 static void gfx_opengl_start_frame(void) {
     frame_count++;
+    if (s_water_gl) {   /* GE+ water off until this frame's sky pass (uWave4 = vec4 15 of the block) */
+        static const float zero[4] = {};
+        glBindBufferBase(GL_UNIFORM_BUFFER, 2, s_wat_ubo);
+        glBufferSubData(GL_UNIFORM_BUFFER, 15 * 16, sizeof zero, zero);
+    }
     if (s_gpuq_on < 0) {
         s_gpuq_on = getenv("GE_PERFSTAT") != NULL && glGenQueries != NULL &&
                     glGetQueryObjectui64v != NULL && glBeginQuery != NULL;
@@ -2360,7 +2437,7 @@ static SkyPlusDraw s_skyplus_ring[SKYPLUS_RING];
 static unsigned s_skyplus_next;
 static GLuint s_skyplus_prog, s_skyplus_vao, s_skyplus_tex;
 static int s_skyplus_tex_gen = -1;
-extern "C" { volatile int gfx_skyplus_failed = 0; volatile int gfx_skyplus_sea = 0; int gfx_skyplus_half = 0; }
+extern "C" { volatile int gfx_skyplus_failed = 0; volatile int gfx_skyplus_sea = 0; int gfx_skyplus_half = 0; volatile int gfx_water_surfaces = 0; }
 enum { SPL_VP, SPL_ASP, SPL_C0, SPL_C1, SPL_C2, SPL_C3, SPL_EYE, SPL_CLOUDY, SPL_SKY, SPL_CLOUD, SPL_OFS,
        SPL_GAIN, SPL_TEXSCALE, SPL_SUNDIR, SPL_SUNCOL, SPL_SUNGLOW, SPL_MOONDIR, SPL_NIGHT, SPL_TEX, SPL_COUNT };
 static GLint s_sp_loc[SPL_COUNT];
@@ -2539,8 +2616,6 @@ void main() {
  * need GLSL 4.60: on an older or ES context this path stays off and the older single-pass shader above draws the sky (no sea).
  * The Sky block is a uniform buffer at binding 0; the five textures sit on units 3..7 (the game's tile sampling uses 0 and 1).
  * Off-screen targets are drawn y-flipped (uFlipY) so that they are stored top row first, as the shaders read them. */
-#include "gl_sky_src.inc"
-
 struct Sp2Target {
     GLuint fbo = 0, tex = 0;
     int w = 0, h = 0;
@@ -2647,6 +2722,17 @@ void main() {
     s_sp2_ok = true;
     gfx_skyplus_sea = 1;
     sysLogPrintf(LOG_NOTE, "GL: GE+ sky and sea on (GLSL 4.60)");
+    /* the water of the level's own water surfaces: its Sky block lives at uniform binding 2 for good, its textures at units 2..4 */
+    {
+        static const float zero[WATER_UBO_BYTES / 4] = {};
+        glGenBuffers(1, &s_wat_ubo);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 2, s_wat_ubo);
+        glBufferData(GL_UNIFORM_BUFFER, WATER_UBO_BYTES, zero, GL_DYNAMIC_DRAW);
+        glGenTextures(1, &s_sp2_wmap);
+        s_water_gl = true;
+        gfx_water_surfaces = 1;
+        sysLogPrintf(LOG_NOTE, "GE+ water surfaces: on (opengl)");
+    }
 }
 
 /* an RGBA8 target of w x h; (re)built when the size changes. wrapS: GL_REPEAT for the panoramas, GL_CLAMP_TO_EDGE for the rest */
@@ -2676,6 +2762,68 @@ static bool sp2_target(Sp2Target& t, int w, int h, GLint wrapS) {
     return ok;
 }
 
+static int s_sp2_wmap_gen = -1;
+
+/* The water of the level's own water surfaces: the colour map, the wave heights (uploaded here when the sea pass would not), and
+ * the Sky block of the water draws (binding 2: the sky block's 16 vec4 + deep / light / flags). Uniform values as in
+ * gfx_deko3d_skyplus_pass. Run inside skyplus2_pass's saved state. */
+static void sp2_water_setup(const SkyPlusDraw& d, const float u[16][4]) {
+    const PortSkyPlus& p = d.p;
+    GLint prev_align = 4;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &prev_align);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if (p.waterTex && p.waterTexGen != s_sp2_wave_gen) {
+        glActiveTexture(GL_TEXTURE0 + 4);
+        glBindTexture(GL_TEXTURE_2D, s_sp2_wave);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, SKYPLUS_WTEX_W, SKYPLUS_WTEX_H, 0, GL_RGBA, GL_UNSIGNED_BYTE, p.waterTex);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameterf(GL_TEXTURE_2D, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY */, 2.0f);
+        s_sp2_wave_gen = p.waterTexGen;
+    }
+    if (p.wmap && p.wmapGen != s_sp2_wmap_gen) {
+        glActiveTexture(GL_TEXTURE0 + 4);
+        glBindTexture(GL_TEXTURE_2D, s_sp2_wmap);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, SKYPLUS_WMAP_W, SKYPLUS_WMAP_H, 0, GL_RGBA, GL_UNSIGNED_BYTE, p.wmap);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        s_sp2_wmap_gen = p.wmapGen;
+    }
+    glPixelStorei(GL_UNPACK_ALIGNMENT, prev_align);
+    float wu[WATER_UBO_BYTES / 16][4];
+    memset(wu, 0, sizeof wu);
+    memcpy(wu, u, 16 * 4 * sizeof(float));
+    wu[1][2] = framebuffers[current_framebuffer].invert_y ? 1.0f : 0.0f;   /* water draws read the pixel's y from the clip position */
+    wu[15][1] = (p.sea && p.waterTex) ? 1.0f : 0.0f;
+    wu[15][2] = 1.0f;   /* the level's water draws: GE+ water on */
+    for (int i = 0; i < 3; i++) { wu[16][i] = p.deep[i]; wu[17][i] = p.light[i]; }
+    wu[16][3] = p.patchScale > 0.0f ? p.patchScale : 6.0f;
+    wu[17][3] = p.reflectLit;
+    wu[18][0] = (p.wmap && s_sp2_wmap_gen == p.wmapGen) ? 1.0f : 0.0f;   /* the colour map is ready */
+    wu[18][1] = p.waterOnly ? 1.0f : 0.0f;                              /* no sky: the fog colour is mirrored, no glints */
+    wu[19][0] = p.toneKeep;
+    wu[19][1] = p.reflectGain;
+    wu[19][2] = p.worldScale;
+    glBindBufferBase(GL_UNIFORM_BUFFER, 2, s_wat_ubo);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof wu, wu, GL_DYNAMIC_DRAW);
+}
+
+/* the water draws sample units 2 (cloud), 3 (waves), 4 (colour map); the sky pass uses 3..7 inside and puts back what it found */
+static void sp2_water_bind(void) {
+    glActiveTexture(GL_TEXTURE0 + 2);
+    glBindTexture(GL_TEXTURE_2D, s_sp2_cloud);
+    glActiveTexture(GL_TEXTURE0 + 3);
+    glBindTexture(GL_TEXTURE_2D, s_sp2_wave);
+    glActiveTexture(GL_TEXTURE0 + 4);
+    glBindTexture(GL_TEXTURE_2D, s_sp2_wmap);
+}
+
 static void skyplus2_pass(const SkyPlusDraw& d) {
     const PortSkyPlus& p = d.p;
     GLint prev_prog = 0, prev_vao = 0, prev_unit = 0, prev_vp[4], prev_sc[4], prev_align = 4, prev_fbo = 0, prev_ubo = 0;
@@ -2701,7 +2849,7 @@ static void skyplus2_pass(const SkyPlusDraw& d) {
     /* the cloud texture (R8 + mips) and the wave heights (RGBA8 + mips) */
     glActiveTexture(GL_TEXTURE0 + 3);
     glBindTexture(GL_TEXTURE_2D, s_sp2_cloud);
-    if (p.texGen != s_sp2_cloud_gen) {
+    if (p.tex && p.texGen != s_sp2_cloud_gen) {
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, SKYPLUS_TEX_W, SKYPLUS_TEX_H, 0, GL_RED, GL_UNSIGNED_BYTE, p.tex);
         glGenerateMipmap(GL_TEXTURE_2D);
@@ -2748,6 +2896,19 @@ static void skyplus2_pass(const SkyPlusDraw& d) {
     u[15][0] = p.time;
     u[15][1] = sea ? 1.0f : 0.0f;
 
+    if (s_water_gl) {
+        sp2_water_setup(d, u);
+    }
+    if (p.waterOnly) {   /* nothing to draw: the water draws of this frame read the block */
+        glActiveTexture(GL_TEXTURE0 + 3);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)prev_tex[3]);
+        glActiveTexture(GL_TEXTURE0 + 4);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)prev_tex[4]);
+        sp2_water_bind();
+        glBindBufferBase(GL_UNIFORM_BUFFER, 0, (GLuint)prev_ubo);
+        glActiveTexture((GLenum)prev_unit);
+        return;
+    }
     /* what each unit shows during the next draw: the dummy until a target is ready */
     GLuint slot[5] = { s_sp2_cloud, sea ? s_sp2_wave : s_sp2_dummy, s_sp2_dummy, s_sp2_dummy, s_sp2_dummy };
     glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_sp2_ubo);
@@ -2851,6 +3012,7 @@ static void skyplus2_pass(const SkyPlusDraw& d) {
     glBindVertexArray((GLuint)prev_vao);
     glUseProgram((GLuint)prev_prog);
     gfx_opengl_set_a2c(prev_a2c);
+    if (s_water_gl) sp2_water_bind();
     glActiveTexture((GLenum)prev_unit);
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
     glScissor(prev_sc[0], prev_sc[1], prev_sc[2], prev_sc[3]);
@@ -2874,7 +3036,7 @@ extern "C" void gfx_opengl_skyplus_pass(int slot) {
     }
     const SkyPlusDraw& d = s_skyplus_ring[slot];
     const PortSkyPlus& p = d.p;
-    if (d.vp[2] <= 0 || d.vp[3] <= 0 || (d.aspA < 0.0f ? -d.aspA : d.aspA) < 1e-6f || !p.tex) {
+    if (d.vp[2] <= 0 || d.vp[3] <= 0 || (d.aspA < 0.0f ? -d.aspA : d.aspA) < 1e-6f || (!p.tex && !p.waterOnly)) {
         return;
     }
     if (s_sp2_ok) {   /* GL 4.6: the Switch's shaders, with the sea */

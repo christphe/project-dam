@@ -117,6 +117,7 @@ struct ShaderProgram {
     uint32_t id1;
     bool uber;
     VkShaderModule vert, frag, mesh_vert;
+    bool water;   /* GE+ water on the level's own water surfaces: uber vertex shader + water.frag, the water descriptor set */
     struct DkCombinerParams params;
     struct DkLayout layout;
     uint8_t num_inputs;
@@ -953,7 +954,7 @@ std::map<std::pair<uint64_t, uint32_t>, bool> s_missed;
 std::map<uint32_t, VkShaderModule> s_modules;   /* by blob offset in the pack */
 VkShaderModule s_uber_vert = VK_NULL_HANDLE, s_uber_frag = VK_NULL_HANDLE;
 VkShaderModule s_fs_vert = VK_NULL_HANDLE, s_fxaa_frag = VK_NULL_HANDLE, s_sky_frag = VK_NULL_HANDLE,
-                s_lut_frag = VK_NULL_HANDLE;
+                s_lut_frag = VK_NULL_HANDLE, s_water_frag = VK_NULL_HANDLE;
 
 int pack_find(uint64_t id0, uint32_t id1) {
     int lo = 0, hi = (int)s_pack_count - 1;
@@ -1003,6 +1004,7 @@ void load_pack(void) {
     s_fxaa_frag = pack_module(pack_find(0, DK_PACK_FXAA), 1);
     s_sky_frag = pack_module(pack_find(0, DK_PACK_SKYPLUS), 1);
     s_lut_frag = pack_module(pack_find(0, DK_PACK_SKYLUT), 1);
+    s_water_frag = pack_module(pack_find(0, DK_PACK_WATER), 1);
     if (!s_fs_vert || !s_fxaa_frag || !s_sky_frag) {
         sysLogPrintf(LOG_WARNING, "VK: post-pass shaders missing from the pack (FXAA %d, GE+ sky %d)",
                      s_fs_vert && s_fxaa_frag, s_fs_vert && s_sky_frag);
@@ -1017,7 +1019,8 @@ void load_pack(void) {
 
 VkDescriptorSetLayout s_set_layout = VK_NULL_HANDLE;
 VkDescriptorSetLayout s_sky_set_layout = VK_NULL_HANDLE;   /* the GE+ sky passes: five samplers (0..4), the Sky block at 5 */
-VkPipelineLayout s_pipe_layout = VK_NULL_HANDLE, s_sky_pipe_layout = VK_NULL_HANDLE;
+VkPipelineLayout s_pipe_layout = VK_NULL_HANDLE, s_sky_pipe_layout = VK_NULL_HANDLE, s_water_pipe_layout = VK_NULL_HANDLE;
+VkDescriptorSetLayout s_water_set_layout = VK_NULL_HANDLE;   /* the water draws: samplers 0..3 and 7, Draw 4, Comb 5, the Sky block 8 */
 VkPipelineCache s_pipe_cache = VK_NULL_HANDLE;
 
 /* The driver's pipeline cache lives in $S/ge007.vkcache between runs: the first
@@ -1135,6 +1138,21 @@ void create_layouts(void) {
     VK_CHECK(vkCreateDescriptorSetLayout(s_dev, &ci, nullptr, &s_sky_set_layout));
     pl.pSetLayouts = &s_sky_set_layout;
     VK_CHECK(vkCreatePipelineLayout(s_dev, &pl, nullptr, &s_sky_pipe_layout));
+    /* the water draws (water.frag.glsl, built with the blocks moved up by 4 like the other draws': Draw 4, Comb 5; its
+     * colour-map sampler moved to 7 and its Sky block to 8, cmake/VulkanShaders.cmake): the uber vertex shader has no block */
+    VkDescriptorSetLayoutBinding wb[8] = {};
+    static const uint32_t wnums[8] = { 0, 1, 2, 3, 7, 4, 5, 8 };
+    for (int i = 0; i < 8; i++) {
+        wb[i].binding = wnums[i];
+        wb[i].descriptorCount = 1;
+        wb[i].descriptorType = i < 5 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        wb[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    ci.bindingCount = 8;
+    ci.pBindings = wb;
+    VK_CHECK(vkCreateDescriptorSetLayout(s_dev, &ci, nullptr, &s_water_set_layout));
+    pl.pSetLayouts = &s_water_set_layout;
+    VK_CHECK(vkCreatePipelineLayout(s_dev, &pl, nullptr, &s_water_pipe_layout));
     pipeline_cache_load();
 }
 
@@ -1265,7 +1283,7 @@ VkPipeline create_pipeline(const PipeKey& k) {
     ci.pDepthStencilState = &ds;
     ci.pColorBlendState = &cb;
     ci.pDynamicState = &dy;
-    ci.layout = s_pipe_layout;
+    ci.layout = p->water ? s_water_pipe_layout : s_pipe_layout;
     return build_pipeline(ci);
 }
 
@@ -1406,6 +1424,12 @@ struct Tex {
 std::vector<Tex> s_tex(1);              /* id 0 = GL's "no texture" */
 std::vector<uint32_t> s_free_ids;
 Img s_dummy;                            /* 1x1 opaque black (GL's unbound texture) */
+Img s_sky_img, s_wtex_img, s_wmap_img;  /* the sky pass's cloud texture, the wave heights, the water colour map (water.frag) */
+/* the Sky block of the water draws: a ring allocation made by this frame's sky pass; zeros (GE's own water) until it ran */
+VkBuffer s_wat_buf = VK_NULL_HANDLE;
+VkDeviceSize s_wat_off = 0;
+bool s_wat_valid = false;
+#define WATER_UBO_BYTES 320   /* 20 vec4: the sky block's 16 and uWX0..3 */
 
 struct Unit { uint8_t kind; uint32_t id; };   /* kind: 0 none, 1 texture, 2 framebuffer */
 Unit s_unit[2] = {};
@@ -1783,11 +1807,58 @@ void unit_image(int u, VkImageView* view, VkSampler* smp) {
     *smp = get_sampler(default_tex_sampler());
 }
 
+/* the water draws' descriptors: the two game textures, the cloud / wave / colour-map textures, Draw, Comb and the Sky block */
+void push_water_descriptors(const VkDescriptorImageInfo ii[2], const VkDescriptorBufferInfo bi[2]) {
+    if (!s_wat_valid) {   /* no sky pass yet this frame: the block is zeros, uWave4.z = 0 = GE's own water */
+        uint8_t* z = ring_alloc(WATER_UBO_BYTES, (uint32_t)s_ubo_align, &s_wat_buf, &s_wat_off);
+        memset(z, 0, WATER_UBO_BYTES);
+        s_wat_valid = true;
+    }
+    static const SmpKey cloud_k = { VK_FILTER_LINEAR, VK_FILTER_LINEAR, MIP_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                                    VK_SAMPLER_ADDRESS_MODE_REPEAT, 1 };
+    static const SmpKey wave_k = { VK_FILTER_LINEAR, VK_FILTER_LINEAR, MIP_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                                   VK_SAMPLER_ADDRESS_MODE_REPEAT, 2 };
+    VkDescriptorImageInfo wi[3] = {
+        { get_sampler(cloud_k), s_sky_img.img ? s_sky_img.view : s_dummy.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { get_sampler(wave_k), s_wtex_img.img ? s_wtex_img.view : s_dummy.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { get_sampler(cloud_k), s_wmap_img.img ? s_wmap_img.view : s_dummy.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+    };
+    VkDescriptorBufferInfo sb = { s_wat_buf, s_wat_off, WATER_UBO_BYTES };
+    VkWriteDescriptorSet w[8] = {};
+    for (int i = 0; i < 8; i++) {
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].descriptorCount = 1;
+    }
+    static const uint32_t bind[8] = { 0, 1, 2, 3, 7, 4, 5, 8 };
+    const VkDescriptorImageInfo* imgs[5] = { &ii[0], &ii[1], &wi[0], &wi[1], &wi[2] };
+    for (int i = 0; i < 5; i++) {
+        w[i].dstBinding = bind[i];
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[i].pImageInfo = imgs[i];
+    }
+    const VkDescriptorBufferInfo* bufs[3] = { &bi[0], &bi[1], &sb };
+    for (int i = 5; i < 8; i++) {
+        w[i].dstBinding = bind[i];
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w[i].pBufferInfo = bufs[i - 5];
+    }
+    vkCmdPushDescriptorSetKHR(main_cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, s_water_pipe_layout, 0, 8, w);
+    s_desc_dirty = false;
+}
+
 void push_descriptors(void) {
     VkDescriptorImageInfo ii[2];
     for (int u = 0; u < 2; u++) {
         unit_image(u, &ii[u].imageView, &ii[u].sampler);
         ii[u].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+    if (s_prg && s_prg->water) {
+        const VkDescriptorBufferInfo wbi[2] = {
+            { s_ubo_buf, s_ubo_off, sizeof(DkDrawUniforms) },
+            { s_ubo_buf, s_ubo_off + UBO_COMB_OFF, sizeof(DkCombinerParams) },
+        };
+        push_water_descriptors(ii, wbi);
+        return;
     }
     VkDescriptorBufferInfo bi[2] = {
         { s_ubo_buf, s_ubo_off, sizeof(DkDrawUniforms) },
@@ -1923,10 +1994,20 @@ struct ShaderProgram* vk_create_and_load_new_shader(uint64_t id0, uint32_t id1) 
     p->used_textures[1] = f.used_textures[1];
     p->stride = p->layout.num_floats * 4u;
     p->mesh_vert = VK_NULL_HANDLE;
-    const int e = pack_find(id0, id1);
-    p->vert = pack_module(e, 0);
-    p->frag = pack_module(e, 1);
-    if (p->vert != VK_NULL_HANDLE && p->frag != VK_NULL_HANDLE) {
+    p->water = false;
+    const int e = (id1 & SHADER_OPT_WATER) && s_water_frag ? -1 : pack_find(id0, id1);
+    if ((id1 & SHADER_OPT_WATER) && s_water_frag && gfx_water_surfaces) {
+        p->uber = true;   /* the uber vertex shader, every attribute (a missing one reads the constant zero) */
+        p->water = true;
+        p->vert = s_uber_vert;
+        p->frag = s_water_frag;
+    } else {
+        p->vert = pack_module(e, 0);
+        p->frag = pack_module(e, 1);
+    }
+    if (p->water) {
+        /* done above */
+    } else if (p->vert != VK_NULL_HANDLE && p->frag != VK_NULL_HANDLE) {
         p->uber = false;
         p->mesh_vert = pack_module(e, 2);
     } else {
@@ -2150,6 +2231,8 @@ void vk_init(void) {
     create_layouts();
     load_pack();
     gfx_skyplus_sea = s_sky_frag && s_lut_frag && s_fs_vert ? 1 : 0;
+    gfx_water_surfaces = s_water_frag && s_sky_frag && s_fs_vert ? 1 : 0;   /* skyplus.c: the level's own water surfaces get the GE+ water */
+    sysLogPrintf(LOG_NOTE, "GE+ water surfaces: %s (vulkan)", gfx_water_surfaces ? "on" : "off");
     s_up = true;
 
     gfx_rdp_affine = 0;   /* D986: the pack is built with perspective-correct shade */
@@ -2172,6 +2255,7 @@ void vk_init(void) {
 void vk_on_resize(void) {}
 void vk_start_frame(void) {
     s_frame_count++;
+    s_wat_valid = false;   /* GE+ water off until this frame's sky pass */
     if (s_up) ensure_frame();
 }
 void vk_end_frame(void) {}
@@ -2524,14 +2608,13 @@ struct SkyPlusDraw {
 #define SKYPLUS_RING 64
 SkyPlusDraw s_sky_ring[SKYPLUS_RING];
 unsigned s_sky_next = 0;
-Img s_sky_img;
 int s_sky_gen = -1;
 #define SKYLUT_W 128   /* the reflection sky's panorama (skylut.frag.glsl) */
 #define SKYLUT_H 64
 #define SEAPANO_W 4096   /* the far sea, baked (skyplus.frag.glsl pass 4); the shader's PANO_W / PANO_H */
 #define SEAPANO_H 512
-Img s_wtex_img;
 int s_wtex_gen = -1;
+int s_wmap_gen = -1;
 int s_lut_fb = -1, s_hsea_fb = -1, s_pano_fb = -1, s_skyr_fb = -1;
 bool s_pano_valid = false;
 int s_pano_bakes = 0;
@@ -2784,6 +2867,7 @@ void gfx_vulkan_park(void) {
     for (auto& kv : s_fs_pipes) vkDestroyPipeline(s_dev, kv.second, nullptr);
     s_fs_pipes.clear();
     destroy_image_now(s_sky_img);
+    destroy_image_now(s_wmap_img);
     for (ISlot& sl : s_islot) {
         destroy_image_now(sl.img);
         sl = ISlot();
@@ -2823,6 +2907,8 @@ void gfx_vulkan_park(void) {
     pipeline_cache_save();
     vkDestroyPipelineCache(s_dev, s_pipe_cache, nullptr);
     vkDestroyPipelineLayout(s_dev, s_pipe_layout, nullptr);
+    vkDestroyPipelineLayout(s_dev, s_water_pipe_layout, nullptr);
+    vkDestroyDescriptorSetLayout(s_dev, s_water_set_layout, nullptr);
     vkDestroyPipelineLayout(s_dev, s_sky_pipe_layout, nullptr);
     vkDestroyDescriptorSetLayout(s_dev, s_sky_set_layout, nullptr);
     vkDestroyDescriptorSetLayout(s_dev, s_set_layout, nullptr);
@@ -2946,10 +3032,10 @@ void gfx_vulkan_skyplus_pass(int slot) {
     }
     const SkyPlusDraw& d = s_sky_ring[slot];
     const PortSkyPlus& p = d.p;
-    if (d.vp[2] <= 0 || d.vp[3] <= 0 || (d.aspA < 0.0f ? -d.aspA : d.aspA) < 1e-6f || !p.tex) return;
+    if (d.vp[2] <= 0 || d.vp[3] <= 0 || (d.aspA < 0.0f ? -d.aspA : d.aspA) < 1e-6f || (!p.tex && !p.waterOnly)) return;
     if (!is_window(s_cur_fb) && !s_fbs[s_cur_fb].created) return;
     ensure_frame();
-    if (p.texGen != s_sky_gen || !s_sky_img.img) {
+    if (p.tex && (p.texGen != s_sky_gen || !s_sky_img.img)) {
         /* RGBA8 with the intensity in every channel (GL: R8 read as .r) and the
          * box mip chain (GL: glGenerateMipmap; the plane is seen at grazing angles) */
         static std::vector<uint8_t> buf, mips;
@@ -2964,7 +3050,18 @@ void gfx_vulkan_skyplus_pass(int slot) {
         if (!upload_image(&s_sky_img, mips.data(), offs, SKYPLUS_TEX_W, SKYPLUS_TEX_H, levels, mips.size())) return;
         s_sky_gen = p.texGen;
     }
-    if (p.sea && p.waterTex && (p.waterTexGen != s_wtex_gen || !s_wtex_img.img)) {   /* the wave heights, for the sea */
+    if (p.wmap && (p.wmapGen != s_wmap_gen || !s_wmap_img.img)) {   /* the water colour map of the level's own water surfaces */
+        static std::vector<uint8_t> mips;
+        std::vector<uint32_t> offs;
+        uint32_t levels = 1;
+        build_mips(p.wmap, SKYPLUS_WMAP_W, SKYPLUS_WMAP_H, mips, offs, &levels);
+        if (s_wmap_img.img) destroy_image_later(s_wmap_img);
+        s_wmap_img = Img();
+        if (upload_image(&s_wmap_img, mips.data(), offs, SKYPLUS_WMAP_W, SKYPLUS_WMAP_H, levels, mips.size())) {
+            s_wmap_gen = p.wmapGen;
+        }
+    }
+    if (p.waterTex && (p.waterTexGen != s_wtex_gen || !s_wtex_img.img)) {   /* the wave heights: the sea, and the water draws */
         static std::vector<uint8_t> mips;
         std::vector<uint32_t> offs;
         uint32_t levels = 1;
@@ -2994,6 +3091,28 @@ void gfx_vulkan_skyplus_pass(int slot) {
     v3(14, p.water, p.seaY);
     u.v[15][0] = p.time;
     u.v[15][1] = sea ? 1.0f : 0.0f;
+
+    {   /* the Sky block of the water draws (water.frag): the sky block's 16 vec4 + deep / light / flags (uWX0..3), as in
+         * gfx_deko3d_skyplus_pass; it stays valid for the draws that follow this frame */
+        float wu[WATER_UBO_BYTES / 16][4];
+        memset(wu, 0, sizeof wu);
+        memcpy(wu, &u, sizeof u);
+        wu[1][2] = (s_cur_fb < (int)s_fbs.size() && s_fbs[s_cur_fb].invert_y) ? 1.0f : 0.0f;   /* the pixel's y from the clip position */
+        wu[15][2] = 1.0f;   /* the level's water draws: GE+ water on */
+        for (int i = 0; i < 3; i++) { wu[16][i] = p.deep[i]; wu[17][i] = p.light[i]; }
+        wu[16][3] = p.patchScale > 0.0f ? p.patchScale : 6.0f;
+        wu[17][3] = p.reflectLit;
+        wu[18][0] = (p.wmap && s_wmap_img.img && s_wmap_gen == p.wmapGen) ? 1.0f : 0.0f;
+        wu[18][1] = p.waterOnly ? 1.0f : 0.0f;
+        wu[19][0] = p.toneKeep;
+        wu[19][1] = p.reflectGain;
+        wu[19][2] = p.worldScale;
+        uint8_t* wp = ring_alloc(WATER_UBO_BYTES, (uint32_t)s_ubo_align, &s_wat_buf, &s_wat_off);
+        memcpy(wp, wu, sizeof wu);
+        s_wat_valid = true;
+        s_desc_dirty = true;
+    }
+    if (p.waterOnly) return;   /* nothing to draw: the water draws of this frame read the block */
 
     const SmpKey cloud_k = { VK_FILTER_LINEAR, VK_FILTER_LINEAR, MIP_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT,
                              VK_SAMPLER_ADDRESS_MODE_REPEAT, 1 };

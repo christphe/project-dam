@@ -1,7 +1,9 @@
 // seaview: Frigate's sea + sky alone, the game's own shaders (skycommon/skyplus/skylut), free camera, playground.
 // keys: WASD move (shift fast), Q/E height, right-mouse or arrows look, B sway on/off, T time freeze, H half-width divisor 1/2/4,
 // 0-9 mode (uWave4.w), Z/X select playground param (uPlay.xyzw), ,/. change it, R reload shaders, P screenshot, Esc quit.
-// args: --shot f.tga --yaw d --pitch d --time t --mode n --half n --sway 1 --play a,b,c,d --dump file --shaders dir --w n --h n
+// args: --shot f.tga|f.png --yaw d --pitch d --time t --mode n|sea|water --half n --sway 1 --play a,b,c,d --dump file --shaders dir --w n --h n
+//       --level dam|caverns|complex --cam x,y,z,yaw,pitch --wtex file.png|tga (see README: Water surface mode)
+// F12: screenshot (png, numbered). Menus Mode / Level / Water: the "Water surface" mode draws a level-water plane with water.frag.glsl.
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
@@ -13,6 +15,8 @@
 #include <math.h>
 #include <string>
 #include <vector>
+#include "../common/img.h"
+#include "../common/waterbake.h"
 
 #define GLFUNCS \
  X(PFNGLCREATESHADERPROC,glCreateShader) X(PFNGLSHADERSOURCEPROC,glShaderSource) X(PFNGLCOMPILESHADERPROC,glCompileShader) \
@@ -25,7 +29,9 @@
  X(PFNGLGENERATEMIPMAPPROC,glGenerateMipmap) X(PFNGLGENFRAMEBUFFERSPROC,glGenFramebuffers) X(PFNGLBINDFRAMEBUFFERPROC,glBindFramebuffer) \
  X(PFNGLFRAMEBUFFERTEXTURE2DPROC,glFramebufferTexture2D) X(PFNGLDELETEPROGRAMPROC,glDeleteProgram) X(PFNGLDELETESHADERPROC,glDeleteShader) \
  X(PFNGLGENQUERIESPROC,glGenQueries) X(PFNGLBEGINQUERYPROC,glBeginQuery) X(PFNGLENDQUERYPROC,glEndQuery) \
- X(PFNGLGETQUERYOBJECTUI64VPROC,glGetQueryObjectui64v) X(PFNGLBLITFRAMEBUFFERPROC,glBlitFramebuffer) X(PFNGLUNIFORM1IPROC,glUniform1i) X(PFNGLUNIFORM1FVPROC,glUniform1fv)
+ X(PFNGLGETQUERYOBJECTUI64VPROC,glGetQueryObjectui64v) X(PFNGLBLITFRAMEBUFFERPROC,glBlitFramebuffer) X(PFNGLUNIFORM1IPROC,glUniform1i) X(PFNGLUNIFORM1FVPROC,glUniform1fv) \
+ X(PFNGLGENRENDERBUFFERSPROC,glGenRenderbuffers) X(PFNGLBINDRENDERBUFFERPROC,glBindRenderbuffer) X(PFNGLRENDERBUFFERSTORAGEPROC,glRenderbufferStorage) X(PFNGLFRAMEBUFFERRENDERBUFFERPROC,glFramebufferRenderbuffer) \
+ X(PFNGLVERTEXATTRIBPOINTERPROC,glVertexAttribPointer) X(PFNGLENABLEVERTEXATTRIBARRAYPROC,glEnableVertexAttribArray)
 #define X(T,N) static T N = 0;
 GLFUNCS
 #undef X
@@ -83,6 +89,96 @@ static GLuint build(const char* vs, const char* fs) {
     if (!ok) { char log[8192]; glGetProgramInfoLog(p, sizeof log, 0, log); fprintf(stderr, "LINK %s:\n%s\n", fs, log); return 0; }
     return p;
 }
+/* The water plane's vertex shader: stands in for uber.vert.glsl (the game's draws arrive transformed; here the camera of the sky's
+ * corner rays does it) and provides the locations water.frag.glsl reads: vTexCoord0/1, vFog, vFogW, vInput1 = PRIM_LOD_FRAC,
+ * vInput2 = SHADE, vClip. A grid denser near the eye (the fog is per vertex). */
+static const char* kWaterVert = R"(#version 460
+layout(location = 0) in vec2 aG;
+uniform vec4 uEyeV, uCC, uHX, uHY, uPl, uGrid, uShade, uFogC, uExt, uAx;
+layout(location = 1) out vec2 vTexCoord0;
+layout(location = 2) out vec2 vTexCoord1;
+layout(location = 7) out vec4 vFog;
+layout(location = 16) out float vFogW;
+layout(location = 9) out vec4 vInput1;
+layout(location = 10) out vec4 vInput2;
+layout(location = 17) out vec3 vClip;
+void main() {
+    /* uExt.z = 0: the big plane (denser near the centre); 1: a rectangle of half sizes uExt.xy along the axes uAx.xy / uAx.zw */
+    vec2 g = uExt.z > 0.5 ? aG : aG * abs(aG);
+    vec2 pxz = uGrid.xy + uAx.xy * (g.x * uExt.x) + uAx.zw * (g.y * uExt.y);
+    vec3 P = vec3(pxz.x, uPl.x, pxz.y);
+    vec3 Q = P - uEyeV.xyz;
+    float w = dot(Q, uCC.xyz) / dot(uCC.xyz, uCC.xyz);
+    float cx = dot(Q, uHX.xyz) / dot(uHX.xyz, uHX.xyz), cy = dot(Q, uHY.xyz) / dot(uHY.xyz, uHY.xyz);
+    float N = uEyeV.w, F = uCC.w;   /* near / far in w units: |cc| is not 1 (the dump's corner rays) */
+    gl_Position = vec4(cx, cy, ((F + N) * w - 2.0 * F * N) / (F - N), w);
+    vec2 uv = P.xz / uPl.y;
+    vTexCoord0 = uv;
+    vTexCoord1 = uv * uPl.z + vec2(0.31, 0.17) + vec2(0.02, 0.013) * uGrid.w;
+    float fogA = uPl.w > 0.0 ? clamp(length(Q) / uPl.w, 0.0, 1.0) : 0.0;
+    vFog = vec4(uFogC.rgb, fogA); vFogW = fogA;
+    vInput1 = vec4(uFogC.w); vInput2 = uShade;
+    vClip = vec3(cx, cy, w);
+}
+)";
+/* The test scene's boxes: world position, normal, colour; the same projection as the water's vertex shader. */
+static const char* kSceneVert = R"(#version 460
+layout(location = 0) in vec3 aP;
+layout(location = 1) in vec3 aN;
+layout(location = 2) in vec3 aC;
+uniform vec4 uEyeV, uCC, uHX, uHY;
+out vec3 vN; out vec3 vC;
+void main() {
+    vec3 Q = aP - uEyeV.xyz;
+    float w = dot(Q, uCC.xyz) / dot(uCC.xyz, uCC.xyz);
+    float cx = dot(Q, uHX.xyz) / dot(uHX.xyz, uHX.xyz), cy = dot(Q, uHY.xyz) / dot(uHY.xyz, uHY.xyz);
+    float N = uEyeV.w, F = uCC.w;
+    gl_Position = vec4(cx, cy, ((F + N) * w - 2.0 * F * N) / (F - N), w);
+    vN = aN; vC = aC;
+}
+)";
+static const char* kSceneFrag = R"(#version 460
+in vec3 vN; in vec3 vC;
+layout(location = 0) out vec4 o;
+void main() { float l = 0.35 + 0.65 * max(dot(normalize(vN), normalize(vec3(0.4, 0.8, 0.3))), 0.0); o = vec4(vC * l, 0.0); }
+)";
+/* Debug view 1: the half-size FX target as the composite reads it (colour / coverage; dark magenta = no coverage) */
+static const char* kHalfDbg = R"(#version 460
+layout(location = 0) in vec2 vUV;
+layout(binding = 0) uniform sampler2D uHalf;
+layout(location = 0) out vec4 o;
+void main() { vec4 h = texture(uHalf, vUV); o = vec4(h.a > 0.05 ? h.rgb / h.a : vec3(0.08, 0.0, 0.08), 1.0); }
+)";
+/* water.frag.glsl with skycommon pasted in and the viewer's variant block (binding 5: water.frag owns 0..4).
+ * variant 0: the file as is = the full shading (one full-res pass, and the FX pass of the half-res pipeline),
+ * variant 1: #define WATER_BODY = the cheap body (step 1 of the half-res pipeline); the game's own define. */
+static GLuint buildWater(int variant = 0) {
+    std::string common = readfile(gShDir + "skycommon.glsl"), f = readfile(gShDir + "water.frag.glsl");
+    size_t k = f.find("#pragma skycommon"); if (k != std::string::npos) f.replace(k, 17, common);
+    std::string hdr = "#define VIEWER\nuniform vec4 uPlay;\nlayout(std140, binding = 5) uniform Viewer { ivec4 uVarv; vec4 uPrv[6]; };\n#define uSeaVar uVarv.x\n#define uSkyVar uVarv.y\n";
+    if (variant == 1) { if (f.find("WATER_BODY") == std::string::npos) { fprintf(stderr, "water.frag.glsl has no WATER_BODY variant\n"); return 0; } hdr += "#define WATER_BODY\n"; }
+    size_t nl = f.find('\n'); f.insert(nl + 1, hdr);
+    GLuint a = compile(GL_VERTEX_SHADER, kWaterVert, "water vertex"), b = compile(GL_FRAGMENT_SHADER, f, variant == 1 ? "water.frag.glsl (WATER_BODY)" : "water.frag.glsl"); if (!a || !b) return 0;
+    GLuint p = glCreateProgram(); glAttachShader(p, a); glAttachShader(p, b); glLinkProgram(p);
+    GLint ok = 0; glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) { char log[8192]; glGetProgramInfoLog(p, sizeof log, 0, log); fprintf(stderr, "LINK water:\n%s\n", log); return 0; }
+    return p;
+}
+/* watercomp.frag.glsl (the game's step-3 composite) on the viewer's water vertex shader. mask: debug view 2, the file patched so that a
+ * pixel that passes the depth test is green where the half-size colour is used and red where the shader discards (the cheap body stays) */
+static GLuint buildComp(bool mask) {
+    std::string f = readfile(gShDir + "watercomp.frag.glsl"); if (f.empty()) { fprintf(stderr, "no watercomp.frag.glsl\n"); return 0; }
+    if (mask) {
+        auto patch = [&](const char* a, const char* b) { size_t q = f.find(a); if (q == std::string::npos) { fprintf(stderr, "mask patch: %s not found\n", a); return; } f.replace(q, strlen(a), b); };
+        patch("if (a < 0.05) discard;", "if (a < 0.05) { outColor = vec4(1.0, 0.0, 0.0, 1.0); return; }");
+        patch("outColor = vec4(clamp(h.rgb / a, 0.0, 1.0), smoothstep(0.3, 0.85, a));", "outColor = vec4(0.0, 1.0, 0.0, smoothstep(0.3, 0.85, a));");
+    }
+    GLuint a = compile(GL_VERTEX_SHADER, kWaterVert, "water vertex"), b = compile(GL_FRAGMENT_SHADER, f, "watercomp.frag.glsl"); if (!a || !b) return 0;
+    GLuint p = glCreateProgram(); glAttachShader(p, a); glAttachShader(p, b); glLinkProgram(p);
+    GLint ok = 0; glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) { char log[8192]; glGetProgramInfoLog(p, sizeof log, 0, log); fprintf(stderr, "LINK watercomp:\n%s\n", log); return 0; }
+    return p;
+}
 static GLuint tex2d(int w, int h, const void* px, bool mips, bool repeatY, float aniso) {
     GLuint t; glGenTextures(1, &t); glBindTexture(GL_TEXTURE_2D, t);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
@@ -110,7 +206,18 @@ static const char* kSeaNames[] = { "current", "no medium swell", "1 layer", "2 l
     "no calm patches", "2 layers, reflection, no swell or patches" };
 static const char* kSkyNames[] = { "current", "1 cloud layer", "2 cloud layers", "no cloud lighting", "no halo or stars",
     "sky = low-res panorama", "flat sky (cost floor)" };
-static HMENU g_seaMenu, g_skyMenu;
+static HMENU g_seaMenu, g_skyMenu, g_modeMenu, g_levelMenu, g_waterMenu;
+static int g_mode = 0;    /* 0 = Sea (the Frigate view), 1 = Water surface (a level's water plane under the sky) */
+static int g_level = 0;   /* 0 Dam, 1 Caverns, 2 Complex */
+static int g_half = 0;    /* water: 0 = one full-resolution water.frag pass, 1 = the game's 3 steps (cheap body, half-res FX, composite) */
+static int g_scene = 1;   /* the edge test scene: a pier, boxes, a second pool and a wall, drawn with depth */
+static int g_dbg = 0;     /* debug view: 0 final, 1 half-res FX target, 2 depth-key mismatch mask, 3 cheap body only */
+static HMENU g_dbgMenu;
+static const char* kDbgNames[] = { "Final", "Half-res FX target", "Depth-key mask (green = replaced, red = water nearby, no key matched)", "Cheap body only (step 1)" };
+static std::string g_wtexPath;    /* the water texture file (empty: data/water_<level>.png|.tga, else the placeholder) */
+static bool g_wtexDirty = true;   /* (re)load and re-bake the water texture */
+static bool g_haveCam = false; static float g_cam[5];   /* --cam x,y,z,yaw,pitch */
+static const char* kLevelNames[] = { "dam", "caverns", "complex" };
 static bool g_mlook = false;
 static int g_rep = 1, g_scale = 1; static HMENU g_repMenu, g_scaleMenu; static char g_gpuName[128] = "";
 #ifdef SEAVIEW_HP   /* ask hybrid laptops for the discrete GPU */
@@ -135,32 +242,52 @@ static const Par kPar[] = {
     { "Far reflection dimming", 0, 4, 0.5f }, { "Horizon fade", 0, 12, 0.006f },
     { "Bake from (0 = no bake)", 0, 9, 600.0f }, { "Fully baked at", 0, 10, 6000.0f },
     { "Cloud light min (low sun)", 0, 14, 0.3f }, { "Cloud light, sun side", 0, 15, 0.8f },
+    /* kind 3: the water surface mode (viewer only; the Level menu presets them). idx = position in the water block */
+    { "Water plane height", 3, 0, 0.0f }, { "Water texture tile (units per repeat)", 3, 1, 256.0f }, { "Patch map size (repeats)", 3, 2, 6.0f },
+    { "reflectLit (0..1)", 3, 3, 0.0f }, { "PRIM_LOD_FRAC (texture blend)", 3, 4, 0.5f }, { "2nd texture scale", 3, 5, 0.7f },
+    { "Fog end (0 = no fog)", 3, 6, 12000.0f }, { "Water only, no sky (cave) 0/1", 3, 7, 0.0f },
+    { "Deep colour R", 3, 8, 0.10f }, { "Deep colour G", 3, 9, 0.20f }, { "Deep colour B", 3, 10, 0.22f },
+    { "Light colour R", 3, 11, 0.30f }, { "Light colour G", 3, 12, 0.45f }, { "Light colour B", 3, 13, 0.48f },
+    { "Shade R", 3, 14, 0.30f }, { "Shade G", 3, 15, 0.34f }, { "Shade B", 3, 16, 0.36f },
+    { "Fog colour R", 3, 17, 0.50f }, { "Fog colour G", 3, 18, 0.58f }, { "Fog colour B", 3, 19, 0.65f },
+    { "Tone keep (reflection in the body hue)", 3, 20, 0.8f }, { "Reflection gain", 3, 21, 0.6f },
 };
 #define NPAR ((int)(sizeof kPar / sizeof *kPar))
+#define WATER0 38   /* index of the first kind-3 entry of kPar */
 static float g_val[NPAR], g_def[NPAR];
-static const char* kTabs[] = { "Sun", "Sky", "Clouds", "Sea", "Fresnel / bake" };
-static int tabOf(int i) { return i < 7 ? 0 : i < 12 ? 1 : i < 17 ? 2 : i < 29 ? 3 : i < 36 ? 4 : 2; }
+static const char* kTabs[] = { "Sun", "Sky", "Clouds", "Sea", "Fresnel / bake", "Water surface" };
+static int tabOf(int i) { return kPar[i].kind == 3 ? 5 : i < 7 ? 0 : i < 12 ? 1 : i < 17 ? 2 : i < 29 ? 3 : i < 36 ? 4 : 2; }
+static int parIdx(const char* name) { for (int i = 0; i < NPAR; i++) if (!strcmp(kPar[i].name, name)) return i; fprintf(stderr, "no parameter %s\n", name); return 0; }
 static HWND g_edit[NPAR], g_lbl[NPAR], g_rst[NPAR], g_tab;
 static const char* kTex[] = { "game texture (GE)", "soft fbm", "contrasted fbm", "cumulus", "stretched cirrus", "clear sky" };
 static int g_texSel = 0; static bool g_texDirty = false;
-static HWND g_colBtn[3], g_colLbl[3], g_colRst[3]; static const int kColTab[3] = { 0, 1, 3 };
-static int colourOf(int i) { return (i >= 3 && i <= 5) ? 0 : (i >= 7 && i <= 9) ? 1 : (i >= 19 && i <= 21) ? 2 : -1; }   /* the R G B values of a colour */
+#define NCOL 7
+static HWND g_colBtn[NCOL], g_colLbl[NCOL], g_colRst[NCOL]; static const int kColTab[NCOL] = { 0, 1, 3, 5, 5, 5, 5 };
+static const int kColFirst[NCOL] = { 3, 7, 19, 46, 49, 52, 55 };   /* the R of each colour (G and B follow) */
+static const char* kColName[NCOL] = { "Sun colour", "Sky colour", "Water colour (tint)", "Deep colour", "Light colour", "Shade (vertex colour)", "Fog colour" };
+static int colourOf(int i) { for (int k = 0; k < NCOL; k++) if (i >= kColFirst[k] && i < kColFirst[k] + 3) return k; return -1; }   /* the R G B values of a colour */
 static void showTab(int t) {
-    for (int k = 0; k < 3; k++) if (g_colBtn[k]) { int sw = kColTab[k] == t ? SW_SHOW : SW_HIDE; ShowWindow(g_colBtn[k], sw); ShowWindow(g_colLbl[k], sw); ShowWindow(g_colRst[k], sw); }
+    for (int k = 0; k < NCOL; k++) if (g_colBtn[k]) { int sw = kColTab[k] == t ? SW_SHOW : SW_HIDE; ShowWindow(g_colBtn[k], sw); ShowWindow(g_colLbl[k], sw); ShowWindow(g_colRst[k], sw); }
     for (int i = 0; i < NPAR; i++) { int sw = (tabOf(i) == t && colourOf(i) < 0) ? SW_SHOW : SW_HIDE; ShowWindow(g_edit[i], sw); ShowWindow(g_lbl[i], sw); ShowWindow(g_rst[i], sw); }
 }
-static void repaintSwatches() { for (int k = 0; k < 3; k++) if (g_colBtn[k]) InvalidateRect(g_colBtn[k], nullptr, TRUE); }
+static void repaintSwatches() { for (int k = 0; k < NCOL; k++) if (g_colBtn[k]) InvalidateRect(g_colBtn[k], nullptr, TRUE); }
 static void setVal(int i, float v) { char b[64]; snprintf(b, sizeof b, "%g", v); SetWindowTextA(g_edit[i], b); g_val[i] = v; }
 static void saveIni(const char* path) {
     FILE* f = fopen(path, "w"); if (!f) return;
     for (int i = 0; i < NPAR; i++) fprintf(f, "%s=%g\n", kPar[i].name, g_val[i]);
-    fprintf(f, "__sea=%d\n__sky=%d\n__tex=%d\n", g_seaVar, g_skyVar, g_texSel); fclose(f);
+    fprintf(f, "__sea=%d\n__sky=%d\n__tex=%d\n__mode=%d\n__level=%d\n__wtex=%s\n__half=%d\n__scene=%d\n__dbg=%d\n", g_seaVar, g_skyVar, g_texSel, g_mode, g_level, g_wtexPath.c_str(), g_half, g_scene, g_dbg); fclose(f);
 }
 static void loadIni(const char* path) {
     FILE* f = fopen(path, "r"); if (!f) return;
-    char line[256];
+    char line[600];
     while (fgets(line, sizeof line, f)) {
         char* eq = strchr(line, '='); if (!eq) continue; *eq = 0; float v = (float)atof(eq + 1);
+        if (!strcmp(line, "__wtex")) { std::string t = eq + 1; while (!t.empty() && (t.back() == '\n' || t.back() == '\r')) t.pop_back(); g_wtexPath = t; g_wtexDirty = true; continue; }
+        if (!strcmp(line, "__half")) { g_half = (int)v; CheckMenuItem(g_waterMenu, 8203, MF_BYCOMMAND | (g_half ? MF_CHECKED : MF_UNCHECKED)); continue; }
+        if (!strcmp(line, "__scene")) { g_scene = (int)v; CheckMenuItem(g_waterMenu, 8204, MF_BYCOMMAND | (g_scene ? MF_CHECKED : MF_UNCHECKED)); continue; }
+        if (!strcmp(line, "__dbg")) { g_dbg = (int)v; CheckMenuRadioItem(g_dbgMenu, 9000, 9003, 9000 + g_dbg, MF_BYCOMMAND); continue; }
+        if (!strcmp(line, "__mode")) { g_mode = (int)v; CheckMenuRadioItem(g_modeMenu, 8000, 8001, 8000 + g_mode, MF_BYCOMMAND); continue; }
+        if (!strcmp(line, "__level")) { g_level = (int)v; CheckMenuRadioItem(g_levelMenu, 8100, 8102, 8100 + g_level, MF_BYCOMMAND); g_wtexDirty = true; continue; }
         if (!strcmp(line, "__sea")) { g_seaVar = (int)v; CheckMenuRadioItem(g_seaMenu, 1000, 1099, 1000 + g_seaVar, MF_BYCOMMAND); continue; }
         if (!strcmp(line, "__sky")) { g_skyVar = (int)v; CheckMenuRadioItem(g_skyMenu, 2000, 2099, 2000 + g_skyVar, MF_BYCOMMAND); continue; }
         if (!strcmp(line, "__tex")) { g_texSel = (int)v; g_texDirty = true; continue; }
@@ -169,8 +296,6 @@ static void loadIni(const char* path) {
     fclose(f);
 }
 static HWND g_texCombo;
-static const int kColFirst[3] = { 3, 7, 19 };
-static const char* kColName[3] = { "Sun colour", "Sky colour", "Water colour" };
 static void pickColour(HWND owner, int k) {
     static COLORREF custom[16];
     const int f = kColFirst[k];
@@ -179,9 +304,9 @@ static void pickColour(HWND owner, int k) {
     cc.rgbResult = RGB(c8(g_val[f]), c8(g_val[f + 1]), c8(g_val[f + 2])); cc.Flags = CC_FULLOPEN | CC_RGBINIT;
     if (ChooseColorA(&cc)) { setVal(f, GetRValue(cc.rgbResult) / 255.f); setVal(f + 1, GetGValue(cc.rgbResult) / 255.f); setVal(f + 2, GetBValue(cc.rgbResult) / 255.f); repaintSwatches(); }
 }
-static bool fileDialog(HWND owner, bool save, char* path, int n) {
-    OPENFILENAMEA o = {}; o.lStructSize = sizeof o; o.hwndOwner = owner; o.lpstrFilter = "Settings (*.ini)\0*.ini\0Tous\0*.*\0"; o.lpstrFile = path; o.nMaxFile = n;
-    o.lpstrDefExt = "ini"; o.Flags = save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST;
+static bool fileDialog(HWND owner, bool save, char* path, int n, const char* filter = "Settings (*.ini)\0*.ini\0All\0*.*\0", const char* ext = "ini") {
+    OPENFILENAMEA o = {}; o.lStructSize = sizeof o; o.hwndOwner = owner; o.lpstrFilter = filter; o.lpstrFile = path; o.nMaxFile = n;
+    o.lpstrDefExt = ext; o.Flags = save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST;
     return save ? GetSaveFileNameA(&o) != 0 : GetOpenFileNameA(&o) != 0;
 }
 static LRESULT CALLBACK pp(HWND h, UINT m, WPARAM w, LPARAM l) {
@@ -191,8 +316,8 @@ static LRESULT CALLBACK pp(HWND h, UINT m, WPARAM w, LPARAM l) {
         else if (code == BN_CLICKED && id >= 4000 && id < 4000 + NPAR) setVal(id - 4000, g_def[id - 4000]);
         else if (code == BN_CLICKED && id == 5001) { static char p[MAX_PATH] = "seaview.ini"; if (fileDialog(h, true, p, MAX_PATH)) saveIni(p); }
         else if (code == BN_CLICKED && id == 5002) { static char p[MAX_PATH] = "seaview.ini"; if (fileDialog(h, false, p, MAX_PATH)) { loadIni(p); SendMessageA(g_texCombo, CB_SETCURSEL, g_texSel, 0); repaintSwatches(); } }
-        else if (code == BN_CLICKED && id >= 5101 && id <= 5103) pickColour(h, id - 5101);
-        else if (code == BN_CLICKED && id >= 5201 && id <= 5203) { const int f = kColFirst[id - 5201]; for (int j = 0; j < 3; j++) setVal(f + j, g_def[f + j]); repaintSwatches(); }
+        else if (code == BN_CLICKED && id >= 5101 && id < 5101 + NCOL) pickColour(h, id - 5101);
+        else if (code == BN_CLICKED && id >= 5201 && id < 5201 + NCOL) { const int f = kColFirst[id - 5201]; for (int j = 0; j < 3; j++) setVal(f + j, g_def[f + j]); repaintSwatches(); }
         else if (code == BN_CLICKED && id == 5003) { for (int i = 0; i < NPAR; i++) setVal(i, g_def[i]); repaintSwatches(); }
         else if (code == CBN_SELCHANGE && id == 5004) { g_texSel = (int)SendMessageA((HWND)l, CB_GETCURSEL, 0, 0); g_texDirty = true; }
         return 0;
@@ -201,7 +326,7 @@ static LRESULT CALLBACK pp(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_DRAWITEM) {   /* a colour swatch: the colour itself, framed */
         const DRAWITEMSTRUCT* di = (const DRAWITEMSTRUCT*)l;
         const int k = (int)di->CtlID - 5101;
-        if (k >= 0 && k < 3) {
+        if (k >= 0 && k < NCOL) {
             const int f = kColFirst[k];
             auto c8 = [](float v) { return (int)(fminf(fmaxf(v, 0.f), 1.f) * 255.f + 0.5f); };
             HBRUSH br = CreateSolidBrush(RGB(c8(g_val[f]), c8(g_val[f + 1]), c8(g_val[f + 2])));
@@ -241,9 +366,39 @@ static void makeCloudTex(int sel, const unsigned char* ge, unsigned char* out) {
         out[y * 64 + x] = (unsigned char)(fminf(fmaxf(v, 0.f), 1.f) * 255.0f);
     }
 }
+/* Level presets (menu Level): the level's own water draw as the game would see it. Guesses until real captures exist (Dam: dark-lit
+ * water, reflectLit 0; Caverns: no sky, mirrors the fog colour, reflectLit 0; Complex: lit pits, reflectLit 1). */
+struct Preset { float h, tile, patch, reflectLit, fogEnd, noSky, shade[3], fog[3], tint[3], swell, chop, speed, eyeY; };
+static const Preset kPreset[3] = {
+    /* Dam      */ { 0, 256, 6, 0, 14000, 0, { 0.28f, 0.30f, 0.30f }, { 0.52f, 0.60f, 0.68f }, { 1.0f, 1.0f, 1.0f }, 0.3f, 0.6f, 0.7f, 260 },
+    /* Caverns  */ { 0, 200, 6, 0, 3500, 1, { 0.55f, 0.60f, 0.60f }, { 0.11f, 0.14f, 0.15f }, { 0.5f, 0.6f, 0.65f }, 0.3f, 0.6f, 0.7f, 160 },
+    /* Complex  */ { 0, 256, 6, 1, 6000, 0, { 0.45f, 0.50f, 0.52f }, { 0.22f, 0.26f, 0.28f }, { 1.0f, 1.0f, 1.0f }, 0.3f, 0.6f, 0.7f, 160 },
+};
+static void applyLevel(int lv) {
+    if (lv < 0 || lv > 2) return;
+    const Preset& p = kPreset[lv]; g_level = lv;
+    CheckMenuRadioItem(g_levelMenu, 8100, 8102, 8100 + lv, MF_BYCOMMAND);
+    setVal(parIdx("Water plane height"), p.h); setVal(parIdx("Water texture tile (units per repeat)"), p.tile); setVal(parIdx("Patch map size (repeats)"), p.patch);
+    setVal(parIdx("reflectLit (0..1)"), p.reflectLit); setVal(parIdx("Fog end (0 = no fog)"), p.fogEnd); setVal(parIdx("Water only, no sky (cave) 0/1"), p.noSky);
+    static const char* sfx[3] = { " R", " G", " B" };
+    for (int i = 0; i < 3; i++) {
+        setVal(parIdx((std::string("Shade") + sfx[i]).c_str()), p.shade[i]); setVal(parIdx((std::string("Fog colour") + sfx[i]).c_str()), p.fog[i]);
+        setVal(parIdx((std::string("Water colour") + sfx[i]).c_str()), p.tint[i]);
+    }
+    setVal(parIdx("Swell"), p.swell); setVal(parIdx("Chop"), p.chop); setVal(parIdx("Wave speed"), p.speed); setVal(parIdx("Eye height"), p.eyeY);
+    g_wtexPath.clear(); g_wtexDirty = true; repaintSwatches();
+}
 static LRESULT CALLBACK wp(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_COMMAND) {
         int id = LOWORD(w);
+        if (id >= 8000 && id <= 8001) { g_mode = id - 8000; CheckMenuRadioItem(g_modeMenu, 8000, 8001, id, MF_BYCOMMAND); }
+        if (id >= 8100 && id <= 8102) applyLevel(id - 8100);
+        if (id == 8200) { static char p[MAX_PATH] = ""; if (fileDialog(h, false, p, MAX_PATH, "Images (*.png;*.tga)\0*.png;*.tga\0All\0*.*\0", "png")) { g_wtexPath = p; g_wtexDirty = true; } }
+        if (id == 8201) g_wtexDirty = true;
+        if (id == 8202) kdown[VK_F12] = true;
+        if (id == 8203) { g_half ^= 1; CheckMenuItem(g_waterMenu, 8203, MF_BYCOMMAND | (g_half ? MF_CHECKED : MF_UNCHECKED)); }
+        if (id == 8204) { g_scene ^= 1; CheckMenuItem(g_waterMenu, 8204, MF_BYCOMMAND | (g_scene ? MF_CHECKED : MF_UNCHECKED)); }
+        if (id >= 9000 && id <= 9003) { g_dbg = id - 9000; CheckMenuRadioItem(g_dbgMenu, 9000, 9003, id, MF_BYCOMMAND); }
         if (id >= 1000 && id < 1100) { g_seaVar = id - 1000; CheckMenuRadioItem(g_seaMenu, 1000, 1099, id, MF_BYCOMMAND); }
         if (id >= 7000 && id < 7010) { g_scale = id - 7000; CheckMenuRadioItem(g_scaleMenu, 7001, 7004, id, MF_BYCOMMAND); }
         if (id >= 6000 && id < 6100) { g_rep = id - 6000; CheckMenuRadioItem(g_repMenu, 6001, 6064, id, MF_BYCOMMAND); }
@@ -258,12 +413,18 @@ static LRESULT CALLBACK wp(HWND h, UINT m, WPARAM w, LPARAM l) {
 }
 
 int main(int argc, char** argv) {
+    int cliLevel = -1, cliMode = -1, cliHalf = -1, cliScene = -1, cliDbg = -1; std::string cliWtex, cliView;
     std::string shot, dump = "sea_dump.bin"; int W = 1280, H = 720, mode = 0, hdiv = 2;
     bool noRep = false; float shx = 0, shz = 0, bakeDistArg = 400.f; float yawd = 0, pitchd = 0, ftime = -1, aniso = 2, fdt = 0, taaA = 0.1f, taaK = 1.25f; int taa = 0, seqN = 0; std::string outp = "seq"; bool sway = false; float play[4] = { 0, 0, 0, 0 };
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i]; auto nx = [&]() { return i + 1 < argc ? argv[++i] : (char*)"0"; };
         if (a == "--shot") shot = nx(); else if (a == "--yaw") yawd = (float)atof(nx()); else if (a == "--pitch") pitchd = (float)atof(nx());
-        else if (a == "--time") ftime = (float)atof(nx()); else if (a == "--mode") mode = atoi(nx()); else if (a == "--half") hdiv = atoi(nx());
+        else if (a == "--time") ftime = (float)atof(nx()); else if (a == "--mode") { std::string v = nx(); if (v == "water") cliMode = 1; else if (v == "sea") cliMode = 0; else mode = atoi(v.c_str()); }
+        else if (a == "--level") { std::string v = nx(); cliLevel = v == "dam" ? 0 : v == "caverns" ? 1 : v == "complex" ? 2 : atoi(v.c_str()); }
+        else if (a == "--cam") { g_haveCam = sscanf(nx(), "%f,%f,%f,%f,%f", &g_cam[0], &g_cam[1], &g_cam[2], &g_cam[3], &g_cam[4]) == 5; if (!g_haveCam) fprintf(stderr, "--cam wants x,y,z,yaw,pitch\n"); }
+        else if (a == "--wtex") cliWtex = nx(); else if (a == "--seahalf") hdiv = atoi(nx());   /* the sea target's width divisor (was --half) */
+        else if (a == "--half") cliHalf = atoi(nx()); else if (a == "--scene") cliScene = atoi(nx()); else if (a == "--view") cliView = nx();
+        else if (a == "--dbgview") { std::string v = nx(); cliDbg = v == "final" ? 0 : v == "fx" ? 1 : v == "mask" ? 2 : v == "cheap" ? 3 : atoi(v.c_str()); }
         else if (a == "--sway") sway = atoi(nx()) != 0; else if (a == "--dump") dump = nx(); else if (a == "--shaders") gShDir = nx();
         else if (a == "--scale") g_scale = atoi(nx()); else if (a == "--norep") noRep = true; else if (a == "--shift") sscanf(nx(), "%f,%f", &shx, &shz); else if (a == "--bakedist") bakeDistArg = (float)atof(nx()); else if (a == "--taa") taa = atoi(nx()); else if (a == "--taaa") taaA = (float)atof(nx()); else if (a == "--taak") taaK = (float)atof(nx()); else if (a == "--seq") seqN = atoi(nx()); else if (a == "--dt") fdt = (float)atof(nx()); else if (a == "--out") outp = nx(); else if (a == "--aniso") aniso = (float)atof(nx()); else if (a == "--w") W = atoi(nx()); else if (a == "--h") H = atoi(nx());
         else if (a == "--play") sscanf(nx(), "%f,%f,%f,%f", &play[0], &play[1], &play[2], &play[3]);
@@ -278,6 +439,8 @@ int main(int argc, char** argv) {
     V3 hw = mul(add(sub(C[1], C[0]), sub(C[3], C[2])), 0.25f), hh = mul(add(sub(C[0], C[2]), sub(C[1], C[3])), 0.25f);
     hh = mul(nrm(hh), len(hw) * (float)H / (float)W);
     V3 eye = { U[24], U[25], U[26] };
+    /* the test scene's frame: origin = the capture's eye, a = the capture's heading, b = to its right (yaw 0) */
+    const V3 sf = nrm({ cen.x, 0, cen.z }), sr = nrm({ hw.x, 0, hw.z }), so = eye;
     float yaw = yawd * 3.14159265f / 180, pitch = pitchd * 3.14159265f / 180;
 
     WNDCLASSA wc = {}; wc.lpfnWndProc = wp; wc.hInstance = GetModuleHandleA(0); wc.lpszClassName = "seaview"; wc.hCursor = LoadCursor(0, IDC_ARROW); RegisterClassA(&wc);
@@ -297,12 +460,23 @@ int main(int argc, char** argv) {
         AppendMenuA(g_repMenu, MF_STRING, 6001, "x1 (normal)"); AppendMenuA(g_repMenu, MF_STRING, 6004, "x4"); AppendMenuA(g_repMenu, MF_STRING, 6016, "x16"); AppendMenuA(g_repMenu, MF_STRING, 6064, "x64");
         CheckMenuRadioItem(g_repMenu, 6001, 6064, 6001, MF_BYCOMMAND);
         AppendMenuA(bar, MF_POPUP, (UINT_PTR)g_repMenu, "Load");
+        g_modeMenu = CreatePopupMenu(); AppendMenuA(g_modeMenu, MF_STRING, 8000, "Sea (Frigate view)"); AppendMenuA(g_modeMenu, MF_STRING, 8001, "Water surface (level water)");
+        CheckMenuRadioItem(g_modeMenu, 8000, 8001, 8000, MF_BYCOMMAND); AppendMenuA(bar, MF_POPUP, (UINT_PTR)g_modeMenu, "Mode");
+        g_levelMenu = CreatePopupMenu(); AppendMenuA(g_levelMenu, MF_STRING, 8100, "Dam"); AppendMenuA(g_levelMenu, MF_STRING, 8101, "Caverns (no sky)"); AppendMenuA(g_levelMenu, MF_STRING, 8102, "Complex");
+        CheckMenuRadioItem(g_levelMenu, 8100, 8102, 8100, MF_BYCOMMAND); AppendMenuA(bar, MF_POPUP, (UINT_PTR)g_levelMenu, "Level");
+        g_waterMenu = CreatePopupMenu(); AppendMenuA(g_waterMenu, MF_STRING, 8200, "Water texture..."); AppendMenuA(g_waterMenu, MF_STRING, 8201, "Reload texture, re-bake, reset deep/light");
+        AppendMenuA(g_waterMenu, MF_STRING, 8202, "Screenshot (F12)");
+        AppendMenuA(g_waterMenu, MF_SEPARATOR, 0, 0); AppendMenuA(g_waterMenu, MF_STRING, 8203, "Half resolution (the game's 3 steps)"); AppendMenuA(g_waterMenu, MF_STRING, 8204, "Test scene (pier, boxes, pool, wall)");
+        CheckMenuItem(g_waterMenu, 8204, MF_BYCOMMAND | MF_CHECKED);
+        AppendMenuA(bar, MF_POPUP, (UINT_PTR)g_waterMenu, "Water");
+        g_dbgMenu = CreatePopupMenu(); for (int i = 0; i < 4; i++) AppendMenuA(g_dbgMenu, MF_STRING, 9000 + i, kDbgNames[i]);
+        CheckMenuRadioItem(g_dbgMenu, 9000, 9003, 9000, MF_BYCOMMAND); AppendMenuA(bar, MF_POPUP, (UINT_PTR)g_dbgMenu, "Debug view");
         SetMenu(hwnd, bar);
     }
     {
         for (int i = 0; i < NPAR; i++) {
             const Par& q = kPar[i];
-            if (q.kind == 0) g_val[i] = q.def;
+            if (q.kind == 0 || q.kind == 3) g_val[i] = q.def;
             else if (q.kind == 1) g_val[i] = U[q.idx];
             else if (q.idx == 0) g_val[i] = asinf(fmaxf(-1.f, fminf(1.f, U[45]))) * 57.29578f;
             else if (q.idx == 1) g_val[i] = atan2f(U[44], U[46]) * 57.29578f;
@@ -313,11 +487,11 @@ int main(int argc, char** argv) {
         WNDCLASSA pc = {}; pc.lpfnWndProc = pp; pc.hInstance = wc.hInstance; pc.lpszClassName = "seaparams"; pc.hCursor = LoadCursor(0, IDC_ARROW);
         pc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassA(&pc);
         RECT mr; GetWindowRect(hwnd, &mr);
-        const int PW = 430, PH = 520;
+        const int PW = 430, PH = 630;
         HWND pw = CreateWindowExA(WS_EX_TOOLWINDOW, "seaparams", "Settings", WS_CAPTION | WS_VISIBLE | WS_POPUPWINDOW, mr.right + 8, mr.top, PW, PH, hwnd, 0, wc.hInstance, 0);
-        g_tab = CreateWindowA(WC_TABCONTROLA, "", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 4, 4, PW - 16, 370, pw, (HMENU)5005, wc.hInstance, 0);
-        for (int t = 0; t < 5; t++) { TCITEMA ti = {}; ti.mask = TCIF_TEXT; ti.pszText = (LPSTR)kTabs[t]; SendMessageA(g_tab, TCM_INSERTITEMA, t, (LPARAM)&ti); }
-        int row[5] = { 0, 0, 0, 0, 0 };
+        g_tab = CreateWindowA(WC_TABCONTROLA, "", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 4, 4, PW - 16, 480, pw, (HMENU)5005, wc.hInstance, 0);
+        for (int t = 0; t < 6; t++) { TCITEMA ti = {}; ti.mask = TCIF_TEXT; ti.pszText = (LPSTR)kTabs[t]; SendMessageA(g_tab, TCM_INSERTITEMA, t, (LPARAM)&ti); }
+        int row[6] = { 0, 0, 0, 0, 0, 0 };
         for (int i = 0; i < NPAR; i++) {
             const int t = tabOf(i), ck = colourOf(i);
             if (ck >= 0 && i != kColFirst[ck]) {   /* G and B: hidden fields, the swatch's row is the R one */
@@ -343,16 +517,38 @@ int main(int argc, char** argv) {
             g_rst[i] = CreateWindowA("BUTTON", "reset", WS_CHILD | BS_PUSHBUTTON, 362, y, 48, 22, pw, (HMENU)(INT_PTR)(4000 + i), wc.hInstance, 0);
             SetWindowPos(g_lbl[i], HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE); SetWindowPos(g_edit[i], HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE); SetWindowPos(g_rst[i], HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
         }
-        CreateWindowA("STATIC", "Cloud texture", WS_CHILD | WS_VISIBLE, 14, 386, 120, 20, pw, 0, wc.hInstance, 0);
-        g_texCombo = CreateWindowA("COMBOBOX", "", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 140, 382, 270, 200, pw, (HMENU)5004, wc.hInstance, 0);
+        CreateWindowA("STATIC", "Cloud texture", WS_CHILD | WS_VISIBLE, 14, 496, 120, 20, pw, 0, wc.hInstance, 0);
+        g_texCombo = CreateWindowA("COMBOBOX", "", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 140, 492, 270, 200, pw, (HMENU)5004, wc.hInstance, 0);
         for (int i = 0; i < (int)(sizeof kTex / sizeof *kTex); i++) SendMessageA(g_texCombo, CB_ADDSTRING, 0, (LPARAM)kTex[i]);
         SendMessageA(g_texCombo, CB_SETCURSEL, 0, 0);
-        CreateWindowA("BUTTON", "Save", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 14, 420, 120, 28, pw, (HMENU)5001, wc.hInstance, 0);
-        CreateWindowA("BUTTON", "Load", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 144, 420, 120, 28, pw, (HMENU)5002, wc.hInstance, 0);
-        CreateWindowA("BUTTON", "Reset all", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 274, 420, 136, 28, pw, (HMENU)5003, wc.hInstance, 0);
-        CreateWindowA("STATIC", "Click in the view: mouse look (Escape releases). WASD/ZQSD, Shift = fast, Space/E up, Ctrl down.", WS_CHILD | WS_VISIBLE, 14, 456, 400, 34, pw, 0, wc.hInstance, 0);
+        CreateWindowA("BUTTON", "Save", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 14, 530, 120, 28, pw, (HMENU)5001, wc.hInstance, 0);
+        CreateWindowA("BUTTON", "Load", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 144, 530, 120, 28, pw, (HMENU)5002, wc.hInstance, 0);
+        CreateWindowA("BUTTON", "Reset all", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 274, 530, 136, 28, pw, (HMENU)5003, wc.hInstance, 0);
+        CreateWindowA("STATIC", "Click in the view: mouse look (Escape releases). WASD/ZQSD, Shift = fast, Space/E up, Ctrl down.", WS_CHILD | WS_VISIBLE, 14, 566, 400, 34, pw, 0, wc.hInstance, 0);
         showTab(0);
         loadIni("seaview.ini");
+        /* the command line wins over the .ini */
+        if (cliLevel >= 0) applyLevel(cliLevel);
+        if (cliMode >= 0) { g_mode = cliMode; CheckMenuRadioItem(g_modeMenu, 8000, 8001, 8000 + g_mode, MF_BYCOMMAND); }
+        if (!cliWtex.empty()) { g_wtexPath = cliWtex; g_wtexDirty = true; }
+        if (cliHalf >= 0) { g_half = cliHalf; CheckMenuItem(g_waterMenu, 8203, MF_BYCOMMAND | (g_half ? MF_CHECKED : MF_UNCHECKED)); }
+        if (cliScene >= 0) { g_scene = cliScene; CheckMenuItem(g_waterMenu, 8204, MF_BYCOMMAND | (g_scene ? MF_CHECKED : MF_UNCHECKED)); }
+        if (cliDbg >= 0) { g_dbg = cliDbg; CheckMenuRadioItem(g_dbgMenu, 9000, 9003, 9000 + g_dbg, MF_BYCOMMAND); }
+        if (!cliView.empty()) {   /* a camera in the test scene's frame: eye (a, b, height above the plane) looking at a target (a, b, height) */
+            const float h0 = g_val[WATER0];
+            struct { const char* n; float e[3], t[3]; } vw[] = {
+                { "overview", { -100, 0, 260 }, { 900, -100, 0 } }, { "pier", { 150, 430, 90 }, { 700, 180, 10 } }, { "boxes", { 150, -100, 120 }, { 700, -200, 20 } },
+                { "shore", { 1500, 2000, 150 }, { 2500, 2000, 0 } }, { "pool", { 600, -1500, 250 }, { 1700, -1500, 80 } }, { "far", { -100, 0, 40 }, { 4000, 100, 0 } } };
+            for (auto& v : vw) if (cliView == v.n) {
+                const V3 E = { so.x + sf.x * v.e[0] + sr.x * v.e[1], h0 + v.e[2], so.z + sf.z * v.e[0] + sr.z * v.e[1] };
+                const V3 T = { so.x + sf.x * v.t[0] + sr.x * v.t[1], h0 + v.t[2], so.z + sf.z * v.t[0] + sr.z * v.t[1] };
+                const V3 d = sub(T, E); const float hd = sqrtf(d.x * d.x + d.z * d.z); const V3 t = { d.x / hd, 0, d.z / hd };
+                eye.x = E.x; eye.z = E.z; setVal(parIdx("Eye height"), E.y);
+                yaw = atan2f(t.x * sf.z - t.z * sf.x, t.x * sf.x + t.z * sf.z); pitch = atan2f(d.y, hd); g_haveCam = false;
+                fprintf(stderr, "view %s: eye %.1f %.1f %.1f\n", v.n, E.x, E.y, E.z);
+            }
+        }
+        if (g_haveCam) { eye.x = g_cam[0]; eye.z = g_cam[2]; setVal(parIdx("Eye height"), g_cam[1]); yaw += g_cam[3] * 3.14159265f / 180; pitch += g_cam[4] * 3.14159265f / 180; }
     }
     HDC dc = GetDC(hwnd);
     PIXELFORMATDESCRIPTOR pf = {}; pf.nSize = sizeof pf; pf.nVersion = 1; pf.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER; pf.iPixelType = PFD_TYPE_RGBA; pf.cColorBits = 32;
@@ -391,6 +587,62 @@ int main(int argc, char** argv) {
     GLuint q[2]; glGenQueries(2, q); bool qv[2] = { false, false }; double gpums = 0;
     GLuint pSky = build("fullscreen.vert.glsl", "skyplus.frag.glsl"), pLut = build("fullscreen.vert.glsl", "skylut.frag.glsl");
     if (!pSky || !pLut) return 2;
+    /* ---- the water surface mode: program, grid, uniform blocks (Draw 0, Comb 1, Sky 2 + the 4 vec4s of the level water), textures ---- */
+    GLuint pWater = buildWater(0), pWBody = buildWater(1), pComp = buildComp(false), pMask = buildComp(true); if (!pWater || !pWBody || !pComp || !pMask) fprintf(stderr, "water program failed: Water surface mode disabled\n");
+    const int GN = 256;   /* cells per side of the plane's grid */
+    GLuint vaoW, vboW, eboW; glGenVertexArrays(1, &vaoW); glBindVertexArray(vaoW);
+    {
+        std::vector<float> gv; for (int j = 0; j <= GN; j++) for (int i = 0; i <= GN; i++) { gv.push_back(2.0f * i / GN - 1.0f); gv.push_back(2.0f * j / GN - 1.0f); }
+        std::vector<unsigned> gi; for (int j = 0; j < GN; j++) for (int i = 0; i < GN; i++) { unsigned a = j * (GN + 1) + i, b = a + 1, c = a + GN + 1, d = c + 1; unsigned t[6] = { a, c, b, b, c, d }; gi.insert(gi.end(), t, t + 6); }
+        glGenBuffers(1, &vboW); glBindBuffer(GL_ARRAY_BUFFER, vboW); glBufferData(GL_ARRAY_BUFFER, gv.size() * 4, gv.data(), GL_STATIC_DRAW);
+        glGenBuffers(1, &eboW); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, eboW); glBufferData(GL_ELEMENT_ARRAY_BUFFER, gi.size() * 4, gi.data(), GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, 0); glEnableVertexAttribArray(0);
+    }
+    glBindVertexArray(vao);
+    GLuint uboW, dDraw, dComb; glGenBuffers(1, &uboW); glBindBuffer(GL_UNIFORM_BUFFER, uboW); glBufferData(GL_UNIFORM_BUFFER, 320, 0, GL_DYNAMIC_DRAW);
+    glGenBuffers(1, &dDraw); glBindBuffer(GL_UNIFORM_BUFFER, dDraw); glBufferData(GL_UNIFORM_BUFFER, 32, 0, GL_DYNAMIC_DRAW);
+    glGenBuffers(1, &dComb); glBindBuffer(GL_UNIFORM_BUFFER, dComb); glBufferData(GL_UNIFORM_BUFFER, 32, 0, GL_DYNAMIC_DRAW);
+    GLuint tWSrc = 0, tWMap = 0;
+    /* the water pipeline's targets (as in gfx_deko3d.cpp wfx_prepare): the scene gets a depth texture; the FX target is half size
+     * (each axis), RGBA8, linear + clamp, cleared to 0 and with its own depth */
+    GLuint tDepth, tHalfFx, fHalfFx, rbHalf, uboC;
+    glGenTextures(1, &tDepth); glBindTexture(GL_TEXTURE_2D, tDepth); glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, W, H, 0, GL_DEPTH_COMPONENT, GL_FLOAT, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, fScene); glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, tDepth, 0);
+    tHalfFx = tex2d(W / 2, H / 2, 0, false, false, 1);   /* linear, clamp */
+    glGenFramebuffers(1, &fHalfFx); glBindFramebuffer(GL_FRAMEBUFFER, fHalfFx); glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tHalfFx, 0);
+    glGenRenderbuffers(1, &rbHalf); glBindRenderbuffer(GL_RENDERBUFFER, rbHalf); glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, W / 2, H / 2); glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbHalf);
+    glGenBuffers(1, &uboC); glBindBuffer(GL_UNIFORM_BUFFER, uboC); glBufferData(GL_UNIFORM_BUFFER, 32, 0, GL_DYNAMIC_DRAW);   /* block Comp of watercomp.frag.glsl */
+    GLuint pScene, pHalfDbg;
+    {   /* the test scene's and the debug view's programs */
+        GLuint a = compile(GL_VERTEX_SHADER, kSceneVert, "scene vert"), b = compile(GL_FRAGMENT_SHADER, kSceneFrag, "scene frag"); pScene = glCreateProgram(); glAttachShader(pScene, a); glAttachShader(pScene, b); glLinkProgram(pScene);
+        pHalfDbg = buildSrc("fullscreen.vert.glsl", kHalfDbg);
+    }
+    GLuint vaoS, vboS; glGenVertexArrays(1, &vaoS); glBindVertexArray(vaoS); glGenBuffers(1, &vboS); glBindBuffer(GL_ARRAY_BUFFER, vboS);
+    for (int i = 0; i < 3; i++) { glVertexAttribPointer(i, 3, GL_FLOAT, GL_FALSE, 36, (const void*)(size_t)(i * 12)); glEnableVertexAttribArray(i); }
+    glBindVertexArray(vao);
+    /* the level's water texture: from the file (--wtex, menu Water, .ini __wtex, else data/water_<level>.png|.tga), else the generated
+     * placeholder; the bake (common/waterbake.h) gives the patch map and the deep / light colours (which land in the pickers) */
+    auto loadWater = [&]() {
+        img::Image im; std::string used;
+        if (!g_wtexPath.empty()) { if (img::loadImage(g_wtexPath, im)) used = g_wtexPath; else fprintf(stderr, "water texture %s: not readable\n", g_wtexPath.c_str()); }
+        else for (const char* ext : { ".png", ".tga" }) { std::string f = std::string("water_") + kLevelNames[g_level] + ext; if (img::loadImage(f, im)) { used = f; break; } }
+        if (used.empty()) { im.w = im.h = 64; waterbake::placeholder(g_level + 1, im.px); used = "(generated placeholder)"; }
+        /* the bake takes up to 128 wide: box-reduce a bigger texture by an integer factor */
+        std::vector<unsigned char> bsrc = im.px; int bw = im.w, bh = im.h;
+        while (bw > 128 || bh > 128) { const int nw = bw / 2, nh = bh / 2; std::vector<unsigned char> t((size_t)nw * nh * 4);
+            for (int y = 0; y < nh; y++) for (int x = 0; x < nw; x++) for (int c = 0; c < 4; c++) t[((size_t)y * nw + x) * 4 + c] = (bsrc[((size_t)2 * y * bw + 2 * x) * 4 + c] + bsrc[((size_t)2 * y * bw + 2 * x + 1) * 4 + c] + bsrc[((size_t)(2 * y + 1) * bw + 2 * x) * 4 + c] + bsrc[((size_t)(2 * y + 1) * bw + 2 * x + 1) * 4 + c]) / 4;
+            bsrc.swap(t); bw = nw; bh = nh; }
+        unsigned char map[waterbake::MW * waterbake::MH * 4]; float deep[3], light[3];
+        if (!waterbake::bake(bsrc.data(), bw, bh, map, deep, light)) { fprintf(stderr, "water bake: texture %dx%d not usable\n", bw, bh); return; }
+        if (tWSrc) glDeleteTextures(1, &tWSrc);
+        if (tWMap) glDeleteTextures(1, &tWMap);
+        tWSrc = tex2d(im.w, im.h, im.px.data(), true, true, 8); tWMap = tex2d(waterbake::MW, waterbake::MH, map, true, true, 1);
+        static const char* sfx[3] = { " R", " G", " B" };
+        for (int i = 0; i < 3; i++) { setVal(parIdx((std::string("Deep colour") + sfx[i]).c_str()), deep[i]); setVal(parIdx((std::string("Light colour") + sfx[i]).c_str()), light[i]); }
+        repaintSwatches();
+        fprintf(stderr, "water texture: %s %dx%d; deep %.2f,%.2f,%.2f light %.2f,%.2f,%.2f\n", used.c_str(), im.w, im.h, deep[0], deep[1], deep[2], light[0], light[1], light[2]);
+    };
 
     double t0 = (double)GetTickCount64() / 1000.0, tPrev = t0, tFrozen = 0; bool frozen = ftime >= 0; if (frozen) tFrozen = ftime;
     int sel = 0; POINT lastm; GetCursorPos(&lastm); int frame = 0; double fpsT = t0; int fpsN = 0, fpsShown = 0;
@@ -406,7 +658,8 @@ int main(int argc, char** argv) {
         if (kdown['H']) hdiv = hdiv == 1 ? 2 : (hdiv == 2 ? 4 : 1);
         for (int d = 0; d < 10; d++) if (kdown['0' + d]) mode = d;
         if (kdown['X']) sel = (sel + 1) & 3;
-        if (kdown['R']) { GLuint a = build("fullscreen.vert.glsl", "skyplus.frag.glsl"), b = build("fullscreen.vert.glsl", "skylut.frag.glsl"); if (a && b) { pSky = a; pLut = b; fprintf(stderr, "reloaded\n"); } }
+        if (kdown['R']) { GLuint a = build("fullscreen.vert.glsl", "skyplus.frag.glsl"), b = build("fullscreen.vert.glsl", "skylut.frag.glsl"), c = buildWater(0); if (a && b) { pSky = a; pLut = b; fprintf(stderr, "reloaded\n"); } if (c) { pWater = c; GLuint c1 = buildWater(1), c2 = buildComp(false), c3 = buildComp(true); if (c1) pWBody = c1; if (c2) pComp = c2; if (c3) pMask = c3; } }
+        if (g_wtexDirty) { loadWater(); g_wtexDirty = false; }
         float step = (float)dt * (keys[VK_SHIFT] ? 5.f : 1.f);
         if (keys[VK_OEM_COMMA]) play[sel] -= step;
         if (keys[VK_OEM_PERIOD]) play[sel] += step;
@@ -455,11 +708,13 @@ int main(int argc, char** argv) {
                 const Par& q = kPar[i];
                 if (q.kind == 0) upr[q.idx] = g_val[i];
                 else if (q.kind == 1) u[q.idx] = g_val[i];
+                else if (q.kind == 3) continue;   /* the water surface block: read where the plane is drawn */
                 else if (q.idx == 0) el = g_val[i] / 57.29578f;
                 else if (q.idx == 1) az = g_val[i] / 57.29578f;
                 else if (g_val[i] != lastEye) { lastEye = g_val[i]; eye.y = g_val[i]; u[25] = eye.y; }
             }
             u[44] = cosf(el) * sinf(az); u[45] = sinf(el); u[46] = cosf(el) * cosf(az);
+            if (g_mode == 1) u[61] = 0;   /* the water surface mode: no Frigate sea, the sky only */
         }
         {   /* block Viewer (binding 1): the menus' variants and the shaders' editable values (PRM) */
             struct { int var[4]; float pr[24]; } vb = { { g_seaVar, g_skyVar, 0, 0 }, {} };
@@ -517,7 +772,98 @@ int main(int argc, char** argv) {
             glBindFramebuffer(GL_READ_FRAMEBUFFER, fSkyR); glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fScene);
             glBlitFramebuffer(0, 0, SW, SH, 0, 0, W, H, GL_COLOR_BUFFER_BIT, GL_LINEAR);
         }
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, fScene); glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        GLuint fShow = fScene;   /* what is shown and saved */
+        if (g_mode == 1 && pWater && tWSrc) {   /* the level's water over the sky, drawn with water.frag.glsl */
+            auto W_ = [&](int k) { return g_val[WATER0 + k]; };   /* the kind-3 block of kPar, in order */
+            const bool noSky = W_(7) > 0.5f, half = g_half && g_dbg != 3 && pComp && pMask && pWBody;
+            glBindFramebuffer(GL_FRAMEBUFFER, fScene); glViewport(0, 0, W, H);
+            if (noSky) { glClearColor(W_(17), W_(18), W_(19), 1); glClear(GL_COLOR_BUFFER_BIT); }   /* a cave: no sky, the fog colour is the horizon */
+            glDepthMask(GL_TRUE); glClear(GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS);
+            float uw[80] = {}; memcpy(uw, u, 256);
+            if (noSky) { uw[28] = W_(17); uw[29] = W_(18); uw[30] = W_(19); }   /* waterShade mirrors uSky (the horizon colour) when there is no sky */
+            uw[62] = 1;   /* uWave4.z: GE+ water on */
+            /* the level-water members of block Sky (vec4 16..19) */
+            uw[64] = W_(8); uw[65] = W_(9); uw[66] = W_(10); uw[67] = W_(2);          /* uWX0: deep colour, patch size in repeats */
+            uw[68] = W_(11); uw[69] = W_(12); uw[70] = W_(13); uw[71] = W_(3);        /* uWX1: light colour, reflectLit */
+            uw[72] = 1; uw[73] = noSky ? 1.f : 0.f;                                   /* uWX2: map ready, water only */
+            uw[76] = W_(20); uw[77] = W_(21); uw[78] = 1.0f;   /* uWX3: toneKeep, reflectGain, 1 / scale (the viewer's plane is in world units) */
+            glBindBuffer(GL_UNIFORM_BUFFER, uboW); glBufferSubData(GL_UNIFORM_BUFFER, 0, 320, uw);
+            const int dr[8] = { 0, 0, 0, 0, 0, 0, 0, 0 }; glBindBuffer(GL_UNIFORM_BUFFER, dDraw); glBufferSubData(GL_UNIFORM_BUFFER, 0, 32, dr);
+            const unsigned cb[8] = { 0, 0, 0, 0, W_(6) > 0 ? 2u : 0u, 0, 0, 0 }; glBindBuffer(GL_UNIFORM_BUFFER, dComb); glBufferSubData(GL_UNIFORM_BUFFER, 0, 32, cb);   /* flags: CF_FOG */
+            glBindBufferBase(GL_UNIFORM_BUFFER, 0, dDraw); glBindBufferBase(GL_UNIFORM_BUFFER, 1, dComb); glBindBufferBase(GL_UNIFORM_BUFFER, 2, uboW); glBindBufferBase(GL_UNIFORM_BUFFER, 5, vubo);
+            const float cl = len(ccU), nearW = 2.0f / cl, farW = 600000.f / cl, h0 = W_(0);
+            /* the test scene (world = origin so, axes sf / sr): boxes, and the water surfaces other than the big plane */
+            struct Box { float a0, a1, b0, b1, y0, y1, c[3]; };
+            std::vector<Box> boxes; struct Rect { float a, b, ea, eb, y; }; std::vector<Rect> pools;
+            if (g_scene) {
+                boxes = { { 300, 1200, 100, 260, h0 - 80, h0 + 60, { 0.55f, 0.55f, 0.50f } },        /* the pier: a slab half in the water */
+                          { 430, 550, -310, -190, h0 - 100, h0 + 140, { 0.70f, 0.35f, 0.30f } }, { 640, 760, -180, -60, h0 - 100, h0 + 120, { 0.30f, 0.55f, 0.35f } },
+                          { 900, 1020, -400, -280, h0 - 100, h0 + 160, { 0.65f, 0.60f, 0.30f } }, { 770, 800, -45, -15, h0 - 100, h0 + 320, { 0.9f, 0.9f, 0.9f } },   /* a thin pole */
+                          { 2500, 2600, 0, 6000, h0 - 300, h0 + 500, { 0.50f, 0.50f, 0.52f } } };    /* the shore: a wall the plane ends against */
+                pools = { { 1700, -1500, 600, 900, h0 + 150 } };
+                boxes.push_back({ 1092, 1100, -2400, -600, h0 - 20, h0 + 170, { 0.55f, 0.55f, 0.50f } });   /* its front rim */   /* a raised pool: another water height */
+            }
+            std::vector<float> sv;
+            for (const Box& bx : boxes) {
+                const float A[2] = { bx.a0, bx.a1 }, B[2] = { bx.b0, bx.b1 }, Y[2] = { bx.y0, bx.y1 };
+                static const int fc[6][4] = { { 0, 2, 6, 4 }, { 1, 3, 7, 5 }, { 0, 1, 5, 4 }, { 2, 3, 7, 6 }, { 0, 1, 3, 2 }, { 4, 5, 7, 6 } };
+                const V3 nr[6] = { { -sf.x, 0, -sf.z }, { sf.x, 0, sf.z }, { -sr.x, 0, -sr.z }, { sr.x, 0, sr.z }, { 0, -1, 0 }, { 0, 1, 0 } };
+                for (int f = 0; f < 6; f++) for (int t = 0; t < 6; t++) {
+                    const int c = fc[f][(t < 3) ? t : (t == 3 ? 0 : t - 2)];   /* 0 1 2, 0 2 3 */
+                    const float a = A[c & 1], b = B[(c >> 1) & 1], y = Y[(c >> 2) & 1];
+                    const float v[9] = { so.x + sf.x * a + sr.x * b, y, so.z + sf.z * a + sr.z * b, nr[f].x, nr[f].y, nr[f].z, bx.c[0], bx.c[1], bx.c[2] };
+                    sv.insert(sv.end(), v, v + 9);
+                }
+            }
+            auto setView = [&](GLuint prog) {
+                auto U4 = [&](const char* n, float a, float b, float c, float d) { GLint l = glGetUniformLocation(prog, n); if (l >= 0) glUniform4f(l, a, b, c, d); };
+                U4("uEyeV", eye.x, eye.y, eye.z, nearW); U4("uCC", ccU.x, ccU.y, ccU.z, farW); U4("uHX", hxU.x, hxU.y, hxU.z, 0); U4("uHY", hyU.x, hyU.y, hyU.z, 0);
+            };
+            if (!sv.empty()) {
+                glUseProgram(pScene); setView(pScene);
+                glBindVertexArray(vaoS); glBindBuffer(GL_ARRAY_BUFFER, vboS); glBufferData(GL_ARRAY_BUFFER, sv.size() * 4, sv.data(), GL_STREAM_DRAW);
+                glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(sv.size() / 9)); glBindVertexArray(vao);
+            }
+            bindTex(0, tWSrc); bindTex(1, tWSrc); bindTex(2, tLut); bindTex(3, tWave); bindTex(4, tWMap);
+            /* every water draw of the frame: the big plane, then the pools (the same list is replayed at half size in step 2) */
+            auto drawWater = [&](GLuint prog) {
+                glUseProgram(prog); setView(prog);
+                auto U4 = [&](const char* n, float a, float b, float c, float d) { glUniform4f(glGetUniformLocation(prog, n), a, b, c, d); };
+                U4("uShade", W_(14), W_(15), W_(16), 1); U4("uFogC", W_(17), W_(18), W_(19), W_(4));
+                glUniform4f(glGetUniformLocation(prog, "uPlay"), play[0], play[1], play[2], play[3]);
+                glBindVertexArray(vaoW);
+                U4("uPl", h0, W_(1) > 1 ? W_(1) : 1, W_(5), W_(6)); U4("uGrid", eye.x, eye.z, 0, (float)T); U4("uExt", 60000.f, 60000.f, 0, 0); U4("uAx", 1, 0, 0, 1);
+                glDrawElements(GL_TRIANGLES, GN * GN * 6, GL_UNSIGNED_INT, 0);
+                for (const Rect& r : pools) {
+                    U4("uPl", r.y, W_(1) > 1 ? W_(1) : 1, W_(5), W_(6)); U4("uGrid", so.x + sf.x * r.a + sr.x * r.b, so.z + sf.z * r.a + sr.z * r.b, 0, (float)T);
+                    U4("uExt", r.ea, r.eb, 1, 0); U4("uAx", sf.x, sf.z, sr.x, sr.z);
+                    glDrawElements(GL_TRIANGLES, GN * GN * 6, GL_UNSIGNED_INT, 0);
+                }
+                glBindVertexArray(vao);
+            };
+            drawWater((half || g_dbg == 3) ? pWBody : pWater);   /* step 1 (or the whole thing at full res) */
+            if (half) {
+                const int Wh = W / 2, Hh = H / 2;
+                glBindFramebuffer(GL_FRAMEBUFFER, fHalfFx); glViewport(0, 0, Wh, Hh);   /* step 2: the water draws again at half size with the full water.frag */
+                glClearColor(0, 0, 0, 0); glDepthMask(GL_TRUE); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                drawWater(pWater);
+                glBindFramebuffer(GL_FRAMEBUFFER, fScene); glViewport(0, 0, W, H);
+                if (g_dbg == 1) {   /* debug: the half-size target itself, full screen */
+                    glDisable(GL_DEPTH_TEST); bindTex(0, tHalfFx); glUseProgram(pHalfDbg); glDrawArrays(GL_TRIANGLES, 0, 3);
+                } else {   /* step 3: the water draws once more at full size, depth LEQUAL against the scene (writes off), watercomp.frag over the body colour */
+                    const float comp[8] = { 0, (float)Hh, (float)Wh, -(float)Hh, (float)Wh, (float)Hh, 0, 0 };   /* GL targets are y-up: the shader's rows from the top are flipped here */
+                    glBindBuffer(GL_UNIFORM_BUFFER, uboC); glBufferSubData(GL_UNIFORM_BUFFER, 0, 32, comp); glBindBufferBase(GL_UNIFORM_BUFFER, 0, uboC);
+                    bindTex(0, tHalfFx);
+                    glDepthFunc(GL_LEQUAL); glDepthMask(GL_FALSE);
+                    if (g_dbg == 2) glDisable(GL_BLEND); else { glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); }
+                    drawWater(g_dbg == 2 ? pMask : pComp);
+                    glDisable(GL_BLEND);
+                }
+            }
+            glDisable(GL_DEPTH_TEST);
+            bindTex(0, tCloud); bindTex(1, tWave); bindTex(3, tDummy); bindTex(4, tDummy);
+        }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fShow); glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         glBlitFramebuffer(0, 0, W, H, 0, 0, W, H, GL_COLOR_BUFFER_BIT, GL_NEAREST);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glEndQuery(GL_TIME_ELAPSED);
@@ -536,12 +882,14 @@ int main(int argc, char** argv) {
             fwrite(hd, 1, 18, f); fwrite(px.data(), 1, px.size(), f); fclose(f);
             if (frame == 16 + seqN) { fprintf(stderr, "seq done gpu %.2f ms\n", gpums); break; }
         }
-        if (kdown['P'] || (!shot.empty() && frame == 6)) {
-            std::vector<unsigned char> px((size_t)W * H * 4); glReadBuffer(GL_BACK); glReadPixels(0, 0, W, H, GL_BGRA, GL_UNSIGNED_BYTE, px.data());
-            std::string fn = shot.empty() ? "shot.tga" : shot; FILE* f = fopen(fn.c_str(), "wb");
-            unsigned char hd[18] = { 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, (unsigned char)(W & 255), (unsigned char)(W >> 8), (unsigned char)(H & 255), (unsigned char)(H >> 8), 32, 8 };
-            fwrite(hd, 1, 18, f); fwrite(px.data(), 1, px.size(), f); fclose(f);
-            fprintf(stderr, "gpu %.2f ms\nsaved %s\n", gpums, fn.c_str()); if (!shot.empty()) break;
+        if (kdown['P'] || kdown[VK_F12] || (!shot.empty() && frame == 6)) {   /* the scene target (before the swap), flipped to top-row-first */
+            std::vector<unsigned char> px((size_t)W * H * 4), fl((size_t)W * H * 4);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fShow); glReadBuffer(GL_COLOR_ATTACHMENT0); glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+            for (int y = 0; y < H; y++) memcpy(&fl[(size_t)y * W * 4], &px[(size_t)(H - 1 - y) * W * 4], (size_t)W * 4);
+            std::string fn = !shot.empty() ? shot : kdown['P'] ? std::string("shot.tga") : std::string();
+            if (fn.empty()) for (int n = 0; ; n++) { char b[64]; snprintf(b, sizeof b, "shot_%03d.png", n); if (GetFileAttributesA(b) == INVALID_FILE_ATTRIBUTES) { fn = b; break; } }
+            const bool okw = img::saveImage(fn, W, H, fl.data());
+            fprintf(stderr, "gpu %.2f ms\n%s %s\n", gpums, okw ? "saved" : "FAILED to save", fn.c_str()); if (!shot.empty()) break;
         }
         memset(kdown, 0, sizeof kdown);
     }

@@ -268,7 +268,7 @@ configure_file(
 # `#pragma skycommon` line, as cmake/SwitchPort.cmake and cmake/VulkanShaders.cmake do), embedded as C++ raw strings.
 file(READ "${CMAKE_SOURCE_DIR}/port/switch/shaders/skycommon.glsl" _gl_skycommon)
 set(_gl_sky_inc "")
-foreach(_sc skyplus skylut)
+foreach(_sc skyplus skylut water)
   file(READ "${CMAKE_SOURCE_DIR}/port/switch/shaders/${_sc}.frag.glsl" _gl_scsrc)
   string(REPLACE "#pragma skycommon" "${_gl_skycommon}" _gl_scsrc "${_gl_scsrc}")
   string(APPEND _gl_sky_inc "static const char gl_${_sc}_glsl[] = R\"GLSLX(${_gl_scsrc})GLSLX\";\n")

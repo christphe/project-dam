@@ -53,6 +53,15 @@ ${_uo}${_ue}")
     file(WRITE "${VK_OUT}/glsl/${_sc}.vk.frag.glsl" "${_scsrc}")
     _vk_spv_sub(5 frag "${VK_OUT}/glsl/${_sc}.vk.frag.glsl" "${VK_OUT}/glsl/${_sc}.frag.spv")
   endforeach()
+  # GE+ water on the level's own water surfaces (#79): water.frag.glsl, paired with the uber vertex shader, blocks moved up by 4
+  # like the other draws' (Draw 4, Comb 5). Its descriptor set (gfx_vulkan.cpp s_water_set_layout) has samplers 0..3 and its
+  # colour map at 7 (binding 4 is Draw there), and the Sky block at 8 (its binding 2 + 4 would meet the Mesh block at 6).
+  file(READ "${VK_SRC}/port/switch/shaders/water.frag.glsl" _wsrc)
+  string(REPLACE "#pragma skycommon" "${_skycommon}" _wsrc "${_wsrc}")
+  string(REPLACE "binding = 4) uniform sampler2D uWMap" "binding = 7) uniform sampler2D uWMap" _wsrc "${_wsrc}")
+  string(REPLACE "binding = 2) uniform Sky" "binding = 4) uniform Sky" _wsrc "${_wsrc}")
+  file(WRITE "${VK_OUT}/glsl/water.vk.frag.glsl" "${_wsrc}")
+  _vk_spv(frag "${VK_OUT}/glsl/water.vk.frag.glsl" "${VK_OUT}/glsl/water.frag.spv")
   string(APPEND _pack "0 1 ${VK_OUT}/glsl/uber.vert.spv ${VK_OUT}/glsl/uber.frag.spv -
 ")
   # the post passes (gfx_dk_layout.h DK_PACK_FULLSCREEN / FXAA / SKYPLUS)
@@ -61,6 +70,8 @@ ${_uo}${_ue}")
   string(APPEND _pack "0 3 - ${VK_OUT}/glsl/fxaa.frag.spv -
 ")
   string(APPEND _pack "0 4 - ${VK_OUT}/glsl/skyplus.frag.spv -
+")
+  string(APPEND _pack "0 5 - ${VK_OUT}/glsl/water.frag.spv -
 ")
   string(APPEND _pack "0 6 - ${VK_OUT}/glsl/skylut.frag.spv -
 ")

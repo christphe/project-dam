@@ -25,6 +25,8 @@
 #define SKYPLUS_TEX_H 64
 #define SKYPLUS_WTEX_W 128
 #define SKYPLUS_WTEX_H 128
+#define SKYPLUS_WMAP_W 64    /* the level's water colour map (the patches that blend deep into light) */
+#define SKYPLUS_WMAP_H 64
 
 typedef struct PortSkyPlus {
     float corner[4][3];   /* world-space rays to the image plane: TL, TR, BL, BR (not normalised) */
@@ -57,6 +59,22 @@ typedef struct PortSkyPlus {
     float bakeEye[3];     /* where the far sea is baked from: the player's eye at the start (not the intro's flying camera) */
     int waterTexGen;      /* bumps when waterTex changes */
     const unsigned char *waterTex;   /* SKYPLUS_WTEX_W x SKYPLUS_WTEX_H RGBA8 (a tiling fbm noise, the wave heights) */
+    /* the level's own water surfaces (Dam, Caverns, Complex; Switch): their colour comes from the level's water texture,
+     * baked once per level (skyplus.c skyPlusWaterSource) into a small tiling patch map (R = 0 deep .. 1 light) */
+    int wmapGen;          /* bumps when wmap changes */
+    const unsigned char *wmap;   /* SKYPLUS_WMAP_W x SKYPLUS_WMAP_H RGBA8, NULL until the bake is done */
+    float deep[3], light[3];     /* the two colours the patch map blends, 0..1 */
+    float reflectLit;     /* 0..1: how much the vertex lighting dims the water's reflection (1 = GE's rule) */
+    float patchScale;     /* the patch map's size in water-texture repeats */
+    float toneKeep;       /* 0..1: how much the reflection is pulled into the body's hue (keeps the original's tone) */
+    float reflectGain;    /* the reflection's weight, x the Fresnel */
+    float worldScale;     /* bg.c room_data_float2 (1 / the level's scale): turns the water draws' depth into the eye's units */
+    int waterOnly;        /* 1: no sky (a level without one: Caverns): this command only sets the water block, nothing is drawn */
+    /* Switch: the far sea baked for the level's own water surfaces (Dam, Complex; #79): the same panorama as Frigate's sea, of a
+     * plane farHeight under the player's start eye (a fixed height: far away the height does not show), read by the water draws
+     * beyond the near distance. farSeaY = that plane's world height, kept from the level's start so the bake is not redone. */
+    int farBake;
+    float farHeight, farSeaY;
 } PortSkyPlus;
 
 #define gSPSkyPlusExt(pkt, ptr)                                       \
@@ -79,6 +97,11 @@ extern int portSkyPlus;
 Gfx *skyPlusRender(Gfx *gdl);
 #endif
 
+/* Switch: fast3d hands the decoded water texture of the level's own water draws (GE's water combiner, TEXEL0) to the
+ * game side while it is wanted (once per level). rgba = w x h RGBA8; fmt/siz = the N64 tile format (for the log). */
+int skyPlusWaterWanted(void);
+void skyPlusWaterSource(const unsigned char *rgba, int w, int h, int fmt, int siz);
+
 /* fast3d -> GL backend: stage one draw (decoder thread) and replay it (GL
  * thread). vp = the GL viewport, aspA/aspB = the decoder's clip-x mapping
  * (x_out = aspA * x_game + aspB). */
@@ -87,6 +110,7 @@ void gfx_opengl_skyplus_pass(int slot);
 /* Set by the GL thread when the GE+ program fails to build: GE's sky is drawn instead. */
 extern volatile int gfx_skyplus_failed;
 extern int gfx_skyplus_half;   /* PC, Video.SkyScale: 1 = the sky and sea passes drawn at half size (the Switch always does) */
+extern volatile int gfx_water_surfaces;   /* 1 = the active backend draws the GE+ water on the level's own water surfaces (water.frag; deko3d, Vulkan, GL 4.6) */
 extern volatile int gfx_skyplus_sea;   /* PC: 1 = the active backend draws the GE+ sea (Vulkan); the Switch always does */
 
 #ifdef __cplusplus

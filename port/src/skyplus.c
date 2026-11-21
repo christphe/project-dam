@@ -18,15 +18,18 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 
 #include "bondconstants.h"
 #include "bondtypes.h"
+#include "game/bg.h"
 #include "game/bgfog.h"
 #include "game/bondview.h"
 #include "game/player.h"
 #include "game/matrixmath.h"
 #include "game/image.h"
 #include "game/unk_092E50.h"
+#include "fr.h"   /* viSetFillColor etc.: the fill of a level without a sky (water-only) */
 
 #include "skyplus.h"
 #include "system.h"
@@ -95,6 +98,8 @@ static void screenRay(f32 x, f32 y, coord3d *out)
 static unsigned char s_tex[SKYPLUS_TEX_W * SKYPLUS_TEX_H];
 static int s_texGen;
 static int s_texNum = -1;
+static int s_farHave;      /* the far sea's plane height is latched for this level */
+static float s_farY;
 
 /* The cloud image as 8-bit intensity. texLoad writes the loaded address back
  * into the word it is given, so it gets a copy of the image number (as
@@ -168,8 +173,24 @@ static float wnoise(float x, float y, int n)   /* x, y in 0..n cells, wraps at n
  *     Tint = 1.0, 1.0, 1.0
  *     Swell = 1.0
  *     Chop = 1.0
- *     Speed = 1.0                                                          */
-struct WaterSettings { float tint[3], swell, chop, speed; };
+ *     Speed = 1.0
+ * and for the level's own water surfaces (Dam, Caverns, Complex), see shaders-sea.md:
+ *     Deep = 0.1, 0.2, 0.2        (0..1, default: the mean colour of the water texture's darker half)
+ *     Light = 0.3, 0.5, 0.5       (default: the mean colour of its lighter half)
+ *     ReflectLit = 0.0            (0..1, 1 = the vertex lighting dims the reflection as GE's does)
+ *     PatchScale = 6.0            (the patch map's size in water-texture repeats)
+ *     FarHeight = 300             (the eye height over the fake plane the far sea is baked for, world units; Switch)
+ * Keys are not case-sensitive.                                                 */
+struct WaterSettings {
+    float tint[3], swell, chop, speed;
+    /* the level's own water surfaces: the two colours the patch map blends (when not set here they are computed from the
+     * level's water texture), the vertex lighting's weight on the reflection, the patch map's size in texture repeats */
+    float deep[3], light[3];
+    int deepSet, lightSet;
+    float reflectLit, patchScale;
+    float toneKeep, reflectGain;   /* the reflection pulled into the body's hue (0..1), and its strength */
+    float farHeight;               /* Switch: the far sea's baked plane lies this far under the player's start eye */
+};
 
 static const char *waterLevelName(int stage)
 {
@@ -182,6 +203,14 @@ static const char *waterLevelName(int stage)
     }
 }
 
+static int keyeq(const char *a, const char *b)
+{
+    for (; *a && *b; a++, b++) {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
+    }
+    return *a == *b;
+}
+
 static void waterSettingsLoad(int stage, struct WaterSettings *w)
 {
     char path[64], line[128];
@@ -190,6 +219,13 @@ static void waterSettingsLoad(int stage, struct WaterSettings *w)
 
     w->tint[0] = w->tint[1] = w->tint[2] = 1.0f;
     w->swell = w->chop = w->speed = 1.0f;
+    w->deepSet = w->lightSet = 0;
+    w->deep[0] = w->deep[1] = w->deep[2] = w->light[0] = w->light[1] = w->light[2] = 0.0f;
+    w->reflectLit = 1.0f;   /* unknown levels: GE's rule */
+    w->patchScale = 6.0f;
+    w->toneKeep = 0.0f;
+    w->reflectGain = 1.0f;
+    w->farHeight = 300.0f;
     if (stage == LEVELID_FRIGATE) {   /* open sea: a real swell, not an oil-flat sea */
         w->swell = 2.0f;
         w->chop = 1.2f;
@@ -197,7 +233,21 @@ static void waterSettingsLoad(int stage, struct WaterSettings *w)
         w->swell = 0.3f;
         w->chop = 0.6f;
         w->speed = 0.7f;
-    }
+        w->reflectLit = 0.0f;   /* Dam's water is lit dark: the reflection is not dimmed by it */
+        w->toneKeep = 0.8f;     /* the original's dark teal: the sky reflection keeps the body's hue */
+        w->reflectGain = 0.6f;  /* measured on the PC (intro camera 1): mean water colour 15,32,39 vs GE's 12,25,29 */
+    } else if (stage == LEVELID_CAVERNS) {   /* still cave water, dark, no sky to mirror */
+        w->swell = 0.3f;
+        w->chop = 0.6f;
+        w->speed = 0.7f;
+        /* the water texture alone (TEXEL0, a dark I4) is ~half the tone of GE's lerp with TEXEL1: x2 brings the mean back to
+         * the original's (measured on the PC, intro camera 1: 10,14,14 vs GE's 10,12.5,12.6); the reflection (the dark
+         * fog colour) at half weight, in the water's own hue */
+        w->tint[0] = w->tint[1] = w->tint[2] = 2.0f;
+        w->reflectLit = 0.0f;
+        w->toneKeep = 0.8f;
+        w->reflectGain = 0.5f;
+    }   /* Complex: reflectLit 1 keeps its pits black */
     if (name == NULL) {
         return;
     }
@@ -209,18 +259,154 @@ static void waterSettingsLoad(int stage, struct WaterSettings *w)
     while (fgets(line, sizeof line, f)) {
         char key[32];
         float a, b, c;
-        if (sscanf(line, " %31[A-Za-z] = %f , %f , %f", key, &a, &b, &c) == 4 && !strcmp(key, "Tint")) {
-            w->tint[0] = a; w->tint[1] = b; w->tint[2] = c;
+        if (sscanf(line, " %31[A-Za-z] = %f , %f , %f", key, &a, &b, &c) == 4) {
+            if (keyeq(key, "Tint")) { w->tint[0] = a; w->tint[1] = b; w->tint[2] = c; }
+            else if (keyeq(key, "Deep")) { w->deep[0] = a; w->deep[1] = b; w->deep[2] = c; w->deepSet = 1; }
+            else if (keyeq(key, "Light")) { w->light[0] = a; w->light[1] = b; w->light[2] = c; w->lightSet = 1; }
         } else if (sscanf(line, " %31[A-Za-z] = %f", key, &a) == 2) {
-            if (!strcmp(key, "Swell")) w->swell = a;
-            else if (!strcmp(key, "Chop")) w->chop = a;
-            else if (!strcmp(key, "Speed")) w->speed = a;
+            if (keyeq(key, "Swell")) w->swell = a;
+            else if (keyeq(key, "Chop")) w->chop = a;
+            else if (keyeq(key, "Speed")) w->speed = a;
+            else if (keyeq(key, "ReflectLit")) w->reflectLit = a < 0.0f ? 0.0f : a > 1.0f ? 1.0f : a;
+            else if (keyeq(key, "ToneKeep")) w->toneKeep = a < 0.0f ? 0.0f : a > 1.0f ? 1.0f : a;
+            else if (keyeq(key, "ReflectGain")) w->reflectGain = a < 0.0f ? 0.0f : a > 2.0f ? 2.0f : a;
+            else if (keyeq(key, "PatchScale")) w->patchScale = a < 0.5f ? 0.5f : a > 64.0f ? 64.0f : a;
+            else if (keyeq(key, "FarHeight")) w->farHeight = a < 20.0f ? 20.0f : a > 3000.0f ? 3000.0f : a;
         }
     }
     fclose(f);
     sysLogPrintf(LOG_NOTE, "GE+ water: %s (tint %.2f,%.2f,%.2f swell %.2f chop %.2f speed %.2f)", path,
                  w->tint[0], w->tint[1], w->tint[2], w->swell, w->chop, w->speed);
 }
+
+/* ---- the level's own water surfaces: colour from the level's water texture ----
+ * fast3d calls skyPlusWaterSource (decoder thread) with the decoded texture of the first water draw of a level (TEXEL0 of GE's
+ * water combiner). It is enlarged and blurred heavily into a small tiling patch map (brightness stretched to 0..1: light and
+ * dark patches), and the colours the shader blends by it are the mean colour of the texture's darker and lighter half. */
+#if defined(PLATFORM_SWITCH) || defined(GE_VULKAN)
+#define SKYPLUS_WATER 1   /* a backend that draws the level's own water surfaces exists in this build (deko3d, Vulkan, GL 4.6) */
+static volatile int s_wbakeWanted;   /* a water level is waiting for its water texture */
+static volatile int s_wbaked;
+static volatile int s_wmapGen;
+static volatile int s_wmapCur;
+static unsigned char s_wmap[2][SKYPLUS_WMAP_W * SKYPLUS_WMAP_H * 4];
+static float s_wdeep[3], s_wlight[3];
+static int s_wsrcW, s_wsrcH, s_wsrcFmt, s_wsrcSiz;
+
+int skyPlusWaterWanted(void)
+{
+    return s_wbakeWanted;
+}
+
+static int wfloor(float v)   /* floor without libm (GE's math.h has no floorf) */
+{
+    const int i = (int)v;
+    return v < (float)i ? i - 1 : i;
+}
+
+static void wblur(float *a, float *t, int R)   /* one box blur pass over the wrapping map, both axes */
+{
+    const int W = SKYPLUS_WMAP_W, H = SKYPLUS_WMAP_H;
+    int x, y, k;
+    for (y = 0; y < H; y++) {
+        for (x = 0; x < W; x++) {
+            float sum = 0.0f;
+            for (k = -R; k <= R; k++) sum += a[y * W + ((x + k) % W + W) % W];
+            t[y * W + x] = sum / (float)(2 * R + 1);
+        }
+    }
+    for (y = 0; y < H; y++) {
+        for (x = 0; x < W; x++) {
+            float sum = 0.0f;
+            for (k = -R; k <= R; k++) sum += t[(((y + k) % H + H) % H) * W + x];
+            a[y * W + x] = sum / (float)(2 * R + 1);
+        }
+    }
+}
+
+void skyPlusWaterSource(const unsigned char *rgba, int w, int h, int fmt, int siz)
+{
+    static float lum[128 * 128], map[SKYPLUS_WMAP_W * SKYPLUS_WMAP_H], tmp[SKYPLUS_WMAP_W * SKYPLUS_WMAP_H];
+    const int MW = SKYPLUS_WMAP_W, MH = SKYPLUS_WMAP_H;
+    float dsum[3] = { 0, 0, 0 }, lsum[3] = { 0, 0, 0 }, med, lo = 1e9f, hi = -1e9f;
+    int n = w * h, nd = 0, nl = 0, i, x, y, nxt;
+
+    if (!s_wbakeWanted || rgba == NULL) {
+        return;
+    }
+    s_wbakeWanted = 0;   /* one try per level */
+    if (w < 2 || h < 2 || w > 128 || h > 128) {
+        sysLogPrintf(LOG_NOTE, "GE+ water: source texture %dx%d fmt %d siz %d not usable (2..128 wide), GE's colour stays", w, h, fmt, siz);
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        lum[i] = (0.299f * rgba[i * 4] + 0.587f * rgba[i * 4 + 1] + 0.114f * rgba[i * 4 + 2]) / 255.0f;
+    }
+    {   /* the median luminance, from a 256-bin histogram (GE's stdlib.h has no qsort) */
+        int hist[256] = { 0 }, acc = 0, b;
+        for (i = 0; i < n; i++) hist[lum[i] >= 1.0f ? 255 : (int)(lum[i] * 256.0f)]++;
+        for (b = 0; b < 256 && acc + hist[b] <= n / 2; b++) acc += hist[b];
+        med = ((float)b + 0.5f) / 256.0f;
+    }
+    for (i = 0; i < n; i++) {
+        float *d = lum[i] < med ? dsum : lsum;
+        int j;
+        for (j = 0; j < 3; j++) d[j] += rgba[i * 4 + j] / 255.0f;
+        if (lum[i] < med) nd++; else nl++;
+    }
+    for (i = 0; i < 3; i++) {
+        s_wdeep[i] = nd ? dsum[i] / (float)nd : lsum[i] / (float)nl;
+        s_wlight[i] = nl ? lsum[i] / (float)nl : dsum[i] / (float)nd;
+    }
+    /* enlarge the whole texture to the map (bilinear, wrapping), then blur it heavily (3 box passes = a gaussian of ~10 % of
+     * the map), then stretch min..max */
+    for (y = 0; y < MH; y++) {
+        for (x = 0; x < MW; x++) {
+            const float sx = ((float)x + 0.5f) * (float)w / (float)MW - 0.5f, sy = ((float)y + 0.5f) * (float)h / (float)MH - 0.5f;
+            const int x0 = wfloor(sx), y0 = wfloor(sy);
+            const float fx = sx - (float)x0, fy = sy - (float)y0;
+            const int xa = ((x0 % w) + w) % w, xb = (((x0 + 1) % w) + w) % w, ya = ((y0 % h) + h) % h, yb = (((y0 + 1) % h) + h) % h;
+            const float a = lum[ya * w + xa] + (lum[ya * w + xb] - lum[ya * w + xa]) * fx;
+            const float b = lum[yb * w + xa] + (lum[yb * w + xb] - lum[yb * w + xa]) * fx;
+            map[y * MW + x] = a + (b - a) * fy;
+        }
+    }
+    for (i = 0; i < 3; i++) wblur(map, tmp, 6);
+    for (i = 0; i < MW * MH; i++) {
+        if (map[i] < lo) lo = map[i];
+        if (map[i] > hi) hi = map[i];
+    }
+    nxt = 1 - s_wmapCur;
+    for (i = 0; i < MW * MH; i++) {
+        const float t = hi - lo > 1e-4f ? (map[i] - lo) / (hi - lo) : 0.5f;
+        const unsigned char v = (unsigned char)(t * 255.0f + 0.5f);
+        s_wmap[nxt][i * 4 + 0] = s_wmap[nxt][i * 4 + 1] = s_wmap[nxt][i * 4 + 2] = v;
+        s_wmap[nxt][i * 4 + 3] = 255;
+    }
+    s_wsrcW = w; s_wsrcH = h; s_wsrcFmt = fmt; s_wsrcSiz = siz;
+    s_wmapCur = nxt;
+    s_wmapGen++;
+    s_wbaked = 1;
+    if (getenv("GE_SEADUMP")) {   /* dev: the source water texture for tools_pc/seaview (ROM-derived: stays in its data/) */
+#if defined(PLATFORM_SWITCH)
+        FILE *df = fopen("sdmc:/switch/project-dam/data/water_src.bin", "wb");
+#else
+        FILE *df = fopen("data/water_src.bin", "wb");
+#endif
+        if (df) { fwrite(&w, sizeof w, 1, df); fwrite(&h, sizeof h, 1, df); fwrite(rgba, 4, (size_t)n, df); fclose(df); }
+    }
+}
+#else
+int skyPlusWaterWanted(void)
+{
+    return 0;
+}
+
+void skyPlusWaterSource(const unsigned char *rgba, int w, int h, int fmt, int siz)
+{
+    (void)rgba; (void)w; (void)h; (void)fmt; (void)siz;
+}
+#endif
 
 static int skyPlusWaterTexture(void)
 {
@@ -317,25 +503,35 @@ Gfx *skyPlusRender(Gfx *gdl)
     coord3d *eye;
     float fwd[3], len;
     int i, mood;
+    int waterOnly = 0;   /* no sky on this level (Caverns): only the water block is set */
     /* per extra layer: wind speed and size relative to the GE layer */
     static const float kSpeed[3] = { 0.35f, 1.0f, 1.9f };
     static const float kScale[3] = { 1.7f, 1.0f, 0.45f };
-
 #ifdef SKYPLUS_TEST_ORIGINAL
     return NULL;   /* A/B test build: GE's sky whatever the ini says */
 #endif
-#if defined(PLATFORM_SWITCH)
-    /* water levels: the sea is drawn by the same pass (GE+ water) */
-    if (!portSkyPlus || gfx_skyplus_failed || !env->Clouds) {
+    if (!portSkyPlus || gfx_skyplus_failed) {
         return NULL;
     }
-#else
-    /* PC: only a backend that draws the sea (Vulkan sets gfx_skyplus_sea) gets the water levels */
-    if (!portSkyPlus || gfx_skyplus_failed || !env->Clouds || (env->IsWater && !gfx_skyplus_sea)) {
+#if !defined(PLATFORM_SWITCH)
+    /* PC: only a backend that draws the sea (Vulkan, GL 4.6 set gfx_skyplus_sea) gets the water levels */
+    if (env->IsWater && !gfx_skyplus_sea) {
         return NULL;
     }
 #endif
-    if (!skyPlusTexture(env->SkyImageId)) {
+    if (!env->Clouds) {
+#ifdef SKYPLUS_WATER
+        /* no sky: GE+ still gives the level's own water surfaces (Caverns) their water, where a backend draws them; the sky
+         * itself stays GE's fill */
+        if (!gfx_water_surfaces || waterLevelName(g_SkyStageNum % 100) == NULL) {
+            return NULL;
+        }
+        waterOnly = 1;
+#else
+        return NULL;
+#endif
+    }
+    if (!waterOnly && !skyPlusTexture(env->SkyImageId)) {
         return NULL;
     }
 
@@ -456,8 +652,13 @@ Gfx *skyPlusRender(Gfx *gdl)
     }
 
     p->texGen = s_texGen;
-    p->tex = s_tex;
-#if defined(PLATFORM_SWITCH) || defined(GE_VULKAN)
+    p->tex = waterOnly ? NULL : s_tex;
+    if (waterOnly) {   /* the water mirrors the fog colour (the horizon: no sky here), no sun, no glints */
+        p->sunGlow = 0.0f;
+        p->night = 0;
+        p->waterOnly = 1;
+    }
+#ifdef SKYPLUS_WATER
     p->time = (float)(s_time / 60.0);   /* GE ticks (60 per second) */
     {
         static int s_wsStage = -1;
@@ -466,6 +667,18 @@ Gfx *skyPlusRender(Gfx *gdl)
         if (stage != s_wsStage) {
             waterSettingsLoad(stage, &s_ws);
             s_wsStage = stage;
+            s_wbaked = 0;   /* a new level: its water texture is captured again */
+            s_wbakeWanted = waterLevelName(stage) != NULL && gfx_water_surfaces;
+            s_farHave = 0;
+#if defined(PLATFORM_SWITCH)
+            if (waterLevelName(stage) != NULL && !env->IsWater && gfx_water_surfaces) {
+                if (waterOnly) {
+                    sysLogPrintf(LOG_NOTE, "GE+ water: %s: far sea not baked (no sky on this level: the live waves everywhere)", waterLevelName(stage));
+                } else {
+                    sysLogPrintf(LOG_NOTE, "GE+ water: %s: far sea baked from a fake plane %.0f under the start eye (FarHeight)", waterLevelName(stage), s_ws.farHeight);
+                }
+            }
+#endif
         }
         p->swell = s_ws.swell;
         p->chop = s_ws.chop;
@@ -477,6 +690,37 @@ Gfx *skyPlusRender(Gfx *gdl)
         skyPlusWaterTexture();   /* the wave heights, for the sea and the water draws */
         p->waterTexGen = s_wtexGen;
         p->waterTex = s_wtex;
+        p->reflectLit = s_ws.reflectLit;
+        p->patchScale = s_ws.patchScale;
+        p->toneKeep = s_ws.toneKeep;
+        p->worldScale = get_room_data_float2();
+        p->reflectGain = s_ws.reflectGain;
+#if defined(PLATFORM_SWITCH)
+        /* the levels with their own water surfaces and a sky (Dam, Complex) get Frigate's baked far sea; Frigate has its own sea,
+         * Caverns no sky (its water is live everywhere) and the other levels no water at all (no bake, no cost) */
+        p->farBake = (!waterOnly && !env->IsWater && waterLevelName(stage) != NULL && gfx_water_surfaces) ? 1 : 0;
+        p->farHeight = s_ws.farHeight;
+#endif
+        if (s_wbaked) {
+            static int s_wlogStage = -1, s_wlogGen = -1;
+            for (i = 0; i < 3; i++) {
+                p->deep[i] = s_ws.deepSet ? s_ws.deep[i] : s_wdeep[i];
+                p->light[i] = s_ws.lightSet ? s_ws.light[i] : s_wlight[i];
+            }
+            p->wmapGen = s_wmapGen;
+            p->wmap = s_wmap[s_wmapCur];
+            if (s_wlogStage != stage || s_wlogGen != s_wmapGen) {
+                s_wlogStage = stage;
+                s_wlogGen = s_wmapGen;
+                sysLogPrintf(LOG_NOTE, "GE+ water: %s source texture %dx%d fmt %d siz %d; computed deep %.2f,%.2f,%.2f light %.2f,%.2f,%.2f%s%s; "
+                             "used deep %.2f,%.2f,%.2f light %.2f,%.2f,%.2f tint %.2f,%.2f,%.2f reflectLit %.2f patchScale %.1f",
+                             waterLevelName(stage), s_wsrcW, s_wsrcH, s_wsrcFmt, s_wsrcSiz,
+                             s_wdeep[0], s_wdeep[1], s_wdeep[2], s_wlight[0], s_wlight[1], s_wlight[2],
+                             s_ws.deepSet ? " (deep from the ini)" : "", s_ws.lightSet ? " (light from the ini)" : "",
+                             p->deep[0], p->deep[1], p->deep[2], p->light[0], p->light[1], p->light[2],
+                             s_ws.tint[0], s_ws.tint[1], s_ws.tint[2], s_ws.reflectLit, s_ws.patchScale);
+            }
+        }
     }
     if (env->IsWater) {
         p->sea = 1;
@@ -503,7 +747,34 @@ Gfx *skyPlusRender(Gfx *gdl)
         p->bakeReset = g_CameraMode == CAMERAMODE_INTRO && prev != CAMERAMODE_INTRO;
         prev = g_CameraMode;
         p->bakeEye[0] = start->x; p->bakeEye[1] = start->y; p->bakeEye[2] = start->z;
+        if (p->farBake) {   /* the fake plane's height is fixed from the level's start (the bake's key must not move with the player) */
+            if (p->bakeReset || !s_farHave) {
+                s_farY = start->y - p->farHeight;
+                s_farHave = 1;
+            }
+            p->farSeaY = s_farY;
+        }
     }
     gSPSkyPlusExt(gdl++, p);
+    if (waterOnly) {
+        /* what sky.c does for a level without clouds: fill the view with the sky colour */
+        if (GE_AI_PLAYERS() == 1) {
+            gDPSetCycleType(gdl++, G_CYC_FILL);
+            gdl = viSetFillColor(gdl, env->Red, env->Green, env->Blue);
+            gDPFillRectangle(gdl++, viGetViewLeft(), viGetViewTop(),
+                    viGetViewLeft() + viGetViewWidth() - 1,
+                    viGetViewTop() + viGetViewHeight() - 1);
+            gDPPipeSync(gdl++);
+            return gdl;
+        }
+        gDPPipeSync(gdl++);
+        gDPSetCycleType(gdl++, G_CYC_FILL);
+        gDPSetRenderMode(gdl++, G_RM_NOOP, G_RM_NOOP2);
+        gDPFillRectangle(gdl++,
+                g_CurrentPlayer->viewleft, g_CurrentPlayer->viewtop,
+                (g_CurrentPlayer->viewleft + g_CurrentPlayer->viewx) - 1,
+                (g_CurrentPlayer->viewtop + g_CurrentPlayer->viewy) - 1);
+        gDPPipeSync(gdl++);
+    }
     return gdl;
 }

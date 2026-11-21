@@ -14,7 +14,7 @@ a Windows g++). `.env` is ignored by git.
 
 ```sh
 python tools_pc/seaview/seaview.py dump        # capture Frigate in the Switch emulator -> data/sea_dump.bin
-python tools_pc/seaview/seaview.py pc          # build and open the PC viewer (--hp: ask for the discrete GPU)
+python tools_pc/seaview/seaview.py pc          # build and open the PC viewer (--hp: ask for the discrete GPU; more options below)
 python tools_pc/seaview/seaview.py nx-send --ini tools_pc/seaview/data/seaview.ini   # console viewer, with those settings
 python tools_pc/seaview/seaview.py nx-build    # rebuild the console viewer (after a shader change: nx-send --build)
 python tools_pc/seaview/seaview.py ini2args F  # the console arguments an .ini turns into
@@ -33,6 +33,64 @@ and so does the console NRO that embeds it.
   and save/load to an `.ini`. `data/seaview.ini` is read at start.
 - View: click in it for mouse look (Escape releases), WASD or ZQSD, Shift = fast, Space/E up, Ctrl down.
 - The GPU time of the PC says nothing about the console: compare variants with it, measure on the console.
+
+## Water surface mode (PC viewer, issue #79)
+
+Draws the level's own water (Dam, Caverns, Complex) the way the game does: a large horizontal plane under the sky, shaded by
+`port/switch/shaders/water.frag.glsl` (the viewer has its own small vertex shader that provides the locations `water.frag` reads:
+`vTexCoord0/1`, `vFog`, `vFogW`, `vInput1` = PRIM_LOD_FRAC, `vInput2` = SHADE, `vClip`). The sky and its reflection come from the same
+passes as the Sea mode (the capture's sky, the sky LUT at binding 2); the Frigate sea is off. Block `Sky` is bound at 2 with the four
+level-water vec4s (`uWX0..uWX2`: deep colour + patch size, light colour + reflectLit, map ready + water-only), `Draw` at 0, `Comb` at 1
+(fog flag), the water texture at samplers 0/1, the wave texture at 3, the baked colour map at 4.
+
+- Menu **Mode**: Sea (the Frigate view) / Water surface. Menu **Level**: Dam / Caverns (no sky: the fog colour is cleared as the
+  horizon and mirrored, `uWX2.y`) / Complex. A level sets the preset (guesses until real captures exist: plane height, texture tile,
+  patch size, reflectLit 0/0/1, fog, shade, tint, waves, eye height) and loads that level's texture. Menu **Water**: pick a texture file,
+  reload and re-bake, screenshot.
+- **Settings** window, tab **Water surface**: plane height, texture tile (world units per repeat), patch map size (repeats), reflectLit,
+  PRIM_LOD_FRAC, 2nd texture scale, fog end (0 = no fog), water-only flag, and the colours deep / light / shade (the vertex colour) / fog.
+  Tab **Sea** holds the tint (`Water colour`) and the waves (swell, chop, speed), tab **Fresnel / bake** the Fresnel terms. Everything is
+  saved in the `.ini` (names as in the window) with `__mode`, `__level` and `__wtex` (the texture path).
+- Water texture: `--wtex FILE`, the Water menu, `__wtex`, else `data/water_<level>.png` or `.tga` (`dam`, `caverns`, `complex`; RGBA,
+  8-bit PNG without palette or interlace, or TGA 24/32 bit; the game's capture, 2..128 wide to match the game's limit), else a generated
+  grey-blue noise placeholder. The viewer bakes it like `skyPlusWaterSource` in `port/src/skyplus.c`: deep / light = mean colour of the
+  darker / lighter half, the patch map = the luma enlarged to 64x64 and blurred 3x(radius 6), stretched to 0..1. The bake is isolated in
+  `common/waterbake.h` (keep it in step with the game's). Loading a texture writes the baked deep / light colours into the pickers.
+- The plane is a 256x256 grid, 60000 units wide, denser near the eye (the fog is per vertex). The camera is the viewer's usual one:
+  eye height is the "Eye height" value of the Sun tab.
+
+### Half resolution and the test scene
+
+Menu **Water** > "Half resolution" (`--half 0|1`, `.ini` `__half`) draws the water the way the Switch (deko3d) path does, with the game's
+own shader files: (1) the main pass draws the water with `water.frag.glsl` + `#define WATER_BODY` (the cheap body colour), depth written;
+(2) the same water draws are replayed into a half-size RGBA8 target (linear, clamp, cleared to 0, own half-size depth) with the full
+`water.frag.glsl`; (3) they are replayed once more at full size with `watercomp.frag.glsl`, alpha-blended over the scene, depth test
+LEQUAL against the scene depth with writes off. Off = one full-size `water.frag.glsl` pass. Menu **Debug view** (`--dbgview
+final|fx|mask|cheap`): the final image, the half-size target as the composite reads it, a mask of step 3 (green = the half-size colour
+is used, red = `watercomp` discards, the cheap body stays), or the cheap body only (step 1).
+
+Menu **Water** > "Test scene" (`--scene 0|1`, default on): a pier slab half in the water, three boxes and a thin pole standing in it, a
+wall the plane ends against, and a raised second pool with a rim, all drawn with depth, in a frame fixed to the capture's eye.
+`--view overview|pier|boxes|shore|pool|far` puts the camera at a ready-made spot of that scene (relative to the scene, so the shots are
+reproducible); `--cam` stays absolute. `--seahalf N` is the old `--half N` (the Sea mode's target width divisor).
+
+### Screenshots, unattended
+
+```sh
+python tools_pc/seaview/seaview.py pc --shot out.png                                   # the Sea view (Frigate dump)
+python tools_pc/seaview/seaview.py pc --shot out.png --mode water --level dam          # Water surface, Dam preset
+python tools_pc/seaview/seaview.py pc --shot out.png --mode water --level caverns --cam 100,160,100,40,-8 --w 1280 --h 720
+python tools_pc/seaview/seaview.py pc --shot out.png --mode water --level dam --wtex data/water_dam.tga --view pier --half 1   # the game's 3 steps
+python tools_pc/seaview/seaview.py pc --shot out.png --mode water --level dam --view boxes --half 1 --dbgview mask       # where the composite takes the half-size colour
+python tools_pc/seaview/seaview.py pc --mode water --level complex --wtex data/water_complex.png   # interactive
+```
+
+`--shot` renders one frame, writes it (`.png` or `.tga`, by the extension) and exits; `seaview.py` waits for it and uses a fixed time
+(`--time 0`, override with `--time T`) and no sway so the images repeat. `--cam x,y,z,yaw,pitch`: eye position in world units, yaw and
+pitch in degrees relative to the capture's view (works interactively too). Other options: `--w`, `--h`, `--yaw`, `--pitch`, `--time`,
+`--mode 0..9` (the sky debug mode, as before) and `--mode sea|water`. In the viewer **F12** (or Water > Screenshot) writes
+`shot_NNN.png` in `data/`, **P** writes `shot.tga`. Relative paths of `--shot` and `--wtex` are taken from where you run the command.
+The `.ini` in `data/` is read at start; the command line wins over it.
 
 ## Console viewer
 
