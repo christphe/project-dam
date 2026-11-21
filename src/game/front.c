@@ -2958,7 +2958,7 @@ void interface_menu06_modesel(void)
             sndPlaySfx(g_musicSfxBufferPtr, DOOR_METAL_CLOSE_SFX, 0);
         }
     }
-    else if ((MODE_V_MULTI <= cursor_v_pos) && (joyGetControllerCount() >= 2))
+    else if ((MODE_V_MULTI <= cursor_v_pos) && (GE_MP_AVAIL() >= 2))
     {
         mission_difficulty_highlighted = MODE_HL_MULTI;
         if (joyGetButtonsPressedThisFrame(PLAYER_1, START_BUTTON|Z_TRIG|A_BUTTON))
@@ -2968,10 +2968,23 @@ void interface_menu06_modesel(void)
         }
     }
 #ifdef COOP_MODEMENU
-    else if ((MODE_V_COOP <= cursor_v_pos) && (joyGetControllerCount() >= 2))
+    else if ((MODE_V_COOP <= cursor_v_pos) && (GE_MP_AVAIL() >= 2))
     {
         mission_difficulty_highlighted = 1;
-        if (joyGetButtonsPressedThisFrame(PLAYER_1, START_BUTTON|Z_TRIG|A_BUTTON))
+        /* fewer than 2 pads: the controller screen opens, and the character select follows by itself once there are 2 */
+        static s32 coop_pads_wait = 0;
+        s32 coop_go = 0;
+        if (coop_pads_wait > 0)
+        {
+            coop_pads_wait--;
+            coop_go = (joyGetControllerCount() >= 2) ? 1 : 0;   /* no request here: only the press asks */
+            if (coop_go) coop_pads_wait = 0;
+        }
+        else if (joyGetButtonsPressedThisFrame(PLAYER_1, START_BUTTON|Z_TRIG|A_BUTTON))
+        {
+            if (GE_NEED_PADS(2)) coop_go = 1; else coop_pads_wait = 180;   /* ~3 s for the pads to come back */
+        }
+        if (coop_go)
         {
             coopMenuSelect();
             sndPlaySfx(g_musicSfxBufferPtr, DOOR_METAL_CLOSE_SFX, 0);
@@ -3129,7 +3142,7 @@ Gfx* constructor_menu06_modesel(Gfx* DL)
 #ifdef COOP_MODEMENU
     x = 0x96;
     y = 0xF4;
-    text_color = (joyGetControllerCount() >= 2) ? 0xFF : 0x70;
+    text_color = (GE_MP_AVAIL() >= 2) ? 0xFF : 0x70;
     DL = frontPrintText(DL, &x, &y, "2.\n", ptrFontZurichBoldChars, ptrFontZurichBold, text_color, viGetX(), viGetY(), 0, 0);
     textstring = "CO-OP";
     textMeasure(&x2, &y2, textstring, ptrFontZurichBoldChars, ptrFontZurichBold, 0);
@@ -3143,7 +3156,7 @@ Gfx* constructor_menu06_modesel(Gfx* DL)
 #endif
     x = 0x96;
     y = MODE_Y_MULTI;
-    if (joyGetControllerCount() >= 2)
+    if (GE_MP_AVAIL() >= 2)
     {
         text_color = 0xFF;
     }
@@ -4509,7 +4522,7 @@ void init_menu0E_mpoptions(void)
 
     if (selected_num_players == 0)
     {
-        numplayers = joyGetControllerCount();
+        numplayers = joyGetControllerCount() < 2 ? 2 : joyGetControllerCount();   /* 2 players to start with */
         init_mp_options_for_scenario(numplayers);
     }
 
@@ -4557,15 +4570,15 @@ void interface_menu0E_mpoptions(void)
     viSetZRange(100.0f, 10000.0f);
     viSetUseZBuf(0);
 
-    if (joyGetControllerCount() < 2)
+    if (GE_MP_AVAIL() < 2)
     {
         frontChangeMenu(MENU_MODE_SELECT, 0);
         setCursorPOSforMode(gamemode);
     }
 
-    if (joyGetControllerCount() < selected_num_players)
+    if (GE_MP_AVAIL() < selected_num_players)
     {
-        init_mp_options_for_scenario(joyGetControllerCount());
+        init_mp_options_for_scenario(GE_MP_AVAIL());
     }
 
     if (joyGetButtons(PLAYER_1, Z_TRIG|A_BUTTON) == 0)
@@ -4708,6 +4721,22 @@ void interface_menu0E_mpoptions(void)
         return;
     }
 
+    /* Start with fewer controllers than players: the controller screen opens, and the match starts by itself once they are there */
+    {
+        static s32 mp_pads_wait = 0;
+        if (mp_pads_wait > 0)   /* the button that closed the screen is still down: it must not ask again */
+        {
+            mp_pads_wait--;
+            tab_start_selected = 0;
+            if (joyGetControllerCount() >= selected_num_players) { tab_start_selected = 1; mp_pads_wait = 0; }
+        }
+        else if (tab_start_selected && !GE_NEED_PADS(selected_num_players))
+        {
+            tab_start_selected = 0;
+            mp_pads_wait = 180;   /* ~3 s for the pads to come back */
+        }
+    }
+
     if (tab_start_selected)
     {
         if (multi_stage_setups[MP_stage_selected].stage_id < 0)
@@ -4734,7 +4763,7 @@ void interface_menu0E_mpoptions(void)
     {
         s32 tmpNumPlayers;
 
-        if (joyGetControllerCount() < selected_num_players + 1)
+        if (GE_MP_AVAIL() < selected_num_players + 1)
         {
             tmpNumPlayers = 2;
         }

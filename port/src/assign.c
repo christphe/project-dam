@@ -20,11 +20,13 @@
 #include "assign.h"
 
 #ifdef __SWITCH__
-extern void nxConfigureInput(int players);   /* port/src/switch/nxassign.c */
+extern unsigned nxConfigureInput(int players, int force);   /* port/src/switch/nxassign.c */
 #endif
 
 extern MENU current_menu;
 extern s32 get_selected_num_players(void);
+extern s32 getPlayerCount(void);
+extern s8 joyGetControllerCount(void);
 
 static SDL_atomic_t s_active;
 static SDL_SpinLock s_lock;
@@ -67,9 +69,24 @@ static int anyKeyDown(void)
 }
 #endif
 
+static SDL_atomic_t s_want;          /* the player count the screen is asked for (0 = the game's own) */
+
 void portAssignRequest(void)
 {
+    sysLogPrintf(LOG_NOTE, "assign: the menu asked for the controller screen");
+    SDL_AtomicSet(&s_want, 0);
     SDL_AtomicSet(&s_forced, 1);
+}
+
+/* The front end needs `n` players: 1 when that many controllers are connected, otherwise the controller screen opens
+ * for `n` players (Co-op and Multiplayer stay open with one pad) and the mode waits for the next press. */
+int portNeedPads(int n)
+{
+    if (joyGetControllerCount() >= n) return 1;
+    sysLogPrintf(LOG_NOTE, "assign: %d player(s) need %d controller(s), %d connected", n, n, (int)joyGetControllerCount());
+    SDL_AtomicSet(&s_want, n);
+    SDL_AtomicSet(&s_forced, 1);
+    return 0;
 }
 
 void portAssignTick(void)
@@ -78,19 +95,19 @@ void portAssignTick(void)
 #ifdef __SWITCH__
     if (SDL_AtomicSet(&s_forced, 0)) {   /* the menu: the system's controller screen, whoever is connected */
         s_switchAsked = 1;
-        nxConfigureInput(count < 1 ? 1 : count);
+        int n = frontEnd() ? get_selected_num_players() : getPlayerCount();   /* in a match: the players there are */
+        if (SDL_AtomicGet(&s_want) > 0) n = SDL_AtomicGet(&s_want);
+        sysLogPrintf(LOG_NOTE, "assign: opening the controller applet for %d player(s) (front end %d)", n < 1 ? 1 : n, frontEnd());
+        const unsigned rc = nxConfigureInput(n < 1 ? 1 : n, 1);
+        sysLogPrintf(LOG_NOTE, "assign: the controller applet closed (0x%x)", rc);
+        inputRequestRescan();   /* re-seat the pads that came back */
         return;
     }
-    if (count < 2) { s_switchAsked = 0; return; }
-    if (!s_switchAsked && inputPadCount() < count) {   /* fewer pads than players: the system's controller screen */
-        s_switchAsked = 1;
-        sysLogPrintf(LOG_INFO, "assign: %d players, %d controller(s): opening the controller applet", count, inputPadCount());
-        nxConfigureInput(count);
-    }
-    return;
+    return;   /* the front end asks through portNeedPads, when a mode needs more pads than are connected */
 #else
     if (!SDL_AtomicGet(&s_active) && SDL_AtomicSet(&s_forced, 0)) {   /* the menu asked: start over, for the players there are */
-        const int n = frontEnd() ? get_selected_num_players() : getPlayerCount();
+        int n = frontEnd() ? get_selected_num_players() : getPlayerCount();
+        if (SDL_AtomicGet(&s_want) > 0) n = SDL_AtomicGet(&s_want);
         SDL_AtomicLock(&s_lock);
         s_count = n < 1 ? 1 : n; s_step = 0; s_armed = 0;
         memset(s_names, 0, sizeof s_names);

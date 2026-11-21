@@ -191,6 +191,13 @@ extern int portSplitVertical;   /* Game.SplitScreen: 2 players side by side inst
 #define GE_WATCH_NO_OPTIONS()    (getPlayerCount() == 1 || coopIsMission())   /* the menu replaces the watch's settings pages */
 #define GE_COOP_VIEW_ORDER()     coopViewOrder()
 #define GE_FROZEN_CAMERA         coopFrozenCamera
+/* Co-op and Multiplayer stay open with one controller: the menus count 4 available, and the controller screen
+ * (port/src/assign.c) is asked for when a mode needs more than are connected. GE_NEED_PADS(n) is 1 when n are there. */
+extern int portNeedPads(int n);
+#define GE_MP_AVAIL()            4
+#define GE_NEED_PADS(n)          portNeedPads(n)
+extern int coopMenuIntent(void);
+#define GE_COOP_WAIT()           (coopMenuIntent() && !portNeedPads(2))   /* co-op chosen, fewer than 2 pads */
 #else
 #define GE_RULE_SOLO()           (getPlayerCount() == 1)
 #define GE_RULE_MULTI()          (getPlayerCount() >= 2)
@@ -216,6 +223,9 @@ extern int portSplitVertical;   /* Game.SplitScreen: 2 players side by side inst
 #define GE_SPLIT_VERT()          0
 #define GE_WATCH_NO_OPTIONS()    0
 #define GE_COOP_VIEW_ORDER()
+#define GE_MP_AVAIL()            joyGetControllerCount()
+#define GE_NEED_PADS(n)          (joyGetControllerCount() >= (n))
+#define GE_COOP_WAIT()           0
 #define GE_PICKUP_TAKEN(prop)    0
 #define GE_PICKUP_VISIBLE(prop)  1
 #define GE_PICKUP_OP(prop, op)   (op)
