@@ -19,8 +19,6 @@ extern "C" {
 #ifdef GE_VULKAN
 extern struct GfxRenderingAPI gfx_vulkan_api;
 
-/* true when GE_RENDERER=vk; read once. */
-bool gfx_vulkan_wanted(void);
 /* Loads the Vulkan loader and checks for a Vulkan 1.3 device with dynamic
  * rendering. false: no usable driver (the caller falls back to GL). */
 bool gfx_vulkan_probe(void);

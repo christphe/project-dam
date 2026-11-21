@@ -9,7 +9,7 @@
  * through popen() (skipped if missing).
  * No telemetry: the request carries only a fixed User-Agent.
  * Checks this fork's releases (christphe/project-dam-nx) against
- * GE007_UPDATE_VERSION; a release without a PC asset is ignored.
+ * PDAM_VERSION; a release without a PC asset is ignored.
  */
 
 #include <stdio.h>
@@ -47,9 +47,14 @@ static char s_assetUrl[512];           /* Switch: the NRO asset of the latest re
 static char s_assetSha[65];
 static SDL_Thread *s_checkThread;      /* Switch: joined on quit (updateCheckShutdown) */
 static SDL_Thread *s_instThread;
+enum { UC_IDLE = 0, UC_CHECKING, UC_UPTODATE, UC_AVAILABLE, UC_FAILED };
+
 static int cfgCheckUpdates = 0;        /* Game.CheckUpdates, default OFF */
-static SDL_atomic_t s_ready;           /* 1 once s_tag is published */
+static SDL_atomic_t s_state;           /* UC_*; s_tag / s_notes are published before it flips to UC_AVAILABLE */
 static char s_tag[32];
+static char s_notes[4096];             /* the release text, plain ASCII */
+static SDL_SpinLock s_lock;
+static int s_prevState = UC_IDLE;
 
 PD_CONSTRUCTOR static void updateCheckConfigInit(void)
 {
@@ -161,43 +166,110 @@ static int fetchLatest(char *buf, size_t cap)
 #endif
 }
 
+/* What the last check saw, so the first menu says "update available" at once on the next launch, without the network:
+ * the tag, the asset (Switch: its URL and sha256, needed to install), then the release text. */
+static const char *seenPath(void) { return sysResolvePath("$S/update.txt"); }
+
+static void seenSave(const char *tag, const char *url, const char *sha, const char *notes)
+{
+    FILE *f = fopen(seenPath(), "wb");
+    if (!f) return;
+    fprintf(f, "%s\n%s\n%s\n%s", tag, url, sha, notes);
+    fclose(f);
+}
+
+static int seenLoad(void)
+{
+    FILE *f = fopen(seenPath(), "rb");
+    if (!f) return 0;
+    char tag[32] = "", url[sizeof s_assetUrl] = "", sha[sizeof s_assetSha] = "";
+    static char notes[sizeof s_notes];
+    size_t n = 0;
+    int ok = fgets(tag, sizeof tag, f) && fgets(url, sizeof url, f) && fgets(sha, sizeof sha, f);
+    tag[strcspn(tag, "\r\n")] = 0;
+    url[strcspn(url, "\r\n")] = 0;
+    sha[strcspn(sha, "\r\n")] = 0;
+    if (ok) n = fread(notes, 1, sizeof notes - 1, f);
+    fclose(f);
+    notes[n] = 0;
+    if (!ok || !tag[0]) return 0;
+    SDL_AtomicLock(&s_lock);
+    snprintf(s_tag, sizeof s_tag, "%s", tag);
+    snprintf(s_notes, sizeof s_notes, "%s", notes);
+    snprintf(s_assetUrl, sizeof s_assetUrl, "%s", url);
+    snprintf(s_assetSha, sizeof s_assetSha, "%s", sha);
+    SDL_AtomicUnlock(&s_lock);
+    return 1;
+}
+
+/* the version this build is: a release's number, or "dev" (never offered an update); GE_UPDATE_AS tests the menu */
+static const char *runningVersion(void)
+{
+    const char *e = getenv("GE_UPDATE_AS");
+    return (e && e[0]) ? e : PDAM_VERSION;
+}
+
 static int updateCheckThread(void *unused)
 {
     (void)unused;
-    static char body[UC_BODY_MAX];   /* the thread runs at most once per launch */
+    static char body[UC_BODY_MAX];   /* one check at a time (UC_CHECKING guards it) */
+    static char notes[sizeof s_notes];
     char tag[32];
     if (fetchLatest(body, UC_BODY_MAX) && extractTag(body, tag, sizeof(tag))) {
+        const int testing = getenv("GE_UPDATE_AS") != NULL;   /* the test hook also skips the asset filter */
+        int offered = 1;
 #ifdef __SWITCH__
         /* The Switch installs the NRO asset, with the sha256 GitHub lists for it. */
         if (!findAsset(body, UC_NRO_ASSET, s_assetUrl, sizeof(s_assetUrl), s_assetSha, sizeof(s_assetSha))) {
             sysLogPrintf(LOG_INFO, "update check: latest %s has no %s asset", tag, UC_NRO_ASSET);
-        } else
+            offered = 0;
+        }
 #else
-        if (!hasPcAsset(body)) {
+        if (!testing && !hasPcAsset(body)) {
             /* The latest release can be Switch-only; nothing to offer here. */
             sysLogPrintf(LOG_INFO, "update check: latest %s has no PC build", tag);
-        } else
+            offered = 0;
+        }
 #endif
-        if (versionNewer(tag, GE007_UPDATE_VERSION)) {
+        (void)testing;
+        if (offered && versionNewer(tag, runningVersion())) {
+            notes[0] = 0;
+            extractBody(body, notes, sizeof notes);
+            SDL_AtomicLock(&s_lock);
             snprintf(s_tag, sizeof(s_tag), "%s", tag);
-            SDL_AtomicSet(&s_ready, 1);   /* full barrier: s_tag visible first */
-            sysLogPrintf(LOG_INFO, "update check: %s is available (running v%s); %s",
-                         tag, GE007_UPDATE_VERSION, UC_RELEASES);
+            snprintf(s_notes, sizeof(s_notes), "%s", notes);
+            SDL_AtomicUnlock(&s_lock);
+            seenSave(tag, s_assetUrl, s_assetSha, notes);
+            SDL_AtomicSet(&s_state, UC_AVAILABLE);   /* full barrier: s_tag visible first */
+            sysLogPrintf(LOG_INFO, "update check: %s is available (running %s); %s", tag, runningVersion(), UC_RELEASES);
         } else {
-            sysLogPrintf(LOG_INFO, "update check: up to date (latest %s, running v%s)",
-                         tag, GE007_UPDATE_VERSION);
+            remove(seenPath());
+            SDL_AtomicSet(&s_state, UC_UPTODATE);
+            sysLogPrintf(LOG_INFO, "update check: up to date (latest %s, running %s)", tag, runningVersion());
         }
     } else {
+        SDL_AtomicSet(&s_state, s_prevState == UC_AVAILABLE ? UC_AVAILABLE : UC_FAILED);
         sysLogPrintf(LOG_INFO, "update check: no result (offline or unavailable)");
     }
     return 0;
 }
 
-void updateCheckStart(void)
+/* One check now: the menu's button, or the start-up check when Game.CheckUpdates is on. */
+void updateCheckRun(void)
 {
-    if (!cfgCheckUpdates) return;   /* OFF by default: no thread, no network, no init */
+    if (SDL_AtomicGet(&s_state) == UC_CHECKING) return;
+#ifdef __SWITCH__
+    /* The last check's thread is joined before the next starts: libnx keeps a thread's stack mapped until it is joined. */
+    if (s_checkThread) { SDL_WaitThread(s_checkThread, NULL); s_checkThread = NULL; }
+#endif
+    s_prevState = SDL_AtomicGet(&s_state);
+    SDL_AtomicSet(&s_state, UC_CHECKING);
     SDL_Thread *t = SDL_CreateThread(updateCheckThread, "ge007-updatecheck", NULL);
-    if (!t) { sysLogPrintf(LOG_INFO, "update check: could not start thread"); return; }
+    if (!t) {
+        SDL_AtomicSet(&s_state, s_prevState);
+        sysLogPrintf(LOG_INFO, "update check: could not start thread");
+        return;
+    }
 #ifdef __SWITCH__
     /* Joined by updateCheckShutdown: libnx keeps a thread's stack mapped until
      * it is joined, and the loader aborts (0xd401) on a stack left mapped when
@@ -208,9 +280,29 @@ void updateCheckStart(void)
 #endif
 }
 
+void updateCheckStart(void)
+{
+    /* a release seen on an earlier launch that this build has not caught up with: offered at once, no network */
+    if (seenLoad()) {
+        if (versionNewer(s_tag, runningVersion())) SDL_AtomicSet(&s_state, UC_AVAILABLE);
+        else remove(seenPath());
+    }
+    if (!cfgCheckUpdates) return;   /* OFF by default: no network until the player asks (the menu's button) */
+    updateCheckRun();
+}
+
+const char *updateCheckRunning(void) { return runningVersion(); }
+
+int updateCheckState(void) { return SDL_AtomicGet(&s_state); }
+
 const char *updateCheckAvailable(void)
 {
-    return SDL_AtomicGet(&s_ready) ? s_tag : NULL;
+    return SDL_AtomicGet(&s_state) == UC_AVAILABLE ? s_tag : NULL;
+}
+
+const char *updateCheckNotes(void)
+{
+    return SDL_AtomicGet(&s_state) == UC_AVAILABLE ? s_notes : "";
 }
 
 void updateCheckOpenReleases(void)
@@ -272,7 +364,7 @@ void updateInstall(void)
     const char *self = sysSelfPath();
     size_t n = self ? strlen(self) : 0;
     static const char tail[] = "/" UC_NRO_ASSET;
-    if (!SDL_AtomicGet(&s_ready) || (s_inst != INST_IDLE && s_inst != INST_FAIL)) return;
+    if (SDL_AtomicGet(&s_state) != UC_AVAILABLE || (s_inst != INST_IDLE && s_inst != INST_FAIL)) return;
     /* Only the installed NRO: a test build run over nxlink has another name. */
     if (n < sizeof(tail) || n >= sizeof(s_instPath) || strcmp(self + n - (sizeof(tail) - 1), tail) != 0) {
         instFail("not the installed NRO");

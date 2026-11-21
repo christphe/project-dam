@@ -79,6 +79,8 @@
 #include "platform.h"
 #include "system.h"
 #include "config.h"
+#include "wheel.h"
+#include "assign.h"
 #include "input.h"
 #include "envflag.h"
 #include "optionsoverlay.h"
@@ -438,6 +440,13 @@ int inputOverlayOwnerPad(void)
     return 0;
 }
 
+static int padSeatForSlot(int idx);
+
+int inputOverlayOwnerSeat(void)
+{
+    return padSeatForSlot(inputOverlayOwnerPad());
+}
+
 /* ------------------------------------------------------------------------
  * D469: data-driven gamepad action table + presets + per-seat rebinding.
  *
@@ -495,6 +504,21 @@ static const struct { const char *key; const char *label; const char *def; } kPa
     [PA_GADGET]  = { "Gadget",     "Cycle gadget",     "b" },
     [PA_START]   = { "Start",      "Start / pause",    "start" },
 };
+
+/* Modern (preset 5): RT fire, LT aim, A use, X reload, Y next weapon, R3 crouch; LB opens the weapon wheel and RB
+ * the gadget wheel (port/src/wheel.c reads them itself); B is free. */
+static const char *const kPadModern[PA_COUNT] = {
+    [PA_FIRE] = "righttrigger", [PA_AIM] = "lefttrigger", [PA_USE] = "a", [PA_RELOAD] = "x", [PA_CROUCH] = "rightstick",
+    [PA_NEXTWPN] = "y", [PA_PREVWPN] = "none", [PA_GADGET] = "none", [PA_START] = "start",
+};
+#define PAD_PRESET_MODERN 5
+/* Modern goes by position, not by letter: a Nintendo pad prints Y where Xbox has X (left), X where Xbox has Y (top),
+ * B at the bottom and A on the right. Same hands on every pad. */
+static const char *const kPadModernNin[PA_COUNT] = {
+    [PA_FIRE] = "righttrigger", [PA_AIM] = "lefttrigger", [PA_USE] = "b", [PA_RELOAD] = "y", [PA_CROUCH] = "rightstick",
+    [PA_NEXTWPN] = "x", [PA_PREVWPN] = "none", [PA_GADGET] = "none", [PA_START] = "start",
+};
+static u8 padFamily[MAX_PADS];   /* defined with its notes below (D471); 2 = Nintendo */
 
 /* D643 (#145 b/c, #149): Original control scheme = a STRICT virtual N64
  * controller. Each native N64 button is bound to up to two pad sources
@@ -596,7 +620,7 @@ static u32 padParseMask(const char *s, int *bad)
 static void padBuildBinds(PadBinds *b, int seat, int custom, int *bad)
 {
     for (int a = 0; a < PA_COUNT; a++)
-        b->mask[a] = padParseMask(custom ? padStr[seat][a] : kPadAct[a].def, bad);
+        b->mask[a] = padParseMask(custom ? padStr[seat][a] : (padPreset[seat] == PAD_PRESET_MODERN ? (padFamily[seat] == 2 ? kPadModernNin[a] : kPadModern[a]) : kPadAct[a].def), bad);
     if (!b->mask[PA_START]) b->mask[PA_START] = PSM(PS_START);   /* lockout guard: keep a pause path */
     for (int n = 0; n < NB_COUNT; n++) b->n64[n] = 0;
 }
@@ -622,6 +646,11 @@ static int padPresetCustom(int seat) { return padPreset[seat] == 3; }
  * styles are); the stored preset is ignored (plain N64 layout) unless it is
  * Custom, whose binds still apply (edited in Ext only). Ext: exactly padPreset. */
 static int padPresetEff(int seat) { return (controlScheme && padPreset[seat] != 3) ? 0 : padPreset[seat]; }
+
+int inputPadIsModern(int seat)
+{
+    return seat >= 0 && seat < MAX_PADS && !controlScheme && padPreset[seat] == PAD_PRESET_MODERN;
+}
 
 /* D498: stick style for the active preset. 1.2 Christmas / 1.3 Frost force
  * HONEY and 1.4 Elektra forces SOLITARE (for mouse and keyboard too, since
@@ -668,6 +697,7 @@ static unsigned padComputeSig(void)
                 for (const char *p = n64Str[s][n]; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
     for (int s = 0; s < MAX_PADS; s++) {
         h ^= (unsigned)padPreset[s] * 16777619u;
+        h = (h ^ (unsigned)padFamily[s]) * 16777619u;   /* Modern follows the pad's family (by position) */
         if (padPresetCustom(s)) anyCustom = 1;
     }
     if (anyCustom)
@@ -928,7 +958,6 @@ static int padRumbleOn[MAX_PADS];
  * GAMECONTROLLER_USE_BUTTON_LABELS=1 means BUTTON_A is the button printed
  * "A" on a Nintendo pad, so only shoulders/triggers/Back/Start differ there. */
 enum { PADFAM_XBOX = 0, PADFAM_PS = 1, PADFAM_NINTENDO = 2 };
-static u8 padFamily[MAX_PADS];
 
 static void padDetectFamily(int seat)
 {
@@ -1140,6 +1169,7 @@ static int nxDefaultsRev = 0;   /* Input.NxDefaultsRev: Switch default migration
 #else
 static int aimMode = AIMMODE_N64;
 #endif
+static int s_aimDevMouse;               /* declared below with its notes */
 static int aimLegacyGepd = 0;
 static int aimStyleLegacy = 0;   /* Input.AimStyle (D333, superseded) */
 
@@ -1152,14 +1182,26 @@ static int aimModeGet(void)
     pdMouseAim = 0;
     /* D422: every slot gets the configured mode (the aim state is per slot;
      * padDirectCompute is stateless and acts on slotPlayer()). */
-    return aimMode;
+    /* the style belongs to the device that aims, and is fixed from the moment the aim begins to the moment it ends */
+    static int latched = -1;
+    const int dev = s_aimDevMouse ? AIMMODE_CENTRED : aimMode;   /* the mouse always aims Centered; Input.AimMode is the gamepad's */
+    struct player *p = slotPlayer();
+    if (p && p->insightaimmode) {
+        if (latched < 0) latched = dev;
+        return latched;
+    }
+    latched = -1;
+    return dev;
 }
+
+/* Auto-aim is for a pad: while the mouse is the device that aims (player 1), the game gets it off (GE_AUTOAIM_ON). */
+extern s32 get_cur_playernum(void);
+int portAimIsMouse(void) { return s_aimDevMouse && get_cur_playernum() == 0; }
 
 /* D337: which device drove aim last. PD picks its crosshair damp per input
  * device; the mouse integration must not swallow a gamepad's stick aim just
  * because the mouse happens to be grabbed. Set by mouse motion, cleared by a
  * deflected pad stick (inputComputePad). */
-static int s_aimDevMouse = 0;
 
 /* D338: Input.AimRange -- how far the N64-mode crosshair can travel.
  *   0 = PC (default, the GEPD/mouse-injector feel): the crosshair reaches the
@@ -1424,6 +1466,40 @@ void inputPadPrefSet(int player, const char *id)
     inputRequestRescan();   /* re-seat the pads now */
 }
 int inputP1Type(void) { return p1Type; }
+
+/* A pad whose button went down since the last call: its id (as the Controller row stores it). 0 = none. */
+int inputPadNewPress(char *id, int n)
+{
+    static u32 prev[MAX_PADS];
+    for (int s = 0; s < MAX_PADS; ++s) {
+        if (!pads[s]) { prev[s] = 0; continue; }
+        const u32 raw = padReadRaw(pads[s]);
+        const u32 down = raw & ~prev[s];
+        prev[s] = raw;
+        if (!down) continue;
+        for (int d = 0, nd = SDL_NumJoysticks(); d < nd; ++d)
+            if (SDL_IsGameController(d) && SDL_JoystickGetDeviceInstanceID(d) == padInst[s]) {
+                padIdOfDevice(d, id, n);
+                return 1;
+            }
+    }
+    return 0;
+}
+
+const char *inputPadNameForId(const char *id)
+{
+    inputPadListRefresh();
+    for (int k = 0; id && inputPadListId(k)[0]; ++k)
+        if (!strcmp(id, inputPadListId(k))) return inputPadListName(k);
+    return "Controller";
+}
+
+int inputPadCount(void)
+{
+    int n = 0;
+    for (int s = 0; s < MAX_PADS; ++s) if (pads[s]) n++;
+    return n;
+}
 
 #ifndef __SWITCH__
 /* Outside a match, order the seats by what the players asked for: a pad that
@@ -2707,6 +2783,40 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         return 0;
     }
 
+    /* Modern: a wheel is open on this pad (LB / RB held). The pad goes on walking and pressing; only the aim is the
+     * wheel's: the right stick is read by the wheel itself (wheel.c), so the game sees it at rest. */
+    const int wheelOpen = portWheelBlocks(idx);
+
+    /* The press that closed the menu (Resume, Back...) must not reach the game as a new press: after the menu closes,
+     * every pad stays neutral until its buttons are let go. */
+    {
+        static int s_menuWasOpen = 0;
+        static u8 s_untilRelease[MAX_PADS];
+        if (idx == 0) {
+            const int open = optionsOverlayIsOpen();
+            if (s_menuWasOpen && !open) memset(s_untilRelease, 1, sizeof s_untilRelease);
+            s_menuWasOpen = open;
+        }
+        if (idx >= 0 && idx < MAX_PADS && s_untilRelease[idx]) {
+            const u32 held = pads[idx] ? padActHeld(&padTabGet()->seat[padSeatForSlot(idx)], padReadRaw(pads[idx])) : 0;
+            if (held) {
+                padActPrev[idx] = held;
+                if (stick_x) *stick_x = 0;
+                if (stick_y) *stick_y = 0;
+                return 0;
+            }
+            s_untilRelease[idx] = 0;
+        }
+    }
+
+    /* the device screen takes every press */
+    if (portAssignBlocks()) {
+        padActPrev[idx] = pads[idx] ? padActHeld(&padTabGet()->seat[padSeatForSlot(idx)], padReadRaw(pads[idx])) : 0;
+        if (stick_x) *stick_x = 0;
+        if (stick_y) *stick_y = 0;
+        return 0;
+    }
+
     if (idx == 0 && optionsOverlayIsOpen()) {
         const Uint8 *overlayKs = SDL_GetKeyboardState(NULL);
         /* D469: pad use/reload/edge state follows the bound actions, not fixed A/X/B/Y */
@@ -3306,6 +3416,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
 
         /* D498: 1.3 Frost / 1.4 Elektra swap the two sticks; menus never swap. */
         if (!padMenuMode && stickSwap(idx)) { int tx = lx, ty = ly; lx = rx; ly = ry; rx = tx; ry = ty; }   /* D518 */
+        if (wheelOpen) rx = ry = 0;   /* the open wheel has the aim */
 
         if (padMenuMode) {
             int px = padStickAxis(lx, padDeadzoneL);   /* D643: accurate N64 response in Original */
@@ -3509,6 +3620,22 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         }
     }
 
+    /* Modern: while aiming, D-pad up / down zoom a scoped weapon (the native C-up / C-down in aim mode) and the left
+     * stick strafes slowly (the native C-left / C-right). The port feeds the same bits the N64 pad would. */
+    if (idx >= 0 && idx < MAX_PADS && inputPadIsModern(padSeatForSlot(idx)) && pads[idx] &&
+        current_menu == GE_MENU_RUN_STAGE) {
+        struct player *mp = slotPlayer();
+        if (mp && mp->insightaimmode && !mp->bonddead) {
+            if (bondwalkItemCheckBitflags(mp->hands[GUNRIGHT].weaponnum, WEAPONSTATBITFLAG_DISABLE_CROUCH)) {
+                if (SDL_GameControllerGetButton(pads[idx], SDL_CONTROLLER_BUTTON_DPAD_UP)) button |= GE_CONT_E;
+                if (SDL_GameControllerGetButton(pads[idx], SDL_CONTROLLER_BUTTON_DPAD_DOWN)) button |= GE_CONT_D;
+            }
+            const int lx = SDL_GameControllerGetAxis(pads[idx], SDL_CONTROLLER_AXIS_LEFTX);
+            if (lx < -12000) button |= GE_CONT_C;
+            else if (lx > 12000) button |= GE_CONT_F;
+        }
+    }
+
     /* D541: front-end release hold-off. One physical press can reach the menu
      * through two OR'd sources a few ms apart -- on a Steam Deck in Desktop
      * Mode, Steam's desktop layout types Enter for A (Escape for B) while SDL
@@ -3682,24 +3809,24 @@ int inputPadFamily(int seat)
     return (seat >= 0 && seat < MAX_PADS && pads[seat]) ? padFamily[seat] : PADFAM_XBOX;
 }
 
-/* D471: expand {A} {B} {X} {Y} {BACK} {START} in a menu help template with
+/* D471: expand {A} {B} {X} {Y} {BACK} {START} {LB} {RB} in a menu help template with
  * the names of the menu pad's family (seat 0, which drives the menus). Xbox
  * expands to exactly the old text. */
 void inputPadHelpFmtFam(char *out, size_t n, const char *tmpl, int fam)
 {
-    static const char *const names[3][6] = {
-        { "A", "B", "X", "Y", "BACK", "START" },
-        { "CROSS", "CIRCLE", "SQUARE", "TRIANGLE", "SHARE", "OPTIONS" },
-        { "A", "B", "X", "Y", "MINUS", "PLUS" },
+    static const char *const names[3][8] = {
+        { "A", "B", "X", "Y", "BACK", "START", "LB", "RB" },
+        { "CROSS", "CIRCLE", "SQUARE", "TRIANGLE", "SHARE", "OPTIONS", "L1", "R1" },
+        { "A", "B", "X", "Y", "MINUS", "PLUS", "L", "R" },
     };
-    static const char *const keys[6] = { "{A}", "{B}", "{X}", "{Y}", "{BACK}", "{START}" };
+    static const char *const keys[8] = { "{A}", "{B}", "{X}", "{Y}", "{BACK}", "{START}", "{LB}", "{RB}" };
     if (fam < 0 || fam > 2) fam = PADFAM_XBOX;
     size_t o = 0;
     if (n == 0) return;
     while (*tmpl && o + 1 < n) {
         int hit = -1;
         if (*tmpl == '{')
-            for (int k = 0; k < 6; k++)
+            for (int k = 0; k < 8; k++)
                 if (!strncmp(tmpl, keys[k], strlen(keys[k]))) { hit = k; break; }
         if (hit >= 0) {
             for (const char *p = names[fam][hit]; *p && o + 1 < n; p++) out[o++] = *p;
@@ -4634,10 +4761,10 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
 {
     /* D518: per seat. The pre-D518 global key is kept as seat 1's, so an
      * existing ini keeps its value for P1 and P2-P4 start at Jinx. */
-    configRegisterInt("Input.PadPreset",  &padPreset[0], 0, 4);   /* D498: 0 Jinx 1.1, 1 Christmas 1.2, 2 Frost 1.3, 3 Custom, 4 Elektra 1.4 */
-    configRegisterInt("Input.PadPreset2", &padPreset[1], 0, 4);
-    configRegisterInt("Input.PadPreset3", &padPreset[2], 0, 4);
-    configRegisterInt("Input.PadPreset4", &padPreset[3], 0, 4);
+    configRegisterInt("Input.PadPreset",  &padPreset[0], 0, 5);   /* D498: 0 Jinx 1.1, 1 Christmas 1.2, 2 Frost 1.3, 3 Custom, 4 Elektra 1.4 */
+    configRegisterInt("Input.PadPreset2", &padPreset[1], 0, 5);
+    configRegisterInt("Input.PadPreset3", &padPreset[2], 0, 5);
+    configRegisterInt("Input.PadPreset4", &padPreset[3], 0, 5);
     for (int seat = 0; seat < MAX_PADS; seat++)
         for (int a = 0; a < PA_COUNT; a++) {
             if (seat == 0) snprintf(padStrKey[seat][a], sizeof(padStrKey[seat][a]), "Input.Pad.%s", kPadAct[a].key);

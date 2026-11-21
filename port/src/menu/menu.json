@@ -1,0 +1,229 @@
+{
+  "_schema": [
+    "The menu's content. Tabs hold items: {\"group\": \"Title\"} is a heading, {\"name\", \"sub\", \"show\", \"controls\"} is an entry.",
+    "A control: id (unique, what expressions call it), key (the game's config key it drives), label, tag, type",
+    "(choice | toggle | slider | action), options, min/max/step, div/decimals/suffix (slider text), default, help,",
+    "show / disabled (expressions), disabledTag (a note while greyed out), dev (hidden unless dev mode is on: true / \"all\", or \"switch\" / \"pc\" for that platform only), restart.",
+    "The PC shows every setting (the machines differ); a setting of the Switch is tuned once, becomes its default and is marked dev: \"switch\".",
+    "Texts are English source text, translated at draw time by a table (English -> language). Logic never reads a",
+    "text: an option is {\"id\": \"enhanced\", \"label\": \"Enhanced\"} (a bare string is both) and expressions, defaults and",
+    "help compare ids. default: a value, an option id, or {\"switch\": v, \"pc\": v}. help: a text, or {option id: text}",
+    "(toggles: \"1\" / \"0\").",
+    "Expressions: ids, 'strings', numbers, == != && || ! and parentheses; names are the control ids plus \"platform\"",
+    "('switch' | 'pc') and \"dev\". Edit this file and press F5 in tools_pc/menuview to see the change."
+  ],
+  "tabs": [
+    { "name": "Video", "items": [
+      { "group": "Picture" },
+      { "name": "Display", "controls": [
+        { "id": "dispMode", "key": "__DisplayMode", "label": "Display mode", "type": "choice", "default": "enhanced",
+          "options": [ { "id": "enhanced", "label": "Enhanced" }, { "id": "original", "label": "Original" }, { "id": "custom", "label": "Custom", "show": "platform == 'pc' || dev" } ],
+          "help": { "enhanced": "The port's picture.", "original": "The N64 look.", "custom": "Shows every graphics option." } },
+        { "id": "fullscreen", "key": "Video.Fullscreen", "label": "Fullscreen", "type": "toggle", "show": "platform == 'pc'" },
+        { "id": "fsMode", "key": "Video.FullscreenMode", "label": "Fullscreen mode", "type": "choice",
+          "show": "platform == 'pc' && fullscreen == 1",
+          "options": [ { "id": "borderless", "label": "Borderless" }, { "id": "exclusive", "label": "Exclusive" } ],
+          "help": {"borderless": "A borderless window covering the screen.", "exclusive": "Takes the display for the game alone."} },
+        { "id": "res", "key": "__Resolution", "label": "Resolution", "type": "select", "default": "r1080", "disabledTag": "(fullscreen)",
+          "show": "platform == 'pc'", "disabled": "fullscreen == 1",
+          "options": [ { "id": "r720", "label": "1280 x 720" }, { "id": "r900", "label": "1600 x 900" }, { "id": "r1080", "label": "1920 x 1080" }, { "id": "r1440", "label": "2560 x 1440" } ] },
+        { "id": "aspect", "key": "Video.AspectMode", "label": "Aspect ratio", "type": "select",
+          "options": [ { "id": "auto", "label": "Auto", "value": 0, "show": "dispMode != 'original'" }, { "id": "fit", "label": "Fit", "value": 4 }, { "id": "4x3", "label": "4:3", "value": 1 }, { "id": "16x9", "label": "16:9", "value": 2 }, { "id": "21x9", "label": "21:9", "value": 3, "show": "dispMode != 'original'" } ],
+          "help": {"auto": "The picture takes the shape of the window, whatever it is: nothing is stretched, a wider window shows more of the sides.", "fit": "Picks the closest of 4:3, 16:9 and 21:9 to the window and adds bars around it.", "4x3": "Forces 4:3, with bars around it.", "16x9": "Forces 16:9, with bars around it.", "21x9": "Forces 21:9, with bars around it."}},
+        { "id": "fov", "key": "Video.FovScale", "label": "Vertical field of view", "type": "slider", "min": 30, "max": 90, "step": 5, "per": 1.66666666666667, "suffix": " deg", "readout": "hfov",
+          "help": "The vertical view angle: 60 is the original. The horizontal angle, shown beside it, follows the window's aspect ratio." },
+        { "id": "split", "key": "Game.SplitScreen", "label": "Split screen", "type": "choice",
+          "options": [ { "id": "horizontal", "label": "One above the other", "value": 0 }, { "id": "vertical", "label": "Side by side", "value": 1 } ],
+          "help": { "horizontal": "Two players share the screen top and bottom, as in the original.", "vertical": "Two players share the screen left and right." } },
+        { "id": "visuals", "show": "dispMode == 'custom'", "key": "Video.Visuals", "label": "Visuals", "type": "choice",
+          "options": [ { "id": "original", "label": "Original" }, { "id": "fixed", "label": "Fixed" }, { "id": "enhanced", "label": "Enhanced" } ],
+          "help": {"original": "The console picture, with its flaws.", "fixed": "The original game's display flaws corrected.", "enhanced": "Fixed, plus a richer sky, scenery and effects."}},
+        { "id": "crop", "show": "dispMode == 'custom'", "key": "Video.SafeAreaCrop", "label": "Crop overscan", "type": "toggle", "dev": "switch"}
+      ] },
+      { "name": "Performance", "show": "platform == 'pc' || dev", "controls": [
+        { "id": "msaaHandheld", "key": "Video.MSAAHandheld", "label": "Anti-aliasing (handheld)", "type": "slider", "dev": "switch",
+          "show": "dispMode == 'custom' && (platform == 'switch')", "options": [ { "id": "Off", "value": 1 }, { "id": "2x", "value": 2 }, { "id": "4x", "value": 4 } ],
+          "help": {"Off": "Jagged edges. The fastest.", "2x": "Smoother edges, a little slower.", "4x": "The smoothest edges, the slowest."}},
+        { "id": "msaaDocked", "key": "Video.MSAA", "label": "Anti-aliasing (docked)", "type": "slider", "dev": "switch",
+          "show": "dispMode == 'custom' && (platform == 'switch')", "options": [ { "id": "Off", "value": 1 }, { "id": "2x", "value": 2 }, { "id": "4x", "value": 4 } ],
+          "help": {"Off": "Jagged edges. The fastest.", "2x": "Smoother edges, a little slower.", "4x": "The smoothest edges, the slowest."}},
+        { "id": "msaaPc", "key": "Video.MSAA", "label": "Anti-aliasing", "type": "slider", "restart": true,
+          "show": "platform == 'pc'", "options": [ { "id": "Off", "value": 1 }, { "id": "2x", "value": 2 }, { "id": "4x", "value": 4 } ],
+          "help": {"Off": "Jagged edges. The fastest.", "2x": "Smoother edges, a little slower.", "4x": "The smoothest edges, the slowest."}},
+        { "id": "fxaa", "show": "dispMode == 'custom'", "key": "Video.FXAA", "label": "FXAA", "type": "toggle", "dev": "switch",
+          "help": "A final pass that smooths edges without blurring flat textures." },
+        { "id": "vsync", "key": "Video.VSync", "label": "VSync", "type": "toggle", "dev": "switch"},
+        { "id": "fps", "key": "Video.FpsCap", "label": "Frame rate cap", "type": "select", "dev": "switch",
+          "options": [ { "id": "30", "value": 30 }, { "id": "60", "value": 60 }, { "id": "90", "value": 90 }, { "id": "120", "value": 120 }, { "id": "144", "value": 144 }, { "id": "165", "value": 165 }, { "id": "240", "value": 240 }, { "id": "auto", "label": "Auto", "value": -1 } ],
+          "help": {"30": "Caps the game at 30 frames per second.", "60": "Caps the game at 60 frames per second.", "90": "Caps at 90. Adds blended in-between frames; the game still runs at 60.", "120": "Caps at 120. Adds blended in-between frames; the game still runs at 60.", "144": "Caps at 144. Adds blended in-between frames; the game still runs at 60.", "165": "Caps at 165. Adds blended in-between frames; the game still runs at 60.", "240": "Caps at 240. Adds blended in-between frames; the game still runs at 60.", "auto": "Matches your display. Above 60 adds blended in-between frames. The game still runs at 60."}},
+        { "id": "showfps", "key": "Video.DisplayFPS", "label": "Show FPS", "type": "toggle", "dev": "switch"},
+        { "id": "tex", "show": "dispMode == 'custom'", "key": "Video.TextureFilter", "label": "Texture filter", "type": "choice", "dev": "switch",
+          "options": [ { "id": "nearest", "label": "Nearest", "value": 0 }, { "id": "3point", "label": "3-point (N64)", "value": 2 }, { "id": "bilinear", "label": "Bilinear", "value": 1 }, { "id": "trilinear", "label": "Trilinear", "value": 3 } ],
+          "help": {"nearest": "Hard-edged texels, no smoothing.", "3point": "The N64's own filter: it blends three texels, so edges look slightly angular. Includes mipmaps. Authentic, less smooth than bilinear.", "bilinear": "Blends four texels: smoother than the N64's own filter. No mipmaps.", "trilinear": "Bilinear plus generated mipmaps (smaller copies of each texture) blended together: distant textures shimmer less."}},
+        { "id": "aniso", "show": "dispMode == 'custom'", "key": "Video.Anisotropy", "label": "Anisotropic filtering", "type": "slider", "dev": "switch", "min": 1, "max": 16, "step": 1, "suffix": "x" },
+        { "id": "draw", "per": 100, "show": "dispMode == 'custom'", "key": "Video.DrawDistance", "label": "Draw distance", "type": "slider", "min": 100, "max": 800, "step": 25, "div": 100, "decimals": 1, "suffix": "x" },
+        { "id": "fog", "per": 100, "show": "dispMode == 'custom'", "key": "Video.FogDistance", "label": "Fog distance", "type": "slider", "min": 100, "max": 800, "step": 25, "div": 100, "decimals": 1, "suffix": "x" },
+        { "id": "lod", "per": 100, "show": "dispMode == 'custom'", "key": "Video.LodDistance", "label": "LOD distance", "type": "slider", "min": 100, "max": 800, "step": 25, "div": 100, "decimals": 1, "suffix": "x" },
+        { "id": "fog_px", "show": "dispMode == 'custom'", "key": "Video.PerPixelFog", "label": "Per-pixel fog", "type": "toggle", "dev": "switch",
+          "help": {"1": "The fog of every pixel comes from its own distance: exact.", "0": "The N64 way: the fog is worked out at the corners of each triangle and blended across it."} },
+        { "id": "sky", "key": "Video.SkyScale", "label": "Sky and sea detail", "type": "choice", "dev": "switch",
+          "show": "platform == 'pc' && visuals == 'enhanced'",
+          "options": [ { "id": "full", "label": "Full" }, { "id": "half", "label": "Half (faster)" } ],
+          "help": { "half": "How sharp the Enhanced sky and sea are. Half draws them at a quarter of the pixels: faster, softer." } },
+        { "id": "renderer", "key": "Video.Renderer", "label": "Renderer", "type": "choice", "default": "vulkan", "restart": true, "show": "platform == 'pc'",
+          "options": [ { "id": "opengl", "label": "OpenGL" }, { "id": "vulkan", "label": "Vulkan" } ],
+          "help": {"vulkan": "The default.", "opengl": "The fallback if Vulkan misbehaves on your GPU."}},
+        { "id": "reset_performance", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
+      ] },
+      { "name": "Effects", "controls": [
+        { "id": "blood", "key": "Game.BloodOnHit", "label": "Blood on hit", "type": "toggle",
+          "help": "A hit on a guard shows a dark-red puff, not the yellow wall puff." },
+        { "id": "shake", "key": "Game.ScreenShakeIntensity", "label": "Explosion shake", "type": "slider", "min": 0, "max": 30, "step": 1, "div": 10, "decimals": 1,
+          "help": "Sets how strongly explosions shake the screen." }
+      ] }
+    ] },
+    { "name": "Audio", "items": [
+      { "group": "Sound" },
+      { "name": "Volume", "controls": [
+        { "id": "master", "key": "Audio.MasterVolume", "label": "Master volume", "type": "slider", "min": 0, "max": 100, "step": 5, "suffix": "%" },
+        { "id": "music", "show": "profile == 1", "key": "Bond.Music", "label": "Music volume", "type": "slider", "default": 75, "min": 0, "max": 100, "step": 5, "suffix": "%", "tag": "per profile" },
+        { "id": "fx", "show": "profile == 1", "key": "Bond.FX", "label": "FX volume", "type": "slider", "default": 75, "min": 0, "max": 100, "step": 5, "suffix": "%", "tag": "per profile" },
+        { "id": "reset_volume", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
+      ] },
+      { "name": "Output", "controls": [
+        { "id": "adev", "key": "Audio.Device", "label": "Output device", "type": "select", "default": "default", "show": "platform == 'pc'",
+          "options": [ { "id": "default", "label": "Default" } ] }
+      ] }
+    ] },
+    { "name": "Input", "items": [
+      { "group": "Gamepad" },
+      { "name": "Style", "controls": [
+        { "id": "scheme", "key": "__ControlStyle", "label": "Control style", "type": "choice",
+          "options": [ { "id": "modern", "label": "Modern", "value": 0 }, { "id": "enhanced", "label": "Enhanced", "value": 1 }, { "id": "original", "label": "Original", "value": 2 } ],
+          "help": { "modern": "Right trigger fires, left trigger aims. Left face button reloads, top one switches weapon, bottom one uses. Click the right stick to crouch. Hold the left bumper for the weapon wheel and the right one for the gadget wheel, then pick with the right stick.", "enhanced": "The remastered layouts, with a free look stick.", "original": "The N64 control styles, as the game shipped them." } },
+        { "id": "padmap_modern", "type": "diagram", "follows": "scheme", "label": "", "show": "scheme == 'modern'",
+          "layouts": { "modern": { "_by": "position", "lt": "Aim", "rt": "Fire", "lb": "Weapon wheel", "rb": "Gadget wheel", "a": "Use", "x": "Reload", "y": "Next weapon", "rs": "Crouch", "lstick": "Move (slow strafe)", "rstick": "Look", "dpad": "Up / down: zoom"} } },
+        { "id": "preset", "key": "Input.PadPreset", "label": "Layout", "type": "choice", "show": "scheme == 'enhanced'",
+          "options": [ { "id": "jinx", "label": "1.1 Jinx", "value": 0 }, { "id": "christmas", "label": "1.2 Christmas", "value": 1 }, { "id": "frost", "label": "1.3 Frost", "value": 2 }, { "id": "elektra", "label": "1.4 Elektra", "value": 4 } ],
+          "help": { "frost": "The two sticks swap roles.", "elektra": "The two sticks swap roles." } },
+        { "id": "padmap", "type": "diagram", "follows": "preset", "label": "", "show": "scheme == 'enhanced'",
+          "layouts": {"modern": {"lt": "Aim", "rt": "Fire", "lb": "Weapon wheel", "rb": "Gadget wheel", "a": "Use", "x": "Reload", "y": "Next weapon", "rs": "Crouch", "lstick": "Move (slow strafe)", "rstick": "Look", "dpad": "Up / down: zoom"}, "jinx": {"lt": "Aim", "rt": "Fire", "lb": "Aim", "a": "Use", "x": "Reload", "y": "Next weapon", "b": "Cycle gadget", "ls": "Crouch", "rs": "Crouch", "lstick": "Move / strafe", "rstick": "Look / turn"}, "christmas": {"lt": "Aim", "rt": "Fire", "lb": "Aim", "a": "Use", "x": "Reload", "y": "Next weapon", "b": "Cycle gadget", "ls": "Crouch", "rs": "Crouch", "lstick": "Move / turn", "rstick": "Look up-down / strafe"}, "frost": {"lt": "Aim", "rt": "Fire", "lb": "Aim", "a": "Use", "x": "Reload", "y": "Next weapon", "b": "Cycle gadget", "ls": "Crouch", "rs": "Crouch", "lstick": "Look up-down / strafe", "rstick": "Move / turn"}, "elektra": {"lt": "Aim", "rt": "Fire", "lb": "Aim", "a": "Use", "x": "Reload", "y": "Next weapon", "b": "Cycle gadget", "ls": "Crouch", "rs": "Crouch", "lstick": "Look / turn", "rstick": "Move / strafe"}} },
+        { "id": "ostyle", "key": "Bond.Control", "label": "Layout", "type": "choice", "default": 0, "tag": "per profile", "show": "profile == 1 && scheme == 'original'",
+          "options": [ "1.1 Honey", "1.2 Solitaire", "1.3 Kissy", "1.4 Goodnight", "2.1 Plenty", "2.2 Galore", "2.3 Domino", "2.4 Goodhead" ] },
+        { "id": "crouch", "key": "Input.CrouchMode", "label": "Crouch", "type": "choice",
+          "options": [ { "id": "hold", "label": "Hold", "value": 0 }, { "id": "toggle", "label": "Toggle", "value": 1 } ] }
+      ] },
+      { "name": "Aiming", "controls": [
+        { "id": "aimstyle", "key": "Input.AimMode", "label": "Aim style", "type": "choice",
+          "options": [ { "id": "original", "label": "Original", "value": 0 }, { "id": "centered", "label": "Centered", "value": 1 } ],
+          "help": { "original": "The N64 way: the crosshair moves across the screen.", "centered": "The crosshair stays in the centre and the view moves, with the weapon sway." } },
+        { "id": "aimrange", "key": "Input.AimRange", "label": "Aim range", "type": "choice", "show": "aimstyle == 'original'",
+          "options": [ { "id": "extended", "label": "Extended", "value": 0 }, { "id": "original", "label": "Original", "value": 1 } ] },
+        { "id": "aimsens", "key": "Input.PadAimLookSens", "label": "Aim sensitivity", "type": "slider", "min": 25, "max": 200, "step": 5, "suffix": "%" },
+        { "id": "aimzoom", "key": "Game.AimZoom", "label": "Aim zoom (handheld)", "type": "choice", "show": "platform == 'switch' && aimstyle == 'centered'",
+          "options": [ { "id": "off", "label": "Off", "value": 0 }, { "id": "x15", "label": "1.5x", "value": 1 }, { "id": "x2", "label": "2x", "value": 2 } ] },
+        { "id": "aimassist", "key": "Game.AimAssist", "label": "Aim assist", "type": "choice", "show": "aimstyle == 'centered'",
+          "options": [ { "id": "off", "label": "Off", "value": 0 }, { "id": "low", "label": "Low", "value": 1 }, { "id": "high", "label": "High", "value": 2 } ] },
+        { "id": "aimentry", "key": "Game.AimEntry", "label": "Aim entry", "type": "choice", "show": "aimstyle == 'centered'",
+          "options": [ { "id": "off", "label": "Off", "value": 0 }, { "id": "view", "label": "Move view", "value": 1 }, { "id": "centre", "label": "Centre crosshair", "value": 2 } ] },
+        { "id": "aimstop", "key": "Game.AimStop", "label": "Stop on aim", "type": "toggle", "show": "aimstyle == 'centered'" },
+        { "id": "reset_aiming", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
+      ] },
+      { "name": "Look and sticks", "controls": [
+        { "id": "invert", "key": "Input.PadLookInvertY", "label": "Invert look", "type": "toggle" },
+        { "id": "lookx", "key": "Input.PadLookSensX", "label": "Horizontal look sensitivity", "type": "slider", "min": 25, "max": 200, "step": 5, "suffix": "%" },
+        { "id": "looky", "key": "Input.PadLookSensY", "label": "Vertical look sensitivity", "type": "slider", "min": 25, "max": 200, "step": 5, "suffix": "%" },
+        { "id": "curve", "per": 100, "key": "Input.PadLookCurve", "label": "Look precision", "type": "slider", "min": 100, "max": 400, "step": 25, "div": 100, "decimals": 2, "show": "aimstyle == 'centered'" },
+        { "id": "accel", "key": "Input.PadTurnAccel", "label": "Turn acceleration", "type": "choice", "show": "aimstyle == 'centered'",
+          "options": [ { "id": "off", "label": "Off", "value": 0 }, { "id": "low", "label": "Low", "value": 1 }, { "id": "high", "label": "High", "value": 2 } ] },
+        { "id": "lookahead", "key": "Game.LookAhead", "label": "Look ahead", "type": "choice", "show": "aimstyle == 'centered'",
+          "options": [ { "id": "off", "label": "Off", "value": 0 }, { "id": "low", "label": "Low", "value": 1 }, { "id": "medium", "label": "Medium", "value": 2 }, { "id": "high", "label": "High", "value": 3 } ] },
+        { "id": "smooth", "key": "Input.PadLookSmooth", "label": "Look smoothing", "type": "slider", "min": 0, "max": 10, "step": 1 },
+        { "id": "dzl", "key": "Input.PadDeadzoneL", "label": "Left stick deadzone", "type": "slider", "min": 0, "max": 100, "step": 1, "per": 300, "suffix": "%" },
+        { "id": "dzr", "key": "Input.PadDeadzoneR", "label": "Right stick deadzone", "type": "slider", "min": 0, "max": 100, "step": 1, "per": 300, "suffix": "%" },
+        { "id": "south", "key": "Input.PadSouthpaw", "label": "Southpaw", "type": "toggle" },
+        { "id": "trigger", "key": "Input.PadTriggerPct", "label": "Trigger threshold", "type": "slider", "min": 1, "max": 99, "step": 1, "suffix": "%" },
+        { "id": "rumble", "key": "Input.RumbleScale", "label": "Vibration", "type": "slider", "min": 0, "max": 100, "step": 5, "per": 0.01, "suffix": "%" },
+        { "id": "reset_lookandsticks", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
+      ] },
+      { "group": "Keyboard and mouse", "show": "platform == 'pc'" },
+      { "name": "Mouse", "show": "platform == 'pc'", "controls": [
+        { "id": "mouse", "key": "Input.MouseEnabled", "label": "Mouse enabled", "type": "toggle" },
+        { "id": "msens", "key": "Input.MouseSensitivity", "label": "Horizontal sensitivity", "type": "slider", "min": 10, "max": 500, "step": 10 },
+        { "id": "msensy", "key": "Input.MouseYScale", "label": "Vertical sensitivity", "type": "slider", "min": 10, "max": 500, "step": 10 },
+        { "id": "minvert", "key": "Input.MouseInvertY", "label": "Invert look", "type": "toggle" },
+        { "id": "msmooth", "key": "Input.MouseSmoothing", "label": "Smoothing", "type": "slider", "min": 0, "max": 90, "step": 5, "suffix": "%" },
+        { "id": "mraw", "key": "Input.MouseRawInput", "label": "Raw input", "type": "toggle" },
+        { "id": "mcursor", "key": "Input.CrosshairCursor", "label": "Crosshair pointer", "type": "toggle" },
+        { "id": "reset_mouse", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
+      ] },
+      { "name": "Key bindings", "show": "platform == 'pc'", "controls": [
+        { "id": "kb_forward", "key": "Input.Bind.Forward", "label": "Move forward", "type": "bind" },
+        { "id": "kb_back", "key": "Input.Bind.Back", "label": "Move backward", "type": "bind" },
+        { "id": "kb_strafeleft", "key": "Input.Bind.StrafeLeft", "label": "Strafe left", "type": "bind" },
+        { "id": "kb_straferight", "key": "Input.Bind.StrafeRight", "label": "Strafe right", "type": "bind" },
+        { "id": "kb_turnleft", "key": "Input.Bind.TurnLeft", "label": "Turn left", "type": "bind" },
+        { "id": "kb_turnright", "key": "Input.Bind.TurnRight", "label": "Turn right", "type": "bind" },
+        { "id": "kb_fire", "key": "Input.Bind.Fire", "label": "Fire", "type": "bind" },
+        { "id": "kb_aim", "key": "Input.Bind.Aim", "label": "Aim", "type": "bind" },
+        { "id": "kb_action", "key": "Input.Bind.Action", "label": "Action / next weapon", "type": "bind" },
+        { "id": "kb_cancel", "key": "Input.Bind.Cancel", "label": "Use / back", "type": "bind" },
+        { "id": "kb_leanleft", "key": "Input.Bind.LeanLeft", "label": "Lean left", "type": "bind" },
+        { "id": "kb_start", "key": "Input.Bind.Start", "label": "Pause / start", "type": "bind" },
+        { "id": "kb_reload", "key": "Input.Bind.Reload", "label": "Reload", "type": "bind" },
+        { "id": "kb_crouch", "key": "Input.Bind.Crouch", "label": "Crouch", "type": "bind" },
+        { "id": "kb_reset", "key": "__ResetBindings", "label": "Reset to defaults", "type": "action" }
+      ] }
+    ] },
+    { "name": "Game", "items": [
+      { "group": "Play" },
+      { "name": "Profile", "show": "fileselect == 1", "controls": [
+        { "id": "profile", "key": "__BondFile", "label": "Save file", "type": "choice", "default": 0,
+          "options": [ "File 1", "File 2", "File 3", "File 4" ],
+          "help": "The profile whose settings (music, FX, control style, aim, sight, ammo) the pages below show." }
+      ] },
+      { "name": "Gameplay", "controls": [
+        { "id": "aimcontrol", "show": "profile == 1", "key": "Bond.AimControl", "label": "Aim control", "type": "choice", "default": 0, "tag": "per profile",
+          "options": [ "Hold", "Toggle" ] },
+        { "id": "autoaim", "show": "profile == 1", "key": "Bond.AutoAim", "label": "Auto-aim", "type": "toggle", "default": 1, "tag": "per profile" },
+        { "id": "blook", "show": "profile == 1", "key": "Bond.LookAhead", "label": "Look ahead", "type": "toggle", "default": 1, "tag": "per profile" },
+        { "id": "aiview", "key": "Game.AIWideView", "label": "Gameplay view area", "type": "choice",
+          "options": [ { "id": "original", "label": "Original", "value": 0 }, { "id": "extended", "label": "Extended", "value": 1 } ] },
+        { "id": "coop", "key": "Game.CoopEnemyHealth", "label": "Co-op enemy health", "type": "choice",
+          "options": [ { "id": "h100", "label": "100%", "value": 0 }, { "id": "h150", "label": "150%", "value": 1 }, { "id": "h200", "label": "200%", "value": 2 } ] },
+        { "id": "noflash", "key": "Game.NoHitFlash", "label": "No hit flash", "type": "toggle" },
+        { "id": "timer", "key": "Game.MissionTimer", "label": "Mission timer", "type": "toggle" },
+        { "id": "skip", "key": "Game.SkipIntro", "label": "Skip intro", "type": "toggle" },
+        { "id": "unlocked", "key": "Game.AllUnlocked", "label": "All unlocked", "type": "toggle" },
+        { "id": "reset_gameplay", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
+      ] },
+      { "name": "Screen", "controls": [
+        { "id": "sight", "show": "profile == 1", "key": "Bond.Sight", "label": "Sight on screen", "type": "toggle", "default": 1, "tag": "per profile" },
+        { "id": "ammo", "show": "profile == 1", "key": "Bond.Ammo", "label": "Ammo on screen", "type": "toggle", "default": 1, "tag": "per profile" },
+        { "id": "hud", "key": "Game.HudScale", "label": "HUD scale", "type": "slider", "min": 75, "max": 150, "step": 5, "suffix": "%" },
+        { "id": "reset_screen", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
+      ] },
+      { "name": "Crosshair", "controls": [
+        { "id": "xpreview", "type": "diagram", "widget": "crosshair", "label": "" },
+        { "id": "xshow", "key": "Video.CrosshairHide", "label": "Show crosshair", "type": "choice",
+          "options": [ { "id": "on", "label": "On", "value": 0 }, { "id": "off", "label": "Off", "value": 1 } ] },
+        { "id": "xalways", "key": "Video.CrosshairPersistent", "label": "Always on", "type": "toggle" },
+        { "id": "xcolor", "key": "Video.CrosshairColor", "label": "Color", "type": "select",
+          "options": [ { "id": "original", "label": "Original (red)", "value": 0 }, { "id": "green", "label": "Green", "value": 1 }, { "id": "red", "label": "Red", "value": 2 }, { "id": "blue", "label": "Blue", "value": 3 }, { "id": "yellow", "label": "Yellow", "value": 4 }, { "id": "cyan", "label": "Cyan", "value": 5 }, { "id": "magenta", "label": "Magenta", "value": 6 }, { "id": "white", "label": "White", "value": 7 }, { "id": "custom", "label": "Custom", "value": 8 } ] },
+        { "id": "xred", "key": "Video.CrosshairRed", "label": "Red", "type": "slider", "min": 0, "max": 255, "step": 5, "show": "xcolor == 'custom'" },
+        { "id": "xgreen", "key": "Video.CrosshairGreen", "label": "Green", "type": "slider", "min": 0, "max": 255, "step": 5, "show": "xcolor == 'custom'" },
+        { "id": "xblue", "key": "Video.CrosshairBlue", "label": "Blue", "type": "slider", "min": 0, "max": 255, "step": 5, "show": "xcolor == 'custom'" },
+        { "id": "xsize", "key": "Video.CrosshairSize", "label": "Size", "type": "slider", "min": 10, "max": 100, "step": 5, "suffix": "%" },
+        { "id": "xstyle", "key": "Video.CrosshairStyle", "label": "Style", "type": "choice",
+          "options": [ { "id": "original", "label": "Original", "value": 0 }, { "id": "thin", "label": "Thin cross", "value": 1 } ] },
+        { "id": "xalpha", "key": "Video.CrosshairAlpha", "label": "Opacity", "type": "slider", "min": 0, "max": 100, "step": 5, "suffix": "%" },
+        { "id": "xhealth", "key": "Video.CrosshairHealthColor", "label": "Color by health", "type": "toggle" },
+        { "id": "reset_crosshair", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
+      ] },
+      { "name": "Updates", "controls": [
+        { "id": "updates", "key": "Game.CheckUpdates", "label": "Check for updates at start", "type": "toggle",
+          "help": "Looks for a new version when the game starts. Off, nothing goes over the network until you press Check for updates in the first menu." }
+      ] }
+    ] }
+  ]
+}

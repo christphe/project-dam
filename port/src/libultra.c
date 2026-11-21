@@ -22,6 +22,8 @@
 /* NOTE: no <sched.h> here — angle-bracket form would resolve to the game's
  * src/sched.h (it is on the include path), not MinGW's. osYieldThread uses a
  * short sleep instead of sched_yield(). */
+#include "wheel.h"
+#include "assign.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -297,7 +299,7 @@ static int      g_tickLockLogN = 0;
 
 /* D961: input-to-photon latency. GE_PERFSTAT=1 logs INPUTLAT every 300 frames;
  * GE_LOWLAT (scheduler kick + fresh pad sample + build gate) is on by default
- * on the Switch (GE_LOWLAT=0 turns it off) and opt-in elsewhere (GE_LOWLAT=1);
+ * (GE_LOWLAT=0 turns it off);
  * GE_PRESSLATCH=1[n] (min-hold, see portPressHold; the event latch is in
  * input.c) is opt-in. Read once. Both off: nothing below changes behaviour
  * (the counters are plain bookkeeping). */
@@ -317,11 +319,7 @@ static void portLatInit(void)
     if (s_latInit) return;
     const char *l = getenv("GE_LOWLAT");
     const char *p = getenv("GE_PRESSLATCH");
-#if defined(PLATFORM_SWITCH)
-    s_llMode = (l && l[0]) ? (atoi(l) != 0) : 1;   /* D961: default on (Switch) */
-#else
-    s_llMode = (l && atoi(l) != 0) ? 1 : 0;
-#endif
+    s_llMode = (l && l[0]) ? (atoi(l) != 0) : 1;   /* D961: default on everywhere; GE_LOWLAT=0 turns it off */
     if (p && atoi(p) != 0) {
         int n = atoi(p);
         s_plHold = n < 2 ? 2 : (n > 4 ? 4 : n);   /* 1 = default hold of 2 polls (about one 30 fps frame) */
@@ -978,6 +976,8 @@ s32 osRecvMesg(OSMesgQueue *mq, OSMesg *msg, s32 flag)
      * input/scheduler and render threads never touch GE watch/save state. */
     if (mq == &gfxFrameMsgQ) {
         watchSettingsGameTick();
+        portWheelGameTick();   /* the Modern weapon / gadget wheels */
+        portAssignTick();      /* who plays with which device, when a multiplayer game is set up */
         /* D961 GE_LOWLAT: drop a retrace the game would only turn into a frame
          * that then waits behind the one still rendering. */
         if (s_llMode && flag == OS_MESG_BLOCK && m != NULL && ((OSScMsg *)m)->type == OS_SC_RETRACE_MSG) {

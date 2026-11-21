@@ -142,4 +142,34 @@ static inline int findAsset(const char *body, const char *name, char *url, size_
     return 0;
 }
 
+/* The release text ("body": "...", a JSON string): escapes decoded, anything that is not plain ASCII text dropped
+ * (the menu font has no emoji or symbols). Returns 1 when there is a body. */
+static inline int extractBody(const char *json, char *out, size_t n)
+{
+    const char *p = strstr(json, "\"body\"");
+    if (!p || n < 2) return 0;
+    p += 6;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    if (*p != ':') return 0;
+    p++;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    if (*p != '"') return 0;
+    p++;
+    size_t i = 0;
+    while (*p && *p != '"' && i + 1 < n) {
+        unsigned char c = (unsigned char)*p++;
+        if (c == '\\') {
+            const char e = *p++;
+            if (e == 'n') c = '\n';
+            else if (e == 't') c = ' ';
+            else if (e == 'r') continue;
+            else if (e == 'u') { for (int k = 0; k < 4 && *p; k++) p++; continue; }   /* non-ASCII: dropped */
+            else c = (unsigned char)e;   /* \" \\ \/ */
+        }
+        if (c == '\n' || (c >= 32 && c < 127)) out[i++] = (char)c;
+    }
+    out[i] = 0;
+    return i > 0;
+}
+
 #endif

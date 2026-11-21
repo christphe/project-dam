@@ -590,7 +590,11 @@ void cur_player_set_ammo_onscreen_setting(u32 param_1)
 
 u32 cur_player_get_screen_setting(void)
 {
+#ifdef PORT
+    return SCREEN_SIZE_FULLSCREEN;   /* the picture shape is the menu's Aspect ratio: the game's own screen size no longer applies */
+#else
     return game_options_entries[PLAYER_OPTION_SCREEN].current_value;
+#endif
 }
 void cur_player_set_screen_setting(u32 param_1)
 {
@@ -599,7 +603,11 @@ void cur_player_set_screen_setting(u32 param_1)
 
 SCREEN_RATIO_OPTION get_screen_ratio(void)
 {
+#ifdef PORT
+    return SCREEN_RATIO_NORMAL;   /* likewise the game's own screen ratio: Aspect ratio in the menu does it */
+#else
     return game_options_entries[PLAYER_OPTION_RATIO].current_value;
+#endif
 }
 
 void set_screen_ratio(SCREEN_RATIO_OPTION ratio_option)
@@ -854,7 +862,7 @@ void watch_screen1_navigation(void)
 
         if (goto_watch_screen_index_2)
         {
-            watch_screen_index = WATCH_INDEX_CONTROL_OPTIONS;
+            watch_screen_index = GE_WATCH_NO_OPTIONS() ? WATCH_INDEX_MISSION_BRIEFING : WATCH_INDEX_CONTROL_OPTIONS;   /* solo / co-op: the settings pages are in the menu */
             set_controlstick_lr_disabled();
             sub_GAME_7F0A5210();
             trigger_watch_zoom(WATCHZOOM3, 15.0f);
@@ -944,7 +952,7 @@ void watch_screen4_navigation(void) {
     {
         if (watch_item_is_actively_selected == 0)
         {
-            watch_screen_index = WATCH_INDEX_GAME_OPTIONS;
+            watch_screen_index = GE_WATCH_NO_OPTIONS() ? WATCH_INDEX_INVENTORY : WATCH_INDEX_GAME_OPTIONS;   /* solo / co-op: no settings pages */
             reset_game_options_index();
             sub_GAME_7F0A5210();
             trigger_watch_zoom(WATCHZOOM3, 15.0f);

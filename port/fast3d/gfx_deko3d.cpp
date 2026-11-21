@@ -68,7 +68,7 @@ extern bool gfx_framebuffers_enabled;   /* gfx_pc.cpp */
 extern int gfx_rdp_affine;              /* gfx_pc.cpp (D540) */
 extern int gfx_fog_vertex;              /* gfx_pc.cpp (D543) */
 extern "C" int portDisplayFixes;       /* port/src/video.c: Video.Visuals >= Fixed (D982) */
-extern int gfx_fog_force;               /* gfx_pc.cpp (D982): GE_FOGPIXEL, -1 = follow the setting */
+extern "C" int portPerPixelFog;                /* port/src/video.c: Video.PerPixelFog */
 extern "C" volatile int gfx_skyplus_failed;   /* gfx_opengl.cpp */
 extern "C" int nxIsHandheld(void);      /* port/src/switch/nxmem.c */
 extern "C" const uint8_t ge007_dksh_pack[], ge007_dksh_pack_end[];
@@ -1334,11 +1334,9 @@ void dk_init(void) {
     gfx_rdp_affine = 0;   /* D986: the pack is built with perspective-correct shade */
     /* Fog: the pack carries both forms (vFog.a per vertex, vFogW = fog * w);
      * Draw.fog_pixel picks one (set at each shader bind, so a live change of
-     * Video.Visuals >= Fixed lands at once, D982). GE_FOGPIXEL=0/1 overrides. */
+     * Video.PerPixelFog lands at once, D982). */
     {
-        const char* fp = getenv("GE_FOGPIXEL");
-        gfx_fog_force = (fp && fp[0]) ? (fp[0] == '1') : -1;
-        gfx_fog_vertex = gfx_fog_force >= 0 ? !gfx_fog_force : !portDisplayFixes;
+        gfx_fog_vertex = !portPerPixelFog;
         s_uni.fog_pixel = gfx_fog_vertex ? 0 : 1;
         sysLogPrintf(LOG_NOTE, "DK: fog %s", gfx_fog_vertex ? "per-vertex (N64)" : "per-pixel");
     }

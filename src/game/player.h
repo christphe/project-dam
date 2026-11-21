@@ -186,8 +186,20 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 #define GE_PROJ_SIM_OWNER(own, op, view) coopProjSimOwner((own), (op), (view))
 #define GE_SPLIT_GE2()           (getPlayerCount() >= 2 && coopSplitView())
 #define GE_SPLIT_EQ2()           (getPlayerCount() == 2 && coopSplitView())
+extern int portSplitVertical;   /* Game.SplitScreen: 2 players side by side instead of one above the other */
+#define GE_SPLIT_VERT()          (GE_SPLIT_EQ2() && portSplitVertical)
+#define GE_WATCH_NO_OPTIONS()    (getPlayerCount() == 1 || coopIsMission())   /* the menu replaces the watch's settings pages */
 #define GE_COOP_VIEW_ORDER()     coopViewOrder()
 #define GE_FROZEN_CAMERA         coopFrozenCamera
+/* Co-op and Multiplayer stay open with one controller: the menus count 4 available, and the controller screen
+ * (port/src/assign.c) is asked for when a mode needs more than are connected. GE_NEED_PADS(n) is 1 when n are there. */
+extern int portNeedPads(int n);
+#define GE_MP_AVAIL()            4
+#define GE_NEED_PADS(n)          portNeedPads(n)
+extern int coopMenuIntent(void);
+extern int portAimIsMouse(void);
+#define GE_AUTOAIM_ON()          (cur_player_get_autoaim() && !portAimIsMouse())   /* no auto-aim while the mouse aims */
+#define GE_COOP_WAIT()           (coopMenuIntent() && !portNeedPads(2))   /* co-op chosen, fewer than 2 pads */
 #else
 #define GE_RULE_SOLO()           (getPlayerCount() == 1)
 #define GE_RULE_MULTI()          (getPlayerCount() >= 2)
@@ -210,7 +222,13 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 #define GE_FROZEN_CAMERA         bondviewFrozenCameraTick
 #define GE_SPLIT_GE2()           (getPlayerCount() >= 2)
 #define GE_SPLIT_EQ2()           (getPlayerCount() == 2)
+#define GE_SPLIT_VERT()          0
+#define GE_WATCH_NO_OPTIONS()    0
 #define GE_COOP_VIEW_ORDER()
+#define GE_MP_AVAIL()            joyGetControllerCount()
+#define GE_NEED_PADS(n)          (joyGetControllerCount() >= (n))
+#define GE_COOP_WAIT()           0
+#define GE_AUTOAIM_ON()          cur_player_get_autoaim()
 #define GE_PICKUP_TAKEN(prop)    0
 #define GE_PICKUP_VISIBLE(prop)  1
 #define GE_PICKUP_OP(prop, op)   (op)

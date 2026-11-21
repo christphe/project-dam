@@ -7,8 +7,7 @@
  * in versionhash.h, included only where it is printed. */
 
 #define GE007_VERSION "@GE007_VERSION@"
-/* Project Dam release the update check compares against (not the upstream base). */
-#define GE007_UPDATE_VERSION "@GE007_UPDATE_VERSION@"
+#define PDAM_VERSION "@PDAM_VERSION@"   /* Project Dam's release ("0.3.0"), or "dev" for any other build */
 #define GE007_VERSION_CODENAME "@VERSION_CODENAME@"
 #define GE007_ORIGIN_URL "@ORIGIN_URL@"
 #define GE007_TARGET_PLATFORM "@TARGET_PLATFORM@"

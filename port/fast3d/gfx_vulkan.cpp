@@ -105,8 +105,8 @@
 extern bool gfx_framebuffers_enabled;           /* gfx_pc.cpp */
 extern int gfx_rdp_affine;                      /* gfx_pc.cpp (D540) */
 extern int gfx_fog_vertex;                      /* gfx_pc.cpp (D543) */
-extern int gfx_fog_force;                       /* gfx_pc.cpp (D982) */
 extern "C" int portDisplayFixes;                /* port/src/video.c (D982) */
+extern "C" int portPerPixelFog;                /* port/src/video.c: Video.PerPixelFog */
 extern "C" int gfx_skyplus_half;                /* gfx_opengl.cpp: Video.SkyScale, 1 = half-size final pass */
 extern "C" volatile int gfx_skyplus_sea;        /* gfx_opengl.cpp: 1 = skyplus.c may give the water levels the sea */
 extern "C" volatile int gfx_skyplus_failed;     /* gfx_opengl.cpp: 1 = skyplus.c draws GE's own sky */
@@ -2154,9 +2154,7 @@ void vk_init(void) {
 
     gfx_rdp_affine = 0;   /* D986: the pack is built with perspective-correct shade */
     {   /* fog: the pack carries both forms; Draw.fog_pixel picks one (gfx_deko3d.cpp dk_init) */
-        const char* fp = getenv("GE_FOGPIXEL");
-        gfx_fog_force = (fp && fp[0]) ? (fp[0] == '1') : -1;
-        gfx_fog_vertex = gfx_fog_force >= 0 ? !gfx_fog_force : !portDisplayFixes;
+        gfx_fog_vertex = !portPerPixelFog;
         s_uni.fog_pixel = gfx_fog_vertex ? 0 : 1;
     }
     s_uni.noise_scale = 1.0f;
@@ -2620,15 +2618,6 @@ struct GfxRenderingAPI gfx_vulkan_api = {
 };
 
 extern "C" {
-
-bool gfx_vulkan_wanted(void) {
-    static int on = -1;
-    if (on < 0) {
-        const char* e = getenv("GE_RENDERER");
-        on = (e != NULL && strcmp(e, "vk") == 0) ? 1 : 0;   /* GL stays the default */
-    }
-    return on != 0;
-}
 
 bool gfx_vulkan_probe(void) {
     if (!load_loader()) return false;

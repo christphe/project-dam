@@ -1,0 +1,324 @@
+{
+ "_comment": "Default of every config key. Source of truth for the options menu AND for the first-run ini: defaultsApply() sets these before configLoad(). A bare value applies to every platform; {\"switch\": n, \"pc\": n} per platform (a missing side = no default there); \"why\" is for people. After editing run tools_pc/gen_menudata.py. \"version\" is the ini's (Config.Version); a migration lists steps for inis older than its version: {\"key\",\"set\"|\"reset\",\"when\":{\"key\",\"eq\"}}. \"legacy\" keys are removed from the game but still read once, so a migration can look at them.",
+ "version": 1,
+ "migrations": [
+  {
+   "version": 1,
+   "why": "Native widescreen and Widescreen auto FOV are gone: the picture always takes the output aspect. Whoever had the stretched 4:3 picture off (native widescreen off) gets forced 4:3 with bars. The fog form used to follow Visuals (Original = per-vertex): it is now its own key. The Custom gamepad layout is gone (Modern replaces it): a Custom seat falls back to 1.1 Jinx.",
+   "steps": [
+    {
+     "key": "Video.AspectMode",
+     "set": 1,
+     "when": {
+      "key": "Video.NativeWidescreen",
+      "eq": 0
+     }
+    },
+    {
+     "key": "Video.PerPixelFog",
+     "set": 0,
+     "when": {
+      "key": "Video.Visuals",
+      "eq": 0
+     }
+    },
+    {
+     "key": "Input.PadPreset",
+     "set": 0,
+     "when": {
+      "key": "Input.PadPreset",
+      "eq": 3
+     }
+    }
+   ]
+  }
+ ],
+ "legacy": {
+  "Video.NativeWidescreen": 1,
+  "Video.WidescreenAuto": 1
+ },
+ "defaults": {
+  "Input.MouseEnabled": {
+   "value": 1,
+   "why": "= 1 (on)"
+  },
+  "Input.CrosshairCursor": {
+   "value": 1,
+   "why": "= 1 (on, D555)"
+  },
+  "Input.MouseSensitivity": {
+   "value": 100,
+   "why": "static int mouseSensitivity = 100"
+  },
+  "Input.MouseYScale": {
+   "value": 100,
+   "why": "= 100 (native), Wave A item 6"
+  },
+  "Input.MouseInvertY": {
+   "value": 0,
+   "why": "= 0"
+  },
+  "Input.AimMode": {
+   "switch": 1,
+   "pc": 0,
+   "why": "= AIMMODE_N64 (0)"
+  },
+  "Input.AimRange": {
+   "value": 0,
+   "why": "= 0 (PC)"
+  },
+  "Input.PadLookInvertY": {
+   "switch": 1,
+   "pc": 0,
+   "why": "= 0"
+  },
+  "Input.PadDeadzoneL": {
+   "switch": 3000,
+   "pc": 7500,
+   "why": "= STICK_DEADZONE (7500 = 25%, D546), Wave A"
+  },
+  "Input.PadDeadzoneR": {
+   "switch": 3000,
+   "pc": 7500,
+   "why": "= STICK_DEADZONE (7500 = 25%, D546), Wave A"
+  },
+  "Input.PadLookSensX": {
+   "switch": 85,
+   "pc": 100,
+   "why": "= 100 (native), Wave A"
+  },
+  "Input.PadLookSensY": {
+   "switch": 85,
+   "pc": 100,
+   "why": "= 100 (native), Wave A"
+  },
+  "Input.PadAimLookSens": {
+   "switch": 75,
+   "pc": 100,
+   "why": "= native"
+  },
+  "Game.AimZoom": {
+   "switch": 2,
+   "why": "project-dam: = 2x"
+  },
+  "Game.AimAssist": {
+   "value": 2,
+   "why": "project-dam: = High"
+  },
+  "Game.AimEntry": {
+   "value": 1,
+   "why": "project-dam: = Move view"
+  },
+  "Game.AimStop": {
+   "value": 1,
+   "why": "project-dam: = on"
+  },
+  "Game.LookAhead": {
+   "switch": 3,
+   "why": "project-dam: = High"
+  },
+  "Input.PadLookCurve": {
+   "value": 200,
+   "why": "the game's own curve (2.0)"
+  },
+  "Input.PadTurnAccel": {
+   "switch": 2,
+   "why": "project-dam: = High"
+  },
+  "Input.PadLookSmooth": {
+   "switch": 2,
+   "pc": 0,
+   "why": "= 0 (off), Wave A"
+  },
+  "Input.PadSouthpaw": {
+   "value": 0,
+   "why": "= 0 (off), Wave A"
+  },
+  "Input.PadTriggerPct": {
+   "switch": 10,
+   "pc": 25,
+   "why": "= 25 (was 23; rounded, D508)"
+  },
+  "Input.RumbleScale": {
+   "value": 0.5,
+   "why": "= gRumbleScale (0.5f), D401"
+  },
+  "Input.CrouchMode": {
+   "value": 1,
+   "why": "= 1 (toggle; D556)"
+  },
+  "Input.MouseSmoothing": {
+   "value": 0,
+   "why": "= 0 (raw)"
+  },
+  "Input.MouseRawInput": {
+   "value": 0,
+   "why": "= 0 (off)"
+  },
+  "Input.ControlScheme": {
+   "value": 0,
+   "why": "= 0 (Modern), D513"
+  },
+  "Input.P1Type": {
+   "value": 2,
+   "why": "= auto (D993)"
+  },
+  "Input.PadPreset": {
+   "value": 0,
+   "why": "= 0 (Jinx 1.1), D469"
+  },
+  "Video.MSAA": {
+   "switch": 4,
+   "pc": 2,
+   "why": "= 2"
+  },
+  "Video.MSAAHandheld": {
+   "switch": 2,
+   "why": "project-dam"
+  },
+  "Video.FXAA": {
+   "value": 1,
+   "why": "on: the smoothing pass is part of the default look"
+  },
+  "Video.SkyScale": {
+   "pc": 0,
+   "why": "GE+ sky and sea at full size"
+  },
+  "Video.Visuals": {
+   "value": 2,
+   "why": "Enhanced on every platform (the old reset table said Fixed on PC, but the initializer was always Enhanced)"
+  },
+  "Video.TextureFilter": {
+   "value": 1,
+   "why": "= 1 (bilinear)"
+  },
+  "Video.Anisotropy": {
+   "value": 4,
+   "why": "= 4"
+  },
+  "Video.FovScale": {
+   "value": 100,
+   "why": "= 100"
+  },
+  "Video.SafeAreaCrop": {
+   "value": 1,
+   "why": "= 1"
+  },
+  "Video.AspectMode": {
+   "value": 0,
+   "why": "= 0 (Window), D447"
+  },
+  "Video.DrawDistance": {
+   "value": 200,
+   "why": "2.0x (D546)"
+  },
+  "Video.FogDistance": {
+   "value": 100,
+   "why": "1.0x = N64 fog (D540)"
+  },
+  "Video.LodDistance": {
+   "value": 200,
+   "why": "2.0x (D546)"
+  },
+  "Video.CrosshairHide": {
+   "value": 0,
+   "why": "= 0 (on, N64)"
+  },
+  "Video.CrosshairPersistent": {
+   "value": 0,
+   "why": "D436: off = N64 (aim mode only)"
+  },
+  "Video.CrosshairColor": {
+   "value": 0,
+   "why": "= 0 (authored red sprite)"
+  },
+  "Video.CrosshairRed": 255,
+  "Video.CrosshairGreen": 255,
+  "Video.CrosshairBlue": 255,
+  "Video.CrosshairSize": {
+   "value": 100,
+   "why": "= 100%"
+  },
+  "Video.CrosshairStyle": {
+   "value": 0,
+   "why": "= 0 (original)"
+  },
+  "Video.CrosshairAlpha": {
+   "value": 100,
+   "why": "= 100% (D511)"
+  },
+  "Video.CrosshairHealthColor": {
+   "value": 0,
+   "why": "= 0 (off, D511)"
+  },
+  "Game.SkipIntro": {
+   "value": 0,
+   "why": "= 0"
+  },
+  "Game.CheckUpdates": {
+   "value": 0,
+   "why": "= 0 (off, D551)"
+  },
+  "Game.MissionTimer": {
+   "value": 0,
+   "why": "= 0 (off, D606)"
+  },
+  "Game.BloodOnHit": {
+   "switch": 1,
+   "pc": 0,
+   "why": "off: the game's own puff"
+  },
+  "Game.CoopEnemyHealth": {
+   "value": 1,
+   "why": "project-dam: = 150% (coop.c)"
+  },
+  "Game.NoHitFlash": {
+   "value": 0,
+   "why": "= 0"
+  },
+  "Game.AllUnlocked": {
+   "value": 0,
+   "why": "= 0 -- D257's \"default ON\" note was stale"
+  },
+  "Game.HudScale": {
+   "value": 100,
+   "why": "= 100 (D226)"
+  },
+  "Game.ScreenShakeIntensity": {
+   "value": 1,
+   "why": "= portScreenShakeScale (1.0f), D181"
+  },
+  "Video.Fullscreen": {
+   "value": 0,
+   "why": "= 0 (windowed)"
+  },
+  "Video.FullscreenMode": {
+   "value": 0,
+   "why": "= 0 (borderless, D511)"
+  },
+  "Video.VSync": {
+   "value": 1,
+   "why": "= 1 (on)"
+  },
+  "Video.FpsCap": {
+   "value": -1,
+   "why": "= -1 (Auto: match display refresh)"
+  },
+  "Video.DisplayFPS": {
+   "value": 0,
+   "why": "registered 0"
+  },
+  "Audio.MasterVolume": {
+   "value": 100,
+   "why": "= 100 (bit-identical passthrough)"
+  },
+  "Video.PerPixelFog": {
+   "value": 1,
+   "why": "per-pixel fog on: the exact fog (the N64 look is the Original preset)"
+  },
+  "Game.SplitScreen": {
+   "value": 0,
+   "why": "two players: one above the other, as the game"
+  }
+ }
+}

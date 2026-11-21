@@ -41,6 +41,23 @@ void optionsOverlayBack(void);
 
 /* 1 while the overlay is on screen. */
 int optionsOverlayIsOpen(void);
+/* The new menu's link to the option values: by config key (or "__DisplayMode", "__Resolution"). Every change goes
+ * through the same path as the old rows, side effects and per-profile fields included. */
+int optionsMenuGet(const char *key, double *out);   /* 1 if the key is known here */
+void optionsMenuSet(const char *key, double value);
+int optionsMenuResCount(void);
+int optionsMenuFileSelect(void);   /* the file select screen is up: the profile can be chosen */
+int optionsMenuInStage(void);
+int optionsMenuUpdateAvailable(void);
+int optionsMenuProfileAvailable(void);   /* a save file is selected (in a mission, or chosen on the file select screen) */   /* a newer release was found */
+int optionsMenuAudioCount(void);                       /* output devices, the system default first */
+const char *optionsMenuAudioLabel(int i);
+void optionsMenuSetSeat(int seat);   /* the player who opened the menu: the controller rows edit that player */
+const char *optionsMenuBindText(const char *key, int slot);   /* the key or button of a binding slot ("" = none) */
+void optionsMenuBindBegin(const char *key, int slot);          /* wait for the next key or mouse button */
+int optionsMenuBindActive(void);
+void optionsMenuAction(const char *key);                       /* an action control: "__ResetBindings"... */
+void optionsMenuResLabel(int i, char *out, int n);
 
 /* D567: 1 once the mouse moved or clicked since the overlay opened or the
  * last pad/keyboard navigation (the pointer is then the active input). */

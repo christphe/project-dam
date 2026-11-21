@@ -233,6 +233,7 @@ static const char *const kRetiredKeys[] = {
     "Input.MenuPointerSpeed",  /* D574 */
     "Input.PadAimSens",        /* project-dam 0.1.0 aim curve, retired */
     "Input.PadAimCurve",       /* project-dam 0.1.0 aim curve, retired */
+    "Input.MouseAimMode",      /* the mouse always aims Centered */
 };
 
 static void applyKV(const char *dottedKey, const char *val)
@@ -300,6 +301,17 @@ const char *configUnknownKeyFirst(void) { return s_unknownFirst; }
  * dotted key, with the same clamp a file load applies. Returns 1 if the key
  * is registered as an int/uint/float option, 0 otherwise (strings are not
  * preset material). */
+void configUnregister(const char *key)
+{
+    for (int i = 0; i < numIntOpts; i++) {
+        if (ci_eq(intOpts[i].key, key)) {
+            for (int j = i; j + 1 < numIntOpts; j++) intOpts[j] = intOpts[j + 1];
+            numIntOpts--;
+            return;
+        }
+    }
+}
+
 int configSetValue(const char *key, double v)
 {
     for (int i = 0; i < numIntOpts; i++) {

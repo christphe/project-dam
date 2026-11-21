@@ -50,12 +50,15 @@ extern MENU current_menu;
 #include "platform.h"
 #include "system.h"
 #include "config.h"
+#include "defaults.h"
 #include "video.h"
 #include "input.h"
 #include "front.h"   /* selected_folder_num (D356 stage probe) */
 #include "lv.h"   /* lvlGetCurrentMultiPlayerSec (D606 mission timer) */
 #include "bondtypes.h"   /* sImageTableEntry (D555 crosshair pointer: typed field reads) */
 #include "file.h"   /* save_data (D356 reset probe: second-file isolation) */
+#include "wheel.h"
+#include "assign.h"
 #include "optionsoverlay.h"
 #include "hudaspect.h"   /* D335b/D472: PORT_HUD_ASPECT */
 #include "watchsettings.h"
@@ -70,6 +73,10 @@ extern save_data *fileGetSaveForFoldernum(u32 folder);
  * declare lround; without this the call is an implicit `int lround()`
  * (GCC only rescued it via its builtin signature). */
 long lround(double x);
+double hypot(double x, double y);
+double fabs(double x);
+double floor(double x);
+double ceil(double x);
 
 /* ---- game symbols (rendering/UI only; see input.c for the same pattern) ---- */
 struct font;
@@ -260,6 +267,9 @@ static int rowSchemeOk(const struct Row *r);   /* D516 */
  * mid-page group separator (PD: menuitem separators between option groups). */
 #define SEP(n) { .key="__Sep" #n, .label="", .kind=ROW_ACTION }
 #define SEP_BACK(n) SEP(n), { .key="__Back" #n, .label="Back", .kind=ROW_ACTION }
+/* A section title: a blank row (no line), then a separator that carries a label (drawn as a title,
+ * its line starts after the text). The first group of a page has no title: the tab names it. */
+#define SEPT(n, t) { .key="__SepGap" #n, .label="", .kind=ROW_ACTION }, { .key="__Sep" #n, .label=t, .kind=ROW_ACTION }
 
 /* Menu PD parity (R7): PD's six groups -- Video, Audio, Mouse, Controller,
  * Game, Key Bindings -- shared by the F10 overlay and the front-end PC Options.
@@ -283,34 +293,37 @@ static struct Row rows[] = {
     /* D447: Original letter/pillarboxes to the console aspect (4:3, or 16:9 while
      * the watch-menu Ratio is 16:9); Window fills the window. */
     { .key="Video.AspectMode", .label="Aspect ratio", .kind=ROW_ENUM, .step=1, .names=kAspectMode },
-    /* D334: native widescreen (world projected at the window aspect, Hor+).
-     * While on, "Widescreen auto FOV" has no effect (it was the stretch-era
-     * vertical-FOV compensation). */
-    { .key="Video.NativeWidescreen", .label="Native widescreen", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
-    { .key="Video.WidescreenAuto", .label="Widescreen auto FOV", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
 #if defined(__SWITCH__)
     { .key="Video.MSAAHandheld", .label="Anti-aliasing (handheld)", .kind=ROW_MSAA },   /* project-dam */
     { .key="Video.MSAA", .label="Anti-aliasing (docked)", .kind=ROW_MSAA },
-    { .key="Video.FXAA", .label="FXAA", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
 #else
     { .key="Video.MSAA", .label="Anti-aliasing", .kind=ROW_MSAA, .restart=1 },
-    { .key="Video.FXAA", .label="FXAA", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },   /* project-dam: now on PC too */
 #endif
     { .key="Video.Visuals", .label="Visuals", .kind=ROW_ENUM, .step=1, .names=kVisuals },   /* D982 */
+    SEP(V2),
+    { .key="Video.VSync", .label="VSync", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
+    { .key="Video.FpsCap", .label="Frame rate cap", .kind=ROW_FPSCAP },
+    { .key="Video.DisplayFPS", .label="Show FPS", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
+    SEP(V3),
+    /* The rest of the picture options live one level down (tabs menu rework). */
+    { .key="__OpenVideoAdv", .label="Advanced", .kind=ROW_ACTION },   /* a sub-menu */
+    { .key="__ResetVideo", .label="Reset to defaults", .kind=ROW_ACTION },
+    SEP_BACK(Video),
+
+    /* Video > Advanced: the options most players never touch. Physically after Video's
+     * Back row so Video's reset range (header -> next header) stays its own. */
+    { .key="__HdrVideoAdv", .label="ADVANCED", .kind=ROW_HEADER },
+    { .key="Video.FXAA", .label="FXAA", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },   /* project-dam: now on PC too */
 #if !defined(__SWITCH__)
     { .key="Video.SkyScale", .label="Sky and sea detail", .kind=ROW_ENUM, .step=1, .names=kSkyScale, .shownWhen="Video.Visuals", .shownValue=2 },
 #endif
 #if defined(GE_VULKAN) && !defined(__SWITCH__)
     { .key="Video.Renderer", .label="Renderer", .kind=ROW_ENUM, .step=1, .names=kRenderer, .restart=1 },   /* issue #44 */
 #endif
-    SEP(V2),
-    { .key="Video.VSync", .label="VSync", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
-    { .key="Video.FpsCap", .label="Frame rate cap", .kind=ROW_FPSCAP },
-    { .key="Video.DisplayFPS", .label="Show FPS", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
-    SEP(V3),
+    SEPT(A1, "Textures"),
     { .key="Video.TextureFilter", .label="Texture filter", .kind=ROW_ENUM, .step=1, .names=kTexFilter },
     { .key="Video.Anisotropy", .label="Anisotropic filtering", .kind=ROW_SLIDER, .step=1, .unit="x" },
-    SEP(V4),
+    SEPT(A2, "Distance"),
     { .key="Video.SafeAreaCrop", .label="Crop overscan", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
     /* 1.0x..8.0x the authored distance (ini 100..800 %; 2.5x default).
      * Legacy AutoFov ini keys remain supported but no longer hide sliders. */
@@ -319,11 +332,11 @@ static struct Row rows[] = {
      * capped at the draw distance. 0.5x..8.0x, 1.0x default. */
     { .key="Video.FogDistance", .label="Fog distance", .kind=ROW_SLIDER, .step=25, .uiMin=100, .uiMax=800 }   /* D565: no < 100 */,
     { .key="Video.LodDistance", .label="LOD distance", .kind=ROW_SLIDER, .step=25, .uiMin=100, .uiMax=800 },
-    SEP(V5),
+    SEPT(A3, "Effects"),
     /* D181 re-exposed (PD "Explosion shake"): named for what it scales (explosions only). */
     { .key="Game.ScreenShakeIntensity", .label="Explosion shake", .kind=ROW_SLIDER, .step=0.1, .uiMin=0, .uiMax=3 },
-    { .key="__ResetVideo", .label="Reset to defaults", .kind=ROW_ACTION },
-    SEP_BACK(Video),
+    { .key="__ResetVideoAdv", .label="Reset to defaults", .kind=ROW_ACTION },
+    SEP_BACK(VideoAdv),
 
     { .key="__HdrAudio", .label="AUDIO", .kind=ROW_HEADER },
     /* D470: port-level master volume (final gain on the mixed output, whole %)
@@ -409,6 +422,7 @@ static struct Row rows[] = {
     { .key="__KbmEnd", .label="", .kind=ROW_ACTION },
 #endif
     { .key="Input.PadPreset", .label="Layout presets", .kind=ROW_ENUM, .step=1, .names=kPadPreset, .schemeOnly=1 },
+    { .key="__OpenLayout", .label="Show layout", .kind=ROW_ACTION, .schemeOnly=1 },   /* a sub-menu: the preset drawn on a pad */
     /* D516: Original shows the game's own styles (the save's, per seat), not the port presets. */
     { .key="Bond.Control", .label="Layout presets", .kind=ROW_ENUM, .step=1, .names=kOrigStyle,
       .found=1, .uiMax=7, .cfgMax=7, .schemeOnly=2 },
@@ -423,7 +437,8 @@ static struct Row rows[] = {
     { .key="Input.Pad.Start", .label="Pause/start", .kind=ROW_PADBIND, .shownWhen="Input.PadPreset", .shownValue=3, .schemeOnly=1 },
 #if defined(__SWITCH__)
     /* project-dam: the aim rows live here on the console (no Mouse page), grouped between two separators. */
-    { .key="__SepC1", .label="", .kind=ROW_ACTION, .schemeOnly=1 },
+    { .key="__SepGapC1", .label="", .kind=ROW_ACTION, .schemeOnly=1 },
+    { .key="__SepC1", .label="Aim", .kind=ROW_ACTION, .schemeOnly=1 },
     { .key="Input.AimMode", .label="Aim style", .kind=ROW_ENUM, .step=1, .names=kAimMode, .schemeOnly=1 },
     { .key="Input.AimRange", .label="Aim range", .kind=ROW_ENUM, .step=1, .names=kAimRange, .hiddenIfOn="Input.AimMode", .schemeOnly=1 },
     { .key="Input.PadAimLookSens", .label="Aim sensitivity", .kind=ROW_SLIDER, .step=5, .schemeOnly=1 },   /* project-dam */
@@ -431,7 +446,8 @@ static struct Row rows[] = {
     { .key="Game.AimAssist", .label="Aim assist", .kind=ROW_ENUM, .step=1, .names=kAimAssist, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },       /* project-dam: nxgame.c */
     { .key="Game.AimEntry", .label="Aim entry", .kind=ROW_ENUM, .step=1, .names=kAimEntry, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },           /* project-dam: nxgame.c */
     { .key="Game.AimStop", .label="Stop on aim", .kind=ROW_TOGGLE, .step=1, .names=kOnOff, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },           /* project-dam: nxgame.c */
-    { .key="__SepC2", .label="", .kind=ROW_ACTION, .schemeOnly=1 },
+    { .key="__SepGapC2", .label="", .kind=ROW_ACTION },
+    { .key="__SepC2", .label="Look and sticks", .kind=ROW_ACTION },
 #else
     /* The pad's Centered aim helpers (nxgame.c), shown while the aim style is Centered. */
     { .key="Input.PadAimLookSens", .label="Aim sensitivity", .kind=ROW_SLIDER, .step=5, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },
@@ -457,6 +473,16 @@ static struct Row rows[] = {
     { .key="Input.RumbleScale", .label="Vibration", .kind=ROW_SLIDER, .step=0.05 },
     { .key="__ResetController", .label="Reset to defaults", .kind=ROW_ACTION },
     SEP_BACK(Controller),
+
+    /* Controller > Layout: the selected seat's preset drawn on a pad (optionsoverlay.c drawLayout).
+     * The blank rows only reserve the picture's height. */
+    { .key="__HdrLayout", .label="LAYOUT", .kind=ROW_HEADER },
+    { .key="__Blank1", .label="", .kind=ROW_ACTION }, { .key="__Blank2", .label="", .kind=ROW_ACTION },
+    { .key="__Blank3", .label="", .kind=ROW_ACTION }, { .key="__Blank4", .label="", .kind=ROW_ACTION },
+    { .key="__Blank5", .label="", .kind=ROW_ACTION }, { .key="__Blank6", .label="", .kind=ROW_ACTION },
+    { .key="__Blank7", .label="", .kind=ROW_ACTION }, { .key="__Blank8", .label="", .kind=ROW_ACTION },
+    { .key="__Blank9", .label="", .kind=ROW_ACTION },
+    SEP_BACK(Layout),
 
     /* PD Key Bindings: one flat list (movement binds, separator, action binds).
      * Mouse buttons 1-5 share the visible slots with keys; pads stay fixed. */
@@ -500,7 +526,7 @@ static struct Row rows[] = {
       .names=kOnOff, .found=1, .uiMax=1, .cfgMax=1, .saveScoped=1 },
     { .key="Bond.Ammo", .label="Ammo on screen", .kind=ROW_TOGGLE,
       .names=kOnOff, .found=1, .uiMax=1, .cfgMax=1, .saveScoped=1 },
-    SEP(G1),
+    SEPT(G1, "View"),
     /* Crouch mode lives here (PD keeps it in "Game"; ratified T1 gate 1).
      * D371/D374: GEPD layout default; crouch defaults to hold. */
     { .key="Input.CrouchMode", .label="Crouch mode", .kind=ROW_ENUM, .step=1, .names=kHold },
@@ -517,7 +543,7 @@ static struct Row rows[] = {
     { .key="Game.AIWideView", .label="Gameplay view area", .kind=ROW_TOGGLE, .step=1, .names=kGameplayView },
     /* D232: the community "no damage flash" toggle (red/green hit-flash overlay in bondview2). */
     { .key="Game.NoHitFlash", .label="No hit flash", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
-    SEP(G2),
+    SEPT(G2, "Crosshair and HUD"),
     { .key="Video.CrosshairHide", .label="Show crosshair", .kind=ROW_TOGGLE, .step=1, .names=kOnOffRev },
     { .key="Video.CrosshairPersistent", .label="Crosshair always on", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },   /* D436 */
     { .key="Video.CrosshairColor", .label="Crosshair color", .kind=ROW_ENUM, .step=1, .names=kCrosshairColor },
@@ -530,7 +556,7 @@ static struct Row rows[] = {
     { .key="Video.CrosshairHealthColor", .label="Crosshair color by health", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },   /* D511 */
     /* D226: scales the ammo counter, pickup/status text and dialogue. */
     { .key="Game.HudScale", .label="HUD scale", .kind=ROW_SLIDER, .step=5, .unit="%" },
-    SEP(G3),
+    SEPT(G3, "Campaign"),
     /* D216/Game.SkipIntro: D408 -- with it on, a failed/aborted
      * mission skips the post-mission failure dossier (MENU_MISSION_FAILED). */
     { .key="Game.SkipIntro", .label="Skip intro", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
@@ -547,7 +573,7 @@ static struct Row rows[] = {
     { .key="Game.BloodOnHit", .label="Blood on hit", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
     /* project-dam: 2-player split-screen co-op campaign (coop.c). */
     { .key="Game.CoopEnemyHealth", .label="Co-op enemy health", .kind=ROW_ENUM, .step=1, .names=kCoopHealth },
-    SEP(G4),
+    SEPT(G4, "Updates"),
     /* D551: opt-in update check; the action row appears only once a newer release is known. */
     { .key="Game.CheckUpdates", .label="Check for updates", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
     { .key="__UpdateOpen", .label="Update available: open page", .kind=ROW_ACTION },
@@ -598,6 +624,8 @@ int optionsRowHeaderParent(int i)
     if (i < 0 || i >= NUM_ROWS || rows[i].kind != ROW_HEADER) return -1;
     /* Select player is the Controller hub entry; its Controller page nests under it. */
     if (!strcmp(rows[i].key, "__HdrController")) return rowIndexByKey("__HdrSelPlayerC");
+    if (!strcmp(rows[i].key, "__HdrVideoAdv")) return rowIndexByKey("__HdrVideo");
+    if (!strcmp(rows[i].key, "__HdrLayout")) return rowIndexByKey("__HdrController");
 #if !defined(__SWITCH__)
     /* PC: Key bindings open from player 1's Input page (a sub-menu). */
     if (!strcmp(rows[i].key, "__HdrBindings")) return rowIndexByKey("__HdrController");
@@ -613,9 +641,13 @@ int optionsRootHeader(int k)
     return rowIndexByKey(kRootOrder[k]);
 }
 
+static int isBlankRow(const struct Row *r)   /* unselectable, draws nothing (reserves room for a picture) */
+{
+    return r->kind == ROW_ACTION && !strncmp(r->key, "__Blank", 7);
+}
 static int isSepRow(const struct Row *r)
 {
-    return r->kind == ROW_ACTION && !strncmp(r->key, "__Sep", 5);
+    return r->kind == ROW_ACTION && (!strncmp(r->key, "__Sep", 5) || isBlankRow(r));
 }
 
 /* On/Off rows draw as PD checkboxes; named two-way rows (Reverse/Upright,
@@ -642,6 +674,8 @@ int optionsRowChildHeader(int i)
     if (i < 0 || i >= NUM_ROWS) return -1;
     const char *key = rows[i].key;
     if (!strncmp(key, "__SelPlayerC", 12)) return rowIndexByKey("__HdrController");
+    if (!strcmp(key, "__OpenVideoAdv")) return rowIndexByKey("__HdrVideoAdv");
+    if (!strcmp(key, "__OpenLayout")) return rowIndexByKey("__HdrLayout");
 #if !defined(__SWITCH__)
     if (!strcmp(key, "__OpenBindings")) return rowIndexByKey("__HdrBindings");
 #endif
@@ -664,6 +698,7 @@ static SDL_atomic_t s_backPending; /* ESC is received on the host thread */
 static int  s_visIdx[NUM_ROWS];
 static int  s_visN = 0;
 static int  s_scroll = 0;
+static SDL_atomic_t s_menuWheel;      /* notches for the ImGui menu (drained by optionsMenuWheel) */
 static SDL_atomic_t s_wheelPending;   /* D314: host-thread wheel notches */
 static int  s_mouseActive = 0;   /* last input was the mouse: hover cues a row + the hint line hides */
 static int  s_hover = -1;        /* visible-list index under the pointer while s_mouseActive (cue only, never selection) */
@@ -1009,10 +1044,12 @@ extern s32 portHudScalePercent(void);   /* video.c: Game.HudScale %, 75..150 (D2
  * hud/100, so the box stays centred, fills the same window area share, and a
  * taller scale just means fewer visible rows (scrolls as before). 100 % is
  * the S2 mapping exactly. */
+#define OV_SHRINK 70   /* the menu draws at this % of the old size (it was too big: ~7 rows on a 16:9 screen) */
 static s32 ovHud(void)
 {
     s32 h = portHudScalePercent();
-    return h < 75 ? 75 : (h > 150 ? 150 : h);
+    h = h < 75 ? 75 : (h > 150 ? 150 : h);
+    return s_open ? h * OV_SHRINK / 100 : h;   /* only the open menu shrinks: the FPS / timer readouts keep their size */
 }
 static s32 ovW(void) { return (s32)lround(320.0 * 100.0 / (double)ovHud()); }
 static s32 ovH(void)
@@ -1034,8 +1071,8 @@ static struct OvLayout overlayLayout(void)
 {
     struct OvLayout o;
     s32 w = ovW(), h = ovH();
-    s32 cardW = s_section < 0 ? 196 : w - 16;   /* PD hub dialogs are narrow; settings pages wide */
-    if (cardW > 304) cardW = 304;
+    s32 cardW = s_section < 0 ? 210 : w - 16;   /* PD hub dialogs are narrow; settings pages wide */
+    if (cardW > 340) cardW = 340;
     o.maxRows = (h - 2 * 4 - OV_HINT_H - OV_TITLE_H - 1 - OV_PAD_TOP - OV_PAD_BOT) / OV_LINE;
     if (o.maxRows < 4) o.maxRows = 4;
     int contentN = s_visN - (s_section >= 0 ? 1 : 0);   /* a section's title is not a row */
@@ -1234,13 +1271,15 @@ static int rowPlatformOk(const struct Row *r)
     };
     /* Display mode Switch / N64 only shows Show FPS; Custom shows the rest. */
     static const char *const kCustomOnly[] = {
-        "Video.AspectMode", "Video.NativeWidescreen", "Video.WidescreenAuto",
-        "Video.MSAAHandheld", "Video.MSAA", "Video.FXAA", "Video.Visuals",
+        "Video.AspectMode", "Video.MSAAHandheld", "Video.MSAA", "Video.Visuals",
         "__SepV2", "Video.VSync", "Video.FpsCap",
-        "__SepV3", "Video.TextureFilter", "Video.Anisotropy",
-        "__SepV4", "Video.SafeAreaCrop",
+        "__SepV3", "__OpenVideoAdv", "__ResetVideo",
+        /* Video > Advanced */
+        "Video.FXAA",
+        "__SepGapA1", "__SepA1", "Video.TextureFilter", "Video.Anisotropy",
+        "__SepGapA2", "__SepA2", "Video.SafeAreaCrop",
         "Video.DrawDistance", "Video.FogDistance", "Video.LodDistance",
-        "__SepV5", "Game.ScreenShakeIntensity", "__ResetVideo",
+        "__SepGapA3", "__SepA3", "Game.ScreenShakeIntensity", "__ResetVideoAdv",
         NULL,
     };
     for (int k = 0; kDesktopOnly[k]; k++) {
@@ -1250,10 +1289,11 @@ static int rowPlatformOk(const struct Row *r)
     /* PC: Enhanced / Original keep the hardware rows (the presets do not
      * set them there); Custom shows the rest too. */
     static const char *const kCustomOnly[] = {
-        "Video.AspectMode", "Video.NativeWidescreen", "Video.WidescreenAuto", "Video.Visuals", "Video.SkyScale",
-        "Video.TextureFilter", "__SepV4", "Video.SafeAreaCrop",
+        "Video.AspectMode", "Video.Visuals", "__ResetVideo",
+        /* Video > Advanced */
+        "Video.TextureFilter", "__SepGapA2", "__SepA2", "Video.SafeAreaCrop",
         "Video.DrawDistance", "Video.FogDistance", "Video.LodDistance",
-        "__SepV5", "Game.ScreenShakeIntensity", "__ResetVideo",
+        "__SepGapA3", "__SepA3", "Game.ScreenShakeIntensity", "__ResetVideoAdv",
         NULL,
     };
 #endif
@@ -1474,9 +1514,14 @@ static void presetProbe(void);   /* D440 GE_PRESETPROBE, below */
 /* Test hook (D558): applies the GE_OPTIONSOVERLAY / _SECTION / _SELECTBACK / _DROPDOWN /
  * _SELECT=<row key> request. Called from init and, with GE_OPTIONSOVERLAY_ATFRAME=<n>, again
  * at emit frame n so it survives the level load (page state resets on load). */
+static void overlayPauseGame(void);   /* GE_NEWMENU: defined with the toggle below */
 static void overlayApplyTestRequest(const char *e)
 {
     s_open = 1;
+    {
+        extern int menuNewActive(void);
+        if (menuNewActive()) overlayPauseGame();
+    }
         /* Diagnostic screenshots: 1 = root, 2..7 = the six pages in hub order;
          * GE_OPTIONSOVERLAY_SECTION=__HdrController etc. targets nested pages. */
         int page = atoi(e) - 2;
@@ -1588,7 +1633,8 @@ static void overlayInit(void)
         /* Pages may scroll (PD dialogs do); overlayHitCheck walks the first and
          * last scroll windows instead of a no-scroll row cap. */
         static const struct { const char *page, *childA, *childB; } pages[] = {
-            { "__HdrVideo", "__DisplayMode", "Game.ScreenShakeIntensity" },
+            { "__HdrVideo", "__DisplayMode", "__OpenVideoAdv" },
+            { "__HdrVideoAdv", "Video.FXAA", "Game.ScreenShakeIntensity" },
             { "__HdrAudio", "Audio.MasterVolume", "Bond.FX" },
 #if defined(__SWITCH__)
             { "__HdrMouse", "Input.MouseSensitivity", "Input.MouseRawInput" },
@@ -2330,157 +2376,15 @@ int optionsRowIsReset(int i)
     return r && isArmRow(r);
 }
 
-/* ini rows reset to the port's C initializers (verified at implementation
- * time, D356 -- each entry cites its source variable): the reset table
- * mirrors them; config.c itself has no central default table (first-write
- * "defaults" are just the current values). __Resolution is NOT here: it is
- * action-backed (s_resSel + videoRequestWindowSize), not a registered config
- * row, so a numeric default cannot express it -- a documented exclusion (the
- * findings D356 entry states it); the player's resolution choice survives a
- * VIDEO reset. */
-static const struct { const char *key; double def; } kResetDefaults[] = {
-    /* INPUT (port/src/input.c initializers) */
-    { "Input.MouseEnabled",       1 },   /* = 1 (on) */
-    { "Input.CrosshairCursor",    1 },   /* = 1 (on, D555) */
-    { "Input.MouseSensitivity", 100 },  /* static int mouseSensitivity = 100 */
-    { "Input.MouseYScale",      100 },  /* = 100 (native), Wave A item 6 */
-    { "Input.MouseInvertY",      0 },   /* = 0 */
-#if defined(__SWITCH__)
-    { "Input.AimMode",           1 },   /* project-dam: = Centred (with the weapon sway) on the console */
-#else
-    { "Input.AimMode",           0 },   /* = AIMMODE_N64 (0) */
-#endif
-    { "Input.AimRange",          0 },   /* = 0 (PC) */
-#if defined(__SWITCH__)
-    { "Input.PadLookInvertY",    1 },   /* project-dam: = 1 (inverted) */
-#else
-    { "Input.PadLookInvertY",    0 },   /* = 0 */
-#endif
-#if defined(__SWITCH__)
-    { "Input.PadDeadzoneL",     3000 },/* project-dam: = NX_DZ_L (10%) */
-#else
-    { "Input.PadDeadzoneL",     7500 },/* = STICK_DEADZONE (7500 = 25%, D546), Wave A */
-#endif
-#if defined(__SWITCH__)
-    { "Input.PadDeadzoneR",     3000 },/* project-dam: = NX_STICK_DEADZONE_R (10%) */
-#else
-    { "Input.PadDeadzoneR",     7500 },/* = STICK_DEADZONE (7500 = 25%, D546), Wave A */
-#endif
-#if defined(__SWITCH__)
-    { "Input.PadLookSensX",      85 },  /* project-dam: = NX_LOOK_SENS (0.85x) */
-#else
-    { "Input.PadLookSensX",     100 },  /* = 100 (native), Wave A */
-#endif
-#if defined(__SWITCH__)
-    { "Input.PadLookSensY",      85 },  /* project-dam: = NX_LOOK_SENS (0.85x) */
-#else
-    { "Input.PadLookSensY",     100 },  /* = 100 (native), Wave A */
-#endif
-#if defined(__SWITCH__)
-    { "Input.PadAimLookSens",    75 },  /* project-dam: = 0.75x */
-    { "Game.AimZoom",             2 },  /* project-dam: = 2x */
-    { "Game.AimAssist",           2 },  /* project-dam: = High */
-    { "Game.AimEntry",            1 },  /* project-dam: = Move view */
-    { "Game.AimStop",             1 },  /* project-dam: = on */
-    { "Game.LookAhead",           3 },  /* project-dam: = High */
-    { "Input.PadLookCurve",     200 },  /* project-dam: = 2.0 (the game's own) */
-    { "Input.PadTurnAccel",       2 },  /* project-dam: = High */
-#else
-    { "Input.PadAimLookSens",   100 },  /* = native */
-    { "Game.AimAssist",           2 },  /* project-dam: = High */
-    { "Game.AimEntry",            1 },  /* project-dam: = Move view */
-    { "Game.AimStop",             1 },  /* project-dam: = on */
-#endif
-#if defined(__SWITCH__)
-    { "Input.PadLookSmooth",      2 },  /* project-dam: = NX_LOOK_SMOOTH */
-#else
-    { "Input.PadLookSmooth",      0 },  /* = 0 (off), Wave A */
-#endif
-    { "Input.PadSouthpaw",        0 },  /* = 0 (off), Wave A */
-#if defined(__SWITCH__)
-    { "Input.PadTriggerPct",     10 },  /* project-dam: = NX_TRIGGER_PCT */
-#else
-    { "Input.PadTriggerPct",     25 },  /* = 25 (was 23; rounded, D508) */
-#endif
-    { "Input.RumbleScale", 0.5 },       /* = gRumbleScale (0.5f), D401 */
-    { "Input.CrouchMode",        1 },   /* = 1 (toggle; D556) */
-    { "Input.MouseSmoothing",    0 },   /* = 0 (raw) */
-    { "Input.MouseRawInput",     0 },   /* = 0 (off) */
-    { "Input.ControlScheme",     0 },   /* = 0 (Modern), D513 */
-    { "Input.P1Type",            2 },   /* = auto (D993) */
-    { "Input.PadPreset",         0 },   /* = 0 (Jinx 1.1), D469 */
-    /* GRAPHICS (port/src/video.c initializers) */
-#if defined(__SWITCH__)
-    { "Video.MSAA",                 4 },   /* project-dam: docked */
-#else
-    { "Video.MSAA",                 2 },   /* = 2 */
-#endif
-#if defined(__SWITCH__)
-    { "Video.MSAAHandheld",         2 },   /* project-dam */
-    { "Video.FXAA",                 1 },   /* project-dam: on */
-#else
-    { "Video.FXAA",                 0 },   /* off: the picture as rendered */
-    { "Video.SkyScale",             0 },   /* GE+ sky and sea at full size */
-    #if defined(GE_VULKAN)
-    { "Video.Renderer",             1 },   /* issue #44: Vulkan */
-#else
-    { "Video.Renderer",             0 },
-#endif
-#endif
-#if defined(__SWITCH__)
-    { "Video.Visuals",              2 },   /* D982: Enhanced */
-#else
-    { "Video.Visuals",              1 },   /* D982: Fixed */
-#endif
-    { "Video.TextureFilter",        1 },   /* = 1 (bilinear) */
-    { "Video.Anisotropy",           4 },   /* = 4 */
-    { "Video.FovScale",            100 },  /* = 100 */
-    { "Video.NativeWidescreen",      1 },  /* = 1 */
-    { "Video.WidescreenAuto",        1 },  /* = 1 */
-    { "Video.SafeAreaCrop",          1 },  /* = 1 */
-    { "Video.AspectMode",            0 },  /* = 0 (Window), D447 */
-    { "Video.DrawDistance",        200 },  /* 2.0x (D546) */
-    { "Video.FogDistance",         100 },  /* 1.0x = N64 fog (D540) */
-    { "Video.LodDistance",         200 },  /* 2.0x (D546) */
-    { "Video.CrosshairHide",      0 },   /* = 0 (on, N64) */
-    { "Video.CrosshairPersistent", 0 },   /* D436: off = N64 (aim mode only) */
-    { "Video.CrosshairColor",   0 },   /* = 0 (authored red sprite) */
-    { "Video.CrosshairRed",   255 },
-    { "Video.CrosshairGreen", 255 },
-    { "Video.CrosshairBlue",  255 },
-    { "Video.CrosshairSize",  100 },   /* = 100% */
-    { "Video.CrosshairStyle",   0 },   /* = 0 (original) */
-    { "Video.CrosshairAlpha", 100 },   /* = 100% (D511) */
-    { "Video.CrosshairHealthColor", 0 },   /* = 0 (off, D511) */
-    /* GAMEPLAY ini rows (port/src/video.c initializers) */
-    { "Game.SkipIntro",   0 },   /* = 0 */
-    { "Game.CheckUpdates", 0 },  /* = 0 (off, D551) */
-    { "Game.MissionTimer", 0 },  /* = 0 (off, D606) */
-#if defined(__SWITCH__)
-    { "Game.BloodOnHit", 1 },    /* project-dam: = on */
-#else
-    { "Game.BloodOnHit", 0 },    /* off: the game's own puff */
-#endif
-    { "Game.CoopEnemyHealth", 1 },/* project-dam: = 150% (coop.c) */
-    { "Game.NoHitFlash",  0 },   /* = 0 */
-    { "Game.AllUnlocked", 0 },   /* = 0 -- D257's "default ON" note was stale */
-    { "Game.HudScale",   100 },  /* = 100 (D226) */
-    { "Game.ScreenShakeIntensity", 1 },   /* = portScreenShakeScale (1.0f), D181 */
-    /* VIDEO (port/src/video.c initializers; DisplayFPS in overlayConfigInit) */
-    { "Video.Fullscreen", 0 },   /* = 0 (windowed) */
-    { "Video.FullscreenMode", 0 },   /* = 0 (borderless, D511) */
-    { "Video.VSync",        1 }, /* = 1 (on) */
-    { "Video.FpsCap",      -1 }, /* = -1 (Auto: match display refresh) */
-    { "Video.DisplayFPS",   0 }, /* registered 0 */
-    /* AUDIO (port/src/audio.c, D470) */
-    { "Audio.MasterVolume", 100 }, /* = 100 (bit-identical passthrough) */
-};
-
+/* ini rows reset to their default in port/src/defaults.json (defaults.h): the same table seeds the ini at
+ * launch (defaultsApply) and feeds the options menu. __Resolution is NOT in it: it is action-backed
+ * (s_resSel + videoRequestWindowSize), not a registered config row, so a numeric default cannot express it
+ * (a documented exclusion, findings D356); the player's resolution choice survives a VIDEO reset. */
+/* The values come from port/src/defaults.json (defaults.h), the same table that seeds the ini at launch. */
 static double kResetDefault(const char *key)
 {
-    for (size_t i = 0; i < sizeof(kResetDefaults) / sizeof(kResetDefaults[0]); i++)
-        if (strcmp(kResetDefaults[i].key, key) == 0) return kResetDefaults[i].def;
-    return -1.0;
+    double v;
+    return defaultsGet(key, &v) ? v : -1.0;
 }
 
 /* The section's DECLARED row range (its header through the next header) --
@@ -2632,6 +2536,7 @@ static void presetProbe(void)
 /* GE_OVNAV test step (called from the file-select hook, game thread):
  * O toggle, D/U move, A open header/link, B back one level, P log the place. */
 static SDL_SpinLock s_ovLock;   /* tentative: the definition below is the same object */
+static void overlayTabStep(int dir);
 void optionsOverlayTestStep(char c)
 {
     SDL_AtomicLock(&s_ovLock);
@@ -2649,6 +2554,8 @@ void optionsOverlayTestStep(char c)
         if (rows[i].kind == ROW_HEADER) { if (s_section < 0) overlayOpenHeader(i); }
         else if (optionsRowChildHeader(i) >= 0) overlayOpenLink(i);
     } else if (c == 'B') { if (s_section >= 0) overlayBackOne(); }
+    else if (c == '<') overlayTabStep(-1);
+    else if (c == '>') overlayTabStep(+1);
     overlayUpdateVisible();
     overlayUpdateScroll();
     if (c == 'P') {
@@ -2659,6 +2566,34 @@ void optionsOverlayTestStep(char c)
             if (rows[s_visIdx[q]].kind == ROW_BOND_FILE) sysLogPrintf(LOG_INFO, "ovnav: chooser row visible at %d", q);
     }
     SDL_AtomicUnlock(&s_ovLock);
+}
+
+/* GE_NEWMENU=1: while the menu is open in a stage the game is paused with its own flags (the pause the
+ * multiplayer watch uses: the clock timer reads 0, the controls are locked), and what was set before
+ * is put back on close. Nothing here touches src/game. */
+extern s32 g_pausedFlag;                       /* src/game/mpmenu.c */
+extern void lvlSetControlsLockedFlag(s32 v);   /* src/game/lv.c */
+extern s32 lvlGetControlsLockedFlag(void);
+static int s_ovPaused = 0;
+static s32 s_ovPrevPaused = 0, s_ovPrevLocked = 0;
+static void overlayPauseGame(void)
+{
+    const int inStage = current_menu == 11 /* the stage */ || current_menu == MENU_INVALID /* bare -level_XX boot */;
+    if (!inStage || s_ovPaused) return;
+    s_ovPrevPaused = g_pausedFlag;
+    s_ovPrevLocked = lvlGetControlsLockedFlag();
+    g_pausedFlag = 1;
+    lvlSetControlsLockedFlag(1);
+    s_ovPaused = 1;
+    sysLogPrintf(LOG_INFO, "optionsoverlay: game paused");
+}
+static void overlayResumeGame(void)
+{
+    if (!s_ovPaused) return;
+    g_pausedFlag = s_ovPrevPaused;
+    lvlSetControlsLockedFlag(s_ovPrevLocked);
+    s_ovPaused = 0;
+    sysLogPrintf(LOG_INFO, "optionsoverlay: game resumed");
 }
 
 void optionsOverlayToggle(void)
@@ -2677,6 +2612,12 @@ void optionsOverlayToggle(void)
         s_memSeat = s_padSeat;
     }
     s_open = !s_open;
+    {
+        extern int menuNewActive(void);
+        if (menuNewActive()) {
+            if (s_open) overlayPauseGame(); else overlayResumeGame();
+        }
+    }
     ddClose();   /* closing (or reopening) the menu cancels a pending pick */
     if (s_open) {
         s_section = -1;
@@ -2722,6 +2663,163 @@ void optionsOverlayBack(void)
 
 int optionsOverlayMouseActive(void) { return s_mouseActive; }   /* D567 */
 
+int optionsMenuGet(const char *key, double *out)
+{
+    if (!strcmp(key, "__DisplayMode")) { *out = videoGetDisplayMode(); return 1; }
+    if (!strcmp(key, "__Resolution")) { *out = s_resSel; return 1; }
+    if (!strcmp(key, "__ControlStyle")) {   /* 0 Modern, 1 Enhanced (the XBLA layouts), 2 Original (the N64 styles) */
+        double scheme = 0, preset = 0;
+        struct Row *rs = rowByKey("Input.ControlScheme"), *rp = rowByKey("Input.PadPreset");
+        if (rs && rs->found) scheme = rowGet(rs);
+        if (rp && rp->found) preset = rowGet(rp);
+        *out = scheme != 0 ? 2 : (preset == 5 ? 0 : 1);
+        return 1;
+    }
+    if (!strcmp(key, "__BondFile")) {   /* the save file the profile settings are read from */
+        const int f = watchSettingsActiveFolder();
+        *out = f < 0 ? 0 : f;
+        return 1;
+    }
+    if (!strcmp(key, "Audio.Device")) {   /* the current device's place in the list, 0 = the system default */
+        const char *cur = audioDeviceCurrentName();
+        int n = audioDeviceRefresh();
+        *out = 0;
+        for (int i = 0; cur && cur[0] && i < n; i++)
+            if (!strcmp(cur, audioDeviceName(i))) { *out = i + 1; break; }
+        return 1;
+    }
+    struct Row *r = rowByKey(key);
+    if (!r || (!r->found && watchSettingsFieldForKey(key) < 0)) return 0;
+    *out = rowGet(r);
+    return 1;
+}
+
+void optionsMenuSet(const char *key, double value)
+{
+    if (!strcmp(key, "__DisplayMode")) { videoSetDisplayMode((int)lround(value)); return; }
+    if (!strcmp(key, "__BondFile")) {   /* file select only: step to the file */
+        if (current_menu != MENU_FILE_SELECT) return;
+        for (int i = 0; i < 4 && watchSettingsActiveFolder() != (int)lround(value); i++) watchSettingsChooseFile(1);
+        return;
+    }
+    if (!strcmp(key, "Audio.Device")) {
+        const int k = (int)lround(value);
+        if (k <= 0) audioDeviceRequest("");
+        else if (k - 1 < audioDeviceRefresh()) audioDeviceRequest(audioDeviceName(k - 1));
+        return;
+    }
+    if (!strcmp(key, "__ControlStyle")) {
+        const int k = (int)lround(value);
+        struct Row *rs = rowByKey("Input.ControlScheme"), *rp = rowByKey("Input.PadPreset");
+        if (!rs || !rp) return;
+        rowSet(rs, k == 2 ? 1.0 : 0.0);
+        if (k == 0) rowSet(rp, 5.0);                              /* Modern is a layout of its own */
+        else if (k == 1 && rowGet(rp) == 5.0) rowSet(rp, 0.0);    /* leaving Modern: the first of the remastered layouts */
+        return;
+    }
+    if (!strcmp(key, "__Resolution")) {
+        const int k = (int)lround(value);
+        if (k < 0 || k >= s_resFitN || k == s_resSel) return;
+        s_resSel = k;
+        const int i = s_resFit[k];
+        videoRequestWindowSize(kResList[i][0], kResList[i][1]);
+        return;
+    }
+    struct Row *r = rowByKey(key);
+    if (r && (r->found || watchSettingsFieldForKey(key) >= 0)) rowSet(r, value);
+}
+
+int optionsMenuResCount(void) { return s_resFitN; }
+
+#ifndef GE_MENU_RUN_STAGE
+#define GE_MENU_RUN_STAGE 11   /* the same value input.c uses for current_menu while a mission runs */
+#endif
+int optionsMenuFileSelect(void) { return current_menu == MENU_FILE_SELECT; }
+int optionsMenuProfileAvailable(void) { return watchSettingsAvailable(); }
+int optionsMenuUpdateAvailable(void) { return updateCheckAvailable() != NULL; }
+int optionsMenuUpdateState(void) { return updateCheckState(); }
+/* "project-dam-v0.3.0" shows as "v0.3.0" */
+const char *optionsMenuUpdateTag(void)
+{
+    const char *t = updateCheckAvailable();
+    if (!t) return "";
+    return strncmp(t, "project-dam-", 12) == 0 ? t + 12 : t;
+}
+const char *optionsMenuUpdateNotes(void) { return updateCheckNotes(); }
+int optionsMenuUpdateInstallable(void)   /* the console downloads and replaces the NRO itself; the PC opens the releases page */
+{
+#ifdef __SWITCH__
+    return 1;
+#else
+    return 0;
+#endif
+}
+int optionsMenuUpdateBusy(void) { return !updateInstallIdle(); }   /* downloading, or done */
+const char *optionsMenuUpdateStatus(void) { return updateInstallStatus(); }
+const char *optionsMenuVersion(void) { return updateCheckRunning(); }
+int optionsMenuInStage(void) { return current_menu == GE_MENU_RUN_STAGE || current_menu == MENU_INVALID; }   /* MENU_INVALID: a level started directly (-level_XX), the front end never ran */
+
+int optionsMenuAudioCount(void) { return 1 + audioDeviceRefresh(); }
+
+const char *optionsMenuAudioLabel(int i)
+{
+    return i <= 0 ? "Default" : audioDeviceName(i - 1);
+}
+
+void optionsMenuSetSeat(int seat)
+{
+    if (seat >= 0 && seat <= 3 && seat != s_padSeat) padSetSeat(seat);
+}
+
+const char *optionsMenuBindText(const char *key, int slot)
+{
+    const char *t = inputBindingSlot(key, slot);
+    return t ? t : "";
+}
+
+void optionsMenuBindBegin(const char *key, int slot)
+{
+    struct Row *r = rowByKey(key);
+    if (!r || r->kind != ROW_BIND) return;
+    r->bindSlot = slot;
+    bindingBegin(r);
+}
+
+int optionsMenuBindActive(void) { return optionsBindingCaptureActive(); }
+
+void optionsMenuAction(const char *key)
+{
+    if (!strcmp(key, "__AssignDevices")) { portAssignRequest(); return; }
+    if (!strcmp(key, "__UpdateOpen")) { updateCheckOpenReleases(); return; }
+    if (!strcmp(key, "__UpdateInstall")) { updateInstall(); return; }   /* Switch: download, check, replace; PC: the page */
+    if (!strcmp(key, "__UpdateCheck")) { updateCheckRun(); return; }
+    if (!strcmp(key, "__RestartGame")) {   /* D443: the orderly D344 quit, then main.c relaunches */
+        sysLogPrintf(LOG_INFO, "menu: restart game requested");
+        configSave();
+        videoRequestRestart("Restart game");
+        return;
+    }
+    if (!strcmp(key, "__QuitToDesktop")) {
+        sysLogPrintf(LOG_INFO, "menu: quit requested");
+        configSave();
+        videoRequestQuit("Quit to desktop");
+        return;
+    }
+    if (!strcmp(key, "__ResetBindings")) {
+        int n = 0;
+        for (int i = 0; i < NUM_ROWS; i++)
+            if (rows[i].kind == ROW_BIND) { n += inputBindingResetKey(rows[i].key); rows[i].bindSlot = 0; }
+        configSave();
+        sysLogPrintf(LOG_INFO, "optionsoverlay: key bindings reset (%d)", n);
+    }
+}
+
+void optionsMenuResLabel(int i, char *out, int n)
+{
+    if (i < 0 || i >= s_resFitN) { if (n > 0) out[0] = 0; return; }
+    snprintf(out, (size_t)n, "%d x %d", kResList[s_resFit[i]][0], kResList[s_resFit[i]][1]);
+}
+
 int optionsOverlayIsOpen(void)
 {
     if (!s_inited) {
@@ -2744,7 +2842,10 @@ void optionsOverlayScroll(int dir)
      * drawing a half-rebuilt list. Queue the notches instead (D287 pattern);
      * optionsOverlayHandleInput() applies them on the scheduler thread. */
     SDL_AtomicAdd(&s_wheelPending, dir);
+    SDL_AtomicAdd(&s_menuWheel, dir);
 }
+
+int optionsMenuWheel(void) { return SDL_AtomicSet(&s_menuWheel, 0); }
 
 /* Scheduler thread: apply wheel notches queued by optionsOverlayScroll().
  * wheel-up -> move up the list; clamps at both ends like a normal PC settings
@@ -2806,6 +2907,8 @@ void optionsOverlayHandleInput(void)
     SDL_AtomicUnlock(&s_ovLock);
 }
 
+static int s_prevTabL, s_prevTabR;   /* L / R edge state (tabs) */
+static int s_nmPrevB = 1, s_nmPrevStart = 1;   /* the new menu: B / Start edges (held when it opens = no press) */
 static void overlayHandleInputLocked(void)
 {
     static int prevUp, prevDn, prevLf, prevRt, prevLmb, prevRmb, prevPadBack;
@@ -2816,6 +2919,8 @@ static void overlayHandleInputLocked(void)
     if (!s_open) {
         s_latchArm = 1;   /* D563: whatever is held when it opens is latched */
         prevUp = prevDn = prevLf = prevRt = prevLmb = prevRmb = 0;
+        s_prevTabL = s_prevTabR = 1;   /* a shoulder held while opening is not a tab press */
+        s_nmPrevB = s_nmPrevStart = 1;
         s_dragRow = -1;
         SDL_AtomicSet(&s_dragWatchField, 0);
         optionsAdjustCommitPending();   /* D489: closed by the host mid-hold */
@@ -2835,6 +2940,26 @@ static void overlayHandleInputLocked(void)
     /* The overlay owns the mouse while it is open: force the OS cursor free +
      * visible (a stage poll would otherwise leave it locked/hidden). */
     inputSuspendForOverlay();
+    {   /* GE_NEWMENU=1: the new menu does its own navigation (menu_game.cpp feeds it the pad, keys and mouse);
+         * this handler only closes it, with B, Start or Esc. Nothing here may touch a row. */
+        extern int menuNewActive(void);
+        if (menuNewActive()) {
+            extern int menuTakeCloseRequest(void);
+            extern void menuPostBack(void);
+            if (portAssignBlocks()) { SDL_AtomicSet(&s_backPending, 0); return; }   /* the device screen takes every press, Esc included */
+            if (optionsBindingCaptureTick()) return;   /* a key is being captured for a binding: nothing else reacts */
+            const int owner = inputOverlayOwnerPad();
+            const int st = inputPadButton(owner, SDL_CONTROLLER_BUTTON_START) != 0;
+            const int esc = SDL_AtomicSet(&s_backPending, 0);
+            /* B (and Esc) close only from the first menu: the menu decides (menuTakeCloseRequest), so a press that
+             * leaves a form never closes it too. Start always closes. */
+            if (esc) menuPostBack();   /* Esc goes back inside the menu, and closes it from the first menu */
+            const int close = menuTakeCloseRequest() || (st && !s_nmPrevStart);
+            s_nmPrevStart = st;
+            if (close) optionsOverlayToggle();
+            return;
+        }
+    }
     if (optionsBindingCaptureTick()) { s_rmbBlock = 1; return; }   /* D544: a right-click bound here must not also go back */
 
     /* D361: regression probe on the ACTUAL joyPoll/F10 thread (not the
@@ -2957,6 +3082,21 @@ static void overlayHandleInputLocked(void)
         return;
     }
     prevPadBack = padBack;
+
+    {   /* Tabs: L / R (or PageUp / PageDown) switch the top-level page */
+        int tl = inputPadButton(inputOverlayOwnerPad(), SDL_CONTROLLER_BUTTON_LEFTSHOULDER) || ks[SDL_SCANCODE_PAGEUP];
+        int tr = inputPadButton(inputOverlayOwnerPad(), SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) || ks[SDL_SCANCODE_PAGEDOWN];
+        int dir = (tr && !s_prevTabR) ? +1 : (tl && !s_prevTabL) ? -1 : 0;
+        s_prevTabL = tl; s_prevTabR = tr;
+        if (dir) {
+            s_mouseActive = 0;
+            navDir = adjDir = 0;
+            if (s_ddRow >= 0) ddClose();
+            overlayTabStep(dir);
+            prevUp = up; prevDn = dn; prevLf = lf; prevRt = rt;
+            return;
+        }
+    }
 
     /* D469: Y or Delete clears the selected pad-binding slot (one press, no modal). */
     {
@@ -3524,18 +3664,19 @@ static int sectionIsMixedScope(int header)
 /* ---- menu PD parity: palette + drawing helpers ----
  * Palette = PD's own green dialog colours (g_MenuColours[], src/game/menu.c:110,
  * PD is MIT, Ryan Dwyer). RGBA, alpha as PD stores it (0x7f = ~50 %). */
-#define PD_DIALOG_BORDER1   0x00bf007fu   /* left/lower border, title gradient start */
-#define PD_TITLEBG          0x0050007fu   /* title gradient middle */
-#define PD_DIALOG_BORDER2   0x00ff007fu   /* right border, title gradient end */
-#define PD_TITLE_TEXT       0xffff00ffu   /* yellow */
-#define PD_BODY             0x002f00c8u   /* PD stores 0x7f; raised after the first look (maintainer: easier to read) */
-#define PD_ITEM_UNFOCUSED   0x55ff55ffu
-#define PD_ITEM_DISABLED    0x006f00afu
+#define PD_DIALOG_BORDER1   0x9be37a50u   /* left/lower border, title gradient start */
+#define PD_TITLEBG          0x1018117fu   /* title gradient middle */
+#define PD_DIALOG_BORDER2   0x9be37a50u   /* right border, title gradient end */
+#define PD_TITLE_TEXT       0x9be37affu   /* accent: muted green (Vert sobre theme) */
+#define PD_BODY             0x0b110cc8u   /* PD stores 0x7f; raised after the first look (maintainer: easier to read) */
+#define PD_ITEM_UNFOCUSED   0xd3e3cfffu
+#define PD_ITEM_DISABLED    0x7e957a9fu
+#define PD_ITEM_TAG         0x7e957affu   /* "(restart)" / "(per profile)" tags: subdued but readable */
 #define PD_FOCUS_INNER      0xffffffffu
-#define PD_FOCUS_OUTER      0x004400ffu
-static const u8 PAL_TITLE_L[3]  = {   0, 191,   0 };   /* border1 */
-static const u8 PAL_TITLE_M[3]  = {   0,  80,   0 };   /* titlebg */
-static const u8 PAL_TITLE_R[3]  = {   0, 255,   0 };   /* border2 */
+#define PD_FOCUS_OUTER      0x0b110cffu
+static const u8 PAL_TITLE_L[3]  = {  18,  28,  20 };   /* title bar: flat */
+static const u8 PAL_TITLE_M[3]  = {  18,  28,  20 };
+static const u8 PAL_TITLE_R[3]  = {  18,  28,  20 };
 
 static u8 lerpU8(int a, int b, int num, int den)
 {
@@ -3571,7 +3712,7 @@ static Gfx *fillGradH3(Gfx *gdl, s32 x0, s32 y0, s32 x1, s32 y1,
 
 /* PD menugfxDrawShimmer: a 40-unit-wide soft streak sweeping along a bar edge.
  * Wall-clock driven (render-rate independent); clipped to [x0, x1). */
-static Gfx *drawShimmer(Gfx *gdl, s32 x0, s32 x1, s32 y0, s32 y1, int periodMs, int phaseMs)
+__attribute__((unused)) static Gfx *drawShimmer(Gfx *gdl, s32 x0, s32 x1, s32 y0, s32 y1, int periodMs, int phaseMs)
 {
     s32 span = (x1 - x0) + 80;
     s32 head = (s32)(((sysGetMicroseconds() / 1000 + (uint64_t)phaseMs) % (uint64_t)periodMs) * (uint64_t)span / (uint64_t)periodMs) - 40;
@@ -3594,7 +3735,7 @@ static u32 pulseInk(void)
     int w = ph < 333 ? ph : 667 - ph;                           /* 0..333..0 */
     int t = w * 1000 / 333;                                     /* 0..1000 */
     t = t * t * (3000 - 2 * t) / 1000000;                       /* smoothstep */
-    u8 r = lerpU8(0x55, 0xff, t, 1000), g = lerpU8(0xff, 0xff, t, 1000), b = lerpU8(0x55, 0xff, t, 1000);
+    u8 r = lerpU8(0x9b, 0xff, t, 1000), g = lerpU8(0xe3, 0xff, t, 1000), b = lerpU8(0x7a, 0xff, t, 1000);
     return ((u32)r << 24) | ((u32)g << 16) | ((u32)b << 8) | 0xffu;
 }
 
@@ -3718,6 +3859,62 @@ static Gfx *overlayEmitLocked(void);
  * this 320-wide overlay canvas, with gunDrawSight's native-widescreen x fix.
  * Drawn after the card (and outside the centred-aspect block) so it floats over
  * everything and follows the real mouse across the whole window. */
+/* The crosshair sprite the game draws (32x32, RGBA per texel), for the menu's preview: texSelect builds the display list the
+ * game would, and its G_SETTIMG says where the texels are and how they are packed; they are read the way the renderer's own
+ * import_texture_* read them. Decoded once per style. Returns 0 when it cannot be read. */
+#include "portaddr.h"
+int portCrosshairPicture(int style, const unsigned char **px)
+{
+    static unsigned char cache[2][32 * 32 * 4];
+    static int state[2];   /* 0 not tried, 1 read, -1 failed */
+    extern struct sImageTableEntry *betacrosshairimage;
+    if (style != 1) style = 0;
+    if (state[style] == 0) {
+        state[style] = -1;
+        struct sImageTableEntry *e = (style == 1 && betacrosshairimage) ? betacrosshairimage : crosshairimage;
+        if (e && e->width == 32 && e->height == 32) {
+            Gfx buf[96];
+            memset(buf, 0, sizeof buf);
+            Gfx *p = buf;
+            texSelect(&p, e, 4, 0, 0);
+            for (Gfx *q = buf; q < p && q < buf + 96; q++) {
+                if ((unsigned char)(q->words.w0 >> 24) != (unsigned char)G_SETTIMG) continue;
+                const int fmt = (int)((q->words.w0 >> 21) & 7), siz = (int)((q->words.w0 >> 19) & 3);
+                const uintptr_t w1 = (uintptr_t)q->words.w1;
+                /* a host pointer as it is, an N64 address (RAM below 8 MB, or a 32-bit one) through the port's window */
+                const unsigned char *a = w1 > 0xFFFFFFFFu ? (const unsigned char *)w1
+                                       : (const unsigned char *)portN64ToHost(w1 < 0x800000 ? (uint32_t)(w1 + 0x80000000u) : (uint32_t)w1);
+                sysLogPrintf(LOG_NOTE, "crosshair preview: style %d image format %d size %d", style, fmt, siz);
+                unsigned char *o = cache[style];
+                int ok = a != NULL;
+                for (int k = 0; k < 32 * 32 && ok; k++) {
+                    int r, g, b, al;
+                    if (fmt == 0 && siz == 3) {   /* RGBA32: a word the renderer swaps (PD_BE32), then R G B A from its low byte up */
+                        uint32_t wd;
+                        memcpy(&wd, a + 4 * k, 4);
+                        wd = __builtin_bswap32(wd);   /* PD_BE32 on a little-endian host */
+                        r = wd & 255; g = (wd >> 8) & 255; b = (wd >> 16) & 255; al = (wd >> 24) & 255;
+                    }
+                    else if (fmt == 0 && siz == 2) { const int v = (a[2 * k] << 8) | a[2 * k + 1]; r = ((v >> 11) & 31) * 255 / 31; g = ((v >> 6) & 31) * 255 / 31; b = ((v >> 1) & 31) * 255 / 31; al = (v & 1) * 255; }   /* RGBA16 */
+                    else if (fmt == 3 && siz == 2) { r = g = b = a[2 * k]; al = a[2 * k + 1]; }                                   /* IA16 */
+                    else if (fmt == 3 && siz == 1) { r = g = b = (a[k] >> 4) * 17; al = (a[k] & 15) * 17; }                       /* IA8 */
+                    else if (fmt == 3 && siz == 0) { const int v = (a[k / 2] >> (4 - (k % 2) * 4)) & 15; r = g = b = (v >> 1) * 255 / 7; al = (v & 1) * 255; }   /* IA4 */
+                    else if (fmt == 4 && siz == 1) { r = g = b = al = a[k]; }                                                      /* I8 */
+                    else if (fmt == 4 && siz == 0) { const int v = (a[k / 2] >> (4 - (k % 2) * 4)) & 15; r = g = b = al = v * 17; }   /* I4 */
+                    else { ok = 0; break; }
+                    o[4 * k] = (unsigned char)r; o[4 * k + 1] = (unsigned char)g; o[4 * k + 2] = (unsigned char)b; o[4 * k + 3] = (unsigned char)al;
+                }
+                if (ok) state[style] = 1;
+                else sysLogPrintf(LOG_NOTE, "crosshair preview: format %d size %d is not read", fmt, siz);
+                break;
+            }
+        }
+    }
+    if (state[style] != 1) return 0;
+    *px = cache[style];
+    return 1;
+}
+
 static Gfx *drawCrosshairPointer(Gfx *gdl, s32 W, s32 H)
 {
     if (!inputCrosshairCursorOn() || !crosshairimage || !SDL_GetMouseFocus()) return gdl;
@@ -3778,9 +3975,295 @@ static const struct HintLine kHint[] = {
     /*  8 */ { "Keyboard and mouse only   Left/Right: Slot",  "Keys/mouse only   L/R: Slot" },
     /*  9 */ { "Enter: Bind   {B}/Esc: Back",                 "Enter: Bind   {B}: Back" },
     /* 10 */ { "{A}/Enter: Select   Left/Right: Change",      "{A}: Select   L/R: Change" },
+    /* 11 */ { "{LB}/{RB}: Tabs   {B}/Esc: Back   {START}: Close", "{LB}/{RB}: Tabs   {B}: Back" },
 };
-enum { H_PADCAP1, H_PADCAP2, H_KEYCAP1, H_KEYCAP2, H_HUB1, H_HUB2, H_CTRL1, H_BACK, H_BIND1, H_BIND2, H_SEC1 };
+enum { H_PADCAP1, H_PADCAP2, H_KEYCAP1, H_KEYCAP2, H_HUB1, H_HUB2, H_CTRL1, H_BACK, H_BIND1, H_BIND2, H_SEC1, H_TABS };
 static void tipSelfCheck(void);
+
+
+/* ------------------------------------------------------------------------ */
+/* Tabs: the top-level pages are tabs in the title bar, switched with L / R.  */
+/* ------------------------------------------------------------------------ */
+
+/* k in kRootOrder of the top-level page that holds section hdr (walks up the nested pages), or -1. */
+static int rootOfSection(int hdr)
+{
+    int guard = 0;
+    while (hdr >= 0 && guard++ < 8) {
+        int parent = optionsRowHeaderParent(hdr);
+        if (parent < 0) break;
+        hdr = parent;
+    }
+    for (int k = 0; k < NUM_ROOTS; k++)
+        if (hdr >= 0 && hdr == optionsRootHeader(k)) return k;
+    return -1;
+}
+
+/* Previous / next top-level page. From the hub, R opens the first tab and L the last. The Controller
+ * tab opens the selected player's own page (the Select player step is only a Back away). */
+static void overlayTabStep(int dir)
+{
+    int k = s_section < 0 ? (dir > 0 ? -1 : NUM_ROOTS) : rootOfSection(s_section);
+    k += dir;
+    if (k < 0) k = NUM_ROOTS - 1;
+    if (k >= NUM_ROOTS) k = 0;
+    int hdr = optionsRootHeader(k);
+    if (hdr >= 0 && !strcmp(rows[hdr].key, "__HdrSelPlayerC")) {
+        padSetSeat(s_padSeat);
+        hdr = rowIndexByKey("__HdrController");
+    }
+    if (hdr >= 0) overlayOpenHeader(hdr);
+}
+
+/* Tab text for k: the page name, extended on the active tab with where inside the page we are. */
+static void tabLabel(int k, int active, char *out, int n)
+{
+    char base[48];
+    titleCase(rows[optionsRootHeader(k)].label, base, sizeof(base));
+    snprintf(out, n, "%s", base);
+    if (!active || s_section < 0) return;
+    const char *key = rows[s_section].key;
+    const char *sub = NULL;
+    char tmp[24];
+    if (!strcmp(key, "__HdrVideoAdv")) sub = "Advanced";
+    else if (!strcmp(key, "__HdrLayout")) { snprintf(tmp, sizeof(tmp), "P%d Layout", s_padSeat + 1); sub = tmp; }
+    else if (!strcmp(key, "__HdrBindings")) { snprintf(tmp, sizeof(tmp), "P%d Keys", s_padSeat + 1); sub = tmp; }
+    else if (!strcmp(key, "__HdrController")) { snprintf(tmp, sizeof(tmp), "Player %d", s_padSeat + 1); sub = tmp; }
+    if (sub) snprintf(out, n, "%s: %s", base, sub);
+    else if (rows[s_section].saveScoped) {
+        int f = watchSettingsActiveFolder();
+        if (f >= 0) snprintf(out, n, "%s (Profile %d)", base, f + 1);
+    }
+}
+
+/* Geometry of the strip: x of each tab, shared by the rect pass and the text pass. */
+static void tabGeometry(const struct OvLayout *o, char lab[][64], s32 *xs, s32 *ws, s32 *chipL, s32 *chipR)
+{
+    int act = rootOfSection(s_section);
+    s32 total = 0;
+    for (int k = 0; k < NUM_ROOTS; k++) {
+        tabLabel(k, k == act, lab[k], 64);
+        ws[k] = bodyWidth(lab[k]);
+        total += ws[k];
+    }
+    s32 avail = (o->right - o->left) - 2 * 26, gap = 12;
+    if (total + gap * (NUM_ROOTS - 1) > avail) gap = (avail - total) / (NUM_ROOTS - 1);
+    if (gap < 4) gap = 4;
+    s32 x = (o->left + o->right) / 2 - (total + gap * (NUM_ROOTS - 1)) / 2;
+    for (int k = 0; k < NUM_ROOTS; k++) { xs[k] = x; x += ws[k] + gap; }
+    *chipL = o->left + 5;
+    *chipR = o->right - 5;
+}
+
+static Gfx *drawTabStripRects(Gfx *gdl, const struct OvLayout *o)
+{
+    char lab[NUM_ROOTS][64];
+    s32 xs[NUM_ROOTS], ws[NUM_ROOTS], cl, cr;
+    tabGeometry(o, lab, xs, ws, &cl, &cr);
+    int act = rootOfSection(s_section);
+    if (act >= 0)   /* the active tab: an underline in the title colour */
+        gdl = fillRectC(gdl, xs[act] - 2, o->titleB - 2, xs[act] + ws[act] + 2, o->titleB, PD_TITLE_TEXT);
+    return gdl;
+}
+
+static Gfx *drawTabStripText(Gfx *gdl, const struct OvLayout *o)
+{
+    char lab[NUM_ROOTS][64];
+    s32 xs[NUM_ROOTS], ws[NUM_ROOTS], cl, cr;
+    tabGeometry(o, lab, xs, ws, &cl, &cr);
+    int act = rootOfSection(s_section);
+    for (int k = 0; k < NUM_ROOTS; k++) {
+        if (k == act) {
+            gdl = drawBody(gdl, xs[k] + 1, o->top + 2, lab[k], 0x000000ff);
+            gdl = drawBody(gdl, xs[k], o->top + 1, lab[k], PD_TITLE_TEXT);
+        } else {
+            gdl = drawBody(gdl, xs[k], o->top + 1, lab[k], PD_ITEM_UNFOCUSED);
+        }
+    }
+    char l[16], r[16];
+    inputPadHelpFmt(l, sizeof(l), "{LB}");
+    inputPadHelpFmt(r, sizeof(r), "{RB}");
+    gdl = drawBody(gdl, cl, o->top + 1, l, PD_ITEM_UNFOCUSED);
+    gdl = drawBodyR(gdl, cr, o->top + 1, r, PD_ITEM_UNFOCUSED);
+    return gdl;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Controller > Layout: the selected player's preset drawn on a pad.          */
+/* ------------------------------------------------------------------------ */
+
+static int onLayoutPage(void)
+{
+    return s_section >= 0 && !strcmp(rows[s_section].key, "__HdrLayout");
+}
+
+struct PadLook {
+    const char *lt, *rt, *lb, *rb;   /* trigger / shoulder names */
+    const char *face[4];             /* A B X Y: what the pad family prints on them (or a shape) */
+    int pos[4];                      /* A B X Y -> slot: 0 top, 1 left, 2 right, 3 bottom */
+};
+static struct PadLook padLook(void)
+{
+    int fam = inputPadFamily(inputOverlayOwnerPad());
+    if (fam == 2)   /* Nintendo: A right, B bottom, X top, Y left */
+        return (struct PadLook){ "ZL", "ZR", "L", "R", { "A", "B", "X", "Y" }, { 2, 3, 0, 1 } };
+    if (fam == 1)   /* PlayStation: cross bottom, circle right, square left, triangle top */
+        return (struct PadLook){ "L2", "R2", "L1", "R1", { "X", "O", "#", "^" }, { 3, 2, 1, 0 } };
+    /* Xbox: A bottom, B right, X left, Y top */
+    return (struct PadLook){ "LT", "RT", "LB", "RB", { "A", "B", "X", "Y" }, { 3, 2, 1, 0 } };
+}
+
+/* Stored preset value (0 Jinx, 1 Christmas, 2 Frost, 3 Custom, 4 Elektra) -> stick roles (D394 table). */
+static const char *const kLeftStickRole[5]  = { "Move / strafe", "Move / turn", "Look / strafe", "", "Look / turn" };
+static const char *const kRightStickRole[5] = { "Look / turn", "Look / strafe", "Move / turn", "", "Move / strafe" };
+
+/* The pad is computed, not drawn from an image: each part is a signed-distance shape (circle, rounded
+ * box, smooth union of those), filled row by row. A run of fully covered pixels is one rectangle; the
+ * edge pixels are single rectangles whose alpha is their coverage, so the outline is smooth at any
+ * size. One silhouette serves a generic Xbox or Switch Pro pad (sticks upper-left / lower-right). */
+enum { PS_CIRCLE, PS_BOX, PS_BODY, PS_CROSS };
+struct PShape {
+    int kind;
+    double x, y, a, b, r;   /* centre, extents, corner radius */
+};
+static double sdCircle(double px, double py, double cx, double cy, double r) { return hypot(px - cx, py - cy) - r; }
+static double sdBox(double px, double py, double cx, double cy, double hx, double hy, double r)
+{
+    double dx = fabs(px - cx) - hx + r, dy = fabs(py - cy) - hy + r;
+    return hypot(dx > 0 ? dx : 0, dy > 0 ? dy : 0) + (dx > dy ? (dx < 0 ? dx : 0) : (dy < 0 ? dy : 0)) - r;
+}
+static double sdSmin(double a, double b, double k)
+{
+    double h = k - fabs(a - b);
+    if (h < 0) h = 0;
+    return (a < b ? a : b) - h * h * 0.25 / k;
+}
+static double shapeDist(const struct PShape *s, double px, double py)
+{
+    switch (s->kind) {
+    case PS_CIRCLE: return sdCircle(px, py, s->x, s->y, s->r);
+    case PS_BOX:    return sdBox(px, py, s->x, s->y, s->a, s->b, s->r);
+    case PS_CROSS: {   /* d-pad: two bars */
+        double h = sdBox(px, py, s->x, s->y, s->a, s->b, s->r), v = sdBox(px, py, s->x, s->y, s->b, s->a, s->r);
+        return h < v ? h : v;
+    }
+    default: {   /* PS_BODY: a centre block and two grips, blended */
+        double c = sdBox(px, py, s->x, s->y - 6, 50, 19, 16);
+        double l = sdCircle(px, py, s->x - 44, s->y + 12, 21), r = sdCircle(px, py, s->x + 44, s->y + 12, 21);
+        return sdSmin(sdSmin(c, l, 14), r, 14);
+    }
+    }
+}
+static void shapeBounds(const struct PShape *s, s32 *x0, s32 *y0, s32 *x1, s32 *y1)
+{
+    double hx = s->a, hy = s->b;
+    if (s->kind == PS_CIRCLE) hx = hy = s->r;
+    else if (s->kind == PS_CROSS) hx = hy = (s->a > s->b ? s->a : s->b);
+    else if (s->kind == PS_BODY) { hx = 70; hy = 40; }
+    *x0 = (s32)floor(s->x - hx) - 3; *x1 = (s32)ceil(s->x + hx) + 3;
+    *y0 = (s32)floor(s->y - hy) - 3; *y1 = (s32)ceil(s->y + hy) + 3;
+    if (s->kind == PS_BODY) *y0 = (s32)floor(s->y - 30) - 3;
+}
+static Gfx *fillShape(Gfx *gdl, const struct PShape *s, double grow, u32 rgba)
+{
+    s32 bx0, by0, bx1, by1;
+    shapeBounds(s, &bx0, &by0, &bx1, &by1);
+    gdl = aaBegin(gdl);
+    for (s32 y = by0; y < by1; y++) {
+        s32 run = -1;
+        for (s32 x = bx0; x <= bx1; x++) {
+            double cov = 0.0;
+            if (x < bx1) {
+                cov = 0.5 - (shapeDist(s, x + 0.5, y + 0.5) - grow);
+                cov = cov < 0 ? 0 : (cov > 1 ? 1 : cov);
+            }
+            if (cov >= 0.999) { if (run < 0) run = x; continue; }
+            if (run >= 0) { gdl = aaPiece(gdl, run, y, x, y + 1, rgba, 1.0); run = -1; }
+            if (cov > 0.02) gdl = aaPiece(gdl, x, y, x + 1, y + 1, rgba, cov);
+        }
+    }
+    return gdl;
+}
+/* a part with an accent ring when the preset uses it */
+static Gfx *drawPart(Gfx *gdl, struct PShape s, u32 fill, int used)
+{
+    if (used) gdl = fillShape(gdl, &s, 1.1, 0x9be37ad0u);
+    return fillShape(gdl, &s, 0.0, fill);
+}
+
+static Gfx *layoutLabel(Gfx *gdl, s32 cx, s32 cy, const char *t)   /* centred on a part */
+{
+    return drawBody(gdl, cx - bodyWidth(t) / 2, cy - 6, t, PD_ITEM_UNFOCUSED);
+}
+
+/* pass 0 = the pad's shapes, pass 1 = every text. Both walk the same coordinates. */
+static Gfx *drawLayout(Gfx *gdl, const struct OvLayout *o, int pass)
+{
+    int preset = *inputPadPresetPtr(s_padSeat);
+    const s32 cx = (o->left + o->right) / 2, y0 = o->contentY + 3, cy = y0 + 50;
+    if (preset < 0 || preset > 4) preset = 0;
+    if (preset == 3) {   /* Custom: nothing fixed to draw */
+        if (pass == 1) {
+            static const char *const l[3] = { "Custom layout", "Every action is bound one by one", "on the Controller page" };
+            for (int i = 0; i < 3; i++)
+                gdl = drawBody(gdl, cx - bodyWidth(l[i]) / 2, y0 + 30 + i * 14, l[i], i ? PD_ITEM_UNFOCUSED : PD_TITLE_TEXT);
+        }
+        return gdl;
+    }
+    const struct PadLook pl = padLook();
+    /* face diamond: slots top, left, right, bottom around (fx, fy) */
+    const double fx = cx + 36, fy = cy - 4;
+    const double slotX[4] = { fx, fx - 9, fx + 9, fx }, slotY[4] = { fy - 9, fy, fy, fy + 9 };
+    const double lsx = cx - 34, lsy = cy - 4, rsx = cx + 14, rsy = cy + 12, dpx = cx - 17, dpy = cy + 12;
+    if (pass == 0) {
+        struct PShape body = { PS_BODY, cx, cy, 0, 0, 0 };
+        gdl = fillShape(gdl, &body, 1.2, 0x9be37a60u);   /* outline */
+        gdl = fillShape(gdl, &body, 0.0, 0x16241aeeu);
+        gdl = drawPart(gdl, (struct PShape){ PS_BOX, cx - 42, cy - 39, 14, 4, 4 }, 0x24372aeeu, 1);   /* triggers */
+        gdl = drawPart(gdl, (struct PShape){ PS_BOX, cx + 42, cy - 39, 14, 4, 4 }, 0x24372aeeu, 1);
+        gdl = drawPart(gdl, (struct PShape){ PS_BOX, cx - 40, cy - 27, 17, 3.2, 3 }, 0x24372aeeu, 1);   /* shoulders */
+        gdl = drawPart(gdl, (struct PShape){ PS_BOX, cx + 40, cy - 27, 17, 3.2, 3 }, 0x24372aeeu, 0);
+        gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, lsx, lsy, 0, 0, 10 }, 0x0b110cffu, 1);   /* sticks: recess + cap */
+        gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, lsx, lsy, 0, 0, 7 }, 0x2c4231ffu, 0);
+        gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, rsx, rsy, 0, 0, 10 }, 0x0b110cffu, 1);
+        gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, rsx, rsy, 0, 0, 7 }, 0x2c4231ffu, 0);
+        gdl = drawPart(gdl, (struct PShape){ PS_CROSS, dpx, dpy, 8, 2.8, 1.2 }, 0x2c4231ffu, 0);   /* d-pad */
+        for (int b = 0; b < 4; b++)
+            gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, slotX[pl.pos[b]], slotY[pl.pos[b]], 0, 0, 5.2 }, 0x0b110cffu, 1);
+        return gdl;
+    }
+    const s32 xr = cx - 68, xl = cx + 68;   /* label columns: right edge of the left one, left edge of the right one */
+    gdl = layoutLabel(gdl, (s32)(cx - 42), cy - 39, pl.lt);
+    gdl = layoutLabel(gdl, (s32)(cx + 42), cy - 39, pl.rt);
+    gdl = layoutLabel(gdl, (s32)(cx - 40), cy - 27, pl.lb);
+    gdl = layoutLabel(gdl, (s32)(cx + 40), cy - 27, pl.rb);
+    gdl = layoutLabel(gdl, (s32)lsx, (s32)lsy, "LS");
+    gdl = layoutLabel(gdl, (s32)rsx, (s32)rsy, "RS");
+    for (int b = 0; b < 4; b++)
+        gdl = layoutLabel(gdl, (s32)slotX[pl.pos[b]], (s32)slotY[pl.pos[b]], pl.face[b]);
+    gdl = drawBodyR(gdl, xr, cy - 45, "Aim", PD_ITEM_UNFOCUSED);
+    gdl = drawBodyR(gdl, xr, cy - 33, "Aim", PD_ITEM_UNFOCUSED);
+    gdl = drawBodyR(gdl, xr, cy - 12, kLeftStickRole[preset], PD_ITEM_UNFOCUSED);
+    gdl = drawBodyR(gdl, xr, cy + 0, "Click: crouch", PD_ITEM_TAG);
+    gdl = drawBodyR(gdl, xr, cy + 13, "D-pad", PD_ITEM_UNFOCUSED);
+    gdl = drawBody(gdl, xl, cy - 45, "Fire", PD_ITEM_UNFOCUSED);
+    gdl = drawBody(gdl, xl, cy - 33, "None", PD_ITEM_TAG);
+    {   /* face buttons in A, B, X, Y order -> their actions */
+        static const char *const act[4] = { "Use", "Gadget", "Reload", "Next weapon" };
+        for (int b = 0; b < 4; b++) {
+            char line[40];
+            snprintf(line, sizeof(line), "%s  %s", pl.face[b], act[b]);
+            gdl = drawBody(gdl, xl, cy - 20 + b * 12, line, PD_ITEM_UNFOCUSED);
+        }
+    }
+    gdl = drawBody(gdl, xl, cy + 28, kRightStickRole[preset], PD_ITEM_UNFOCUSED);
+    gdl = drawBody(gdl, xl, cy + 40, "Click: crouch", PD_ITEM_TAG);
+    {
+        const char *foot = "Sticks: up-down / left-right";
+        gdl = drawBody(gdl, cx - bodyWidth(foot) / 2, y0 + 105, foot, PD_ITEM_TAG);
+    }
+    return gdl;
+}
 
 Gfx *optionsOverlayEmit(void)
 {
@@ -3816,6 +4299,19 @@ static Gfx *overlayEmitLocked(void)
     }
 
     if (!s_open) {
+        {   /* no menu geometry left behind */
+            extern int menuNewActive(void);
+            extern void menuUiClose(void);
+            extern void menuWheelFrame(void);
+            if (menuNewActive()) {
+                char an[4][48];
+                int astep = 0, acount = 0;
+                extern void menuAssignFrame(void);
+                if (portAssignState(an, &astep, &acount)) menuAssignFrame();   /* who plays with which device */
+                else if (portWheelMask() != 0) menuWheelFrame();   /* the Modern wheels */
+                else menuUiClose();
+            }
+        }
         if ((!s_showFps || !s_fpsText[0]) && !s_missionTimeText[0]) {
             return NULL;   /* nothing appended -> golden dumps byte-identical */
         }
@@ -3844,6 +4340,25 @@ static Gfx *overlayEmitLocked(void)
         return s_buf;
     }
 
+    {   /* the new menu (port/src/menu, Dear ImGui through gfx_ui_*) replaces the drawing while GE_NEWMENU=1 */
+        extern int menuNewActive(void);
+        extern void menuUiFrame(void);
+        if (menuNewActive()) {
+            if (s_ovPaused) {   /* a level load clears the flags: keep them set while the menu is open */
+                if (!g_pausedFlag) g_pausedFlag = 1;
+                if (!lvlGetControlsLockedFlag()) lvlSetControlsLockedFlag(1);
+            }
+            static int s_nmLog = 0;
+            if (getenv("GE_NEWMENU_LOG") && (s_nmLog++ % 120) == 0)
+                sysLogPrintf(LOG_INFO, "optionsoverlay: new menu frame %d, g_GlobalTimer=%d paused=%d", s_nmLog, (int)g_GlobalTimer, s_ovPaused);
+            extern void menuAssignFrame(void);
+            char an[4][48];
+            int astep = 0, acount = 0;
+            if (portAssignState(an, &astep, &acount)) menuAssignFrame();   /* choosing the devices: the screen takes the menu's place */
+            else menuUiFrame();
+            return NULL;
+        }
+    }
     overlayUpdateVisible();
     overlayUpdateScroll();
     if (s_scrollSnap) {
@@ -3885,8 +4400,6 @@ static Gfx *overlayEmitLocked(void)
     {
         gdl = fillGradH3(gdl, o.left - 2, o.top, o.right + 2, o.titleB,
                          PAL_TITLE_L, PAL_TITLE_M, PAL_TITLE_R, 127);
-        gdl = drawShimmer(gdl, o.left - 2, o.right + 2, o.top, o.top + 1, 2400, 0);
-        gdl = drawShimmer(gdl, o.left - 2, o.right + 2, o.titleB - 1, o.titleB, 2400, 1200);
         gdl = fillRectC(gdl, o.left, o.titleB, o.right, o.titleB + 1, PD_DIALOG_BORDER1);   /* line under the title bar */
         gdl = fillRectC(gdl, o.left, o.titleB + 1, o.right, o.bottom, PD_BODY);
         gdl = fillRectC(gdl, o.left, o.titleB + 1, o.left + 1, o.bottom, PD_DIALOG_BORDER1);
@@ -3909,13 +4422,13 @@ static Gfx *overlayEmitLocked(void)
         } else if (!strcmp(rows[s_section].key, "__HdrController") &&
                    (PAD_PAGE_ALWAYS || (s_sel >= 0 && s_sel < s_visN && rows[s_visIdx[s_sel]].kind == ROW_PADBIND))) {
             help1 = &kHint[H_CTRL1];
-            help2 = &kHint[H_BACK];
+            help2 = &kHint[H_TABS];
         } else if (!strcmp(rows[s_section].key, "__HdrBindings")) {
             help1 = &kHint[H_BIND1];
             help2 = &kHint[H_BIND2];
         } else {
             help1 = &kHint[H_SEC1];
-            help2 = &kHint[H_BACK];
+            help2 = &kHint[H_TABS];
         }
     }
     /* D507: description of the focused row (any input source), first line under
@@ -3958,11 +4471,17 @@ static Gfx *overlayEmitLocked(void)
         int isCue = (p == cueP);
         u32 fillInk = !r->found ? PD_ITEM_DISABLED :
                       isCue ? pulseInk() : PD_ITEM_UNFOCUSED;
-        if (isSepRow(r)) {   /* PD menuitemSeparatorRender: a 1 px line */
-            gdl = fillRectC(gdl, o.left + 8, rowY + OV_LINE / 2, o.right - 8, rowY + OV_LINE / 2 + 1, PD_ITEM_DISABLED);
+        if (isBlankRow(r) || (isSepRow(r) && !strncmp(r->key, "__SepGap", 8))) continue;   /* blank space, no line */
+        if (isSepRow(r)) {   /* PD menuitemSeparatorRender: a 1 px line; with a label it is a section title */
+            const s32 x0 = r->label[0] ? o.labelX + bodyWidth(r->label) + 6 : o.left + 8;
+            gdl = fillRectC(gdl, x0, rowY + OV_LINE / 2, o.right - 8, rowY + OV_LINE / 2 + 1, PD_ITEM_DISABLED);
             continue;
         }
         if (s_section < 0) continue;   /* hub rows are text only */
+        if (isCue && r->found) {   /* Vert sobre: a thin accent marker and a faint fill instead of the pulse alone */
+            gdl = fillRectC(gdl, o.left + 1, rowY, o.right - 1, rowY + OV_LINE, 0x9be37a1au);
+            gdl = fillRectC(gdl, o.left + 1, rowY + 2, o.left + 3, rowY + OV_LINE - 2, PD_TITLE_TEXT);
+        }
         if (strcmp(r->key, "Video.CrosshairColor") == 0 && r->found) {
             extern void portCrosshairPreview(s32 *, s32 *, s32 *);
             char val[48];
@@ -3994,14 +4513,21 @@ static Gfx *overlayEmitLocked(void)
         }
     }
 
+    if (s_section >= 0 && rootOfSection(s_section) >= 0) gdl = drawTabStripRects(gdl, &o);
+    if (onLayoutPage()) gdl = drawLayout(gdl, &o, 0);
+
     /* ---- pass 2: text ---- */
     gdl = microcode_constructor(gdl);
+    if (onLayoutPage()) gdl = drawLayout(gdl, &o, 1);
 
     for (int p = p0; p <= pLast; p++) {
         const struct Row *r = &rows[s_visIdx[p]];
         s32 rowY = o.contentY + (s32)lround((p - s_scrollF) * OV_LINE) + OV_TEXT_DY;
         if (rowY - OV_TEXT_DY < bodyTop || rowY - OV_TEXT_DY + OV_LINE > bodyBot) continue;
-        if (isSepRow(r)) continue;
+        if (isSepRow(r)) {
+            if (r->label[0]) gdl = drawBody(gdl, o.labelX, rowY, r->label, PD_TITLE_TEXT);   /* section title */
+            continue;
+        }
         int isCue = (p == cueP);
         u32 ink = !r->found ? PD_ITEM_DISABLED :
                   isCue ? pulseInk() : PD_ITEM_UNFOCUSED;
@@ -4040,7 +4566,7 @@ static Gfx *overlayEmitLocked(void)
         if (r->saveScoped && sectionIsMixedScope(s_section)) {
             s32 tagX = o.labelX + bodyWidth(r->label) + 4;
             if (tagX + bodyWidth("(per profile)") < labelEnd - 2)
-                gdl = drawBody(gdl, tagX, rowY, "(per profile)", PD_ITEM_DISABLED);
+                gdl = drawBody(gdl, tagX, rowY, "(per profile)", PD_ITEM_TAG);
         }
         if (!r->found) {
             gdl = drawBodyR(gdl, o.valueR, rowY, "(n/a)", PD_ITEM_DISABLED);
@@ -4049,7 +4575,7 @@ static Gfx *overlayEmitLocked(void)
         if (r->restart) {
             s32 tagX = o.labelX + bodyWidth(r->label) + 4;
             if (tagX + bodyWidth("(restart)") < labelEnd - 2)
-                gdl = drawBody(gdl, tagX, rowY, "(restart)", PD_ITEM_DISABLED);
+                gdl = drawBody(gdl, tagX, rowY, "(restart)", PD_ITEM_TAG);
         }
         if (!checkbox && val[0])   /* sliders: PD shows the value text right of the wedge */
             gdl = drawBodyR(gdl, o.valueR, rowY, val,
@@ -4059,7 +4585,7 @@ static Gfx *overlayEmitLocked(void)
     {   /* late pass (PD): the open dropdown's popup list over everything */
         s32 dx0, dy0, dx1, dy1; int vis;
         if (ddGeom(&dx0, &dy0, &dx1, &dy1, &vis)) {
-            gdl = fillRectC(gdl, dx0, dy0, dx1, dy1, 0x002800eeu);
+            gdl = fillRectC(gdl, dx0, dy0, dx1, dy1, 0x0b110cf2u);
             gdl = fillRectC(gdl, dx0, dy0, dx1, dy0 + 1, PD_DIALOG_BORDER2);
             gdl = fillRectC(gdl, dx0, dy1 - 1, dx1, dy1, PD_DIALOG_BORDER2);
             gdl = fillRectC(gdl, dx0, dy0, dx0 + 1, dy1, PD_DIALOG_BORDER2);
@@ -4080,7 +4606,10 @@ static Gfx *overlayEmitLocked(void)
                 gdl = drawBodyR(gdl, dx1 - 3, dy1 - 12, s_ddTop + vis < s_ddN ? "v" : "^", PD_TITLE_TEXT);
         }
     }
-    {
+    const int tabs = s_section >= 0 && rootOfSection(s_section) >= 0;
+    if (tabs) {
+        gdl = drawTabStripText(gdl, &o);
+    } else {
         char raw[64], title[64];
         if (s_section >= 0) optionsRowTitle(s_section, raw, sizeof(raw));
         else snprintf(raw, sizeof(raw), "Options");
@@ -4095,7 +4624,7 @@ static Gfx *overlayEmitLocked(void)
             gdl = drawBody(gdl, o.left + 8 + bodyWidth(title) + 6, o.top + 1, note, PD_ITEM_UNFOCUSED);
         }
     }
-    if (s_visN - first > o.maxRows)
+    if (!tabs && s_visN - first > o.maxRows)
         gdl = drawBodyR(gdl, o.right - 8, o.top + 1,
                         s_scroll > first ? "^ v" : "v", PD_TITLE_TEXT);
 
@@ -4203,7 +4732,6 @@ static const struct { const char *key, *help; } kRowHelp[] = {
     { "Video.CrosshairPersistent", "Shows the crosshair all the time. The N64 shows it only while aiming. Off by default." },
     { "Video.CrosshairColor", "Original keeps the game's red sight. Custom: set Red, Green and Blue (0-255)." },
     { "Video.CrosshairHealthColor", "The crosshair shifts from green to red as your health drops." },
-    { "Video.WidescreenAuto", "This only applies when Native widescreen is off." },
     { "Game.ScreenShakeIntensity", "Sets how strongly explosions shake the screen." },
     { "Input.AimMode", "Original lets the crosshair move. Centered keeps it in the middle." },
     { "Input.AimRange", "Sets how far the crosshair can move from the center." },
@@ -4346,6 +4874,10 @@ void optionsRowTitle(int i, char *out, int n)
         snprintf(out, n, "PLAYER %d %s", s_padSeat + 1, r->label);
     else if (!strcmp(r->key, "__HdrSelPlayerC"))
         snprintf(out, n, "SELECT PLAYER");
+    else if (!strcmp(r->key, "__HdrVideoAdv"))
+        snprintf(out, n, "VIDEO ADVANCED");
+    else if (!strcmp(r->key, "__HdrLayout"))
+        snprintf(out, n, "PLAYER %d LAYOUT", s_padSeat + 1);
     else
         snprintf(out, n, "%s", r->label);
 }

@@ -340,6 +340,15 @@ This port is a thin layer on a large amount of other people's work.
   (Emill / decompals), [`qemu-irix`](https://github.com/n64decomp/qemu-irix) and
   `rabbitizer` (n64decomp).
 - [SDL2](https://libsdl.org) and [zlib](https://zlib.net).
+- [Dear ImGui](https://github.com/ocornut/imgui) (Omar Cornut and contributors, MIT),
+  which draws the options menu (`port/third_party/imgui/`).
+- The options menu's fonts: [Barlow Condensed](https://github.com/jpt/barlow) (The Barlow
+  Project Authors) and [Fira Sans](https://github.com/mozilla/Fira) (The Mozilla
+  Foundation and Telefonica S.A.), both under the SIL Open Font License
+  (`port/third_party/fonts/`).
+- The options menu's gamepad drawing: "Generic Gamepad Template" by nicefrog, from
+  [OpenGameArt](https://opengameart.org/content/generic-gamepad-template), CC0
+  (`port/third_party/gamepad/`).
 
 **Methodology**
 

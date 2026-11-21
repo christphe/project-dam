@@ -34,6 +34,8 @@ void configRegisterString(const char *key, char *value, int bufSize);
 /* Set / read a registered int/uint/float option by dotted key (clamped like
  * a file load). Return 1 if the key exists. Used by the settings presets. */
 int configSetValue(const char *key, double v);
+/* Forgets a registered numeric key: it is no longer read or written (retiring a key after its migration). */
+void configUnregister(const char *key);
 int configGetValue(const char *key, double *out);
 int configIntKeyWasLoaded(const char *key);   /* key present in the ini at last configLoad */
 

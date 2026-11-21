@@ -44,7 +44,7 @@ extern void exit(int status);
 extern void gfx_sdl_set_external_present(void (*present)(void), void (*dims)(uint32_t *, uint32_t *), void (*park)(void));
 extern void gfx_sdl_set_external_swap_interval(void (*set_interval)(int));
 #endif
-#include "../fast3d/gfx_vulkan.h"   /* issue #44: Vulkan on PC with GE_RENDERER=vk */
+#include "../fast3d/gfx_vulkan.h"   /* issue #44: Vulkan on PC (Video.Renderer) */
 #include "../fast3d/gfx_frame.h"   /* D969: replay thread */
 static int s_vulkanActive = 0;   /* issue #44: the Vulkan backend was selected (0 without GE_VULKAN) */
 
@@ -70,7 +70,7 @@ static int initDone = 0;
 static int cfgVSync         = 1;   /* swap interval: 0 = off, 1 = on            */
 static int cfgFpsCap        = -1;  /* frame cap in fps; -1 = Auto (match display refresh, up to 4x the VI rate), 0 = uncapped (vsync); menu: Auto/30/60, and 90/120/144/165/240 = D578 interpolation */
 #ifdef GE_VULKAN
-static int cfgRenderer      = 1;   /* Video.Renderer (PC): 0 OpenGL, 1 Vulkan (default); GE_RENDERER overrides */
+static int cfgRenderer      = 1;   /* Video.Renderer (PC): 0 OpenGL, 1 Vulkan (default) */
 #else
 static int cfgRenderer      = 0;
 #endif
@@ -95,24 +95,26 @@ extern int portSkyPlus;   /* port/src/skyplus.c */
 extern int gfx_skyplus_half;   /* gfx_opengl.cpp: Video.SkyScale */
 /* Video.Visuals (D982): 0 Original, 1 Fixed, 2 Enhanced. Fixed turns on
  * every fix of a display flaw of the original game (D979 landmarks, D980
- * foliage depth, per-pixel fog D543, ...); Enhanced adds what the game
+ * foliage depth, ...); Enhanced adds what the game
  * never had (the GE+ sky, ...). A new fix or addition tests the level; it
  * gets no key of its own. The N64 display preset = Original. Live: the
  * derived flags below change at the next frame (VCFG_VISUALS). */
 int portVisuals = 2;
 int portDisplayFixes = 1;   /* = portVisuals >= 1 */
+int portSplitVertical = 0;  /* Game.SplitScreen: 0 = one above the other (the game), 1 = side by side */
+int portPerPixelFog = 1;    /* Video.PerPixelFog: the exact fog of the pixel's own depth; off = the RSP's per-vertex fog (the N64) */
 static void videoApplyVisuals(void)
 {
     portDisplayFixes = portVisuals >= 1;
     portSkyPlus = portVisuals >= 2;
-}
+}   /* the fog form is its own setting: Video.PerPixelFog */
 static int cfgTexFilter     = 1;   /* 0 = nearest, 1 = bilinear (default), 2 = N64 3-point + trilinear, 3 = trilinear (Trilinear option, playtest 2026-10-03) */
 static int cfgFixMipTex     = 1;   /* RC2: clip mip-contaminated texture uploads to base height */
 static int cfgDetailBaseTile = 1;  /* D236: TEXTURETYPE_DETAIL -> sample the base image, not the detail tile */
 static int cfgWrapFix       = 0;   /* D74 sub-tile UV pre-wrap + RC3/D167 non-PoT mask-period wrap (opt-in; GE_WRAPFIX env overrides) */
 static float cfgFovScale    = 100.0f; /* D211: percent of the original vertical FOV; 100 = unchanged (byte-identical). D546: float so the 5-degree UI steps are exact */
-static int cfgWidescreenAuto = 1;  /* WIDESCREEN-FOV-PLAN Phase 4: auto-scale vertical FOV by window aspect ratio; on by default, no-op at 4:3 */
-static int cfgNativeWidescreen = 1; /* D334 (WIDESCREEN-FOV-PLAN Phase 2): project the world at the real window aspect (Hor+); no-op at 4:3 */
+/* The world is always projected at the real output aspect (Hor+, D334); the stretch-era keys Video.NativeWidescreen
+ * and Video.WidescreenAuto are gone (defaults.json migrates them). */
 static int cfgHudScale = 100;        /* D226: HUD text/ammo scale %, 100 = original (no emission) */
 static int cfgDrawDistance      = 200; /* % of authored far clip; D546: 2.0x default (was 2.5x) */
 static int cfgFogDistance       = 100; /* D540: % of the authored fog distances; 100 = N64 */
@@ -121,7 +123,7 @@ static int cfgLodDistance         = 200; /* % of authored geometry LOD distance;
 static int cfgLodDistanceAutoFov  = 0; /* legacy ini option, no longer exposed in the menu */
 static int cfgAniso         = 4;   /* D212: anisotropic filtering samples; 4 = the value fast3d already applied (no visual delta at default) */
 static int cfgSafeAreaCrop  = 1;   /* crop the N64 TV-overscan safe-area margin (visible as black top/bottom bars on PC) instead of showing it; on by default */
-static int cfgAspectMode    = 0;   /* D447: 0 = Window (fill the window), 1 = Original (pillar/letterbox to the console aspect: 4:3, or 16:9 while the game's Ratio option is 16:9). D508: 2 = 16:9, 3 = 21:9 (forced) */
+static int cfgAspectMode    = 0;   /* 0 = Auto (the picture is the window: with Native widescreen the world projects at the window's aspect), 1 = 4:3, 2 = 16:9, 3 = 21:9 (forced: bars), 4 = Fit (the nearest of those three to the window, bars) */
 static int cfgFullscreen    = 0;   /* 0 = windowed, 1 = borderless fullscreen   */
 static int cfgFullscreenMode = 0;  /* D511: fullscreen flavour, 0 = borderless desktop, 1 = exclusive */
 static int cfgDeckPresetApplied = 0; /* D283: 1 once the Steam Deck preset has been considered */
@@ -335,7 +337,7 @@ s32 portHudScalePercent(void)
 f32 portNativeAspect(void)
 {
     f32 a = gfx_current_dimensions.aspect_ratio;
-    if (!cfgNativeWidescreen || a < 0.01f) {
+    if (a < 0.01f) {
         return 0.0f;
     }
     if (a < 0.5f) { a = 0.5f; }
@@ -398,10 +400,6 @@ f32 portScaleFovY(f32 fovy, s32 isTitleScreen)
          * the projection aspect; the Phase-4 vertical boost below was the
          * stretch-era compensation and would double-count, so it is skipped
          * (vertical FOV stays the game's, as in the PD port). */
-        if (cfgWidescreenAuto && !cfgNativeWidescreen &&
-            gfx_current_dimensions.aspect_ratio > 0.01f) {
-            fovy *= sqrtf(gfx_current_dimensions.aspect_ratio / (4.0f / 3.0f));
-        }
         if (portFovScale > 0.4f && portFovScale < 2.01f && portFovScale != 1.0f) {
             fovy *= portFovScale;
         }
@@ -463,10 +461,6 @@ f32 portLodScaleOwnFov(void)
 f32 portFovYScaleFactor(void)
 {
     f32 k = 1.0f;
-    if (cfgWidescreenAuto && !cfgNativeWidescreen &&
-        gfx_current_dimensions.aspect_ratio > 0.01f) {
-        k *= sqrtf(gfx_current_dimensions.aspect_ratio / (4.0f / 3.0f));
-    }
     if (portFovScale > 0.4f && portFovScale < 2.01f && portFovScale != 1.0f) {
         k *= portFovScale;
     }
@@ -493,9 +487,6 @@ f32 portFovHorizDegrees(s32 pct)
     double asp = (double)portNativeAspect();
     if (asp <= 0.0) {
         asp = 4.0 / 3.0;
-        if (cfgWidescreenAuto && gfx_current_dimensions.aspect_ratio > 0.01f) {
-            v *= sqrt((double)gfx_current_dimensions.aspect_ratio / (4.0 / 3.0));
-        }
     }
     if (pct > 40 && pct < 201) {
         v *= (double)pct / 100.0;
@@ -641,7 +632,7 @@ f32 portRoomPoolScale(void)
     /* D334: native widescreen widens the horizontal frustum too (via the
      * projection aspect instead of the vertical boost), so it admits the same
      * extra side rooms and keeps the pool bump. */
-    if ((cfgWidescreenAuto || cfgNativeWidescreen) && gfx_current_dimensions.aspect_ratio > 0.01f) {
+    if (gfx_current_dimensions.aspect_ratio > 0.01f) {
         t *= sqrtf(gfx_current_dimensions.aspect_ratio / (4.0f / 3.0f));
     }
     if (t > scale) { scale = t; }
@@ -682,7 +673,7 @@ PD_CONSTRUCTOR static void videoConfigInit(void)
     configRegisterInt("Video.CrosshairRed",   &cfgCrosshairRed,   0, 255);
     configRegisterInt("Video.CrosshairGreen", &cfgCrosshairGreen, 0, 255);
     configRegisterInt("Video.CrosshairBlue",  &cfgCrosshairBlue,  0, 255);
-    configRegisterInt("Video.CrosshairSize",  &cfgCrosshairSize, 50, 200);
+    configRegisterInt("Video.CrosshairSize",  &cfgCrosshairSize, 10, 100);
     configRegisterInt("Video.CrosshairStyle", &cfgCrosshairStyle, 0, 1);
     configRegisterInt("Video.CrosshairAlpha", &cfgCrosshairAlpha, 0, 100);        /* D511 */
     configRegisterInt("Video.CrosshairHealthColor", &cfgCrosshairHealth, 0, 1);   /* D511 */
@@ -694,6 +685,8 @@ PD_CONSTRUCTOR static void videoConfigInit(void)
 #ifndef __SWITCH__
     configRegisterInt("Video.SkyScale",      &gfx_skyplus_half, 0, 1);   /* GE+ sky and sea: 0 full size, 1 half size (faster); read each frame */
 #endif
+    configRegisterInt("Game.SplitScreen",    &portSplitVertical, 0, 1);
+    configRegisterInt("Video.PerPixelFog",   &portPerPixelFog, 0, 1);
     configRegisterInt("Video.Visuals",       &portVisuals,   0, 2);   /* D982: Original / Fixed / Enhanced */
     configRegisterInt("Video.MSAA",          &cfgMSAA,       1, 16);   /* D443: 16x added */
     configRegisterInt("Video.DisplayMode",   &cfgDisplayMode, 0, 2);
@@ -706,8 +699,6 @@ PD_CONSTRUCTOR static void videoConfigInit(void)
     configRegisterInt("Video.DetailBaseTile", &cfgDetailBaseTile, 0, 1);
     configRegisterInt("Video.WrapFix", &cfgWrapFix, 0, 1);
     configRegisterFloat("Video.FovScale", &cfgFovScale, 50.f, 150.f);
-    configRegisterInt("Video.WidescreenAuto", &cfgWidescreenAuto, 0, 1);
-    configRegisterInt("Video.NativeWidescreen", &cfgNativeWidescreen, 0, 1);   /* D334 */
     configRegisterInt("Game.HudScale", &cfgHudScale, 75, 150);   /* D226: capped at 150 (user: little benefit above) */
     configRegisterInt("Video.DrawDistance", &cfgDrawDistance, 100, 800);
     /* D565: floor 100 -- below the authored fog the shortened far clip also
@@ -719,7 +710,7 @@ PD_CONSTRUCTOR static void videoConfigInit(void)
     configRegisterInt("Video.LodDistanceAutoFov", &cfgLodDistanceAutoFov, 0, 1);
     configRegisterInt("Video.Anisotropy", &cfgAniso, 1, 16);
     configRegisterInt("Video.SafeAreaCrop", &cfgSafeAreaCrop, 0, 1);
-    configRegisterInt("Video.AspectMode", &cfgAspectMode, 0, 3);   /* D447; D508 forced ratios 2..3 */
+    configRegisterInt("Video.AspectMode", &cfgAspectMode, 0, 4);   /* 0 Auto, 1..3 forced 4:3 / 16:9 / 21:9, 4 Fit */
     configRegisterInt("Video.Fullscreen",    &cfgFullscreen, 0, 1);
     configRegisterInt("Video.FullscreenMode", &cfgFullscreenMode, 0, 1);   /* D511: 0 borderless, 1 exclusive */
     configRegisterInt("Window.Width",        &cfgWinW,       0, 16384);
@@ -934,10 +925,8 @@ static void videoApplyLowEndDefaults(void)
 static const struct { const char *key; double n64, port; } kVideoPresets[] = {
     { "Video.TextureFilter",         2,   1 },   /* N64 3-point vs bilinear */
     { "Video.Visuals",               0,   2 },   /* D982: Original vs Enhanced */
-    { "Video.NativeWidescreen",      0,   1 },   /* 4:3 projection (D334) */
-    { "Video.WidescreenAuto",        0,   1 },   /* stock vertical FOV at any window aspect */
+    { "Video.PerPixelFog",           0,   1 },   /* per-vertex RSP fog (N64) vs the exact per-pixel fog (D543) */
     { "Video.SafeAreaCrop",          0,   1 },   /* show the VI frame as output, borders included */
-    { "Video.AspectMode",            1,   0 },   /* D447: exact console aspect, bars around it */
     { "Video.DrawDistance",        100, 200 },   /* authored far clip (D218); D546 2.0x */
     { "Video.FogDistance",         100, 100 },   /* D540: N64 fog in both presets */
     { "Video.LodDistance",         100, 200 },   /* authored LOD switch distances (D249); D546 2.0x */
@@ -980,6 +969,12 @@ int videoApplyPreset(int which)
     if (which == VIDEO_PRESET_N64 && (cfgFpsCap > 60 || cfgFpsCap < 0)) {
         configSetValue("Video.FpsCap", 60);
         if (initDone) videoRequestLiveConfigForKey("Video.FpsCap");
+        changed++;
+    }
+    /* Original N64 shows only shapes the console had: Auto (the window's own) and 21:9 become Fit (4:3 or 16:9). Aspect is not a
+     * bundle key, so this does not make Display mode Custom. */
+    if (which == VIDEO_PRESET_N64 && (cfgAspectMode == 0 || cfgAspectMode == 3)) {
+        cfgAspectMode = 4;
         changed++;
     }
     sysLogPrintf(LOG_INFO, "video: applied %s preset (%d value(s) changed)",
@@ -1058,6 +1053,7 @@ void videoRequestLiveConfigForKey(const char *key)
     else if (!strcmp(key, "Video.Anisotropy"))      mask = VCFG_ANISO;
     else if (!strcmp(key, "Video.SafeAreaCrop"))    mask = VCFG_CROP;
     else if (!strcmp(key, "Video.Visuals"))         mask = VCFG_VISUALS;   /* D982 */
+    else if (!strcmp(key, "Video.PerPixelFog"))     mask = VCFG_VISUALS;
 #ifdef __SWITCH__
     else if (!strcmp(key, "Video.MSAA"))            mask = VCFG_MSAA;   /* project-dam: live there */
     else if (!strcmp(key, "Video.FXAA"))            mask = VCFG_FXAA;
@@ -1359,9 +1355,8 @@ int videoInit(void)
     }
 #endif
 #ifdef GE_VULKAN
-    /* issue #44: Vulkan backend, the PC default (Video.Renderer; GE_RENDERER=vk / gl overrides it);
-     * no usable driver -> GL. */
-    if (getenv("GE_RENDERER") != NULL ? gfx_vulkan_wanted() : cfgRenderer == 1) {
+    /* issue #44: Vulkan backend, the PC default (Video.Renderer); no usable driver -> GL. */
+    if (cfgRenderer == 1) {
         if (gfx_vulkan_probe()) {
             renderingAPI = &gfx_vulkan_api;
             gfx_sdl_set_vulkan_window(true);
@@ -1596,20 +1591,25 @@ void videoDestroy(void)
     }
 }
 
-/* D447: target aspect of the output rect for the current frame. Original mode
- * does what the console did: 4:3, or 16:9 while the watch-menu Ratio option is
- * 16:9 (the game pre-squashes for a stretching widescreen TV). get_screen_ratio()
- * is read only, never written. Returns 0 for Window mode (fill the window). */
-extern int get_screen_ratio(void);
+/* Target aspect of the output rect for the current frame (0 = fill the window). Forced ratios and Fit
+ * letterbox/pillarbox to that shape; with Native widescreen the world is projected at the same aspect, so
+ * nothing is stretched. Fit picks the nearest of 4:3, 16:9 and 21:9 to the window (the boundaries are the
+ * geometric means, 1.54 and 2.03); in Display mode Original only 4:3 and 16:9. */
 static float videoOutputAspect(void)
 {
     switch (cfgAspectMode) {
-    case 1:   /* Original: the console's own shape */
-        return get_screen_ratio() == 1 /* SCREEN_RATIO_16_9 */ ? (16.0f / 9.0f) : (4.0f / 3.0f);
-    case 2: return 16.0f / 9.0f;   /* D508: forced ratios; with Native widescreen the world
-                                      projects at this aspect (it is the output rect's own) */
+    case 1: return 4.0f / 3.0f;
+    case 2: return 16.0f / 9.0f;
     case 3: return 21.0f / 9.0f;   /* also stands in for 2.35:1 cinema */
-    default: return 0.0f;          /* Window: fill the window */
+    case 4: {
+        int w, h;
+        videoGetWindowSize(&w, &h);
+        if (w <= 0 || h <= 0) return 0.0f;
+        const float a = (float)w / (float)h;
+        if (videoGetDisplayMode() == 1) return a < 1.54f ? 4.0f / 3.0f : 16.0f / 9.0f;   /* Original N64: the console's two shapes */
+        return a < 1.54f ? 4.0f / 3.0f : a < 2.03f ? 16.0f / 9.0f : 21.0f / 9.0f;
+    }
+    default: return 0.0f;          /* Auto: the picture is the window */
     }
 }
 
@@ -1668,7 +1668,7 @@ void videoStartFrame(void)
         if (dirty & VCFG_CROP) gfx_set_safe_area_crop(cfgSafeAreaCrop);
         if (dirty & VCFG_VISUALS) {   /* D982 */
             videoApplyVisuals();
-            gfx_set_fog_pixel(portDisplayFixes);
+            gfx_set_fog_pixel(portPerPixelFog);
         }
         if (dirty & VCFG_FXAA) gfx_fxaa_on = cfgFXAA != 0;   /* project-dam */
 #ifdef __SWITCH__
@@ -1758,18 +1758,13 @@ void videoPumpEvents(void)
             } else if (ev.key.keysym.sym == SDLK_F12 && !ev.key.repeat) {
                 screenshotReq = 1;
             } else if (ev.key.keysym.sym == SDLK_F10 && !ev.key.repeat) {
-                /* F10: port-layer options overlay (the one PC options UI). */
+                /* F10: the menu (the one PC options UI). */
                 optionsOverlayToggle();
             } else if (ev.key.keysym.sym == SDLK_ESCAPE && !ev.key.repeat) {
-                /* Overlay open: ESC backs out of a category, then closes (swallowed). Otherwise
-                 * WI-1: in click-to-lock mode ESC frees the captured cursor
-                 * (and is swallowed); else it falls through to input.c where
-                 * it feeds the N64 B button (D145). */
-                if (optionsOverlayIsOpen()) {
-                    optionsOverlayBack();
-                } else {
-                    inputReleaseCapture();
-                }
+                /* Menu open: ESC goes back inside it, and closes it from the first menu (the menu reads the
+                 * key itself, menu_game.cpp feedInput). Otherwise ESC is the game's B button (input.c, D145);
+                 * it no longer frees the mouse. */
+                if (optionsOverlayIsOpen()) optionsOverlayBack();
             }
             break;
         case SDL_MOUSEBUTTONDOWN:

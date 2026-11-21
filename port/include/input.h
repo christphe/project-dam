@@ -66,6 +66,11 @@ int  inputCrosshairCursorOn(void);   /* D555: Input.CrosshairCursor (overlay dra
  * navigation). Unaffected by the overlay's pad-swallow, which happens at our
  * logic layer, not SDL's. No pad open -> 0. */
 int   inputPadButton(int idx, SDL_GameControllerButton b);
+int   inputPadNewPress(char *id, int n);   /* a pad button went down: that pad's id, 1 = yes */
+const char *inputPadNameForId(const char *id);
+int   inputPadCount(void);
+int   inputPadIsModern(int seat);       /* the seat plays with the Modern layout (LB / RB open the wheels) */
+int   inputOverlayOwnerSeat(void);  /* the player (seat 0..3) whose pad opened the menu */
 int   inputOverlayOwnerPad(void);   /* D472: pad driving the F10 overlay */
 short inputPadAxis(int idx, SDL_GameControllerAxis a);
 
