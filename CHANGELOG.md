@@ -3,6 +3,7 @@
 ## [Unreleased] - minor
 
 ### Added
+- A Windows build (x86-64 zip) in every release, next to the Switch NRO; the PC update check offers it
 - A fullscreen options menu, the same on the Switch and the PC (F10 on the PC, Select on a pad): a first menu (Resume, Options, Controllers, Check for updates, Restart, Quit), then Video, Audio, Input and Game pages with a help line for each value. It replaces the small card of the old overlay
 - Modern control style: right trigger fires, left trigger aims, the face buttons reload, switch weapon and use (by position, so a Nintendo pad gets the same hands), a click of the right stick crouches. Hold the left bumper for a weapon wheel or the right one for a gadget wheel and pick with the right stick: you keep walking, the wheel only takes the aim
 - Check for updates in the first menu (PC and Switch): "Update available" opens the release notes, and on the Switch installs the new version (A twice: it downloads, checks the hash and replaces the NRO, #68). The version is shown beside the title

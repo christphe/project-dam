@@ -24,7 +24,8 @@ export SDL2DIR="${SDL2DIR:-${SYSROOT}}"
 cmake -S . -B "${BUILD_DIR}" -G Ninja \
     -DROMID="${ROMID}" \
     -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}" \
-    -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN}"
+    -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN}" \
+    -DPROJECT_DAM_VERSION="${PROJECT_DAM_VERSION:-}"
 cmake --build "${BUILD_DIR}"
 
 # Copy every non-system DLL the executable imports, transitively, from the
