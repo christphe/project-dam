@@ -114,6 +114,7 @@ int  inputAnyPadHeld(void);                        /* a button of any gamepad is
 unsigned inputPadHeldSources(int seat);            /* bit i = source i held */
 int  inputPadPresetStep(int cur, int dir);
 int *inputPadPresetPtr(int seat);                 /* D518: per-seat preset value */
+int *inputControlSchemePtr(int seat);             /* per-player Input.ControlScheme: 0 Enhanced, 1 Original, 2 Modern */
 void inputPadBindingText(int seat, int act, int slot, char *out, int n);
 int  inputPadBindingSet(int seat, int act, int slot, int src);   /* src < 0 clears */
 int  inputPadBindingReset(int act);                /* all seats; returns seats changed */

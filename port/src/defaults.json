@@ -1,10 +1,10 @@
 {
  "_comment": "Default of every config key. Source of truth for the options menu AND for the first-run ini: defaultsApply() sets these before configLoad(). A bare value applies to every platform; {\"switch\": n, \"pc\": n} per platform (a missing side = no default there); \"why\" is for people. After editing run tools_pc/gen_menudata.py. \"version\" is the ini's (Config.Version); a migration lists steps for inis older than its version: {\"key\",\"set\"|\"reset\",\"when\":{\"key\",\"eq\"}}. \"legacy\" keys are removed from the game but still read once, so a migration can look at them.",
- "version": 1,
+ "version": 2,
  "migrations": [
   {
    "version": 1,
-   "why": "Native widescreen and Widescreen auto FOV are gone: the picture always takes the output aspect. Whoever had the stretched 4:3 picture off (native widescreen off) gets forced 4:3 with bars. The fog form used to follow Visuals (Original = per-vertex): it is now its own key. The Custom gamepad layout is gone (Modern replaces it): a Custom seat falls back to 1.1 Jinx.",
+   "why": "Native widescreen and Widescreen auto FOV are gone: the picture always takes the output aspect. Whoever had the stretched 4:3 picture off (native widescreen off) gets forced 4:3 with bars. The fog form used to follow Visuals (Original = per-vertex): it is now its own key. The Custom gamepad layout is gone (Modern replaces it): a Custom seat (any player) falls back to 1.1 Jinx.",
    "steps": [
     {
      "key": "Video.AspectMode",
@@ -29,6 +29,180 @@
       "key": "Input.PadPreset",
       "eq": 3
      }
+    },
+    {
+     "key": "Input.PadPreset2",
+     "set": 0,
+     "when": {
+      "key": "Input.PadPreset2",
+      "eq": 3
+     }
+    },
+    {
+     "key": "Input.PadPreset3",
+     "set": 0,
+     "when": {
+      "key": "Input.PadPreset3",
+      "eq": 3
+     }
+    },
+    {
+     "key": "Input.PadPreset4",
+     "set": 0,
+     "when": {
+      "key": "Input.PadPreset4",
+      "eq": 3
+     }
+    }
+   ]
+  },
+  {
+   "version": 2,
+   "why": "Modern is a control style beside Enhanced and Original (Input.ControlScheme 2), no longer layout 5 of Input.PadPreset, and the style is per player like the layouts (Input.ControlScheme2..4). Players 2-4 take the old global style; a player on layout 5 becomes Modern with 1.1 Jinx as their Enhanced layout. Original ignored the layouts, so an Original player's layout goes back to 1.1 Jinx first.",
+   "steps": [
+    {
+     "key": "Input.PadPreset",
+     "set": 0,
+     "when": {
+      "key": "Input.ControlScheme",
+      "eq": 1
+     }
+    },
+    {
+     "key": "Input.PadPreset2",
+     "set": 0,
+     "when": {
+      "key": "Input.ControlScheme",
+      "eq": 1
+     }
+    },
+    {
+     "key": "Input.PadPreset3",
+     "set": 0,
+     "when": {
+      "key": "Input.ControlScheme",
+      "eq": 1
+     }
+    },
+    {
+     "key": "Input.PadPreset4",
+     "set": 0,
+     "when": {
+      "key": "Input.ControlScheme",
+      "eq": 1
+     }
+    },
+    {
+     "key": "Input.ControlScheme2",
+     "set": 0,
+     "when": {
+      "key": "Input.ControlScheme",
+      "eq": 0
+     }
+    },
+    {
+     "key": "Input.ControlScheme2",
+     "set": 1,
+     "when": {
+      "key": "Input.ControlScheme",
+      "eq": 1
+     }
+    },
+    {
+     "key": "Input.ControlScheme3",
+     "set": 0,
+     "when": {
+      "key": "Input.ControlScheme",
+      "eq": 0
+     }
+    },
+    {
+     "key": "Input.ControlScheme3",
+     "set": 1,
+     "when": {
+      "key": "Input.ControlScheme",
+      "eq": 1
+     }
+    },
+    {
+     "key": "Input.ControlScheme4",
+     "set": 0,
+     "when": {
+      "key": "Input.ControlScheme",
+      "eq": 0
+     }
+    },
+    {
+     "key": "Input.ControlScheme4",
+     "set": 1,
+     "when": {
+      "key": "Input.ControlScheme",
+      "eq": 1
+     }
+    },
+    {
+     "key": "Input.ControlScheme",
+     "set": 2,
+     "when": {
+      "key": "Input.PadPreset",
+      "eq": 5
+     }
+    },
+    {
+     "key": "Input.PadPreset",
+     "set": 0,
+     "when": {
+      "key": "Input.PadPreset",
+      "eq": 5
+     }
+    },
+    {
+     "key": "Input.ControlScheme2",
+     "set": 2,
+     "when": {
+      "key": "Input.PadPreset2",
+      "eq": 5
+     }
+    },
+    {
+     "key": "Input.PadPreset2",
+     "set": 0,
+     "when": {
+      "key": "Input.PadPreset2",
+      "eq": 5
+     }
+    },
+    {
+     "key": "Input.ControlScheme3",
+     "set": 2,
+     "when": {
+      "key": "Input.PadPreset3",
+      "eq": 5
+     }
+    },
+    {
+     "key": "Input.PadPreset3",
+     "set": 0,
+     "when": {
+      "key": "Input.PadPreset3",
+      "eq": 5
+     }
+    },
+    {
+     "key": "Input.ControlScheme4",
+     "set": 2,
+     "when": {
+      "key": "Input.PadPreset4",
+      "eq": 5
+     }
+    },
+    {
+     "key": "Input.PadPreset4",
+     "set": 0,
+     "when": {
+      "key": "Input.PadPreset4",
+      "eq": 5
+     }
     }
    ]
   }
@@ -47,8 +221,8 @@
    "why": "= 1 (on, D555)"
   },
   "Input.MouseSensitivity": {
-   "value": 100,
-   "why": "static int mouseSensitivity = 100"
+   "value": 230,
+   "why": "the maintainer's tuned value (static int mouseSensitivity = 100 before the defaults apply)"
   },
   "Input.MouseYScale": {
    "value": 100,
@@ -151,28 +325,40 @@
    "why": "= 0 (off)"
   },
   "Input.ControlScheme": {
-   "value": 0,
-   "why": "= 0 (Modern), D513"
+   "value": 2,
+   "why": "= 2 (Modern) for every player (maintainer's choice, #78); 0 Enhanced, 1 Original (D513)"
+  },
+  "Input.ControlScheme2": {
+   "value": 2,
+   "why": "= 2 (Modern), same as player 1"
+  },
+  "Input.ControlScheme3": {
+   "value": 2,
+   "why": "= 2 (Modern), same as player 1"
+  },
+  "Input.ControlScheme4": {
+   "value": 2,
+   "why": "= 2 (Modern), same as player 1"
   },
   "Input.P1Type": {
    "value": 2,
    "why": "= auto (D993)"
   },
   "Input.PadPreset": {
-   "value": 5,
-   "why": "= 5 (Modern) by default (maintainer's choice, #78); 0 = Jinx 1.1, D469"
+   "value": 0,
+   "why": "= 0 (1.1 Jinx), the Enhanced layout; Modern is Input.ControlScheme 2 (D469)"
   },
   "Input.PadPreset2": {
-   "value": 5,
-   "why": "= 5 (Modern), same as player 1"
+   "value": 0,
+   "why": "= 0 (1.1 Jinx), same as player 1"
   },
   "Input.PadPreset3": {
-   "value": 5,
-   "why": "= 5 (Modern), same as player 1"
+   "value": 0,
+   "why": "= 0 (1.1 Jinx), same as player 1"
   },
   "Input.PadPreset4": {
-   "value": 5,
-   "why": "= 5 (Modern), same as player 1"
+   "value": 0,
+   "why": "= 0 (1.1 Jinx), same as player 1"
   },
   "Video.MSAA": {
    "switch": 4,

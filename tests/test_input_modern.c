@@ -381,6 +381,30 @@ static void testDirect(void)
     GE_CHECK_EQ_INT(n64BridgeButtons(0, &c, &bo) & (GE_CONT_E | GE_CONT_D | GE_CONT_C | GE_CONT_F), 0);
 }
 
+/* GameDirect, the keyboard part: the keys add full scale to the stick, each axis clamped to the rim. */
+static int keysOf(int padWalk, int padStrafe, int fwd, int back, int left, int right, int *strafe)
+{
+    int w = padWalk;
+    *strafe = padStrafe;
+    inputDirectMoveAddKeys(fwd, back, left, right, &w, strafe);
+    return w;
+}
+
+static void testDirectKeys(void)
+{
+    int s;
+    GE_CHECK_EQ_INT(INPUT_DIRECT_MAX, 75);
+    GE_CHECK_EQ_INT(keysOf(0, 0, 1, 0, 0, 0, &s), 75);  GE_CHECK_EQ_INT(s, 0);     /* W, stick at rest: the bug of #78 */
+    GE_CHECK_EQ_INT(keysOf(0, 0, 0, 1, 1, 0, &s), -75); GE_CHECK_EQ_INT(s, -75);   /* S + A */
+    GE_CHECK_EQ_INT(keysOf(0, 0, 0, 0, 0, 1, &s), 0);   GE_CHECK_EQ_INT(s, 75);    /* D */
+    GE_CHECK_EQ_INT(keysOf(40, 0, 1, 0, 0, 0, &s), 75);                            /* W + half stick: no speed boost */
+    GE_CHECK_EQ_INT(keysOf(-75, 0, 1, 0, 0, 0, &s), 0);                            /* W + stick full back: cancel */
+    GE_CHECK_EQ_INT(keysOf(0, 30, 1, 0, 0, 0, &s), 75); GE_CHECK_EQ_INT(s, 30);    /* W + stick right: diagonal */
+    GE_CHECK_EQ_INT(keysOf(0, 0, 1, 1, 1, 1, &s), 0);   GE_CHECK_EQ_INT(s, 0);     /* opposite keys cancel */
+    GE_CHECK_EQ_INT(keysOf(-40, 20, 0, 0, 0, 0, &s), -40); GE_CHECK_EQ_INT(s, 20); /* no key: the stick alone */
+    GE_CHECK_EQ_INT(keysOf(0, -60, 0, 0, 1, 0, &s), 0); GE_CHECK_EQ_INT(s, -75);   /* A + stick left: clamped */
+}
+
 int main(void)
 {
     GE_TEST_BEGIN("input: Modern style");
@@ -388,5 +412,6 @@ int main(void)
     testSmoothing();
     testBridge();
     testDirect();
+    testDirectKeys();
     return GE_TEST_END();
 }

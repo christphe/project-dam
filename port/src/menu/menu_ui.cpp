@@ -11,6 +11,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <set>
 
 namespace menu {
 
@@ -32,8 +33,31 @@ inline char upc(char c) { return (c >= 'a' && c <= 'z') ? (char)(c - 32) : c; }
 inline float maxf(float a, float b) { return a > b ? a : b; }
 inline float minf(float a, float b) { return a < b ? a : b; }
 
-ImFont* g_body = nullptr;
+ImFont* g_body = nullptr;   /* the two families; each text size is drawn from a font baked at that pixel size */
 ImFont* g_head = nullptr;
+/* Fonts baked at the sizes the menu draws: a glyph squeezed from a 48 / 72 px raster to ~30 px smears. A size not
+ * baked yet is noted and drawn from the nearest one meanwhile; the next frame rebuilds the atlas (fontsBuild). */
+const void* g_ttf[2] = { nullptr, nullptr };
+size_t g_ttfLen[2] = { 0, 0 };
+std::map<int, ImFont*> g_baked[2];   /* family (0 body, 1 head) -> px -> font */
+std::set<int> g_want[2];
+bool g_fontsDirty = false;
+float g_fontsW = 0.0f;   /* the width the sizes were asked for: a new window size starts a new set */
+
+float snap(float v) { const float r = (float)(int)v; return v - r >= 0.5f ? r + 1.0f : (v - r <= -0.5f ? r - 1.0f : r); }   /* nearest whole pixel */
+
+ImFont* pick(ImFont* f, float px, float* drawPx) {
+    *drawPx = px;
+    if (!f) return f;
+    const int fam = f == g_head ? 1 : 0;
+    const int k = (int)(px + 0.5f);   /* px > 0 */
+    if (k <= 0) return f;
+    auto it = g_baked[fam].find(k);
+    if (it != g_baked[fam].end()) { *drawPx = (float)k; return it->second; }   /* one texel per pixel */
+    if (g_want[fam].insert(k).second) g_fontsDirty = true;
+    auto up = g_baked[fam].lower_bound(k);   /* meanwhile: the nearest larger raster, else the base one */
+    return up != g_baked[fam].end() ? up->second : f;
+}
 
 Model g_model;
 State g_state;
@@ -45,6 +69,9 @@ int g_focus = -1;         /* index among the visible controls of the entry, or -
 bool g_closeReq = false;
 float g_scroll = 0, g_scrollTarget = 0;
 std::string g_actionFired;   /* the id of the last action control activated (the game's adapter reads it) */
+std::string g_pressId;       /* the action button last pressed, and when: drawAction flashes it */
+double g_pressTime = -1.0;
+const double kPressFlash = 0.28;   /* seconds */
 std::string g_selId;         /* the select whose list is open, or "" */
 int g_ownerSeat = -1;
 float g_padUv[4] = { 0, 0, 0, 0 }, g_padAspect = 0;
@@ -83,8 +110,13 @@ std::string upper(const std::string& s) {
     return o;
 }
 
-ImVec2 textSize(ImFont* f, float px, const char* s) { return f->CalcTextSizeA(px, 1e9f, 0.0f, s); }
-void text(ImDrawList* dl, ImFont* f, float px, ImVec2 p, ImU32 col, const char* s) { dl->AddText(f, px, p, col, s); }
+ImVec2 textSize(ImFont* f, float px, const char* s) { float d; ImFont* b = pick(f, px, &d); return b->CalcTextSizeA(d, 1e9f, 0.0f, s); }
+ImVec2 textSizeWrapped(ImFont* f, float px, float wrap, const char* s) { float d; ImFont* b = pick(f, px, &d); return b->CalcTextSizeA(d, 1e9f, wrap, s); }
+void text(ImDrawList* dl, ImFont* f, float px, ImVec2 p, ImU32 col, const char* s, float wrap = 0.0f) {
+    float d;
+    ImFont* b = pick(f, px, &d);
+    dl->AddText(b, d, ImVec2(snap(p.x), snap(p.y)), col, s, nullptr, wrap);   /* whole pixels: no half-texel smear */
+}
 void textCenter(ImDrawList* dl, ImFont* f, float px, ImVec2 a, ImVec2 b, ImU32 col, const char* s) {
     const ImVec2 sz = textSize(f, px, s);
     text(dl, f, px, ImVec2(a.x + (b.x - a.x - sz.x) * 0.5f, a.y + (b.y - a.y - sz.y) * 0.5f), col, s);
@@ -100,8 +132,17 @@ bool hit(const char* id, ImVec2 a, ImVec2 size) {
 }
 
 /* an action control: "__ResetEntry" puts every control of its entry back to its default, anything else is the game's */
+/* the focused toggle / button: a gold frame around what A presses (Left / Right do nothing there) */
+void focusFrame(ImDrawList* dl, ImVec2 a, ImVec2 b, float u)
+{
+    const float p = 0.45f * u;
+    dl->AddRect(ImVec2(a.x - p, a.y - p), ImVec2(b.x + p, b.y + p), kGold, 0.0f, 0, 1.5f);
+}
+
 void fireAction(const Control& c) {
     g_actionFired = c.id;
+    g_pressId = c.id;
+    g_pressTime = ImGui::GetTime();
     if (c.key == "__ResetEntry") {
         for (const Tab& t : g_model.tabs)
             for (const Item& it : t.items) {
@@ -200,6 +241,7 @@ void drawToggle(ImDrawList* dl, const Control& c, int fi, float x, float y, floa
         dl->AddPolyline(tick, 3, col, ImDrawFlags_None, k);
     }
     text(dl, g_body, 1.6f * u, ImVec2(x + s + 0.9f * u, y + (s - 1.6f * u) * 0.5f - 0.1f * u), disabled ? kDisabled : kInk, on ? tr("ON").c_str() : tr("OFF").c_str());
+    if (g_focus == fi && !disabled) focusFrame(dl, ImVec2(x, y), ImVec2(x + s, y + s), u);
 }
 
 void drawSlider(ImDrawList* dl, const Control& c, int fi, float x, float y, float u, bool disabled) {
@@ -241,8 +283,15 @@ void drawAction(ImDrawList* dl, const Control& c, int fi, float x, float y, floa
     char id[64];
     snprintf(id, sizeof id, "##%s", c.id.c_str());
     if (hit(id, ImVec2(x, y), ImVec2(bw, bh)) && !disabled) { fireAction(c); g_focus = fi; }
-    box(dl, ImVec2(x, y), ImVec2(x + bw, y + bh), IM_COL32(21, 22, 15, 255), kRule);
-    textCenter(dl, g_head, 1.55f * u, ImVec2(x, y), ImVec2(x + bw, y + bh), disabled ? kDisabled : kInk, tr(c.label).c_str());
+    /* the press: the button sinks a little and flashes gold, then fades back */
+    const double t = (g_pressId == c.id && g_pressTime >= 0) ? (ImGui::GetTime() - g_pressTime) / kPressFlash : 1.0;
+    const float k = (t >= 0 && t < 1) ? (float)(1.0 - t) : 0.0f;
+    const float in = 0.35f * u * k;
+    const ImVec2 a(x + in, y + in), b(x + bw - in, y + bh - in);
+    box(dl, a, b, IM_COL32(21, 22, 15, 255), k > 0 ? kGold : kRule);
+    if (k > 0) dl->AddRectFilled(a, b, IM_COL32(230, 194, 90, (int)(110 * k)));
+    textCenter(dl, g_head, 1.55f * u, a, b, disabled ? kDisabled : kInk, tr(c.label).c_str());
+    if (g_focus == fi && !disabled) focusFrame(dl, ImVec2(x, y), ImVec2(x + bw, y + bh), u);
 }
 
 void startCapture(const Control& c, int slot) {
@@ -302,7 +351,7 @@ void drawCrosshairPreview(ImDrawList* dl, float x, float y, float w, float h, fl
             }
         dl->PopClipRect();
         const std::string note2 = tr("The size the game draws it at") + ": " + std::to_string((int)g_state.get("xsize")) + "%";
-        dl->AddText(g_body, 1.4f * u, ImVec2(x + 1.0f * u, y + h - 2.2f * u), kMut, note2.c_str());
+        text(dl, g_body, 1.4f * u, ImVec2(x + 1.0f * u, y + h - 2.2f * u), kMut, note2.c_str());
         return;
     }
     const float th = style == 1 ? maxf(1.0f, half * 0.05f) : maxf(1.0f, half * 0.12f);
@@ -315,7 +364,7 @@ void drawCrosshairPreview(ImDrawList* dl, float x, float y, float w, float h, fl
     dl->AddLine(ImVec2(c.x, c.y + in), ImVec2(c.x, c.y + out), col, th);
     dl->PopClipRect();
     const std::string note = tr("The size the game draws it at") + ": " + std::to_string((int)g_state.get("xsize")) + "%";
-    dl->AddText(g_body, 1.4f * u, ImVec2(x + 1.0f * u, y + h - 2.2f * u), kMut, note.c_str());
+    text(dl, g_body, 1.4f * u, ImVec2(x + 1.0f * u, y + h - 2.2f * u), kMut, note.c_str());
 }
 
 /* the gamepad drawn with what each button does in the chosen layout: the left half's labels on the left, the right half's on the right */
@@ -422,14 +471,47 @@ void drawSelect(ImDrawList* dl, const Control& c, int fi, float x, float y, floa
 
 }  // namespace
 
+void fontsBuild() {
+    ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->Clear();
+    ImFontConfig base;
+    base.FontDataOwnedByAtlas = false;   /* the caller keeps the TTF bytes */
+    base.OversampleH = 2;
+    base.OversampleV = 2;
+    g_body = io.Fonts->AddFontFromMemoryTTF(const_cast<void*>(g_ttf[0]), (int)g_ttfLen[0], 48.0f, &base);
+    g_head = io.Fonts->AddFontFromMemoryTTF(const_cast<void*>(g_ttf[1]), (int)g_ttfLen[1], 72.0f, &base);
+    ImFontConfig exact;   /* drawn at its own size on whole pixels: no oversampling needed */
+    exact.FontDataOwnedByAtlas = false;
+    exact.OversampleH = 1;
+    exact.OversampleV = 1;
+    exact.PixelSnapH = true;
+    for (int fam = 0; fam < 2; fam++) {
+        g_baked[fam].clear();
+        for (int k : g_want[fam])
+            g_baked[fam][k] = io.Fonts->AddFontFromMemoryTTF(const_cast<void*>(g_ttf[fam]), (int)g_ttfLen[fam], (float)k, &exact);
+    }
+    g_fontsDirty = false;
+}
+
+bool fontsFrame(float W) {
+    if (W != g_fontsW) {   /* another window size: other pixel sizes; the old ones go at the next rebuild */
+        g_fontsW = W;
+        g_want[0].clear();
+        g_want[1].clear();
+        g_baked[0].clear();
+        g_baked[1].clear();
+        g_fontsDirty = true;
+    }
+    return g_fontsDirty;
+}
+
 void init(const void* bodyTtf, size_t bodyLen, const void* headTtf, size_t headLen) {
     ImGuiIO& io = ImGui::GetIO();
-    ImFontConfig cfg;
-    cfg.FontDataOwnedByAtlas = false;   /* the caller keeps the TTF bytes */
-    cfg.OversampleH = 2;
-    cfg.OversampleV = 2;
-    g_body = io.Fonts->AddFontFromMemoryTTF(const_cast<void*>(bodyTtf), (int)bodyLen, 48.0f, &cfg);
-    g_head = io.Fonts->AddFontFromMemoryTTF(const_cast<void*>(headTtf), (int)headLen, 72.0f, &cfg);
+    g_ttf[0] = bodyTtf;
+    g_ttfLen[0] = bodyLen;
+    g_ttf[1] = headTtf;
+    g_ttfLen[1] = headLen;
+    fontsBuild();
     io.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad);   /* the menu has its own focus model */
 }
 
@@ -910,8 +992,9 @@ void draw(float W, float H) {
                 if (right) g_slotSel = 1;
                 if (ok) startCapture(c, g_slotSel);
             } else if (!dis) {
-                if (left) changeValue(c, -1);
-                if (right) changeValue(c, +1);
+                const bool press = c.type == CT_ACTION || c.type == CT_TOGGLE || c.type == CT_SELECT;   /* pressed only by A / Enter / a click: */
+                if (left && !press) changeValue(c, -1);                          /* a stick passing through Left / Right */
+                if (right && !press) changeValue(c, +1);                         /* must not fire or flip them */
                 if (ok && c.type == CT_SELECT) openSelect(c);
                 else if (ok && c.type != CT_SLIDER) changeValue(c, +1);
             }
@@ -991,7 +1074,7 @@ void draw(float W, float H) {
                 const float ch = layoutChoice(*c, 0, availW, u, &slots);
                 rowH = maxf(rowH, ch + 1.5f * u);
             }
-            const float helpH = help.empty() ? 0.0f : g_body->CalcTextSizeA(1.4f * u, 1e9f, fw - 2.4f * u, help.c_str()).y + 0.6f * u;   /* wrapped */
+            const float helpH = help.empty() ? 0.0f : textSizeWrapped(g_body, 1.4f * u, fw - 2.4f * u, help.c_str()).y + 0.6f * u;   /* wrapped */
             const float total = rowH + helpH;
             rows.push_back({ cy, total, helpH });
             cy += total + 0.4f * u;
@@ -1033,7 +1116,7 @@ void draw(float W, float H) {
             else if (c.type == CT_BIND) drawBind(dl, c, fi, cx0, cy2, u, dis);
             else if (c.type == CT_DIAGRAM) drawDiagram(dl, c, fx + 1.0f * u, y0, fw - 2.0f * u, u);   /* the whole width of the form */
             else drawAction(dl, c, fi, cx0, cy2, u, dis);
-            if (!help.empty()) dl->AddText(g_body, 1.4f * u, ImVec2(fx + 1.2f * u, y0 + baseH - 0.2f * u), kMut, help.c_str(), nullptr, fw - 2.4f * u);
+            if (!help.empty()) text(dl, g_body, 1.4f * u, ImVec2(fx + 1.2f * u, y0 + baseH - 0.2f * u), kMut, help.c_str(), fw - 2.4f * u);
             dl->AddLine(ImVec2(fx, y0 + rowH + 0.2f * u), ImVec2(fx + fw, y0 + rowH + 0.2f * u), kLine, 1.0f);
         }
         ImGui::PopClipRect();

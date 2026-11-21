@@ -47,6 +47,13 @@ static void values(void)
 #endif
 }
 
+static double getv(const char *key)
+{
+    double v = -1;
+    GE_CHECK(configGetValue(key, &v));
+    return v;
+}
+
 static void migrations(void)
 {
     GE_CHECK(kDefaultsVersion >= 1);
@@ -62,28 +69,73 @@ static void migrations(void)
     GE_CHECK(configGetValue("Config.Version", &v));
     GE_CHECK(v == 0);
 
-    /* Version 1: native widescreen off -> forced 4:3; Visuals 0 -> per-vertex fog; Custom pad layout (3) -> 0. */
+    /* The defaults: Modern for every player, 1.1 Jinx as the Enhanced layout. */
+    GE_CHECK(getv("Input.ControlScheme") == 2 && getv("Input.ControlScheme2") == 2 &&
+             getv("Input.ControlScheme3") == 2 && getv("Input.ControlScheme4") == 2);
+    GE_CHECK(getv("Input.PadPreset") == 0 && getv("Input.PadPreset4") == 0);
+
+    /* An old ini, the port's controls (global Input.ControlScheme 0): native widescreen off -> forced 4:3; Visuals 0
+     * -> per-vertex fog; Custom (3) -> 1.1 Jinx for every player; layout 5 -> the Modern style; players 2-4 take
+     * the global style. */
     GE_CHECK(configSetValue("Video.NativeWidescreen", 0));   /* legacy key, registered by defaultsApply */
     GE_CHECK(configSetValue("Video.Visuals", 0));
     GE_CHECK(configSetValue("Video.PerPixelFog", 1));
     GE_CHECK(configSetValue("Video.AspectMode", 0));
+    GE_CHECK(configSetValue("Input.ControlScheme", 0));
     GE_CHECK(configSetValue("Input.PadPreset", 3));
+    GE_CHECK(configSetValue("Input.PadPreset2", 5));
+    GE_CHECK(configSetValue("Input.PadPreset3", 2));
+    GE_CHECK(configSetValue("Input.PadPreset4", 3));
     defaultsMigrate();
-    GE_CHECK(configGetValue("Video.AspectMode", &v));
-    GE_CHECK(v == 1);
-    GE_CHECK(configGetValue("Video.PerPixelFog", &v));
-    GE_CHECK(v == 0);
-    GE_CHECK(configGetValue("Input.PadPreset", &v));
-    GE_CHECK(v == 0);
-    GE_CHECK(configGetValue("Config.Version", &v));   /* stamped with the current version */
-    GE_CHECK(v == kDefaultsVersion);
+    GE_CHECK(getv("Video.AspectMode") == 1);
+    GE_CHECK(getv("Video.PerPixelFog") == 0);
+    GE_CHECK(getv("Input.ControlScheme") == 0 && getv("Input.PadPreset") == 0);    /* Custom -> Enhanced Jinx */
+    GE_CHECK(getv("Input.ControlScheme2") == 2 && getv("Input.PadPreset2") == 0);  /* layout 5 -> Modern */
+    GE_CHECK(getv("Input.ControlScheme3") == 0 && getv("Input.PadPreset3") == 2);  /* Frost stays Enhanced Frost */
+    GE_CHECK(getv("Input.ControlScheme4") == 0 && getv("Input.PadPreset4") == 0);
+    GE_CHECK(getv("Config.Version") == kDefaultsVersion);
     GE_CHECK(!configGetValue("Video.NativeWidescreen", &v));   /* legacy keys dropped */
 
     /* A second run does nothing: the ini is at the current version. */
     GE_CHECK(configSetValue("Input.PadPreset", 3));
     defaultsMigrate();
-    GE_CHECK(configGetValue("Input.PadPreset", &v));
-    GE_CHECK(v == 3);
+    GE_CHECK(getv("Input.PadPreset") == 3);
+
+    /* An old ini in Original (global Input.ControlScheme 1): every player is Original, a stored layout 5 does not
+     * make one Modern. */
+    GE_CHECK(configSetValue("Config.Version", 0));
+    GE_CHECK(configSetValue("Input.ControlScheme", 1));
+    GE_CHECK(configSetValue("Input.ControlScheme2", 2));   /* absent from the old ini: the default */
+    GE_CHECK(configSetValue("Input.PadPreset", 5));
+    GE_CHECK(configSetValue("Input.PadPreset2", 5));
+    defaultsMigrate();
+    GE_CHECK(getv("Input.ControlScheme") == 1 && getv("Input.ControlScheme2") == 1 &&
+             getv("Input.ControlScheme3") == 1 && getv("Input.ControlScheme4") == 1);
+    GE_CHECK(getv("Input.PadPreset") == 0 && getv("Input.PadPreset2") == 0);
+
+    /* An ini written after versioning (v1) by a build where Modern was layout 5. */
+    GE_CHECK(configSetValue("Config.Version", 1));
+    GE_CHECK(configSetValue("Input.ControlScheme", 0));
+    GE_CHECK(configSetValue("Input.ControlScheme2", 2));
+    GE_CHECK(configSetValue("Input.PadPreset", 5));
+    GE_CHECK(configSetValue("Input.PadPreset2", 1));
+    defaultsMigrate();
+    GE_CHECK(getv("Input.ControlScheme") == 2 && getv("Input.PadPreset") == 0);
+    GE_CHECK(getv("Input.ControlScheme2") == 0 && getv("Input.PadPreset2") == 1);   /* Christmas stays Enhanced Christmas */
+
+    /* No ini (version 0 with every value at its default): nothing changes. */
+    GE_CHECK(configSetValue("Config.Version", 0));
+    for (int n = 0; n < 4; n++) {
+        static const char *const ks[4] = { "Input.ControlScheme", "Input.ControlScheme2", "Input.ControlScheme3", "Input.ControlScheme4" };
+        static const char *const kp[4] = { "Input.PadPreset", "Input.PadPreset2", "Input.PadPreset3", "Input.PadPreset4" };
+        GE_CHECK(configSetValue(ks[n], 2));
+        GE_CHECK(configSetValue(kp[n], 0));
+    }
+    defaultsMigrate();
+    GE_CHECK(getv("Input.ControlScheme") == 2 && getv("Input.ControlScheme2") == 2 &&
+             getv("Input.ControlScheme3") == 2 && getv("Input.ControlScheme4") == 2);
+    GE_CHECK(getv("Input.PadPreset") == 0 && getv("Input.PadPreset3") == 0);
+    GE_CHECK(getv("Config.Version") == kDefaultsVersion);
 }
 
 static void applied(void)

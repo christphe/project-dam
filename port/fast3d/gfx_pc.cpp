@@ -7143,7 +7143,14 @@ static void gfx_frame_body(Gfx* commands, bool emit_overlay, Gfx** overlay_io, u
             s_overlay_scale = 1.0f;
         }
     }
-    gfx_ui_flush();   /* the menu UI, in the same target as the overlay */
+    /* The menu UI goes on the window after the composite (MSAA resolve, FXAA): FXAA run over it chipped the
+     * glyph edges. Only when the game target is window-sized; otherwise it stays in the game target, as before. */
+    const bool ui_on_window = game_renders_to_framebuffer &&
+                              gfx_current_dimensions.width == gfx_current_game_window_viewport.width &&
+                              gfx_current_dimensions.height == gfx_current_game_window_viewport.height;
+    if (!ui_on_window) {
+        gfx_ui_flush();   /* the menu UI, in the same target as the overlay */
+    }
     gfx_flush();
     *perf_t1 = perf_t0 ? gfx_perf_now_ns() : 0;
     gfxFramebuffer = 0;
@@ -7175,6 +7182,11 @@ static void gfx_frame_body(Gfx* commands, bool emit_overlay, Gfx** overlay_io, u
             } else
             gfxFramebuffer = (uintptr_t)gfx_rapi->get_framebuffer_texture_id(game_framebuffer);
         }
+    }
+    if (ui_on_window) {
+        gfx_rapi->start_draw_to_framebuffer(0, 1);   /* the window, over the finished picture */
+        gfx_ui_flush();
+        gfx_flush();
     }
 
     gfx_rapi->end_frame();

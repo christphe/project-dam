@@ -1,4 +1,4 @@
-/* The weapon wheel and the gadget wheel of the Modern control style (Input.PadPreset 5).
+/* The weapon wheel and the gadget wheel of the Modern control style (Input.ControlScheme 2).
  *
  * LB held opens the weapon wheel, RB the gadget wheel: the right stick picks a sector, letting go of the button
  * equips it. While a wheel is open the player's pad is neutral (no look, no move), and the menu layer draws the
