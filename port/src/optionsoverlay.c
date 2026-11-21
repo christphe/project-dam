@@ -1,25 +1,20 @@
 /*
- * F10 in-game options overlay -- approach (C) from docs/dev/OPTIONS-MENU-PLAN.md.
+ * Options menu: the game side. Port-layer only; no src/ menu code is touched.
  *
- * Port-layer only. No src/ menu code is touched: the overlay draws its own
- * fast3d 2D display list (appended after the game DL in gfx_run) and edits the
- * port-owned config.c variables directly. Live knobs apply immediately; the
- * two that need an FBO/window rebuild (MSAA, Fullscreen) are tagged "(restart)".
+ * The menu itself is port/src/menu/ (menu.json -> menu_model -> menu_ui, drawn
+ * with ImGui; menu_game.cpp adapts it to the game). This file is what the
+ * menu calls into (optionsMenuGet / optionsMenuSet / optionsMenuAction ...):
+ *   - rows[]: every setting key, how it reads and writes its value (config.c
+ *     ini keys, watchsettings.c per-profile Bond.* values, pseudo keys);
+ *   - the actions (bindings capture, resets, updates, audio device ...);
+ *   - opening and closing (F10, Select/-, the file-select "Options"), and the
+ *     pause while the menu is open in a stage.
+ * Live knobs apply immediately; the ones that need an FBO/window rebuild apply
+ * on the next frame or are tagged "(restart)". Wiki: docs/wiki/options-menu.md.
  *
- * Menu PD alignment (T2/T3): PD's dialog anatomy -- hub of big-font rows ->
- * flat sub-dialogs, gradient title strip, tapering focus rule, separator +
- * Back as the last row, Select-player hop before Controller / Key bindings --
- * in GE's watch palette. Rows still resolve to the same ini keys.
- *
- * The panel adapts to whatever 2D space it is drawn in (320x240 in-game vs
- * 440x330 on front-end screens -- viSetXY differs) and scrolls when the row
- * list outgrows the viewport (wheel / arrows at the edges). F10 opens at a
- * category list; each category has its own short page and Back row. Cyclic
- * rows (MSAA, texture filter, resolution, toggles) wrap in both directions.
- *
- * Text + fill helpers are the game's own (textRender / microcode_constructor /
- * gDPFillRectangle) reached by extern -- same pattern input.c uses to read
- * current_menu / cursor_h_pos. This is a rendering/UI view, not a logic change.
+ * The fast3d panel drawing and the row navigation further down are from the
+ * menu this replaced (approach (C) in docs/dev/OPTIONS-MENU-PLAN.md). They no
+ * longer run: menuNewActive() (menu_game.cpp) is always 1.
  *
  * Diagnostic: set GE_OPTIONSOVERLAY=1 to auto-open at boot (headless layout
  * check). Env-gated, harmless when unset.

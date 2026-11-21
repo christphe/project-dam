@@ -91,3 +91,4 @@ exclude:
   - dev/findings
   - dev/game-behavior-reference.md
   - dev/release-dropin-rom-plan.md
+  - wiki

@@ -21,6 +21,11 @@ Context is scarce. Load by tier; do not blind-read whole files.
   `docs/porting-notes.md` (recurring bug classes) — skim the section
   headers, read the classes relevant to the task.
 - **Tier 2 — on demand only, do NOT read start-to-finish:**
+  - `docs/wiki/` — how each subsystem works on `main` today (menu, ini keys,
+    control styles, co-op, dev.py, testing, releases, first launch). Read
+    `docs/wiki/index.md`, then only the page you need. After a merge that
+    changes a page's sources, update it (`docs/wiki/README.md` §Operations;
+    `tools_pc/wiki_lint.py` lists stale pages).
   - `docs/internals.md` — architecture / RSP deltas / phased plan (§1–§10).
     Read the section you need.
   - Findings: one file per finding in `docs/dev/findings/`. Run
