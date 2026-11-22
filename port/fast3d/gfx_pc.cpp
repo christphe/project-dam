@@ -249,6 +249,14 @@ static struct RenderingState {
     TextureCacheNode* textures[SHADER_MAX_TEXTURES];
 } rendering_state;
 
+/* Level export capture (issue #102, port/levelrec/gfx_levelcap.inc): off unless
+ * `ge007 --export-level` armed it; each hook below costs one bool test. */
+static bool s_lr_on = false;      /* a driven display list is being captured */
+static bool s_lr_armed = false;   /* G_DL calls are reported to levelExportOnDl */
+static int s_lr_unit = 0;         /* texture unit import_texture is filling (for the upload hook) */
+static void lr_note_vertices(size_t n, size_t dest, const Vtx* v);
+static void lr_note_upload(const uint8_t* rgba, uint32_t w, uint32_t h);
+
 struct GfxDimensions gfx_current_window_dimensions;
 int32_t gfx_current_window_position_x;
 int32_t gfx_current_window_position_y;
@@ -1182,6 +1190,7 @@ static uint8_t s_water_import_fmt = 0, s_water_import_siz = 0;
 
 static void gfx_upload_texture(uint32_t width, uint32_t height, bool gen_mipmaps) {
     gfx_rapi->upload_texture(tex_upload_buffer, width, height, gen_mipmaps);
+    if (s_lr_on) lr_note_upload(tex_upload_buffer, width, height);   /* level export */
     if (s_water_import) {
         s_water_import = false;
         skyPlusWaterSource(tex_upload_buffer, (int)width, (int)height, (int)s_water_import_fmt, (int)s_water_import_siz);
@@ -1697,6 +1706,7 @@ static void import_texture(int i, int tile, bool importReplacement) {
         return;   /* (a cache hit is decoded again when the water capture wants the image) */
     }
     s_tick_texmiss++;
+    s_lr_unit = i;   /* level export: the unit gfx_upload_texture fills */
     s_a2cdump_cur = orig_addr;   /* GE_A2CDUMP */
     s_a2cdump_fmt = fmt;
     s_a2cdump_siz = siz;
@@ -3885,6 +3895,8 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         return; /* D146 */
     }
 
+    if (s_lr_on) lr_note_vertices(n_vertices, dest_index, vertices);   /* level export */
+
     for (size_t i = 0; i < n_vertices; i++, dest_index++) {
         const Vtx* v = &vertices[i];
         struct LoadedVertex* d = &rsp.loaded_vertices[dest_index];
@@ -5132,6 +5144,7 @@ static inline void gfx_tri_emit(const TriState& ts, struct LoadedVertex* const* 
 }
 
 #include "gfx_meshcache.inc"   /* issue #10: display-list mesh cache (GE_MESHCACHE=1) */
+#include "../levelrec/gfx_levelcap.inc"   /* issue #102: level export capture */
 
 static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
     /* D75D: only real model triangles (all indices < MAX_VERTICES); the
@@ -5143,6 +5156,10 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
     }
     if (s_mc_cap != nullptr && !is_rect) {   /* mesh cache: recording this display list */
         mc_cap_tri(vtx1_idx, vtx2_idx, vtx3_idx);
+        return;
+    }
+    if (s_lr_on && !is_rect) {   /* level export: recorded, not drawn */
+        lr_capture_tri(vtx1_idx, vtx2_idx, vtx3_idx);
         return;
     }
     struct LoadedVertex* v1 = &rsp.loaded_vertices[vtx1_idx];
@@ -6479,6 +6496,7 @@ static void gfx_run_dl(Gfx* cmd) {
                     // Push return address
                     Gfx* subGFX = (Gfx*)seg_addr(cmd->words.w1);
 
+                    if (s_lr_armed && subGFX != nullptr) lr_dl_hook(subGFX);   /* level export */
                     if (subGFX != nullptr && !mc_try(subGFX)) {   /* mesh cache (issue #10) */
                         gfx_run_dl(subGFX);
                     }
@@ -7318,6 +7336,10 @@ static void gfx_frame_body(Gfx* commands, bool emit_overlay, Gfx** overlay_io, u
 
 extern "C" void gfx_run(Gfx* commands) {
     s_hud_scale = 1.0f;   /* D226: never carry a HUD scale across frames */
+    {   /* level export (issue #102): `--export-level DIR` arms the capture; asked once */
+        static bool lr_asked = false;
+        if (!lr_asked) { lr_asked = true; levelExportWanted(); }
+    }
     const uint64_t perf_t0 = gfx_perfstat_on() ? gfx_perf_now_ns() : 0;
     ++num_dls;
     gfx_sp_reset();

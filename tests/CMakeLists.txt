@@ -68,6 +68,13 @@ set_property(TARGET test_mission_format PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CU
   "${CMAKE_SOURCE_DIR}/port/mission" "${CMAKE_SOURCE_DIR}/port/levelrec")
 set_property(TARGET test_mission_format PROPERTY COMPILE_OPTIONS "")
 
+# level.rec (port/levelrec): the record layout, plus a structural check of a real
+# export when GE_LEVELREC_DIR names one (skipped otherwise). Header only: no core.
+ge_add_pure_test(test_levelrec_file test_levelrec_file.c)
+set_property(TARGET test_levelrec_file PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}"
+  "${CMAKE_SOURCE_DIR}/port/levelrec")
+set_property(TARGET test_levelrec_file PROPERTY COMPILE_OPTIONS "")
+
 if(GE007_ROM_TESTS)
   # Tests that read the ROM: local opt-in only (the ROM is never in the repo).
   # Add them here with ge_add_test() and make them skip unless GE007_ROM names
