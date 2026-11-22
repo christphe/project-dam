@@ -6,6 +6,8 @@ sources:
   - port/src/config.c
   - port/src/menu/menu.json
   - port/src/switch/nxgame.c
+  - port/src/gpuprobe.c
+  - port/src/video.c
 verified: e2fda9e2
 ---
 
@@ -30,6 +32,19 @@ that edits them. How the menu binds them: [options-menu.md](options-menu.md).
   `Dev.Mode` (shows the menu's dev rows), `Menu.Language`, the `Debug.*` keys, and
   `Game.LookAheadLevel` (0..3, `port/src/switch/nxgame.c`: the Original / Low / Medium / High part
   of the per-profile Look ahead, written by the menu; one value for every profile).
+- **Hidden keys** (registered, no menu row, no entry in `defaults.json`; set by the machine, editable in the ini):
+  - `Video.GpuProbeDone` (0/1): the first-launch GPU benchmark (`port/src/gpuprobe.c`, GL half `gfx_opengl_gpuprobe`)
+    has run, or its cautious fallback was applied. It runs once per ini, on the PC and handhelds (not the Switch), and
+    measures what the GPU can afford: it lowers `Video.SkyScale` (full / half / quarter sky), `Video.MSAA` (4x down to
+    2x or 1x) and `Video.AlphaToCoverage` (off) from their defaults only; a value the player has changed is left alone.
+    It draws a short "Measuring the GPU..." screen with the numbers (a few seconds at most). Delete the key or set it to
+    0 to run it again. Env: `GE_GPUPROBE=0` never, `=1` run again and overwrite, `GE_GPUPROBE_HIDDEN=1` do not show it.
+    When `Video.Renderer` is Vulkan, the first launch runs on OpenGL for the probe (the stored renderer is not
+    changed) and Vulkan is used from the next launch.
+  - `Video.AlphaToCoverage` (0/1, default 1): smooth alpha cut-outs (leaves, fences) through MSAA instead of a plain blend.
+    The probe turns it off where it costs frames; `GE_A2C=0/1` pins it for one run.
+  - `System.Console` (0/1): run as a console (no keyboard or mouse; the window is the panel). A PortMaster handheld
+    launcher sets it; the Switch is always a console. `GE_CONSOLE=1` overrides it (`port/include/console.h`).
 - **Per-profile settings** (`Bond.*` in the menu: music and FX volume, aim control, auto-aim, look ahead (Off, Original, Low, Medium or High; only Off / Original is in the save, the level is `Game.LookAheadLevel` above),
   sight and ammo on screen, control style of the Original scheme) are not in the ini, apart from that level: they live
   in the save file, as on the N64.

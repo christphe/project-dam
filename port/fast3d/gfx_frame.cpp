@@ -1163,7 +1163,7 @@ int thread_wanted(void) {
     static int on = -1;
     if (on < 0) {
         const char* e = getenv("GE_FRAMETHREAD");
-#if defined(__SWITCH__)
+#if defined(__SWITCH__) || defined(GE_H700)
         on = !(e != NULL && e[0] == '0');   /* the Switch: on unless GE_FRAMETHREAD=0 */
 #else
         on = e != NULL && e[0] != '0';      /* elsewhere: opt-in */

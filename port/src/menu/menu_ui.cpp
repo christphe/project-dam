@@ -623,6 +623,7 @@ void setPlatform(bool pc) {
     g_entry = 0;
     g_focus = -1;
 }
+void setConsole(bool console) { g_state.console = console; g_entry = 0; g_focus = -1; }
 void setDev(bool dev) { g_state.dev = dev; g_entry = 0; g_focus = -1; }
 bool isPc() { return g_state.pc; }
 bool devOn() { return g_state.dev; }

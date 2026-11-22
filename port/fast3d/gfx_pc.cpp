@@ -45,9 +45,7 @@
 #include "gfx_rendering_api.h"
 #include "gfx_screen_config.h"
 #include "gfx_frame.h"   /* D968: decoder -> frame -> replay */
-#if defined(__SWITCH__) || defined(GE_VULKAN)
-#include "gfx_opengl.h"   /* gfx_opengl_fxaa_pass */
-#endif
+#include "gfx_opengl.h"   /* gfx_opengl_fxaa_pass: the GL-only build (no Vulkan, not the Switch) names them directly */
 
 uintptr_t gfxFramebuffer;
 
@@ -4247,10 +4245,14 @@ static inline bool gfx_tri_reject(struct LoadedVertex* v1, struct LoadedVertex* 
  * come from a texture. */
 extern "C" int portDisplayFixes;   /* port/src/video.c: Video.Visuals >= Fixed (D982) */
 
+extern "C" { int gfx_a2c_user = 1; }   /* Video.AlphaToCoverage (hidden key, port/src/video.c) */
+
 static int gfx_a2c_gate(void) {
-    /* GE_A2C=0 turns it off for the run (A/B); unset: Video.Visuals decides */
-    static const int off = [] { const char* e = getenv("GE_A2C"); return e && e[0] == '0'; }();
-    return portDisplayFixes && gfx_msaa_level > 1 && !off ? 1 : 0;
+    /* GE_A2C=0 / 1 forces it off / on for the run (A/B); unset: Video.AlphaToCoverage (the first-launch GPU probe
+     * clears it on a GPU where A2C costs frames, port/src/gpuprobe.h) and Video.Visuals decide */
+    static const int env = [] { const char* e = getenv("GE_A2C"); return e && (e[0] == '0' || e[0] == '1') ? e[0] - '0' : -1; }();
+    const int want = env >= 0 ? env : gfx_a2c_user;
+    return portDisplayFixes && gfx_msaa_level > 1 && want ? 1 : 0;
 }
 
 /* Bit (1 << G_ACMUX_x) for every alpha source the combiner's alpha formula

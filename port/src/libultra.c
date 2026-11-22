@@ -2781,6 +2781,13 @@ typedef struct PortTimer {
 } PortTimer;
 
 static PortTimer g_ptimers[PORT_MAX_TIMERS];
+/* Guards g_ptimers. The tick thread (portServiceTimers) and game threads
+ * (osSetTimer/osStopTimer) touch it concurrently; unguarded, a receiver could
+ * re-arm a one-shot between its message send and the `active = 0` that followed,
+ * and the clear lost the new arm (hang in bossInitMainthreadData on multi-core
+ * ARM). Never held across osSendMesg, so a receiver that calls osSetTimer
+ * cannot deadlock against it. */
+static pthread_mutex_t g_ptimerLock = PTHREAD_MUTEX_INITIALIZER;
 
 /* cycles -> microseconds at the RSP counter rate. Inverse of
  * OS_USEC_TO_CYCLES(). */
@@ -2800,16 +2807,18 @@ int osSetTimer(OSTimer *timer, OSTime start, OSTime period,
     timer->mq = mq;
     timer->msg = msg;
 
+    pthread_mutex_lock(&g_ptimerLock);
     for (i = 0; i < PORT_MAX_TIMERS; ++i) {
         if (g_ptimers[i].os == timer) { pt = &g_ptimers[i]; break; }
         if (!g_ptimers[i].active && !pt) pt = &g_ptimers[i];
     }
-    if (!pt) return -1;
+    if (!pt) { pthread_mutex_unlock(&g_ptimerLock); return -1; }
 
     pt->os = timer;
-    pt->active = 1;
     pt->periodUs = (uint32_t)portCyclesToUs(period);
     pt->fireUs = sysGetMicroseconds() + portCyclesToUs(start);
+    pt->active = 1;   /* last: the entry is complete before it is live */
+    pthread_mutex_unlock(&g_ptimerLock);
     sysLogPrintf(LOG_NOTE, "timer set: t=%p start=%lluus period=%uus mq=%p",
                  (void *)timer, (unsigned long long)portCyclesToUs(start),
                  pt->periodUs, (void *)mq);
@@ -2819,12 +2828,15 @@ int osSetTimer(OSTimer *timer, OSTime start, OSTime period,
 int osStopTimer(OSTimer *timer)
 {
     int i;
+    pthread_mutex_lock(&g_ptimerLock);
     for (i = 0; i < PORT_MAX_TIMERS; ++i) {
         if (g_ptimers[i].os == timer) {
             g_ptimers[i].active = 0;
+            pthread_mutex_unlock(&g_ptimerLock);
             return 0;
         }
     }
+    pthread_mutex_unlock(&g_ptimerLock);
     return -1;
 }
 
@@ -2834,13 +2846,30 @@ static void portServiceTimers(void)
     int i;
     for (i = 0; i < PORT_MAX_TIMERS; ++i) {
         PortTimer *pt = &g_ptimers[i];
-        if (!pt->active) continue;
-        while (pt->fireUs <= now) {
-            sysLogPrintf(LOG_NOTE, "timer fire: t=%p mq=%p",
-                         (void *)pt->os, (void *)pt->os->mq);
-            osSendMesg(pt->os->mq, pt->os->msg, OS_MESG_NOBLOCK);
-            if (!pt->periodUs) { pt->active = 0; break; }
-            pt->fireUs += pt->periodUs;
+        for (;;) {
+            OSTimer *os;
+            OSMesgQueue *mq;
+            OSMesg msg;
+
+            /* Decide and retire under the lock, send after unlocking. A
+             * one-shot goes inactive BEFORE its message is posted: once the
+             * receiver wakes it may re-arm the same timer, and that arm must
+             * not be clobbered by a late `active = 0`. */
+            pthread_mutex_lock(&g_ptimerLock);
+            if (!pt->active || pt->fireUs > now) {
+                pthread_mutex_unlock(&g_ptimerLock);
+                break;
+            }
+            os = pt->os;
+            mq = os->mq;
+            msg = os->msg;
+            if (pt->periodUs) pt->fireUs += pt->periodUs;
+            else pt->active = 0;
+            pthread_mutex_unlock(&g_ptimerLock);
+
+            sysLogPrintf(LOG_NOTE, "timer fire: t=%p mq=%p", (void *)os, (void *)mq);
+            osSendMesg(mq, msg, OS_MESG_NOBLOCK);
+            if (!pt->periodUs) break;
         }
     }
 }
@@ -2850,10 +2879,12 @@ static uint64_t portNextTimerUs(void)
 {
     uint64_t earliest = ~0ull;
     int i;
+    pthread_mutex_lock(&g_ptimerLock);
     for (i = 0; i < PORT_MAX_TIMERS; ++i) {
         PortTimer *pt = &g_ptimers[i];
         if (pt->active && pt->fireUs < earliest) earliest = pt->fireUs;
     }
+    pthread_mutex_unlock(&g_ptimerLock);
     return earliest;
 }
 

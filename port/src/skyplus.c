@@ -396,16 +396,6 @@ void skyPlusWaterSource(const unsigned char *rgba, int w, int h, int fmt, int si
         if (df) { fwrite(&w, sizeof w, 1, df); fwrite(&h, sizeof h, 1, df); fwrite(rgba, 4, (size_t)n, df); fclose(df); }
     }
 }
-#else
-int skyPlusWaterWanted(void)
-{
-    return 0;
-}
-
-void skyPlusWaterSource(const unsigned char *rgba, int w, int h, int fmt, int siz)
-{
-    (void)rgba; (void)w; (void)h; (void)fmt; (void)siz;
-}
 #endif
 
 static int skyPlusWaterTexture(void)
@@ -451,6 +441,20 @@ static int skyPlusWaterTexture(void)
     s_wtexGen++;
     s_wtexOk = 1;
     return 1;
+}
+#endif
+
+#if !(defined(PLATFORM_SWITCH) || defined(GE_VULKAN))
+/* No backend draws the level's own water surfaces (a GL-only build): fast3d still calls these.
+ * Outside the block above, which is the whole GE+ water section of those builds. */
+int skyPlusWaterWanted(void)
+{
+    return 0;
+}
+
+void skyPlusWaterSource(const unsigned char *rgba, int w, int h, int fmt, int siz)
+{
+    (void)rgba; (void)w; (void)h; (void)fmt; (void)siz;
 }
 #endif
 

@@ -17,6 +17,7 @@
 #include "menu_fonts.h"
 #include "menu_data.h"
 #include "menu_pad.h"
+#include "console.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -101,6 +102,7 @@ void init() {
 #else
     menu::setPlatform(true);
 #endif
+    menu::setConsole(portIsConsole() != 0);   /* the Switch, or GE_CONSOLE=1 / System.Console on a handheld */
     menu::setDev(portDevMode() != 0);   /* Dev.Mode in the ini */
     {
         std::string err;

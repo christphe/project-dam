@@ -32,6 +32,7 @@ extern void exit(int status);
 #include "system.h"
 #include "config.h"
 #include "video.h"
+#include "gpuprobe.h"
 #include "input.h"
 #include "optionsoverlay.h"
 #include "audio.h"
@@ -93,6 +94,7 @@ static int cfgMSAA          = 2;   /* 1/2/4/8/16 samples; 2x default is lighter 
 static int cfgDisplayMode   = 0;
 extern int portSkyPlus;   /* port/src/skyplus.c */
 extern int gfx_skyplus_half;   /* gfx_opengl.cpp: Video.SkyScale */
+extern int gfx_a2c_user;       /* gfx_pc.cpp: Video.AlphaToCoverage (hidden; the GPU probe may clear it) */
 /* Video.Visuals (D982): 0 Original, 1 Fixed, 2 Enhanced. Fixed turns on
  * every fix of a display flaw of the original game (D979 landmarks, D980
  * foliage depth, ...); Enhanced adds what the game
@@ -128,6 +130,7 @@ static int cfgFullscreen    = 0;   /* 0 = windowed, 1 = borderless fullscreen   
 static int cfgFullscreenMode = 0;  /* D511: fullscreen flavour, 0 = borderless desktop, 1 = exclusive */
 static int cfgDeckPresetApplied = 0; /* D283: 1 once the Steam Deck preset has been considered */
 static int cfgLowEndConsidered = 0;  /* D482: 1 once the low-end GPU defaults have been considered */
+static int cfgGpuProbeDone = 0;      /* first-launch GPU benchmark ran (or its cautious fallback applied): once per ini */
 static int cfgDefaultsRev = 0;       /* D546: 1 once the 2.5x -> 2.0x draw/LOD default migration ran */
 
 /*
@@ -683,7 +686,7 @@ PD_CONSTRUCTOR static void videoConfigInit(void)
     configRegisterInt("Video.FXAA",          &cfgFXAA,       0, 1);
     configRegisterInt("Video.Renderer",      &cfgRenderer,   0, 1);   /* issue #44: 0 OpenGL, 1 Vulkan; read at launch */
 #ifndef __SWITCH__
-    configRegisterInt("Video.SkyScale",      &gfx_skyplus_half, 0, 1);   /* GE+ sky and sea: 0 full size, 1 half size (faster); read each frame */
+    configRegisterInt("Video.SkyScale",      &gfx_skyplus_half, 0, 2);   /* GE+ sky and sea: 0 full size, 1 half, 2 quarter (faster); read each frame */
 #endif
     configRegisterInt("Game.SplitScreen",    &portSplitVertical, 0, 1);
     configRegisterInt("Video.PerPixelFog",   &portPerPixelFog, 0, 1);
@@ -721,6 +724,8 @@ PD_CONSTRUCTOR static void videoConfigInit(void)
     configRegisterInt("Video.DeckPresetApplied", &cfgDeckPresetApplied, 0, 1);   /* D283 */
     configRegisterInt("Video.LowEndConsidered", &cfgLowEndConsidered, 0, 1);     /* D482 */
     configRegisterInt("Video.DefaultsRev", &cfgDefaultsRev, 0, 1);               /* D546 */
+    configRegisterInt("Video.GpuProbeDone", &cfgGpuProbeDone, 0, 1);             /* first-launch GPU benchmark (gpuprobe.h) */
+    configRegisterInt("Video.AlphaToCoverage", &gfx_a2c_user, 0, 1);             /* hidden, no menu row: the GPU probe turns it off where A2C costs frames; GE_A2C env overrides */
 }
 
 /* D283: Steam Deck preset. Called from main() right AFTER configLoad(), so
@@ -868,6 +873,93 @@ static void videoMigrateDefaults(void)
     sysLogPrintf(LOG_INFO, "video: defaults rev 1 (D546): %d value(s) moved to 2.0x", changed);
     cfgDefaultsRev = 1;
     configSave();
+}
+
+/* First-launch GPU mini-benchmark: ONE aarch64 binary serves every handheld, so what a weak GPU needs (a smaller GE+ sky,
+ * no alpha-to-coverage, a lower MSAA) is measured, not compiled in. Same rules as D482: once per ini (Video.GpuProbeDone), only
+ * values the player has not moved off the default (Video.SkyScale still 0, Video.MSAA still its default), after gfx_init
+ * (needs the GL context; the main thread still holds it), before the first frame. The Switch (deko3d) keeps its defaults.
+ * Vulkan player: the probe runs on GL, so the FIRST launch uses GL for the whole session (Video.Renderer is not touched; the
+ * next launch is Vulkan with the measured keys, which are shared by both backends); no GL context -> Vulkan, no probe.
+ * Crash safety: a marker file exists while measuring; if it is still there at the next start the measurement hung or crashed
+ * the driver, so it is not repeated and the cautious result (quarter sky, no A2C, 2x MSAA at most) is applied instead.
+ * GE_GPUPROBE=0 disables it, =1 runs it again and applies the result over the current values (testing);
+ * GE_GPUPROBE_HIDDEN=1 runs it without showing it. */
+#define GPUPROBE_HOLD_MS 200      /* the summary stays on screen this long: the whole probe stays near 1.1 s on the H700 */
+#define GPUPROBE_MSAA_DEFAULT 4   /* Video.MSAA's default (defaults.json "pc"): below this the player or a preset chose it */
+static int s_probeOnGl = 0;       /* this session runs on GL only for the first-launch probe (renderer setting is Vulkan) */
+
+#ifndef __SWITCH__
+/* 0: nothing to do; else 1 = measure, 2 = a marker from an earlier unfinished run is there (cautious values, no GL needed) */
+static int videoProbeMode(int *force, char *marker, size_t n)
+{
+    const char *env = getenv("GE_GPUPROBE");
+    FILE *mf;
+
+    *force = env && env[0] == '1';
+    if (env && env[0] == '0') return 0;
+    if (cfgGpuProbeDone && !*force) return 0;
+    snprintf(marker, n, "%s", sysResolvePath("$S/gpuprobe.pending"));
+    mf = fopen(marker, "rb");
+    if (mf) { fclose(mf); return 2; }
+    return 1;
+}
+
+static void videoProbePresent(void)
+{
+    wmAPI->swap_buffers_begin();
+    wmAPI->swap_buffers_end();
+}
+#endif
+
+static void videoApplyGpuProbe(void)
+{
+#ifndef __SWITCH__
+    int force;
+    char marker[512];
+    const int mode = videoProbeMode(&force, marker, sizeof marker);
+    GpuProbeChoice c;
+
+    if (!mode) return;
+    if (mode == 1 && s_vulkanActive) return;   /* Vulkan kept (no GL context for the probe): nothing measured */
+    if (mode == 2) {
+        c.skyScale = 2;
+        c.a2c = 0;
+        c.msaa = cfgMSAA > 2 ? 2 : -1;
+        sysLogPrintf(LOG_WARNING, "gpuprobe: an earlier run did not finish (%s); cautious defaults: SkyScale=2 A2C=0 MSAA<=2", marker);
+        remove(marker);
+    } else {
+        GpuProbeRun run;
+        const char *hid = getenv("GE_GPUPROBE_HIDDEN");
+        uint32_t ww = 0, wh = 0; int32_t x = 0, y = 0;
+        FILE *mf = fopen(marker, "wb");
+        if (mf) { fputs("measuring", mf); fclose(mf); }
+        if (wmAPI && wmAPI->get_dimensions) wmAPI->get_dimensions(&ww, &wh, &x, &y);
+        memset(&run, 0, sizeof run);
+        run.w = (int)ww;
+        run.h = (int)wh;
+        run.msaa = (int)gfx_msaa_level;
+        run.frameMs = 1000.0f / 60.0f;
+        run.visible = !(hid && hid[0] == '1');
+        run.holdMs = getenv("GE_GPUPROBE_HOLD_MS") ? atoi(getenv("GE_GPUPROBE_HOLD_MS")) : GPUPROBE_HOLD_MS;
+        run.present = videoProbePresent;
+        gfx_opengl_gpuprobe(&run);
+        remove(marker);
+        c = run.choice;
+        sysLogPrintf(LOG_NOTE, "gpuprobe: sky full/half/quarter = %.2f/%.2f/%.2f ms, msaa 1x/2x/4x = %.2f/%.2f/%.2f ms (cost over 1x %+.2f/%+.2f, budget %.2f), a2c %+.2f ms -> SkyScale=%d MSAA=%d A2C=%d (-1 = not measured, kept)",
+                     run.skyMs[0], run.skyMs[1], run.skyMs[2], run.msaaMs[0], run.msaaMs[1], run.msaaMs[2],
+                     run.msaaMs[1] - run.msaaMs[0], run.msaaMs[2] - run.msaaMs[0], run.frameMs * GPUPROBE_MSAA_FRAME_SHARE,
+                     run.a2cDeltaMs, c.skyScale, c.msaa, c.a2c);
+    }
+    if (c.skyScale >= 0 && (force || gfx_skyplus_half == 0)) gfx_skyplus_half = c.skyScale;
+    if (c.a2c >= 0 && !getenv("GE_A2C") && (force || gfx_a2c_user == 1)) gfx_a2c_user = c.a2c;   /* GE_A2C pins it for a test run: not saved over */
+    if (c.msaa >= 0 && c.msaa <= (int)gfx_msaa_level && (force || cfgMSAA == GPUPROBE_MSAA_DEFAULT)) {   /* only ever lowered */
+        cfgMSAA = c.msaa;
+        gfx_msaa_level = (uint32_t)c.msaa;
+    }
+    cfgGpuProbeDone = 1;
+    configSave();
+#endif
 }
 
 static void videoApplyLowEndDefaults(void)
@@ -1357,7 +1449,23 @@ int videoInit(void)
 #ifdef GE_VULKAN
     /* issue #44: Vulkan backend, the PC default (Video.Renderer); no usable driver -> GL. */
     if (cfgRenderer == 1) {
-        if (gfx_vulkan_probe()) {
+#ifndef __SWITCH__
+        int probeForce;
+        char probeMarker[512];
+        if (videoProbeMode(&probeForce, probeMarker, sizeof probeMarker) == 1) {
+            /* the first-launch GPU probe measures the GL context: this launch runs on GL (the stored renderer stays Vulkan) */
+            if (gfx_sdl_gl_usable()) {
+                s_probeOnGl = 1;
+                sysLogPrintf(LOG_NOTE, "gpuprobe: first launch on GL for the probe; Vulkan from the next launch");
+            } else {
+                cfgGpuProbeDone = 1;   /* nothing to measure on: do not try again */
+                sysLogPrintf(LOG_WARNING, "gpuprobe: no OpenGL context for the probe; staying on Vulkan, probe skipped");
+            }
+        }
+#endif
+        if (s_probeOnGl) {
+            /* GL for this session only */
+        } else if (gfx_vulkan_probe()) {
             renderingAPI = &gfx_vulkan_api;
             gfx_sdl_set_vulkan_window(true);
             gfx_sdl_set_external_present(gfx_vulkan_present, gfx_vulkan_get_dimensions, gfx_vulkan_park);
@@ -1411,6 +1519,7 @@ int videoInit(void)
     gfx_init(&set);
     videoMigrateDefaults();       /* D546: before D482, which compares against the new defaults */
     videoApplyLowEndDefaults();   /* D482: needs GL_RENDERER; before the first frame */
+    videoApplyGpuProbe();         /* measures the GL context: also before the first frame */
 
     /* VSync + optional fps cap; fast3d paces the window itself. */
     wmAPI->set_swap_interval(cfgVSync ? 1 : 0);

@@ -56,6 +56,25 @@ services:
     volumes:
       - .:/src
     command: ["sh", "tools_pc/docker-build-win.sh"]
+  # Linux aarch64 for H700 handhelds under muOS (Dockerfile.h700, glibc 2.36)
+  # -> build-h700/ge007.aarch64.
+  h700:
+    build:
+      context: .
+      dockerfile: Dockerfile.h700
+    image: local/project-dam-build-h700:latest
+    working_dir: /src
+    volumes:
+      - .:/src
+      - ccache:/ccache
+    command:
+      - sh
+      - -c
+      - >-
+        cmake -S . -B build-h700 -G Ninja -DROMID=ntsc-final
+        -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-h700.cmake -DGE_H700=ON
+        -DGE_VULKAN=OFF -DGE007_BUILD_TESTS=OFF
+        && cmake --build build-h700
   shell:
     image: local/project-dam-build:latest
     working_dir: /src

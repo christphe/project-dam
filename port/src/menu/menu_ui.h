@@ -27,6 +27,7 @@ void fontsBuild();
  * returns false with the reason in *err; the menu then shows it instead of the content. */
 bool setData(const char* json, size_t len, std::string* err);
 
+void setConsole(bool console);   /* "console" in expressions: no keyboard/mouse (a run-time setting, not the platform) */
 void setPlatform(bool pc);   /* which defaults and which "platform ==" rules apply */
 /* The link to the game's values: get fills the config value of a control's key (false = no such value), set stores
  * one. Without it the menu keeps its own values (the viewer). */
