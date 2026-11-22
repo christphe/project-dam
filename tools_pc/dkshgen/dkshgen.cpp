@@ -123,6 +123,45 @@ static void append_formula(std::string& s, uint8_t c[2][4], bool do_single, bool
 
 static const char* ST(int j) { return j == 0 ? "S" : "T"; }
 
+/* Dynamic lights (port/include/dynlights.h): struct GfxLights as std140,
+ * binding 3 of both stages; the eye-space position rides in varying 18. */
+static const char* LIGHTS_BLOCK =
+    "layout(std140, binding = 3) uniform Lights {\n"
+    "    mat4 inv_proj;\n"      /* eye = inv_proj * clip (row-vector matrix read column-major) */
+    "    ivec4 lcount;\n"       /* x point lights, y sun on */
+    "    vec4 sun_dir;\n"
+    "    vec4 sun_col;\n"
+    "    vec4 lpos[16];\n"      /* eye xyz, w radius */
+    "    vec4 lcol[16];\n"
+    "};\n";
+#define DK_VAR_EYE 18
+
+/* Per-pixel lighting of the combined colour, before fog. Flat normals from
+ * the eye-space position's derivatives, turned to face the eye. Point lights
+ * add the texture colour (or a neutral grey) times the light, so a dark
+ * corridor lights up; the sun scales the colour the original lighting gave,
+ * so what the level baked as shadow stays dark. */
+static const char* LIGHTS_FN =
+    "vec3 dynLight(vec3 base, vec3 albedo) {\n"
+    "    if (lcount.x == 0 && lcount.y == 0) return base;\n"
+    "    vec3 n = normalize(cross(dFdx(vEye), dFdy(vEye)));\n"
+    "    if (dot(n, vEye) > 0.0) n = -n;\n"
+    "    vec3 add = vec3(0.0);\n"
+    "    for (int i = 0; i < lcount.x; i++) {\n"
+    "        vec3 d = lpos[i].xyz - vEye;\n"
+    "        float d2 = dot(d, d);\n"
+    "        float r2 = lpos[i].w * lpos[i].w;\n"
+    "        if (d2 >= r2) continue;\n"
+    "        float fall = 1.0 - d2 / r2;\n"
+    "        fall *= fall;\n"
+    "        float ndl = clamp(dot(n, d) * inversesqrt(max(d2, 1e-4)) * 0.75 + 0.25, 0.0, 1.0);\n"
+    "        add += lcol[i].rgb * (fall * ndl);\n"
+    "    }\n"
+    "    vec3 c = base + albedo * add;\n"
+    "    if (lcount.y != 0) c += base * sun_col.rgb * (0.4 * max(dot(n, sun_dir.xyz), 0.0));\n"
+    "    return c;\n"
+    "}\n";
+
 /* Combiner GLSL (deko3d): see gfx_opengl_gen_shader_src. */
 static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool mesh = false) {
     s_bad = false;
@@ -168,6 +207,8 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
               "    mat4 mtx[32];\n"   /* last: see DkMeshUniforms */
               "};\n";
     }
+    vs += LIGHTS_BLOCK;
+    vs += fmt("layout(location = %d) out vec3 vEye;\n", DK_VAR_EYE);
     vs += "void main() {\n";
     if (mesh) {
         vs += "    vec4 mp = mtx[int(aVtxPos.w + 0.5)] * vec4(aVtxPos.xyz, 1.0);\n"
@@ -200,6 +241,8 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
         else vs += fmt("    vInput%d = aInput%d;\n", i + 1, i + 1);
     }
     vs += mesh ? "    gl_Position = mp;\n" : "    gl_Position = aVtxPos;\n";
+    vs += "    vec4 he = inv_proj * gl_Position;\n"
+          "    vEye = he.xyz / (abs(he.w) > 1e-6 ? he.w : 1.0);\n";
     vs += "}\n";
 
     fs = "#version 460\n";
@@ -261,6 +304,9 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
               "}\n";
     }
     fs += "layout(location = 0) out vec4 outColor;\n";
+    fs += LIGHTS_BLOCK;
+    fs += fmt("layout(location = %d) in vec3 vEye;\n", DK_VAR_EYE);
+    fs += LIGHTS_FN;
     fs += "void main() {\n";
     for (int i = 0; i < f.num_inputs; i++) {
         fs += fmt("    vec%d cInput%d = clamp(vInput%d, 0.0, 1.0);\n", nin, i + 1, i + 1);
@@ -301,6 +347,8 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
     }
     fs += "    texel = WRAP(texel, -0.51, 1.51);\n";
     fs += "    texel = clamp(texel, 0.0, 1.0);\n";
+    fs += f.used_textures[0] ? "    texel.rgb = min(dynLight(texel.rgb, texVal0.rgb), vec3(1.0));\n"
+                             : "    texel.rgb = min(dynLight(texel.rgb, vec3(0.6)), vec3(1.0));\n";
     if (f.opt_fog) {
         fs += "    float fogA = fog_pixel != 0 ? clamp(vFogW * gl_FragCoord.w, 0.0, 1.0) : clamp(vFog.a, 0.0, 1.0);\n";
         fs += f.opt_alpha ? "    texel = vec4(mix(texel.rgb, vFog.rgb, fogA), texel.a);\n"

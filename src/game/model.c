@@ -5295,6 +5295,15 @@ void doshadow(ModelRenderData *renderdata, Model *model, ModelNode *node)
     shadow = &node->Data->Shadow;
     vtxtemplate = D_800363F8;
     rwdata = (ModelRwData_HeaderRecord *) modelGetNodeRwData(model, shadow->HeaderNode);
+#ifdef PORT
+    {   /* project-dam PROTOTYPE: GE_NOBLOB=1 hides the round blob shadow (port/src/dynlights.c portHideBlob) */
+        extern int portHideBlob(void);
+        if (portHideBlob())
+        {
+            return;
+        }
+    }
+#endif
     height = rwdata->pos.y - rwdata->ground;
     sizex = shadow->size.x;
     sizey = shadow->size.y;

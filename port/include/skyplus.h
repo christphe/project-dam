@@ -100,6 +100,10 @@ Gfx *skyPlusRender(Gfx *gdl);
 /* Switch: fast3d hands the decoded water texture of the level's own water draws (GE's water combiner, TEXEL0) to the
  * game side while it is wanted (once per level). rgba = w x h RGBA8; fmt/siz = the N64 tile format (for the log). */
 int skyPlusWaterWanted(void);
+/* Dynamic lights: the sun of the GE+ sky just drawn for this view (world
+ * space, toward the sun; colour 0..1). 0 when that sky has no sun above the
+ * horizon or GE+ drew no sky. Consumes it: one read per view. */
+int skyPlusSun(float dir[3], float col[3]);
 void skyPlusWaterSource(const unsigned char *rgba, int w, int h, int fmt, int siz);
 
 /* fast3d -> GL backend: stage one draw (decoder thread) and replay it (GL

@@ -29,6 +29,13 @@
 #include "player.h"
 #include "stan.h"
 #include "explosion.h"
+#ifdef PORT
+/* project-dam: the prop draws are bracketed with G_SHADOWCAST_EXT (port/src/dynlights.c) */
+extern Gfx *portShadowCastMark(Gfx *gdl, int on);
+#define PORT_SHADOW_MARK(gdl, on) (gdl) = portShadowCastMark((gdl), (on));
+#else
+#define PORT_SHADOW_MARK(gdl, on)
+#endif
 #include "bgroomtrans.h"
 
 
@@ -715,7 +722,9 @@ Gfx *sub_GAME_7F0B3C8C(Gfx *gdl)
                 {
                     if (sub_GAME_7F0BD8F0())
                     {
+                        PORT_SHADOW_MARK(gdl, 1)
                         gdl = chrpropsRenderPass(gdl, dword_CODE_bss_8007FFA0[j].roomid, 0);
+                        PORT_SHADOW_MARK(gdl, 0)
                     }
                 }
  
@@ -744,7 +753,9 @@ Gfx *sub_GAME_7F0B3C8C(Gfx *gdl)
                 {
                     if (sub_GAME_7F0BD8F0())
                     {
+                        PORT_SHADOW_MARK(gdl, 1)
                         gdl = chrpropsRenderPass(gdl, dword_CODE_bss_8007FFA0[j].roomid, 2);
+                        PORT_SHADOW_MARK(gdl, 0)
                     }
                 }
  
@@ -806,7 +817,9 @@ Gfx *sub_GAME_7F0B3C8C(Gfx *gdl)
                 {
                     if (sub_GAME_7F0BD8F0())
                     {
+                        PORT_SHADOW_MARK(gdl, 1)
                         gdl = chrpropsRenderPass(gdl, dword_CODE_bss_8007FFA0[j].roomid, 1);
+                        PORT_SHADOW_MARK(gdl, 0)
                     }
                 }
  
@@ -2831,6 +2844,12 @@ void bgLoadRoomModelData(s32 roomID)
     }
 
     bgBuildRoomVtxBounds(roomID);
+#ifdef PORT
+    {   /* project-dam PROTOTYPE: GE's painted light removed (port/src/relight.c, GE_RELIGHT=1) */
+        extern void portRelightApplyRoom(s32 room);
+        portRelightApplyRoom(roomID);
+    }
+#endif
     roomsHandleStateDebugging();
 
 end:;

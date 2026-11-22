@@ -450,6 +450,10 @@ int s_lut_fb = -1;     /* its render target (an s_fbs entry, made on first use) 
  * (fragment binding 2, water.frag.glsl); its uWave4.z = 0 until a sky pass ran
  * this frame, so the water stays GE's own with Visuals = Original. */
 #define WATER_UBO_OFS 3072
+/* Dynamic lights (struct GfxLights): binding 3 of the vertex and fragment
+ * stages of every combiner program, after the water block. */
+#define LIGHTS_UBO_OFS 3584
+#define LIGHTS_UBO_SIZE 1024   /* sizeof(GfxLights) = 624 with 16 lights */
 int s_sky_slot_w = -1;   /* the cloud texture, for the reflections (set by the sky pass) */
 int s_wtex_slot = -1;    /* the wave heights (skyplus.c's fbm), for the sea and the water draws */
 /* the level's water colour map (skyplus.c, baked from the level's water texture), water.frag binding 4; the sky block also
@@ -1389,6 +1393,12 @@ void dk_mesh_draw(uint32_t name, const struct GfxMeshDraw* d) {
     s_cmd_pending = true;
 }
 
+/* The light block for the draws that follow (inline in the command buffer,
+ * so it lands between the draws as recorded). */
+void dk_set_lights(const struct GfxLights* l) {
+    dkCmdBufPushConstants(s_cmd, s_ubo.gpu + LIGHTS_UBO_OFS, LIGHTS_UBO_SIZE, 0, sizeof *l, l);
+}
+
 /* s_pack is the NRO-embedded pack, set once in dk_init: safe from the decoder. */
 bool dk_mesh_supported(uint64_t id0, uint32_t id1) {
     const int e = pack_find(id0, id1);
@@ -1442,7 +1452,7 @@ void dk_init(void) {
 
     s_desc = make_block(NUM_IMG_DESC * sizeof(DkImageDescriptor) + NUM_SMP_DESC * sizeof(DkSamplerDescriptor),
                         DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached);
-    s_ubo = make_block(4096, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached);
+    s_ubo = make_block(8192, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached);   /* the light block ends at 4608 */
     s_query = make_block(4096, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached);
     memset(s_desc.cpu, 0, s_desc.size);
     memset(s_ubo.cpu, 0, s_ubo.size);
@@ -1464,6 +1474,9 @@ void dk_init(void) {
     dkCmdBufBindUniformBuffer(s_cmd, DkStage_Fragment, 0, s_ubo.gpu, 256);
     dkCmdBufBindUniformBuffer(s_cmd, DkStage_Fragment, 1, s_ubo.gpu + 256, 256);
     dkCmdBufBindUniformBuffer(s_cmd, DkStage_Fragment, 2, s_ubo.gpu + WATER_UBO_OFS, 512);   /* GE+ water */
+    static_assert(sizeof(struct GfxLights) <= LIGHTS_UBO_SIZE, "the light block fits its bytes");
+    dkCmdBufBindUniformBuffer(s_cmd, DkStage_Vertex, 3, s_ubo.gpu + LIGHTS_UBO_OFS, LIGHTS_UBO_SIZE);    /* dynamic lights */
+    dkCmdBufBindUniformBuffer(s_cmd, DkStage_Fragment, 3, s_ubo.gpu + LIGHTS_UBO_OFS, LIGHTS_UBO_SIZE);
     DkColorWriteState cw;
     dkColorWriteStateDefaults(&cw);
     dkCmdBufBindColorWriteState(s_cmd, &cw);
@@ -2035,6 +2048,7 @@ struct GfxRenderingAPI gfx_deko3d_api = {
     dk_mesh_delete,
     dk_mesh_draw,
     dk_mesh_supported,
+    dk_set_lights,
 };
 
 extern "C" {

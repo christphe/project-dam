@@ -1487,6 +1487,7 @@ static bool mc_replay_gpu(McEntry* e) {
                 d.env_in[j][3] = L[env0.a];
             }
         }
+        gfx_dynlights_sync();
         gfx_rapi->mesh_draw(g->mesh_id, &d);
         s_mc_g_runs++;
         s_mc_g_tris += r.nverts / 3;

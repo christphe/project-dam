@@ -1020,7 +1020,7 @@ void load_pack(void) {
 VkDescriptorSetLayout s_set_layout = VK_NULL_HANDLE;
 VkDescriptorSetLayout s_sky_set_layout = VK_NULL_HANDLE;   /* the GE+ sky passes: five samplers (0..4), the Sky block at 5 */
 VkPipelineLayout s_pipe_layout = VK_NULL_HANDLE, s_sky_pipe_layout = VK_NULL_HANDLE, s_water_pipe_layout = VK_NULL_HANDLE;
-VkDescriptorSetLayout s_water_set_layout = VK_NULL_HANDLE;   /* the water draws: samplers 0..3 and 7, Draw 4, Comb 5, the Sky block 8 */
+VkDescriptorSetLayout s_water_set_layout = VK_NULL_HANDLE;   /* the water draws: samplers 0..3 and 9, Draw 4, Comb 5, Lights 7, the Sky block 8 */
 VkPipelineCache s_pipe_cache = VK_NULL_HANDLE;
 
 /* The driver's pipeline cache lives in $S/ge007.vkcache between runs: the first
@@ -1105,18 +1105,20 @@ struct PipeKey {
 std::map<PipeKey, VkPipeline> s_pipes;
 
 void create_layouts(void) {
-    VkDescriptorSetLayoutBinding b[5] = {};
-    const uint32_t nums[5] = { 0, 1, 4, 5, 6 };
-    for (int i = 0; i < 5; i++) {
+    VkDescriptorSetLayoutBinding b[6] = {};
+    const uint32_t nums[6] = { 0, 1, 4, 5, 6, 7 };   /* 7 = the dynamic-light block (Lights, binding 3 in the GLSL, + 4) */
+    for (int i = 0; i < 6; i++) {
         b[i].binding = nums[i];
         b[i].descriptorCount = 1;
         b[i].descriptorType = i < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        b[i].stageFlags = nums[i] == 6 ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_FRAGMENT_BIT;
+        b[i].stageFlags = nums[i] == 6 ? VK_SHADER_STAGE_VERTEX_BIT
+                        : nums[i] == 7 ? (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
+                                       : VK_SHADER_STAGE_FRAGMENT_BIT;
     }
     VkDescriptorSetLayoutCreateInfo ci = {};
     ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     ci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    ci.bindingCount = 5;
+    ci.bindingCount = 6;
     ci.pBindings = b;
     VK_CHECK(vkCreateDescriptorSetLayout(s_dev, &ci, nullptr, &s_set_layout));
     VkPipelineLayoutCreateInfo pl = {};
@@ -1139,16 +1141,17 @@ void create_layouts(void) {
     pl.pSetLayouts = &s_sky_set_layout;
     VK_CHECK(vkCreatePipelineLayout(s_dev, &pl, nullptr, &s_sky_pipe_layout));
     /* the water draws (water.frag.glsl, built with the blocks moved up by 4 like the other draws': Draw 4, Comb 5; its
-     * colour-map sampler moved to 7 and its Sky block to 8, cmake/VulkanShaders.cmake): the uber vertex shader has no block */
-    VkDescriptorSetLayoutBinding wb[8] = {};
-    static const uint32_t wnums[8] = { 0, 1, 2, 3, 7, 4, 5, 8 };
-    for (int i = 0; i < 8; i++) {
+     * colour-map sampler moved to 9 and its Sky block to 8, cmake/VulkanShaders.cmake): the uber vertex shader's Lights block
+     * is at 7, like the other draws' */
+    VkDescriptorSetLayoutBinding wb[9] = {};
+    static const uint32_t wnums[9] = { 0, 1, 2, 3, 9, 4, 5, 8, 7 };
+    for (int i = 0; i < 9; i++) {
         wb[i].binding = wnums[i];
         wb[i].descriptorCount = 1;
         wb[i].descriptorType = i < 5 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        wb[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        wb[i].stageFlags = i == 8 ? (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT) : VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    ci.bindingCount = 8;
+    ci.bindingCount = 9;
     ci.pBindings = wb;
     VK_CHECK(vkCreateDescriptorSetLayout(s_dev, &ci, nullptr, &s_water_set_layout));
     pl.pSetLayouts = &s_water_set_layout;
@@ -1807,6 +1810,26 @@ void unit_image(int u, VkImageView* view, VkSampler* smp) {
     *smp = get_sampler(default_tex_sampler());
 }
 
+/* the dynamic-light block (binding 7): this frame's latest set_lights, zeros until the first one (a ring allocation, so it
+ * is per frame: vk_start_frame invalidates it) */
+VkBuffer s_lights_buf = VK_NULL_HANDLE;
+VkDeviceSize s_lights_off = 0;
+bool s_lights_valid = false;
+
+void lights_ensure(void) {
+    if (s_lights_valid) return;
+    uint8_t* z = ring_alloc((uint32_t)sizeof(GfxLights), (uint32_t)s_ubo_align, &s_lights_buf, &s_lights_off);
+    memset(z, 0, sizeof(GfxLights));
+    s_lights_valid = true;
+}
+
+void vk_set_lights(const struct GfxLights* l) {
+    uint8_t* p = ring_alloc((uint32_t)sizeof(GfxLights), (uint32_t)s_ubo_align, &s_lights_buf, &s_lights_off);
+    memcpy(p, l, sizeof(GfxLights));
+    s_lights_valid = true;
+    s_desc_dirty = true;
+}
+
 /* the water draws' descriptors: the two game textures, the cloud / wave / colour-map textures, Draw, Comb and the Sky block */
 void push_water_descriptors(const VkDescriptorImageInfo ii[2], const VkDescriptorBufferInfo bi[2]) {
     if (!s_wat_valid) {   /* no sky pass yet this frame: the block is zeros, uWave4.z = 0 = GE's own water */
@@ -1824,25 +1847,27 @@ void push_water_descriptors(const VkDescriptorImageInfo ii[2], const VkDescripto
         { get_sampler(cloud_k), s_wmap_img.img ? s_wmap_img.view : s_dummy.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
     };
     VkDescriptorBufferInfo sb = { s_wat_buf, s_wat_off, WATER_UBO_BYTES };
-    VkWriteDescriptorSet w[8] = {};
-    for (int i = 0; i < 8; i++) {
+    lights_ensure();
+    const VkDescriptorBufferInfo li = { s_lights_buf, s_lights_off, sizeof(GfxLights) };
+    VkWriteDescriptorSet w[9] = {};
+    for (int i = 0; i < 9; i++) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].descriptorCount = 1;
     }
-    static const uint32_t bind[8] = { 0, 1, 2, 3, 7, 4, 5, 8 };
+    static const uint32_t bind[9] = { 0, 1, 2, 3, 9, 4, 5, 8, 7 };
     const VkDescriptorImageInfo* imgs[5] = { &ii[0], &ii[1], &wi[0], &wi[1], &wi[2] };
     for (int i = 0; i < 5; i++) {
         w[i].dstBinding = bind[i];
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w[i].pImageInfo = imgs[i];
     }
-    const VkDescriptorBufferInfo* bufs[3] = { &bi[0], &bi[1], &sb };
-    for (int i = 5; i < 8; i++) {
+    const VkDescriptorBufferInfo* bufs[4] = { &bi[0], &bi[1], &sb, &li };
+    for (int i = 5; i < 9; i++) {
         w[i].dstBinding = bind[i];
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         w[i].pBufferInfo = bufs[i - 5];
     }
-    vkCmdPushDescriptorSetKHR(main_cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, s_water_pipe_layout, 0, 8, w);
+    vkCmdPushDescriptorSetKHR(main_cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, s_water_pipe_layout, 0, 9, w);
     s_desc_dirty = false;
 }
 
@@ -1864,11 +1889,13 @@ void push_descriptors(void) {
         { s_ubo_buf, s_ubo_off, sizeof(DkDrawUniforms) },
         { s_ubo_buf, s_ubo_off + UBO_COMB_OFF, sizeof(DkCombinerParams) },
     };
-    VkWriteDescriptorSet w[5] = {};
-    for (int i = 0; i < 5; i++) {
+    VkWriteDescriptorSet w[6] = {};
+    for (int i = 0; i < 6; i++) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].descriptorCount = 1;
     }
+    lights_ensure();
+    const VkDescriptorBufferInfo li = { s_lights_buf, s_lights_off, sizeof(GfxLights) };
     VkDescriptorBufferInfo mi = { s_mesh_ubo_buf, s_mesh_ubo_off, sizeof(DkMeshUniforms) };
     w[0].dstBinding = 0;
     w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1882,10 +1909,18 @@ void push_descriptors(void) {
     w[3].dstBinding = 5;
     w[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     w[3].pBufferInfo = &bi[1];
-    w[4].dstBinding = 6;
-    w[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    w[4].pBufferInfo = &mi;
-    vkCmdPushDescriptorSetKHR(main_cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe_layout, 0, s_mesh_mode ? 5 : 4, w);
+    uint32_t n = 4;   /* dense: 0, 1, 4, 5, then the Mesh block (mesh mode only), then Lights */
+    if (s_mesh_mode) {
+        w[n].dstBinding = 6;
+        w[n].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w[n].pBufferInfo = &mi;
+        n++;
+    }
+    w[n].dstBinding = 7;
+    w[n].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    w[n].pBufferInfo = &li;
+    n++;
+    vkCmdPushDescriptorSetKHR(main_cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe_layout, 0, n, w);
     s_desc_dirty = false;
 }
 
@@ -2256,6 +2291,7 @@ void vk_on_resize(void) {}
 void vk_start_frame(void) {
     s_frame_count++;
     s_wat_valid = false;   /* GE+ water off until this frame's sky pass */
+    s_lights_valid = false;   /* the light block is a per-frame ring allocation: zeros until this frame's first set_lights */
     if (s_up) ensure_frame();
 }
 void vk_end_frame(void) {}
@@ -2698,6 +2734,7 @@ struct GfxRenderingAPI gfx_vulkan_api = {
     vk_mesh_delete,
     vk_mesh_draw,
     vk_mesh_supported,
+    vk_set_lights,
 };
 
 extern "C" {

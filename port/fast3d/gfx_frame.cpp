@@ -630,6 +630,22 @@ void r_mesh_draw(uint32_t id, const struct GfxMeshDraw* d) {
     s_st_mesh_draws++;
 }
 
+void r_set_lights(const struct GfxLights* l) {
+    if (B->set_lights == nullptr) {
+        return;
+    }
+    if (!s_rec) {
+        B->set_lights(l);
+        return;
+    }
+    s_fr->nbytes = (s_fr->nbytes + 15) & ~(size_t)15;
+    grow(s_fr->bytes, s_fr->cap_bytes, s_fr->nbytes + sizeof *l);
+    memcpy(s_fr->bytes + s_fr->nbytes, l, sizeof *l);
+    GfxFrameCmd& c = push_cmd(GFC_LIGHTS);
+    c.off = s_fr->nbytes;
+    s_fr->nbytes += sizeof *l;
+}
+
 void r_init(void) {
     B->init();
     s_fb_count = 1;   /* gfx_opengl_init: framebuffers.resize(1) */
@@ -969,6 +985,9 @@ void replay(const GfxFrame& f) {
                 apply_state(f.states[c.a]);   /* binds the classic program: mesh_draw uses its twin */
                 mesh_draw_on_gl((uint32_t)c.b, f.bytes + c.off, (uint32_t)c.c);
                 break;
+            case GFC_LIGHTS:
+                B->set_lights((const struct GfxLights*)(f.bytes + c.off));
+                break;
         }
     }
 }
@@ -1229,6 +1248,7 @@ struct GfxRenderingAPI* gfx_frame_install(struct GfxRenderingAPI* backend) {
     s_api.mesh_create = r_mesh_create;
     s_api.mesh_delete = r_mesh_delete;
     s_api.mesh_draw = r_mesh_draw;
+    s_api.set_lights = backend->set_lights != nullptr ? r_set_lights : nullptr;
     return &s_api;
 }
 
