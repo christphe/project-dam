@@ -166,8 +166,9 @@ struct Doc {
     void commit(const std::string &snap);          // push a snapshot taken before an edit as one undo step
     bool restoreSnapshot(const std::string &snap, std::string &err);   // cancel a drag
 
-    // Set by the GUI: renders the view to a 320x240 PNG without overlay (empty when headless).
-    std::function<bool(const std::string &path, std::string &err)> captureFn;
+    // Set by the GUI: renders the view to a 320x240 PNG without overlay, in the old-photo look at the
+    // given intensity (0 = plain). Empty when headless.
+    std::function<bool(const std::string &path, float intensity, std::string &err)> captureFn;
 
     // ---- mod (campaign): mods/<mod>/campaign.json + <mission>/mission.json + thumb.png ----
     Campaign camp;
@@ -175,6 +176,8 @@ struct Doc {
     bool modDirty = false;
     std::string modDir;
     bool openMod(const std::string &dir, std::string &err);          // creates the folder and an empty campaign when new
+    std::string modNotice;                                           // set by saveMod when it had to make an id
+    bool modIdOk() const;
     bool saveMod(std::string &err);                                  // campaign.json (not required to be valid yet)
     std::vector<std::string> validateMod() const;
     // New mission folder (unique, from `folder` or the name), mission.json written, appended to the
@@ -206,3 +209,7 @@ private:
 // Small helpers shared by the UI and MCP code.
 bool readFile(const std::string &path, std::string &out);
 bool padSpecFromJson(const struct cJSON *args, PadSpec &out, std::string &err);   // "pad": n | "id", or "pos": [x,y,z]
+
+// UUID v4 from a real random source (std::random_device); and the 8-4-4-4-12 hex check.
+std::string generateUuid();
+bool uuidValid(const char *s);

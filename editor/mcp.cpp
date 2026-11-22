@@ -264,11 +264,22 @@ ToolResult toolCaptureThumb(Doc &d, const cJSON *a)
     if (path.empty()) path = d.defaultThumbPath();   // mods/<mod>/<mission>/thumb.png when a mod mission is open
     if (path.empty()) return fail("\"path\" is required (a .png file) unless a mission of an open mod is being edited");
     if (!d.captureFn) return fail("capture_thumb needs the editor window: it is not available with --mcp-stdio / --mcp-http");
-    if (!d.captureFn(path, err)) return fail(err);
+    float intensity = 1.0f;
+    std::string style = argStr(a, "style", "old_photo");
+    if (style == "plain") intensity = 0.0f;
+    else if (style != "old_photo") return fail("\"style\" is old_photo (default) or plain");
+    if (argHas(a, "intensity")) {
+        const cJSON *iv = cJSON_GetObjectItemCaseSensitive(a, "intensity");
+        if (!cJSON_IsNumber(iv)) return fail("\"intensity\" is a number, 0 (plain) to 1.5; default 1");
+        intensity = (float)iv->valuedouble;
+        intensity = intensity < 0 ? 0 : intensity > 1.5f ? 1.5f : intensity;
+    }
+    if (!d.captureFn(path, intensity, err)) return fail(err);
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "written", path.c_str());
     cJSON_AddNumberToObject(o, "width", 320);
     cJSON_AddNumberToObject(o, "height", 240);
+    cJSON_AddNumberToObject(o, "intensity", intensity);
     return okJson(o);
 }
 
@@ -371,8 +382,8 @@ const Tool kTools[] = {
       "\"op\":{\"type\":\"integer\"},\"mission_pad\":{\"type\":\"string\"},\"pos\":{\"type\":\"array\",\"items\":{\"type\":\"number\"},\"minItems\":3,\"maxItems\":3},"
       "\"yaw\":{\"type\":\"number\"},\"axis\":{\"type\":\"string\",\"enum\":[\"x\",\"y\",\"z\"]}, KSNAP }}",
       toolSetTransform },
-    { "capture_thumb", "Render the editor's current 3D view to a 320x240 PNG (4:3 crop, no markers or panels). Needs the editor window.",
-      "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"default: thumb.png in the open mission's folder inside the open mod\"}}}", toolCaptureThumb },
+    { "capture_thumb", "Render the editor's current 3D view to a 320x240 PNG (4:3 crop, no markers or panels) in the baked old-photo look (sepia, grain, vignette, border; style plain or intensity 0 turns it off). Needs the editor window.",
+      "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"default: thumb.png in the open mission's folder inside the open mod\"},\"style\":{\"type\":\"string\",\"enum\":[\"old_photo\",\"plain\"]},\"intensity\":{\"type\":\"number\",\"description\":\"old-photo strength, 0 = plain capture, default 1, max 1.5\"}}}", toolCaptureThumb },
     { "mod_open", "Open a mod folder (mods/<mod>, created with an empty campaign.json when new). Optional name, author, description, affects [story|multiplayer], unlock (ordered|open) edit the campaign; mission (folder or index) opens one of its missions.",
       "{\"type\":\"object\",\"properties\":{\"dir\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"author\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"},"
       "\"affects\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"story\",\"multiplayer\"]}},\"unlock\":{\"type\":\"string\",\"enum\":[\"ordered\",\"open\"]},"

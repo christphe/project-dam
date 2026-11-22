@@ -15,6 +15,9 @@ cJSON *modJson(const Doc &d)
     cJSON *ms = cJSON_AddArrayToObject(o, "missions");
     for (int i = 0; i < d.camp.nmissions; i++) cJSON_AddItemToArray(ms, cJSON_CreateString(d.camp.missions[i]));
     cJSON_AddBoolToObject(o, "dirty", d.modDirty);
+    cJSON_AddStringToObject(o, "id", d.camp.id);
+    cJSON_AddBoolToObject(o, "id_valid", d.modIdOk());
+    if (!d.modNotice.empty()) cJSON_AddStringToObject(o, "warning", d.modNotice.c_str());
     return o;
 }
 
@@ -57,12 +60,13 @@ ToolResult toolModOpen(Doc &d, const cJSON *a)
 ToolResult toolModSave(Doc &d, const cJSON *)
 {
     std::string err;
-    std::vector<std::string> issues = d.validateMod();
     if (!d.saveMod(err)) return fail(err);
+    std::vector<std::string> issues = d.validateMod();   // after the save: it made the id if it was missing
     cJSON *o = modJson(d);
     cJSON_AddStringToObject(o, "saved", (d.modDir + "/campaign.json").c_str());
     cJSON *w = cJSON_AddArrayToObject(o, "warnings");
     for (auto &i : issues) cJSON_AddItemToArray(w, cJSON_CreateString(i.c_str()));
+    if (!d.modNotice.empty()) cJSON_AddItemToArray(w, cJSON_CreateString(d.modNotice.c_str()));
     return okJson(o);
 }
 

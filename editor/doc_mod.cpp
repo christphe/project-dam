@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <random>
 
 namespace fs = std::filesystem;
 
@@ -23,6 +24,32 @@ static std::string baseName(std::string p)
     size_t s = p.find_last_of("/\\");
     return s == std::string::npos ? p : p.substr(s + 1);
 }
+
+std::string generateUuid()
+{
+    std::random_device rd;
+    std::seed_seq seq{ rd(), rd(), rd(), rd(), rd(), rd(), rd(), rd() };
+    std::mt19937_64 gen(seq);
+    uint64_t a = gen(), b = gen();
+    a = (a & 0xffffffffffff0fffull) | 0x0000000000004000ull;   // version 4
+    b = (b & 0x3fffffffffffffffull) | 0x8000000000000000ull;   // variant 10xx
+    char s[40];
+    snprintf(s, sizeof s, "%08x-%04x-%04x-%04x-%012llx", (unsigned)(a >> 32), (unsigned)((a >> 16) & 0xffff), (unsigned)(a & 0xffff),
+             (unsigned)(b >> 48), (unsigned long long)(b & 0xffffffffffffull));
+    return s;
+}
+
+bool uuidValid(const char *s)
+{
+    if (!s || strlen(s) != 36) return false;
+    for (int i = 0; i < 36; i++) {
+        if (i == 8 || i == 13 || i == 18 || i == 23) { if (s[i] != '-') return false; }
+        else if (!isxdigit((unsigned char)s[i])) return false;
+    }
+    return true;
+}
+
+bool Doc::modIdOk() const { return uuidValid(camp.id); }
 
 bool Doc::openMod(const std::string &dirIn, std::string &err)
 {
@@ -40,10 +67,12 @@ bool Doc::openMod(const std::string &dirIn, std::string &err)
         if (ec) { err = "cannot create " + dir; campaignFree(&c); return false; }
         snprintf(c.name, sizeof c.name, "%s", baseName(dir).c_str());
         c.affects = CAMPAIGN_AFFECTS_STORY;
+        snprintf(c.id, sizeof c.id, "%s", generateUuid().c_str());
         if (!campaignSaveFile(file.c_str(), &c, e, sizeof e)) { err = e; campaignFree(&c); return false; }
     }
     campaignFree(&camp);
     camp = c;   // takes over the owned pointers
+    modNotice = uuidValid(camp.id) ? "" : "warning: campaign.json has no valid id; one is generated on the next save";
     hasMod = true;
     modDir = dir;
     modDirty = false;
@@ -54,6 +83,11 @@ bool Doc::saveMod(std::string &err)
 {
     if (!hasMod) { err = "no mod is open"; return false; }
     char e[256] = "";
+    modNotice.clear();
+    if (!modIdOk()) {   // a hand-written or older campaign.json: the save key is made now, once
+        snprintf(camp.id, sizeof camp.id, "%s", generateUuid().c_str());
+        modNotice = std::string("warning: campaign.json had no valid id; generated ") + camp.id;
+    }
     if (!campaignSaveFile((modDir + "/campaign.json").c_str(), &camp, e, sizeof e)) { err = e[0] ? e : "cannot write campaign.json"; return false; }
     modDirty = false;
     return true;

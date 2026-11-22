@@ -110,6 +110,11 @@ def mod_checks(exe, export, work):
     err, d = s.tool("mod_open", dir=moddir, name="Smoke mod", author="tester", description="a test", affects=["story", "multiplayer"],
                     unlock="open")
     check(not err and d["name"] == "Smoke mod" and d["missions"] == [], "mod_open creates the mod folder")
+    import re
+    uuid_re = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    mod_id = d["id"]
+    check(uuid_re.match(mod_id) is not None and d["id_valid"], "a new mod gets a UUID v4: " + mod_id)
+    check(json.load(open(os.path.join(moddir, "campaign.json")))["id"] == mod_id, "the id is in campaign.json")
     err, d = s.tool("mod_add_mission", name="First", level="bunker1")
     check(not err and d["folder"] == "first" and os.path.exists(os.path.join(moddir, "first", "mission.json")), "mod_add_mission 1")
     err, d = s.tool("mod_add_mission", name="Second", level="silo")
@@ -134,9 +139,21 @@ def mod_checks(exe, export, work):
     s.call("initialize", {"protocolVersion": "2025-06-18"})
     err, d = s.tool("mod_open", dir=moddir, mission="first")
     check(not err and d["missions"][0] == "second", "reloaded in a new process")
+    check(d["id"] == mod_id, "the id survives save and reload")
     err, d = s.tool("level_describe")
     check(d["mission"]["open"] and d["mission"]["name"] == "First", "mod_open mission=first opens that mission")
 
+    # a campaign.json without an id: warned on open, generated on the next save
+    cpath = os.path.join(moddir, "campaign.json")
+    camp = json.load(open(cpath))
+    del camp["id"]
+    json.dump(camp, open(cpath, "w"))
+    err, d = s.tool("mod_open", dir=moddir)
+    check(not err and not d["id_valid"] and "warning" in d, "mod without an id: warned on open")
+    err, d = s.tool("mod_save")
+    check(not err and uuid_re.match(d["id"]) is not None and any("id" in w for w in d["warnings"]), "mod_save generates the missing id")
+    check(uuid_re.match(json.load(open(cpath))["id"]) is not None, "the generated id is in campaign.json")
+    err, d = s.tool("mod_open", dir=moddir, mission="first")
     err, d = s.tool("set_environment", mood="dusk", sun={"azimuth": 120, "elevation": 12, "color": [1, 0.8, 0.6], "glow": 0.6},
                     sky=[0.5, 0.6, 0.7], cloud_speed=2, sea={"enabled": True, "height": -120, "swell": 1.5})
     check(not err and d["environment"]["mood"] == "dusk", "set_environment: " + json.dumps(d)[:120])
@@ -204,6 +221,19 @@ def gui_capture_check(exe, export, work):
             def call(i, n, a):
                 return post({"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": n, "arguments": a}})["result"]
 
+            # the old-photo look: intensity 1 differs from plain, both 320x240, and is deterministic
+            def dims(path):
+                b = open(path, "rb").read()
+                return int.from_bytes(b[16:20], "big"), int.from_bytes(b[20:24], "big"), b
+            p0, p1, p1b = [os.path.join(work, n) for n in ("plain.png", "photo.png", "photo2.png")]
+            r0 = call(6, "capture_thumb", {"path": p0, "intensity": 0})
+            r1 = call(7, "capture_thumb", {"path": p1})
+            r2 = call(8, "capture_thumb", {"path": p1b, "style": "old_photo", "intensity": 1})
+            check(not (r0["isError"] or r1["isError"] or r2["isError"]), "capture_thumb with intensity 0 / default / 1")
+            w0, h0, b0 = dims(p0); w1, h1, b1 = dims(p1); _, _, b2 = dims(p1b)
+            check((w0, h0) == (320, 240) and (w1, h1) == (320, 240), "both captures are 320x240")
+            check(b0 != b1, "intensity 1 differs from intensity 0")
+            check(b1 == b2, "the old-photo capture is deterministic (same view, same file)")
             call(3, "mod_open", {"dir": moddir, "name": "GUI mod"})
             call(4, "mod_add_mission", {"name": "Thumbed", "level": "bunker1"})
             r = call(5, "capture_thumb", {})

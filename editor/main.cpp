@@ -35,6 +35,7 @@
 #include "editor_gl.h"
 #include "launch.h"
 #include "mcp.h"
+#include "photo.h"
 #include "png.h"
 #include "scene.h"
 #include "view.h"
@@ -124,6 +125,7 @@ struct App {
     bool snapGrid = false, snapFloor = false, snapPads = false;
     float gridStep = 25.0f;
     char thumbPath[512] = "thumb.png";
+    float thumbIntensity = 1.0f;   // old-photo look of Capture, 0 = plain
     std::string lastAutoThumb;
     char modDirBuf[512] = "mods/mymod", modNewName[64] = "New mission", modNewLevel[32] = "bunker1";
     std::map<std::string, uint32_t> thumbTex;   // thumb.png path -> GL texture (0: missing)
@@ -386,7 +388,7 @@ void doSave(App &a)
 // scaled to 320x240. Runs on the main thread, outside an ImGui frame: the next frame redraws everything.
 void invalidateThumbs(App &a);
 
-bool captureThumb(App &a, const std::string &path, std::string &err)
+bool captureThumb(App &a, const std::string &path, float intensity, std::string &err)
 {
     int dw, dh, ww, wh;
     SDL_GL_GetDrawableSize(a.win, &dw, &dh);
@@ -414,6 +416,7 @@ bool captureThumb(App &a, const std::string &path, std::string &err)
             for (int k = 0; k < 3; k++) o[k] = (uint8_t)(n ? acc[k] / n : 0);
             o[3] = 255;
         }
+    applyOldPhoto(out, 320, 240, intensity);
     std::error_code ec;
     std::filesystem::path p(path);
     if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path(), ec);
@@ -473,7 +476,7 @@ void toolbar(App &a, float W, float topH)
     ImGui::Checkbox("Pads##snap", &a.snapPads); ImGui::SameLine();
     if (ImGui::Button("Capture")) {
         std::string e;
-        if (a.doc.captureFn && a.doc.captureFn(a.thumbPath, e)) a.say("thumbnail written: %s", a.thumbPath);
+        if (a.doc.captureFn && a.doc.captureFn(a.thumbPath, a.thumbIntensity, e)) a.say("thumbnail written: %s", a.thumbPath);
         else a.say("capture: %s", e.c_str());
     }
     ImGui::SameLine();
@@ -509,11 +512,21 @@ void modPanel(App &a)
     ImGui::InputText("##moddir", a.modDirBuf, sizeof a.modDirBuf);
     ImGui::SameLine();
     if (ImGui::Button("Open/new##mod")) {
-        if (d.openMod(a.modDirBuf, err)) { invalidateThumbs(a); a.say("mod '%s' (%d missions)", d.camp.name, d.camp.nmissions); }
+        if (d.openMod(a.modDirBuf, err)) {
+            invalidateThumbs(a);
+            a.say("mod '%s' (%d missions)", d.camp.name, d.camp.nmissions);
+            if (!d.modNotice.empty()) a.say("%s", d.modNotice.c_str());
+        }
         else a.say("mod: %s", err.c_str());
     }
     if (!d.hasMod) { ImGui::TextDisabled("A mod is a campaign: mods/<mod>/campaign.json + one folder per mission."); return; }
     Campaign &c = d.camp;
+    {   // the id keys the mod's save: made once, read-only
+        char idbuf[CAMPAIGN_ID_LEN];
+        snprintf(idbuf, sizeof idbuf, "%s", d.modIdOk() ? c.id : "(none: made on save)");
+        ImGui::SetNextItemWidth(-60);
+        ImGui::InputText("id##c", idbuf, sizeof idbuf, ImGuiInputTextFlags_ReadOnly);
+    }
     if (ImGui::InputText("name##c", c.name, sizeof c.name)) d.modDirty = true;
     if (ImGui::InputText("author##c", c.author, sizeof c.author)) d.modDirty = true;
     if (ImGui::InputTextMultiline("##cdesc", c.description, sizeof c.description, ImVec2(-1, 48))) d.modDirty = true;
@@ -527,7 +540,8 @@ void modPanel(App &a)
     ImGui::SetNextItemWidth(110);
     if (ImGui::Combo("unlock", &un, "ordered\0open\0")) { c.unlock = un ? CAMPAIGN_UNLOCK_OPEN : CAMPAIGN_UNLOCK_ORDERED; d.modDirty = true; }
     if (ImGui::Button("Save mod")) {
-        if (d.saveMod(err)) a.say("saved %s/campaign.json", d.modDir.c_str()); else a.say("save mod: %s", err.c_str());
+        if (d.saveMod(err)) { a.say("saved %s/campaign.json", d.modDir.c_str()); if (!d.modNotice.empty()) a.say("%s", d.modNotice.c_str()); }
+        else a.say("save mod: %s", err.c_str());
     }
     ImGui::SameLine();
     if (ImGui::Button("Check mod")) {
@@ -618,6 +632,8 @@ void leftPanel(App &a, float x, float y, float w, float h)
         ImGui::InputText("##thumb", a.thumbPath, sizeof a.thumbPath);
         ImGui::SameLine();
         ImGui::TextUnformatted("thumb");
+        ImGui::SetNextItemWidth(-90);
+        ImGui::SliderFloat("old photo", &a.thumbIntensity, 0.0f, 1.5f, "%.2f");
         if (a.doc.hasMission) {
             ImGui::Text("%s%s", a.doc.mission.name, a.doc.dirty ? " *" : "");
         }
@@ -1399,7 +1415,7 @@ int main(int argc, char **argv)
     snprintf(app.missionPath, sizeof app.missionPath, "%s", app.doc.missionPath.c_str());
     if (app.doc.hasMod) snprintf(app.modDirBuf, sizeof app.modDirBuf, "%s", app.doc.modDir.c_str());
 
-    app.doc.captureFn = [&app](const std::string &path, std::string &e) { return captureThumb(app, path, e); };
+    app.doc.captureFn = [&app](const std::string &path, float intensity, std::string &e) { return captureThumb(app, path, intensity, e); };
     // thumb.png next to the mission, by default
     if (!app.doc.missionPath.empty()) {
         std::string mp = app.doc.missionPath;
