@@ -499,10 +499,27 @@ static const struct CurrentEnvironmentRecord *skyPlusEnv(const struct CurrentEnv
     return &s_bunker1;
 }
 
+/* The sun of the last GE+ sky drawn, for the dynamic lights (dynlights.c),
+ * which read it once right after the sky of the same view. */
+static int s_sunValid;
+static float s_sunDir[3], s_sunCol[3];
+
+int skyPlusSun(float dir[3], float col[3])
+{
+    const int ok = s_sunValid;
+    if (ok) {
+        memcpy(dir, s_sunDir, sizeof s_sunDir);
+        memcpy(col, s_sunCol, sizeof s_sunCol);
+    }
+    s_sunValid = 0;
+    return ok;
+}
+
 Gfx *skyPlusRender(Gfx *gdl)
 {
     const struct CurrentEnvironmentRecord *env = skyPlusEnv(fogGetCurrentEnvironmentp());
     PortSkyPlus *p;
+    s_sunValid = 0;
     coord3d r[5];
     coord3d *eye;
     float fwd[3], len;
@@ -661,6 +678,11 @@ Gfx *skyPlusRender(Gfx *gdl)
         p->sunGlow = 0.0f;
         p->night = 0;
         p->waterOnly = 1;
+    }
+    if (p->sunGlow > 0.0f && !p->night && p->sunDir[1] > 0.0f) {   /* a sun above the horizon (not Frigate's set one) */
+        memcpy(s_sunDir, p->sunDir, sizeof s_sunDir);
+        memcpy(s_sunCol, p->sunCol, sizeof s_sunCol);
+        s_sunValid = 1;
     }
 #ifdef SKYPLUS_WATER
     p->time = (float)(s_time / 60.0);   /* GE ticks (60 per second) */

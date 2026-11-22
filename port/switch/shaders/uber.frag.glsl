@@ -67,6 +67,37 @@ layout(std140, binding = 1) uniform Comb {
 
 layout(location = 0) out vec4 outColor;
 
+// Dynamic lights: same block and lighting as tools_pc/dkshgen (LIGHTS_BLOCK, LIGHTS_FN).
+layout(location = 18) in vec3 vEye;
+layout(std140, binding = 3) uniform Lights {
+    mat4 inv_proj;
+    ivec4 lcount;
+    vec4 sun_dir;
+    vec4 sun_col;
+    vec4 lpos[16];
+    vec4 lcol[16];
+};
+
+vec3 dynLight(vec3 base, vec3 albedo) {
+    if (lcount.x == 0 && lcount.y == 0) return base;
+    vec3 n = normalize(cross(dFdx(vEye), dFdy(vEye)));
+    if (dot(n, vEye) > 0.0) n = -n;
+    vec3 add = vec3(0.0);
+    for (int i = 0; i < lcount.x; i++) {
+        vec3 d = lpos[i].xyz - vEye;
+        float d2 = dot(d, d);
+        float r2 = lpos[i].w * lpos[i].w;
+        if (d2 >= r2) continue;
+        float fall = 1.0 - d2 / r2;
+        fall *= fall;
+        float ndl = clamp(dot(n, d) * inversesqrt(max(d2, 1e-4)) * 0.75 + 0.25, 0.0, 1.0);
+        add += lcol[i].rgb * (fall * ndl);
+    }
+    vec3 c = base + albedo * add;
+    if (lcount.y != 0) c += base * sun_col.rgb * (0.4 * max(dot(n, sun_dir.xyz), 0.0));
+    return c;
+}
+
 float random(in vec3 value) {
     float random = dot(sin(value), vec3(12.9898, 78.233, 37.719));
     return fract(sin(random) * 143758.5453);
@@ -191,6 +222,7 @@ void main() {
     }
     texel = WRAP(texel, -0.51, 1.51);
     texel = clamp(texel, 0.0, 1.0);
+    texel.rgb = min(dynLight(texel.rgb, (flags & CF_TEX0) != 0u ? texVal0.rgb : vec3(0.6)), vec3(1.0));
     if ((flags & CF_FOG) != 0u) {
         float fogA = fog_pixel != 0 ? clamp(vFogW * gl_FragCoord.w, 0.0, 1.0) : clamp(vFog.a, 0.0, 1.0);
         texel.rgb = mix(texel.rgb, vFog.rgb, fogA);

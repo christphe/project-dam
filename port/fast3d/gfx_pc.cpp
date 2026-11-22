@@ -33,6 +33,7 @@
 #endif
 #include <PR/gbi.h>
 #include "gbiex.h" /* GE's G_TRI4 + PD extension opcodes (see header) */
+#include "dynlights.h" /* G_DYNLIGHTS_EXT: dynamic point lights (port/src/dynlights.c) */
 
 #include "platform.h"
 #include "portaddr.h"   /* Stage B: arena windows + #95 address model */
@@ -3349,6 +3350,107 @@ static void gfx_adjust_width_height_for_scale(uint32_t& width, uint32_t& height)
     }
 }
 
+/* Dynamic lights of the view being drawn (G_DYNLIGHTS_EXT, eye space; see
+ * port/include/dynlights.h). The shaders light per pixel: they get the
+ * lights plus the inverse of the clip transform the vertices carry, to turn
+ * a pixel back into the lights' eye space (struct GfxLights). */
+static PortDynLight s_dynl[PORT_DYNLIGHTS_MAX];
+static int s_dynl_n = 0;          /* entries of s_dynl, the sun included (radius < 0) */
+static bool s_dynl_dirty = true;  /* the light list changed since the last block */
+static bool s_dynl_sent_on = false;
+static float s_dynl_T[16];        /* the clip transform the last "on" block inverted */
+static float s_dynl_P[4][4];       /* the camera's projection, latched when the lights arrive (gfx_dynlights_sync) */
+
+static bool gfx_mat4_invert(const float m[16], float inv[16]) {
+    float t[16];
+    t[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+    t[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+    t[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+    t[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+    t[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+    t[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+    t[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+    t[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+    t[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+    t[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+    t[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+    t[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+    t[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+    t[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+    t[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+    t[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+    const float det = m[0] * t[0] + m[1] * t[4] + m[2] * t[8] + m[3] * t[12];
+    if (fabsf(det) < 1e-20f) return false;
+    for (int i = 0; i < 16; i++) inv[i] = t[i] / det;
+    return true;
+}
+
+/* Before a draw: hands the backend a new light block when the lights or the
+ * clip transform changed. Off (no lights, or an orthographic projection: the
+ * HUD, text) is one block of zeros. */
+static void gfx_dynlights_sync(void) {
+    if (gfx_rapi->set_lights == nullptr) return;
+    const bool on = s_dynl_n > 0 && rsp.P_matrix[2][3] != 0.0f;
+    if (!on) {
+        if (s_dynl_sent_on || s_dynl_dirty) {
+            struct GfxLights l;
+            memset(&l, 0, sizeof l);
+            gfx_flush();
+            gfx_rapi->set_lights(&l);
+            s_dynl_sent_on = false;
+            s_dynl_dirty = false;
+        }
+        return;
+    }
+    /* the vertices carry clip = eye * P * A (row vectors), A = the fixes the
+     * CPU and the mesh path apply: aspect on x (gfx_adjust_x_for_aspect_ratio),
+     * y flip, z to 0..1. P is the camera's projection latched with the lights,
+     * not the draw's: GE loads projection x view as the "projection" of its
+     * room draws (bg.c, field_10E0), so the draw's own P would unproject them
+     * into the level's space. Rooms and props share the camera's depth, so the
+     * camera's P unprojects both into the lights' eye space. */
+    const struct GfxClipParameters cp = gfx_rapi->get_clip_parameters();
+    float A[4][4] = {};
+    const float k = fbActive ? 1.0f : rsp.aspect_scale / gfx_current_dimensions.aspect_ratio;
+    A[0][0] = k;
+    A[3][0] = fbActive ? 0.0f : rsp.aspect_ofs * k;
+    A[1][1] = cp.invert_y ? -1.0f : 1.0f;
+    A[2][2] = cp.z_is_from_0_to_1 ? 0.5f : 1.0f;
+    A[3][2] = cp.z_is_from_0_to_1 ? 0.5f : 0.0f;
+    A[3][3] = 1.0f;
+    float T[16];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            T[i * 4 + j] = s_dynl_P[i][0] * A[0][j] + s_dynl_P[i][1] * A[1][j] + s_dynl_P[i][2] * A[2][j] +
+                           s_dynl_P[i][3] * A[3][j];
+        }
+    }
+    if (!s_dynl_dirty && s_dynl_sent_on && memcmp(T, s_dynl_T, sizeof T) == 0) return;
+    struct GfxLights l;
+    memset(&l, 0, sizeof l);
+    if (!gfx_mat4_invert(T, l.inv_proj)) return;
+    int np = 0;
+    for (int i = 0; i < s_dynl_n; i++) {
+        const PortDynLight* d = &s_dynl[i];
+        if (d->radius < 0.0f) {
+            l.count[1] = 1;
+            memcpy(l.sun_dir, d->pos, sizeof d->pos);
+            memcpy(l.sun_col, d->col, sizeof d->col);
+        } else if (np < GFX_LIGHTS_MAX) {
+            memcpy(l.pos[np], d->pos, sizeof d->pos);
+            l.pos[np][3] = d->radius;
+            memcpy(l.col[np], d->col, sizeof d->col);
+            np++;
+        }
+    }
+    l.count[0] = np;
+    gfx_flush();
+    gfx_rapi->set_lights(&l);
+    memcpy(s_dynl_T, T, sizeof T);
+    s_dynl_sent_on = true;
+    s_dynl_dirty = false;
+}
+
 /* D146: a valid mapped-memory pointer check. A desynced / corrupt front-end
  * DL (D75 family) hands wild pointers to the RSP command handlers; abort()
  * over one bad menu model is the wrong trade for a breadth-first port. */
@@ -4839,6 +4941,7 @@ static inline int gfx_tri_nearclip(struct LoadedVertex* const v_arr[3], bool is_
 }
 
 static inline void gfx_tri_emit(const TriState& ts, struct LoadedVertex* const* emit_v, int n_out_tris, bool is_rect) {
+    gfx_dynlights_sync();
     const int n_emit_verts = n_out_tris * 3;
     if (buf_vbo_num_tris + n_out_tris > MAX_BUFFERED) {
         gfx_flush(); // buf_vbo holds MAX_BUFFERED triangles; make room for 1-2
@@ -6635,6 +6738,21 @@ static void gfx_run_dl(Gfx* cmd) {
                 gfx_flush();
                 gfx_rapi->clear_framebuffer(false, true);
                 break;
+            case G_DYNLIGHTS_EXT: {
+                const PortDynLight* src = (const PortDynLight*)(uintptr_t)cmd->words.w1;
+                int n = (int)C0(0, 8);
+                if (n > PORT_DYNLIGHTS_MAX) n = PORT_DYNLIGHTS_MAX;
+                if (n > 0 && !fast3d_ptr_ok(src)) n = 0;
+                for (int i = 0; i < n; i++) s_dynl[i] = src[i];
+                s_dynl_n = n;
+                s_dynl_dirty = true;
+                /* sent right before the level (lv.c lvlRender): the projection
+                 * loaded now is the camera's (fr.c viSetupCurrentPlayerView) */
+                memcpy(s_dynl_P, rsp.P_matrix, sizeof s_dynl_P);
+                break;
+            }
+            case G_SHADOWCAST_EXT:   /* the prop draws' bracket (port/src/dynlights.c): nothing reads it yet */
+                break;
             case G_RDPPIPESYNC:
             case G_RDPFULLSYNC:
             case G_RDPLOADSYNC:
@@ -6672,6 +6790,9 @@ static void gfx_sp_reset() {
     rsp.modelview_matrix_stack_size = 1;
     rsp.current_num_lights = 2;
     rsp.lights_changed = true;
+    s_dynl_n = 0;
+    s_dynl_dirty = true;     /* the backend's block may hold the last frame's lights */
+    s_dynl_sent_on = false;
 }
 
 extern "C" void gfx_get_dimensions(uint32_t* width, uint32_t* height, int32_t* posX, int32_t* posY) {

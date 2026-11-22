@@ -1,0 +1,7 @@
+# Room draws load projection x view as their "projection" matrix
+
+**Trap.** GE does not keep the camera in the modelview for its room geometry. `bondviewUpdateCameraMatrices` (bondview2.c ~8430) builds `field_10E0 = projection * lookat`, and `bg.c` (~722, ~763, ~784) loads it with `G_MTX_PROJECTION` before drawing rooms; the room's own modelview is then only the room's offset. Props, on the other hand, are drawn with the pure camera projection (fr.c `viSetupCurrentPlayerView`) and a modelview that folds the camera in (`camGetWorldToScreenMtxf`, e.g. chr.c ~2745). So in fast3d, `rsp.P_matrix` at a room draw is not a projection: inverting it unprojects room pixels into the level's world space, not into eye space.
+
+**Symptom.** Per-pixel dynamic lights reconstructed the eye position with `inverse(rsp.P_matrix)` at each draw: the explosion lights lit nothing on the level geometry (the ground under a timed mine kept the same value to 0.1 across the blast), and the sun was applied in the wrong frame on rooms while looking plausible from the start position.
+
+**What works.** Latch the camera's projection once per view (fast3d does it when it decodes `G_DYNLIGHTS_EXT`, sent right before `bgLevelRender`) and unproject every draw with it. Rooms and props share the camera's depth (they depth-test against each other), so their normalised device coordinates are in one space, and the camera's projection takes both back to the same eye space. Any other port feature that needs a pixel's eye position from fast3d's clip coordinates has the same trap.

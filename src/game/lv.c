@@ -852,6 +852,12 @@ Gfx* lvlRender(Gfx* DL)
             }
 
             propsTickPlayer();
+#if defined(PORT)
+            {   /* project-dam: dynamic point lights for this view (port/src/dynlights.c) */
+                extern Gfx *portDynLightsEmit(Gfx *gdl);
+                DL = portDynLightsEmit(DL);
+            }
+#endif
             DL = bgLevelRender(DL);
 
             if (get_debug_portal_flag())

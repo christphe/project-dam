@@ -36,6 +36,16 @@ layout(location = 13) out vec4 vInput5;
 layout(location = 14) out vec4 vInput6;
 layout(location = 15) out vec4 vInput7;
 layout(location = 17) out vec3 vClip;   // clip x, y, w (water.frag.glsl: the pixel's screen position)
+layout(location = 18) out vec3 vEye;    // eye-space position (dynamic lights, struct GfxLights)
+
+layout(std140, binding = 3) uniform Lights {
+    mat4 inv_proj;
+    ivec4 lcount;
+    vec4 sun_dir;
+    vec4 sun_col;
+    vec4 lpos[16];
+    vec4 lcol[16];
+};
 
 void main() {
     vTexCoord0 = aTexCoord0;
@@ -56,4 +66,6 @@ void main() {
     vInput7 = aInput7;
     vClip = aVtxPos.xyw;
     gl_Position = aVtxPos;
+    vec4 he = inv_proj * aVtxPos;
+    vEye = he.xyz / (abs(he.w) > 1e-6 ? he.w : 1.0);
 }

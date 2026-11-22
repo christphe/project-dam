@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Dynamic lights (Enhanced visuals, Switch and PC on Vulkan): explosions light the walls, floor, guards and objects around them in a warm glow that fades with the blast, brighter for bigger blasts, and every shot's muzzle flash, Bond's and the guards', briefly lights its surroundings
 - PC: the first launch measures the GPU for about a second (shown on screen) and lowers the sky and sea detail, the anti-aliasing and alpha-to-coverage only where they cost frames; settings you changed are left alone. Sky and sea detail gets a Quarter (fastest) level
 - PC: the options menu names the buttons of the controller in use: the Nintendo letters for a Switch Pro controller, the cross, circle, square and triangle for a PlayStation one (on the controller drawing and in the button hints)
 

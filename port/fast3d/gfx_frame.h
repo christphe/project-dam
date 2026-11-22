@@ -118,6 +118,7 @@ enum GfxFrameCmdType {
     GFC_MESH_CREATE,     /* issue #10: a = mesh id, b = float count, data at bytes[off] */
     GFC_MESH_DELETE,     /* issue #10: a = mesh id */
     GFC_DRAW_MESH,       /* issue #10: a = state index, b = mesh id, draw parameters at bytes[off] (c = matrix count) */
+    GFC_LIGHTS,          /* dynamic lights: a struct GfxLights at bytes[off] */
 };
 
 struct GfxFrameCmd {

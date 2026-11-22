@@ -44,6 +44,18 @@ struct GfxMeshDraw {
     float mtx[GFX_MESH_MAX_MTX][16];          /* row-vector clip matrices: clip = (x y z 1) * m */
 };
 
+/* Dynamic lights (port/include/dynlights.h), per-pixel in the shaders. Laid
+ * out as the std140 block `Lights` the deko3d shaders read (binding 3). */
+#define GFX_LIGHTS_MAX 16
+struct GfxLights {
+    float inv_proj[16];   /* row vectors: eye = clip * inv_proj, clip = what the vertices carry */
+    int32_t count[4];     /* [0] point lights, [1] 1 = the sun is on */
+    float sun_dir[4];     /* eye space, toward the sun, normalised */
+    float sun_col[4];
+    float pos[GFX_LIGHTS_MAX][4];   /* eye space xyz, w = radius */
+    float col[GFX_LIGHTS_MAX][4];
+};
+
 struct GfxRenderingAPI {
     const char* (*get_name)(void);
     int (*get_max_texture_size)(void);
@@ -111,6 +123,9 @@ struct GfxRenderingAPI {
      * from the decoder thread (the frame recorder passes it through). Null:
      * every program does (GL compiles the twin on demand). */
     bool (*mesh_supported)(uint64_t id0, uint32_t id1);
+    /* The light block for the draws that follow. Null: the backend has no
+     * dynamic lights (only deko3d has them). */
+    void (*set_lights)(const struct GfxLights* l);
 };
 
 #endif
