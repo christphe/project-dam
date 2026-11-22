@@ -62,6 +62,14 @@ struct LrVtx {
 };
 static LrVtx s_lr_vtx[MAX_VERTICES + 4];
 
+static float s_lr_offset[3];
+
+extern "C" void levelcapSetWorldOffset(float x, float y, float z) {
+    s_lr_offset[0] = x;
+    s_lr_offset[1] = y;
+    s_lr_offset[2] = z;
+}
+
 static int lr_cur_mtx(void) {
     std::array<float, 16> m;
     if (rsp.modelview_matrix_stack_size > 0) {
@@ -70,6 +78,9 @@ static int lr_cur_mtx(void) {
         memset(m.data(), 0, sizeof(m));
         m[0] = m[5] = m[10] = m[15] = 1.0f;
     }
+    m[12] += s_lr_offset[0];   /* row-major [4][4]: the translation row */
+    m[13] += s_lr_offset[1];
+    m[14] += s_lr_offset[2];
     if (s_lr_mtx_last >= 0 && s_lr_mtx[s_lr_mtx_last] == m) return s_lr_mtx_last;
     for (int i = (int)s_lr_mtx.size() - 1; i >= 0 && i >= (int)s_lr_mtx.size() - 256; i--) {
         if (s_lr_mtx[i] == m) return s_lr_mtx_last = i;

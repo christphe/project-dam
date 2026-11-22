@@ -1,5 +1,6 @@
 #include "doc.h"
 #include "launch.h"
+#include "exportcache.h"
 
 #include <algorithm>
 #include <cmath>
@@ -239,6 +240,23 @@ bool Doc::newMission(const std::string &name, const std::string &levelName, std:
     dirty = true;
     sel = Selection();
     return true;
+}
+
+bool Doc::openLevelByName(const std::string &lvl, bool reexport, std::string &err)
+{
+    if (missionLevelNumber(lvl.c_str()) < 0) { err = "unknown level '" + lvl + "'"; return false; }
+    std::string dir = exportDirFor(gameExe, lvl);
+    if (reexport || !exportPresent(dir)) {
+        if (!exportRun(gameExe, lvl, dir, err)) return false;
+    }
+    return openLevel(dir, err);
+}
+
+std::string Doc::missingLevel() const
+{
+    if (!hasMission || !mission.level[0]) return "";
+    if (hasLevel && level.name == mission.level) return "";
+    return mission.level;
 }
 
 bool Doc::openMission(const std::string &path, std::string &err)

@@ -1,5 +1,7 @@
 #include "editor_gl.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "glad/glad.h"
@@ -70,4 +72,33 @@ void editorGlDeleteTexture(uint32_t id)
 {
     GLuint t = id;
     glDeleteTextures(1, &t);
+}
+
+static GLuint s_offFbo, s_offColor, s_offDepth;
+static int s_offW, s_offH;
+
+void editorOffscreenBind(int w, int h)
+{
+    if (s_offFbo == 0 || w != s_offW || h != s_offH) {
+        if (s_offFbo == 0) { glGenFramebuffers(1, &s_offFbo); glGenRenderbuffers(1, &s_offColor); glGenRenderbuffers(1, &s_offDepth); }
+        glBindRenderbuffer(GL_RENDERBUFFER, s_offColor);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+        glBindRenderbuffer(GL_RENDERBUFFER, s_offDepth);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+        glBindFramebuffer(GL_FRAMEBUFFER, s_offFbo);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, s_offColor);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, s_offDepth);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) fprintf(stderr, "[editor] offscreen framebuffer incomplete\n");
+        s_offW = w; s_offH = h;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, s_offFbo);
+}
+
+void editorOffscreenPresent(int w, int h)
+{
+    glDisable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, s_offFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }

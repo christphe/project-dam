@@ -110,6 +110,7 @@ void Scene::render(const Doc &doc, const Camera &cam, int winW, int winH, int vx
     m_drawn = 0;
     a->start_frame();
     a->start_draw_to_framebuffer(0, 1.0f);
+    if (m_offscreen) editorOffscreenBind(winW, winH);   // see editor_gl.h
     editorGlClear(winW, winH, 0.10f, 0.11f, 0.13f);
     if (vw <= 0 || vh <= 0) return;
     const int gx = vx, gy = winH - (vy + vh);    // GL origin is bottom left

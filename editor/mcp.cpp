@@ -127,9 +127,13 @@ ToolResult toolLevelDescribe(Doc &d, const cJSON *a)
 
 ToolResult toolLevelOpen(Doc &d, const cJSON *a)
 {
-    std::string dir = argStr(a, "dir"), err;
-    if (dir.empty()) return fail("\"dir\" is required: the export directory holding level.rec and level.json");
-    if (!d.openLevel(dir, err)) return fail(err);
+    std::string dir = argStr(a, "dir"), lvl = argStr(a, "level"), err;
+    if (!lvl.empty()) {
+        if (!d.openLevelByName(lvl, cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(a, "reexport")), err)) return fail(err);
+    } else {
+        if (dir.empty()) return fail("give \"level\" (a solo level name, e.g. bunker1) or \"dir\" (an export directory)");
+        if (!d.openLevel(dir, err)) return fail(err);
+    }
     ToolResult r; r.text = d.describe("summary");
     return r;
 }
@@ -147,6 +151,9 @@ ToolResult toolMissionOpen(Doc &d, const cJSON *a)
     } else {
         return fail("give \"path\" to open a mission.json, or \"new\": true with \"level\" (e.g. bunker1) and \"name\"");
     }
+    // the mission's level, from the export cache (exported by the game when missing)
+    const std::string need = d.missingLevel();
+    if (!need.empty() && !d.openLevelByName(need, false, err)) return fail("mission opened, but its level: " + err);
     ToolResult r; r.text = d.describe("summary");
     return r;
 }
@@ -353,10 +360,12 @@ const Tool kTools[] = {
     { "level_describe", "Describe the loaded level export: rooms, pads, setup props, and the open mission. detail = summary | pads | props | mission.",
       "{\"type\":\"object\",\"properties\":{\"detail\":{\"type\":\"string\",\"enum\":[\"summary\",\"pads\",\"props\",\"mission\"]}}}",
       toolLevelDescribe },
-    { "level_open", "Load a level export directory (level.rec + level.json written by `ge007 -level_XX --export-level DIR`).",
-      "{\"type\":\"object\",\"properties\":{\"dir\":{\"type\":\"string\"}},\"required\":[\"dir\"]}",
+    { "level_open", "Load a solo level by name (level, e.g. bunker1): from the export cache next to the game, or the game "
+      "exports it first (a few seconds; reexport: true redoes it). Or load an export directory (dir).",
+      "{\"type\":\"object\",\"properties\":{\"level\":{\"type\":\"string\",\"description\":\"solo level name, e.g. bunker1\"},"
+      "\"reexport\":{\"type\":\"boolean\"},\"dir\":{\"type\":\"string\"}}}",
       toolLevelOpen },
-    { "mission_open", "Open a mission.json (path), or start a new mission for a level (new: true, level, name). export optionally loads a level export first.",
+    { "mission_open", "Open a mission.json (path), or start a new mission for a level (new: true, level, name). The mission's level is loaded too (exported by the game when missing); export loads a given export directory instead.",
       "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"new\":{\"type\":\"boolean\"},\"name\":{\"type\":\"string\"},"
       "\"level\":{\"type\":\"string\",\"description\":\"solo level name, e.g. bunker1\"},\"export\":{\"type\":\"string\"}}}",
       toolMissionOpen },

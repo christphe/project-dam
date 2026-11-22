@@ -132,6 +132,11 @@ struct Doc {
 
     // ---- files ----
     bool openLevel(const std::string &dir, std::string &err);
+    // Opens a solo level by name from the export cache next to the game (exportcache.h), running the
+    // game's export first when it is missing or when reexport is set. Blocks until the game is done.
+    bool openLevelByName(const std::string &level, bool reexport, std::string &err);
+    // The open mission's level when the loaded export is another one (or none), else "".
+    std::string missingLevel() const;
     bool newMission(const std::string &name, const std::string &levelName, std::string &err);
     bool openMission(const std::string &path, std::string &err);
     bool saveMission(const std::string &path, std::string &err);   // path "" = missionPath

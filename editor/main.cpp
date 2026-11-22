@@ -34,6 +34,7 @@
 #include "doc.h"
 #include "editor_gl.h"
 #include "launch.h"
+#include "exportcache.h"
 #include "mcp.h"
 #include "photo.h"
 #include "png.h"
@@ -47,11 +48,14 @@ namespace {
 struct Options {
     bool mcpStdio = false, mcpHttp = false, noMcp = false, help = false;
     int port = 8765;
-    std::string exportDir, missionFile, game, screenshot, modDir;
+    std::string exportDir, missionFile, game, screenshot, modDir, level;
     int frames = 30;
     bool hasCam = false, hasClick = false, hasDrag = false;
     float drag[4] = { 0, 0, 0, 0 };
     int dragAxis = -1;
+    bool noOffscreen = false;   // --no-offscreen: draw straight into the window (see editor_gl.h)
+    bool hasMouseDrag = false, mouseClickMode = false, mouseMiddle = false;   // --mouse-middle: the drag uses the middle button (pan)   // --mouse-click: click the handle, move, click to confirm
+    float mouseDrag[2] = { 0, 0 };   // --mouse-drag DX,DY: real SDL mouse events on the gizmo (--drag-axis picks the arrow)
     float cam[5] = { 0, 0, 0, 0, 0 };
     float click[2] = { 0, 0 };
     std::string tool;
@@ -105,18 +109,24 @@ struct App {
 
     enum Tool { T_SELECT, T_GUARD, T_OBJECT, T_MOVE } tool = T_SELECT;
     bool showRooms = true, showProps = true, showPads = true, showMPads = true, showPortals = false, showStan = false;
-    char levelDir[512] = "", missionPath[512] = "", newName[128] = "New mission", newLevel[32] = "bunker1";
+    char levelDir[512] = "", missionPath[512] = "", newName[128] = "New mission";
     char gameExe[512] = "", padText[64] = "", padFilter[32] = "";
     int gModel = -1, gAi = -1, gWeapon = -1;
     int oType = 3, oModel = -1, oItem = -1;
     int editA = 0, editB = 0, editC = 0;
     ItemRef editFor;
     std::string spawn;
+    char pickLevel[32] = "bunker1";   // File > level
+    ExportJob job;                    // the game exporting a level for us
+    std::string autoTried;
+    ImVec2 gizC{}, gizTip[3]{};       // last frame's gizmo on screen (the --mouse-drag test aid aims at it)
+    bool gizOk = false;            // the mission level last fetched on its own (once per level)
     std::deque<std::string> log;
     int seenLevelGen = 0;
     McpHttp http;
     int mcpPort = 0;
-    bool looking = false, lmbDown = false;
+    bool looking = false, lmbDown = false, panning = false;
+    float panDist = 0;                 // pan: distance of the grabbed point
     float lmbX = 0, lmbY = 0;
     float vx = 0, vy = 0, vw = 1, vh = 1;     // the 3D view rectangle (window pixels, y down)
     std::vector<Item> items;
@@ -135,7 +145,8 @@ struct App {
     struct Drag {
         enum Mode { NONE, MOVE, YAW } mode = NONE;
         int axis = -1;             // 0 x, 1 y, 2 z locked; -1 free (the horizontal plane through the start)
-        bool keymove = false;      // started with G: follows the mouse until a click
+        bool keymove = false;      // started with G, or a click on a handle: follows the mouse until a click
+        ImVec2 pressAt{};          // where the handle was pressed
         Vec3 startPos{};
         Vec3 grab{};               // free move: where the mouse ray met the plane at the start
         float s0 = 0;              // axis move: the mouse's position along the axis at the start
@@ -218,6 +229,19 @@ bool padFromHit(const App &a, const Hit &h, PadSpec &ps)
     }
 }
 
+// Editing needs a mission: the first edit on a bare level starts one (unsaved until Save).
+bool ensureMission(App &a)
+{
+    if (a.doc.hasMission) return true;
+    std::string err;
+    if (!a.doc.hasLevel) { a.say("open a level or a mission first (File panel)"); return false; }
+    const Selection keep = a.doc.sel;   // an original prop or pad stays the same thing in an empty mission
+    if (!a.doc.newMission(a.newName, "", err)) { a.say("new mission: %s", err.c_str()); return false; }
+    a.doc.sel = keep;
+    a.say("started a new mission on %s (not saved yet: Save writes it)", a.doc.mission.level);
+    return true;
+}
+
 void applyClick(App &a, const Hit &h)
 {
     std::string err;
@@ -229,7 +253,7 @@ void applyClick(App &a, const Hit &h)
         else if (h.kind == Hit::SURFACE) a.doc.sel.kind = Selection::ROOM, a.doc.sel.num = h.room;
         return;
     }
-    if (!a.doc.hasMission) { a.say("open or create a mission first (File panel)"); return; }
+    if (!ensureMission(a)) return;
     PadSpec ps;
     if (!padFromHit(a, h, ps)) return;
     ItemRef ref;
@@ -258,8 +282,45 @@ void reloadLevelGpu(App &a)
         a.cam.frame(a.doc.level.mn, a.doc.level.mx);
         a.cam.zfar = std::max(50000.0f, 4.0f * (a.doc.level.mx[0] - a.doc.level.mn[0] + a.doc.level.mx[2] - a.doc.level.mn[2]));
         snprintf(a.levelDir, sizeof a.levelDir, "%s", a.doc.level.dir.c_str());
+        if (missionLevelNumber(a.doc.level.name.c_str()) >= 0) snprintf(a.pickLevel, sizeof a.pickLevel, "%s", a.doc.level.name.c_str());
         a.say("level '%s': %zu rooms, %zu pads, %zu props, %d draw runs", a.doc.level.name.c_str(), a.doc.level.rooms.size(),
               a.doc.level.pads.size(), a.doc.level.props.size(), a.scene.runCount());
+    }
+}
+
+// A solo level from the export cache next to the game; the game exports it in the background when
+// it is missing (or reexport). pollLevel() loads it when the game is done.
+void requestLevel(App &a, const std::string &lvl, bool reexport)
+{
+    std::string err;
+    a.doc.gameExe = a.gameExe;
+    snprintf(a.pickLevel, sizeof a.pickLevel, "%s", lvl.c_str());
+    const std::string dir = exportDirFor(a.gameExe, lvl);
+    if (!reexport && exportPresent(dir)) {
+        if (!a.doc.openLevel(dir, err)) a.say("open level: %s", err.c_str());
+        return;
+    }
+    if (a.job.running) { a.say("an export is already running (%s)", a.job.level.c_str()); return; }
+    if (exportStart(a.job, a.gameExe, lvl, err)) a.say("exporting %s: the game loads it, records it and closes", lvl.c_str());
+    else a.say("export %s: %s", lvl.c_str(), err.c_str());
+}
+
+void pollLevel(App &a)
+{
+    std::string err;
+    if (a.job.running) {
+        int r = exportPoll(a.job, err);
+        if (r == 1) {
+            if (!a.doc.openLevel(a.job.dir, err)) a.say("open level: %s", err.c_str());
+        } else if (r < 0) a.say("export: %s", err.c_str());
+        return;
+    }
+    // an opened mission (or a mod's) brings its level
+    const std::string need = a.doc.missingLevel();
+    if (!need.empty() && need != a.autoTried) {
+        a.autoTried = need;
+        snprintf(a.pickLevel, sizeof a.pickLevel, "%s", need.c_str());
+        requestLevel(a, need, false);
     }
 }
 
@@ -397,6 +458,7 @@ bool captureThumb(App &a, const std::string &path, float intensity, std::string 
     const int vx = (int)(a.vx * sx), vy = (int)(a.vy * sy), vw = (int)(a.vw * sx), vh = (int)(a.vh * sy);
     if (vw < 16 || vh < 16) { err = "the 3D view is too small (window minimized?)"; return false; }
     a.scene.render(a.doc, a.cam, dw, dh, vx, vy, vw, vh, a.showRooms, a.showProps);
+    if (a.scene.offscreen()) editorOffscreenPresent(dw, dh);   // the view is in the offscreen frame: bring it to the window's buffer read below
     int cw = std::min(vw, vh * 4 / 3), ch = cw * 3 / 4;
     const int cx = vx + (vw - cw) / 2, cy = vy + (vh - ch) / 2;
     std::vector<uint8_t> src;
@@ -601,11 +663,31 @@ void leftPanel(App &a, float x, float y, float w, float h)
     ImGui::Begin("Hierarchy", nullptr, kPanel);
     std::string err;
     if (ImGui::CollapsingHeader("File", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::SetNextItemWidth(-60);
-        ImGui::InputText("##ldir", a.levelDir, sizeof a.levelDir);
+        // the level: a solo level, exported by the game the first time and then kept next to it
+        ImGui::SetNextItemWidth(-160);
+        if (ImGui::BeginCombo("##lvl", a.pickLevel)) {
+            for (int i = 0; missionLevelNameAt(i); i++) {
+                const char *n = missionLevelNameAt(i);
+                if (ImGui::Selectable(n, strcmp(n, a.pickLevel) == 0)) snprintf(a.pickLevel, sizeof a.pickLevel, "%s", n);
+            }
+            ImGui::EndCombo();
+        }
         ImGui::SameLine();
-        if (ImGui::Button("Level")) {
-            if (a.doc.openLevel(a.levelDir, err)) reloadLevelGpu(a); else a.say("open level: %s", err.c_str());
+        ImGui::BeginDisabled(a.job.running);
+        if (ImGui::Button("Open##lvl")) requestLevel(a, a.pickLevel, false);
+        ImGui::SameLine();
+        if (ImGui::Button("Re-export")) requestLevel(a, a.pickLevel, true);
+        ImGui::EndDisabled();
+        if (a.job.running) ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.48f, 1.0f), "exporting %s...", a.job.level.c_str());
+        else if (!exportPresent(exportDirFor(a.gameExe, a.pickLevel))) ImGui::TextDisabled("not exported yet: Open runs the game once");
+        if (ImGui::TreeNode("Export folder")) {
+            ImGui::SetNextItemWidth(-60);
+            ImGui::InputText("##ldir", a.levelDir, sizeof a.levelDir);
+            ImGui::SameLine();
+            if (ImGui::Button("Load")) {
+                if (a.doc.openLevel(a.levelDir, err)) reloadLevelGpu(a); else a.say("open level: %s", err.c_str());
+            }
+            ImGui::TreePop();
         }
         ImGui::SetNextItemWidth(-60);
         ImGui::InputText("##mpath", a.missionPath, sizeof a.missionPath);
@@ -613,13 +695,11 @@ void leftPanel(App &a, float x, float y, float w, float h)
         if (ImGui::Button("Open")) {
             if (a.doc.openMission(a.missionPath, err)) a.say("opened %s", a.missionPath); else a.say("open mission: %s", err.c_str());
         }
-        ImGui::SetNextItemWidth(-60);
+        ImGui::SetNextItemWidth(-110);
         ImGui::InputText("##nname", a.newName, sizeof a.newName);
-        ImGui::SetNextItemWidth(110);
-        ImGui::InputText("level", a.newLevel, sizeof a.newLevel);
         ImGui::SameLine();
-        if (ImGui::Button("New mission")) {
-            if (a.doc.newMission(a.newName, a.doc.hasLevel ? "" : a.newLevel, err)) {
+        if (ImGui::Button("New mission")) {   // on the level above (loaded, or picked: it is exported then)
+            if (a.doc.newMission(a.newName, a.doc.hasLevel ? "" : a.pickLevel, err)) {
                 snprintf(a.missionPath, sizeof a.missionPath, "%s", a.doc.missionPath.c_str());
                 a.say("new mission for %s", a.doc.mission.level);
             } else a.say("new mission: %s", err.c_str());
@@ -1003,6 +1083,7 @@ void dragRebase(App &a, const Vec3 &org, const Vec3 &dir)
 
 void dragBegin(App &a, int hit, const Vec3 &org, const Vec3 &dir)
 {
+    if (!ensureMission(a)) return;
     TransformInfo t = a.doc.getTransform(a.doc.sel);
     a.drag = App::Drag();
     a.drag.sel = a.doc.sel;
@@ -1041,8 +1122,11 @@ void dragUpdate(App &a, const Vec3 &org, const Vec3 &dir)
             np[0] = d.startPos[0] + h[0] - d.grab[0];
             np[2] = d.startPos[2] + h[2] - d.grab[2];
         }
-        a.doc.snapPoint(np, a.snapOpts(), ownPadId(a));
-        if (d.axis >= 0) for (int i = 0; i < 3; i++) if (i != d.axis) np[i] = d.startPos[i];
+        SnapOpts so = a.snapOpts();
+        if (d.axis == 1) so.floor = false;   // a height move: the floor must not pull it back
+        a.doc.snapPoint(np, so, ownPadId(a));
+        // locked: only the axis moves, but the floor snap still sets the height of an X/Z move
+        if (d.axis >= 0) for (int i = 0; i < 3; i++) if (i != d.axis && !(i == 1 && so.floor)) np[i] = d.startPos[i];
         if (a.doc.setTransform(d.sel, &np, nullptr, false, err)) d.changed = true;
     } else if (d.mode == App::Drag::YAW) {
         Vec3 h;
@@ -1149,6 +1233,27 @@ void cameraInput(App &a, bool viewHovered)
         a.cam.pitch -= io.MouseDelta.y * 0.0035f;
         a.cam.pitch = std::max(-1.55f, std::min(1.55f, a.cam.pitch));
     }
+    // middle button: pan, the point under the cursor follows the mouse
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle)) a.panning = false;
+    // moves of earlier frames only: the press frame's delta is not part of the drag
+    if (a.panning && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
+        const float k = 2.0f * tanf(a.cam.fov * 0.5f) * a.panDist / std::max(a.vh, 1.0f);
+        const Vec3 f = a.cam.forward(), r = a.cam.right();
+        const Vec3 u = { r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0] };
+        for (int i = 0; i < 3; i++) a.cam.pos[i] += (-r[i] * io.MouseDelta.x + u[i] * io.MouseDelta.y) * k;
+    }
+    if (viewHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+        Vec3 o, d;
+        a.cam.ray(io.MousePos.x - a.vx, io.MousePos.y - a.vy, a.vw, a.vh, o, d);
+        Hit h = pickScene(a.doc, o, d);
+        if (h.kind != Hit::NONE && h.t > 1.0f) a.panDist = h.t;
+        else if (a.doc.hasLevel) {   // nothing under the cursor: the depth of the level's centre
+            Vec3 c, f = a.cam.forward();
+            for (int i = 0; i < 3; i++) c[i] = (a.doc.level.mn[i] + a.doc.level.mx[i]) * 0.5f - a.cam.pos[i];
+            a.panDist = std::max(100.0f, c[0] * f[0] + c[1] * f[1] + c[2] * f[2]);
+        } else a.panDist = 1000.0f;
+        a.panning = true;
+    }
     if (viewHovered && io.MouseWheel != 0) {
         Vec3 f = a.cam.forward();
         float s = a.cam.speed * 0.25f * io.MouseWheel;
@@ -1202,6 +1307,8 @@ void frameUi(App &a, int winW, int winH, bool &quit)
     const TransformInfo ti = a.doc.getTransform(a.doc.sel);
     GizmoGeo gg;
     if (ti.valid && ti.movable) gg = gizmoGeo(a, ov, ti);
+    a.gizOk = gg.ok; a.gizC = gg.c;
+    for (int i = 0; i < 3; i++) a.gizTip[i] = gg.tip[i];
     Vec3 mOrg, mDir;
     a.cam.ray(mp.x - a.vx, mp.y - a.vy, a.vw, a.vh, mOrg, mDir);
 
@@ -1221,8 +1328,13 @@ void frameUi(App &a, int winW, int winH, bool &quit)
             a.say("move cancelled");
         } else {
             dragUpdate(a, mOrg, mDir);
-            const bool confirm = a.drag.keymove ? ImGui::IsMouseClicked(ImGuiMouseButton_Left) : ImGui::IsMouseReleased(ImGuiMouseButton_Left);
-            if (confirm) dragEnd(a, true);
+            if (!a.drag.keymove && ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+                fabsf(mp.x - a.drag.pressAt.x) < 4 && fabsf(mp.y - a.drag.pressAt.y) < 4) {
+                a.drag.keymove = true;   // a click on a handle (no drag): it follows the mouse until the next click
+            } else {
+                const bool confirm = a.drag.keymove ? ImGui::IsMouseClicked(ImGuiMouseButton_Left) : ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+                if (confirm) dragEnd(a, true);
+            }
         }
     } else {
         if (viewHovered && ti.valid && ti.movable && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_G, false)) {
@@ -1233,7 +1345,7 @@ void frameUi(App &a, int winW, int winH, bool &quit)
             a.sunSnap = a.doc.snapshot();
         } else if (viewHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             int hit = gg.ok ? gizmoHit(gg, mp) : 0;
-            if (hit) dragBegin(a, hit, mOrg, mDir);
+            if (hit) { dragBegin(a, hit, mOrg, mDir); a.drag.pressAt = mp; }
             else { a.lmbDown = true; a.lmbX = mp.x; a.lmbY = mp.y; }
         }
         // click = press and release in the view without dragging
@@ -1271,11 +1383,14 @@ void usage()
 {
     puts("ge-editor: GoldenEye co-op mission editor\n"
          "  ge-editor [options]\n"
-         "    --export DIR      level export (level.rec + level.json from `ge007 -level_XX --export-level DIR`)\n"
+         "    --level NAME      solo level to open (e.g. bunker1): from the export cache next to the game, exported first if missing\n"
+         "    --export DIR      level export folder (level.rec + level.json from `ge007 -level_XX --export-level DIR`)\n"
          "    --mod DIR         mod folder (mods/<mod>) to open\n"
          "    --mission FILE    mission.json to open (a new one is started if the file does not exist)\n"
          "    --port N          MCP HTTP port on 127.0.0.1 (default 8765; the next free one is used)\n"
          "    --no-mcp          do not start the MCP HTTP server\n"
+         "    --no-offscreen    draw straight into the window, not into a whole offscreen frame copied at the end\n"
+         "                      (the default avoids half-drawn frames on NVIDIA's DXGI present path)\n"
          "    --mcp-stdio       headless: MCP over stdin/stdout (newline-delimited JSON-RPC), no window\n"
          "    --mcp-http        headless: only the HTTP MCP server, no window (until killed)\n"
          "    --game EXE        game executable for Play (default: GE_EDITOR_GAME, else ge007 next to the editor)\n"
@@ -1293,7 +1408,9 @@ bool parseArgs(int argc, char **argv, Options &o)
         if (s == "--mcp-stdio") o.mcpStdio = true;
         else if (s == "--mcp-http") o.mcpHttp = true;
         else if (s == "--no-mcp") o.noMcp = true;
+        else if (s == "--no-offscreen") o.noOffscreen = true;
         else if (s == "--export") next(o.exportDir);
+        else if (s == "--level") next(o.level);
         else if (s == "--mission") next(o.missionFile);
         else if (s == "--game") next(o.game);
         else if (s == "--mod") next(o.modDir);
@@ -1306,6 +1423,10 @@ bool parseArgs(int argc, char **argv, Options &o)
             o.hasClick = sscanf(argv[++i], "%f,%f", &o.click[0], &o.click[1]) == 2;
         } else if (s == "--drag" && i + 1 < argc) {
             o.hasDrag = sscanf(argv[++i], "%f,%f,%f,%f", &o.drag[0], &o.drag[1], &o.drag[2], &o.drag[3]) == 4;
+        } else if (s == "--mouse-click") { o.mouseClickMode = true;
+        } else if (s == "--mouse-middle") { o.mouseMiddle = true;
+        } else if (s == "--mouse-drag" && i + 1 < argc) {
+            o.hasMouseDrag = sscanf(argv[++i], "%f,%f", &o.mouseDrag[0], &o.mouseDrag[1]) == 2;
         } else if (s == "--drag-axis" && i + 1 < argc) {
             std::string v = argv[++i]; o.dragAxis = v == "x" ? 0 : v == "y" ? 1 : v == "z" ? 2 : -1;
         } else if (s == "--tool") next(o.tool);
@@ -1315,7 +1436,8 @@ bool parseArgs(int argc, char **argv, Options &o)
     return true;
 }
 
-bool loadStartup(Doc &doc, const Options &o, std::string &err)
+// blocking: the headless modes export a missing level here; the window does it in the background (pollLevel).
+bool loadStartup(Doc &doc, const Options &o, std::string &err, bool blocking)
 {
     if (!o.exportDir.empty() && !doc.openLevel(o.exportDir, err)) return false;
     if (!o.modDir.empty() && !doc.openMod(o.modDir, err)) return false;
@@ -1328,6 +1450,10 @@ bool loadStartup(Doc &doc, const Options &o, std::string &err)
             if (!doc.newMission("New mission", "", err)) return false;
             doc.missionPath = o.missionFile;
         }
+    }
+    if (blocking) {
+        std::string lvl = !o.level.empty() && !doc.hasLevel ? o.level : doc.missingLevel();
+        if (!lvl.empty() && !doc.openLevelByName(lvl, false, err)) return false;
     }
     return true;
 }
@@ -1350,7 +1476,7 @@ int main(int argc, char **argv)
         Doc doc;
         doc.gameExe = opt.game.empty() ? defaultGameExe(exeDir) : opt.game;
         std::string err;
-        if (!loadStartup(doc, opt, err)) { fprintf(stderr, "ge-editor: %s\n", err.c_str()); return 1; }
+        if (!loadStartup(doc, opt, err, true)) { fprintf(stderr, "ge-editor: %s\n", err.c_str()); return 1; }
         return mcpStdioLoop(doc);
     }
 
@@ -1358,7 +1484,7 @@ int main(int argc, char **argv)
         Doc doc;
         doc.gameExe = opt.game.empty() ? defaultGameExe(exeDir) : opt.game;
         std::string err;
-        if (!loadStartup(doc, opt, err)) { fprintf(stderr, "ge-editor: %s\n", err.c_str()); return 1; }
+        if (!loadStartup(doc, opt, err, true)) { fprintf(stderr, "ge-editor: %s\n", err.c_str()); return 1; }
         std::mutex docLock;
         McpHttp http;
         if (!http.start(opt.port, [&](std::function<void()> fn) { std::lock_guard<std::mutex> l(docLock); fn(); }, doc, err)) {
@@ -1388,6 +1514,15 @@ int main(int argc, char **argv)
     app.gl = SDL_GL_CreateContext(app.win);
     if (!app.gl) { fprintf(stderr, "no OpenGL 3.3 core context: %s\n", SDL_GetError()); return 1; }
     SDL_GL_SetSwapInterval(1);
+    {   // what the driver really gave (a single-buffered window would show half-drawn frames)
+        int dbl = -1, depth = -1, maj = -1, min = -1;
+        SDL_GL_GetAttribute(SDL_GL_DOUBLEBUFFER, &dbl);
+        SDL_GL_GetAttribute(SDL_GL_DEPTH_SIZE, &depth);
+        SDL_GL_GetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, &maj);
+        SDL_GL_GetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, &min);
+        fprintf(stderr, "[editor] GL context %d.%d: doublebuffer %d, depth %d bits, swap interval %d, offscreen frame %s\n",
+                maj, min, dbl, depth, SDL_GL_GetSwapInterval(), opt.noOffscreen ? "off (--no-offscreen)" : "on");
+    }
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -1404,8 +1539,10 @@ int main(int argc, char **argv)
     SDL_GL_GetDrawableSize(app.win, &dw, &dh);
     std::string err;
     if (!app.scene.init(dw, dh, err)) { fprintf(stderr, "renderer: %s\n", err.c_str()); return 1; }
+    app.scene.setOffscreen(!opt.noOffscreen);
 
-    if (!loadStartup(app.doc, opt, err)) app.say("startup: %s", err.c_str());
+    if (!loadStartup(app.doc, opt, err, false)) app.say("startup: %s", err.c_str());
+    if (!opt.level.empty() && !app.doc.hasLevel) requestLevel(app, opt.level, false);
     if (!app.doc.hasLevel) app.cam.pos = { 0, 800, 0 };
     reloadLevelGpu(app);
     if (opt.hasCam) {
@@ -1434,12 +1571,50 @@ int main(int argc, char **argv)
     int frame = 0;
     while (!quit) {
         SDL_Event e;
+        static ImVec2 mdStart;
+        if (opt.hasMouseDrag && frame >= 4 && frame <= 20) {   // test aid: press on the gizmo, move, release, as a hand does
+            if (frame == 4) {
+                // the mouse "enters" the window: else the SDL backend reads the real cursor while the window has focus
+                SDL_Event en; memset(&en, 0, sizeof en);
+                en.type = SDL_WINDOWEVENT; en.window.windowID = SDL_GetWindowID(app.win); en.window.event = SDL_WINDOWEVENT_ENTER;
+                SDL_PushEvent(&en);
+                mdStart = app.gizC;
+                if (opt.dragAxis >= 0) mdStart = ImVec2((app.gizC.x + app.gizTip[opt.dragAxis].x) * 0.5f, (app.gizC.y + app.gizTip[opt.dragAxis].y) * 0.5f);
+                TransformInfo t0 = app.doc.getTransform(app.doc.sel);
+                fprintf(stderr, "mouse-drag: camera at %.0f %.0f %.0f\n", app.cam.pos[0], app.cam.pos[1], app.cam.pos[2]);
+                fprintf(stderr, "mouse-drag: gizmo %s, press at %.0f,%.0f, item at %.0f %.0f %.0f\n", app.gizOk ? "shown" : "NOT shown",
+                        mdStart.x, mdStart.y, t0.pos[0], t0.pos[1], t0.pos[2]);
+            }
+            const int k = frame - (opt.mouseClickMode ? 7 : 6);
+            ImVec2 m = mdStart;
+            if (k > 0) { float f = std::min(k, 10) / 10.0f; m.x += opt.mouseDrag[0] * f; m.y += opt.mouseDrag[1] * f; }
+            SDL_Event ev; memset(&ev, 0, sizeof ev);
+            ev.type = SDL_MOUSEMOTION; ev.motion.windowID = SDL_GetWindowID(app.win); ev.motion.x = (int)m.x; ev.motion.y = (int)m.y;
+            SDL_PushEvent(&ev);
+            const bool down = frame == 6 || (opt.mouseClickMode && frame == 17);
+            const bool up = frame == 18 || (opt.mouseClickMode && frame == 7);
+            if (down || up) {
+                memset(&ev, 0, sizeof ev);
+                ev.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+                ev.button.windowID = SDL_GetWindowID(app.win); ev.button.button = opt.mouseMiddle ? SDL_BUTTON_MIDDLE : SDL_BUTTON_LEFT;
+                ev.button.state = down ? SDL_PRESSED : SDL_RELEASED; ev.button.clicks = 1;
+                ev.button.x = (int)m.x; ev.button.y = (int)m.y;
+                SDL_PushEvent(&ev);
+            }
+            if (frame == 12) fprintf(stderr, "mouse-drag: mid-drag mode %d axis %d\n", (int)app.drag.mode, app.drag.axis);
+            if (frame == 20) {
+                TransformInfo t1 = app.doc.getTransform(app.doc.sel);
+                fprintf(stderr, "mouse-drag: camera at %.0f %.0f %.0f\n", app.cam.pos[0], app.cam.pos[1], app.cam.pos[2]);
+                fprintf(stderr, "mouse-drag: after release item at %.0f %.0f %.0f, undo steps %zu\n", t1.pos[0], t1.pos[1], t1.pos[2], app.doc.undoStack.size());
+            }
+        }
         while (SDL_PollEvent(&e)) {
             ImGui_ImplSDL2_ProcessEvent(&e);
             if (e.type == SDL_QUIT) quit = true;
             if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_CLOSE) quit = true;
         }
         drainJobs();
+        pollLevel(app);
         if (app.doc.levelGen != app.seenLevelGen) reloadLevelGpu(app);
 
         SDL_GL_GetDrawableSize(app.win, &dw, &dh);
@@ -1457,7 +1632,9 @@ int main(int argc, char **argv)
         const float sx = (float)dw / (float)std::max(ww, 1), sy = (float)dh / (float)std::max(wh, 1);
         app.scene.render(app.doc, app.cam, dw, dh, (int)(app.vx * sx), (int)(app.vy * sy), (int)(app.vw * sx), (int)(app.vh * sy),
                          app.showRooms, app.showProps);
+        if (app.scene.offscreen()) editorOffscreenBind(dw, dh);   // the GUI goes into the same offscreen frame
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        if (app.scene.offscreen()) editorOffscreenPresent(dw, dh);
 
         frame++;
         if (opt.hasClick && frame == 3) {

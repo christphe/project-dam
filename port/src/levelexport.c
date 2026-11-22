@@ -117,19 +117,29 @@ static int isRoomDl(const void *dl)
     return 0;
 }
 
+/* src/game/matrixmath.c, not in its header: save + reset / restore the conversion scale. */
+void matrix_4x4_7F058C64(void);
+void matrix_4x4_7F058C88(void);
+
 /* model -> world of a room: the level scale and the room position, as
- * setupRoomTransformationMatrix builds it without the player offset. */
-static void roomWorldMatrix(s32 room, s32 out[4][4])
+ * setupRoomTransformationMatrix builds it without the player offset. The fixed-point
+ * matrix gets only the scale: the position (pos * scale) passes 32767 on big levels
+ * (Dam), so it goes to the capture as a float offset (levelcapSetWorldOffset). */
+static void roomWorldMatrix(s32 room, s32 out[4][4], float offset[3])
 {
     f32 m[4][4];
     const f32 s = get_room_data_float2();
     memset(m, 0, sizeof(m));
     m[0][0] = m[1][1] = m[2][2] = s;
     m[3][3] = 1.0f;
-    m[3][0] = ptr_bgdata_room_fileposition_list[room].pos.f[0] * s;
-    m[3][1] = ptr_bgdata_room_fileposition_list[room].pos.f[1] * s;
-    m[3][2] = ptr_bgdata_room_fileposition_list[room].pos.f[2] * s;
+    for (int k = 0; k < 3; k++) offset[k] = ptr_bgdata_room_fileposition_list[room].pos.f[k] * s;
+    /* The game bakes the level's visibility scale into every f32 -> fixed conversion
+     * (bg.c: matrix_4x4_7F058C4C(mCurrentLevelVisibilityScale); 0.2 on Dam) and undoes it
+     * in its projection. The export wants plain world units: the game's own save/reset
+     * and restore pair turns it off for this one conversion. */
+    matrix_4x4_7F058C64();
     matrix_4x4_f32_to_s32(m, out);
+    matrix_4x4_7F058C88();
 }
 
 static int s_roomOwner[256];
@@ -160,7 +170,8 @@ static void exportRooms(void)
         snprintf(name, sizeof(name), "room %d", (int)r);
         const int owner = levelcapAddOwner(LEVELREC_OWNER_ROOM, r, name);
         s_roomOwner[r] = owner;
-        roomWorldMatrix(r, mtx);
+        float offset[3];
+        roomWorldMatrix(r, mtx, offset);
 
         Gfx *g = dl;
         gSPMatrix(g++, mtx, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH);
@@ -170,7 +181,9 @@ static void exportRooms(void)
             gSPDisplayList(g++, OS_K0_TO_PHYSICAL(g_BgRoomInfo[r].ptr_secondary_expanded_mapping_info));
         }
         gSPEndDisplayList(g++);
+        levelcapSetWorldOffset(offset[0], offset[1], offset[2]);
         levelcapRunDl(dl, owner);
+        levelcapSetWorldOffset(0.0f, 0.0f, 0.0f);
         s_roomHasGeometry[r] = 1;
 
         if (!was) {
@@ -440,7 +453,9 @@ static void exportModels(void)
         Gfx *end = rd.gdl;
         if (end - s_modelDl > 65000) { bad++; m->render_pos = savedPos; continue; }
         gSPEndDisplayList(end++);
+        matrix_4x4_7F058C64();   /* no visibility scale in the conversion (see roomWorldMatrix) */
         bondviewTransformManyPosToViewMatrix(m->render_pos, m->obj->numMatrices);   /* Mtxf -> the Mtx the DL reads */
+        matrix_4x4_7F058C88();
         char name[32];
         snprintf(name, sizeof(name), "%s %d", guard ? "guard" : "object", id);
         const int owner = levelcapAddOwner(LEVELREC_OWNER_MODEL, id, name);

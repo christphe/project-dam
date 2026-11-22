@@ -76,6 +76,11 @@ bool Doc::openMod(const std::string &dirIn, std::string &err)
     hasMod = true;
     modDir = dir;
     modDirty = false;
+    // its first mission (and so its level), unless that would drop unsaved edits; startup's --mission wins after
+    if (camp.nmissions > 0 && !(hasMission && dirty)) {
+        std::string e2;
+        if (!modOpenMission(0, e2)) modNotice += (modNotice.empty() ? "" : "; ") + ("first mission: " + e2);
+    }
     return true;
 }
 

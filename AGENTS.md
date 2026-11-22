@@ -20,6 +20,7 @@
 3. **Region macros mirror the Makefile.** `CMakeLists.txt` `REGION_DEFS` must match the N64 Makefile's per-region macro set exactly (finding A1).
 4. **`src/libultrare/Makefile.libultrare` is ground truth** for original-vs-Rare libultra files (finding B3). The PC build compiles `libultra/audio`, `libultrare/audio`, `libultra/gu` and `libultrare/io/vitbl.c` only. Every other `io/` and `os/` file is excluded and shimmed in `port/src/libultra.c`.
 5. **`rsp/graphics/gmain.s` is the RSP ground truth** for the GBI commands GE emits and its custom CC/RM modes. `port/fast3d/` replaces it on PC.
+6. **A report or a question is not a go.** When the maintainer reports a symptom ("it flickers", "this doesn't line up") or asks a question, look first: read what they sent (the screenshot, the log) closely, check it against the code, then answer with what you see and the likely cause, and stop. Change code only once they ask for the fix. Never start edits on a hunch from one sentence.
 
 ## Tree hygiene & release gate
 

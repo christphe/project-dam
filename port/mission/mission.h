@@ -217,6 +217,8 @@ int  missionValidate(const Mission *m, char *err, size_t errlen);
 
 /* Solo level name -> the -level_XX stage number (e.g. "bunker1" -> 9), -1 if unknown. */
 int  missionLevelNumber(const char *name);
+/* The i-th solo level name in mission order (0 = "dam"), NULL past the last one. */
+const char *missionLevelNameAt(int i);
 
 /* ---- campaign.json (a mod) ---- */
 #define CAMPAIGN_FORMAT 1

@@ -20,3 +20,10 @@ bool editorGlReadRect(int winH, int x, int y, int w, int h, std::vector<uint8_t>
 // RGBA8 texture for ImGui::Image (mod panel thumbnails). 0 on failure.
 uint32_t editorGlUploadTexture(int w, int h, const uint8_t *rgba);
 void editorGlDeleteTexture(uint32_t id);
+
+// Whole-frame offscreen rendering (on by default, --no-offscreen turns it off): the 3D view and the GUI
+// draw into an offscreen framebuffer, copied to the window in one blit just before the swap, so the
+// window's own buffer only ever holds whole frames. Windows + NVIDIA presents windowed OpenGL through
+// DXGI ("Vulkan/OpenGL present method: Auto") and showed half-drawn frames: the 3D without the GUI.
+void editorOffscreenBind(int w, int h);      // creates / resizes it on demand, then binds it
+void editorOffscreenPresent(int w, int h);   // blit to the window's back buffer, window framebuffer bound after

@@ -15,6 +15,11 @@ static const struct { const char *name; int num; } kLevels[] = {
     {"cuba",54},
 };
 
+const char *missionLevelNameAt(int i)
+{
+    return i >= 0 && i < (int)(sizeof(kLevels) / sizeof(kLevels[0])) ? kLevels[i].name : NULL;
+}
+
 int missionLevelNumber(const char *name)
 {
     if (!name) return -1;

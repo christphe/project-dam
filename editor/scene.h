@@ -19,10 +19,14 @@ public:
     // Draws the window background and the level into the viewport rectangle (x, y from the top).
     void render(const Doc &doc, const Camera &cam, int winW, int winH, int vx, int vy, int vw, int vh, bool showRooms,
                 bool showProps);
+    // Whole-frame offscreen rendering (editor_gl.h); the caller copies the frame to the window after its GUI.
+    void setOffscreen(bool on) { m_offscreen = on; }
+    bool offscreen() const { return m_offscreen; }
     int runCount() const { return (int)m_runs.size(); }
     int drawn() const { return m_drawn; }
 
 private:
+    bool m_offscreen = true;
     struct GpuRun {
         uint32_t mesh = 0;
         ShaderProgram *prg = nullptr;

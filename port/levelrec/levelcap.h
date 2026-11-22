@@ -29,6 +29,12 @@ void levelcapRunDl(void *dl, int owner);
 
 int  levelcapAddOwner(int kind, int id, const char *name);
 
+/* A float translation added to the modelview of every vertex recorded from now on. The
+ * N64 matrix is 16.16 fixed point (|t| < 32768): a room far from the origin (Dam) cannot
+ * carry its world position in it, so the driver loads only the scale and passes the
+ * position here. 0,0,0 turns it off. */
+void levelcapSetWorldOffset(float x, float y, float z);
+
 /* Totals, for the report line. */
 void levelcapCounts(int *ntex, int *nowners, int *nruns, unsigned long long *ntris);
 /* World-space bounds of everything recorded for an owner; 0 if it has no triangle. */
