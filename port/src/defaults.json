@@ -233,9 +233,8 @@
    "why": "= 0"
   },
   "Input.AimMode": {
-   "switch": 1,
-   "pc": 0,
-   "why": "= AIMMODE_N64 (0)"
+   "value": 1,
+   "why": "= AIMMODE_CENTRED (1) on every platform (maintainer's choice); 0 = the N64 model"
   },
   "Input.AimRange": {
    "value": 0,
@@ -362,8 +361,8 @@
   },
   "Video.MSAA": {
    "switch": 4,
-   "pc": 2,
-   "why": "= 2"
+   "pc": 4,
+   "why": "4x everywhere, like the Switch docked"
   },
   "Video.MSAAHandheld": {
    "switch": 2,
@@ -458,8 +457,8 @@
   },
   "Game.BloodOnHit": {
    "switch": 1,
-   "pc": 0,
-   "why": "off: the game's own puff"
+   "pc": 1,
+   "why": "on everywhere: the same game on Switch and PC"
   },
   "Game.CoopEnemyHealth": {
    "value": 1,
