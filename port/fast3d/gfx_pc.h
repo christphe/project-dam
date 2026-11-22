@@ -39,7 +39,15 @@ struct TextureCacheKey {
     // there is no per-texel or per-draw cost. Zero for non-CI textures.
     uint32_t palette_hash;
 
-    bool operator==(const TextureCacheKey&) const noexcept = default;
+    /* Spelled out, not "= default": GCC 10 (the arm64 build's compiler) compares
+     * an array member of a defaulted operator== by the two objects' addresses,
+     * so two distinct keys never matched and every lookup missed (the whole
+     * texture cache re-imported and evicted each frame). */
+    bool operator==(const TextureCacheKey& o) const noexcept {
+        return texture_addr == o.texture_addr && palette_addrs[0] == o.palette_addrs[0] &&
+               palette_addrs[1] == o.palette_addrs[1] && fmt == o.fmt && siz == o.siz &&
+               palette_index == o.palette_index && size_bytes == o.size_bytes && palette_hash == o.palette_hash;
+    }
 
     struct Hasher {
         size_t operator()(const TextureCacheKey& key) const noexcept {
