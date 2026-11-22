@@ -1606,7 +1606,7 @@ static void portNoteSwapReturn(void)
         g_tickLockSame = 0;
     }
     __atomic_store_n(&g_tickNudgeUs, nudge, __ATOMIC_RELAXED);
-    if ((++g_tickLockLogN % 300) == 1)
+    if (s_ilOn && (++g_tickLockLogN % 300) == 1)   /* GE_PERFSTAT only */
         sysLogPrintf(LOG_NOTE, "D600: tick lock phase=%lld us err=%lld us nudge=%lld us", (long long)phase, (long long)err, (long long)nudge);
 }
 
@@ -1728,7 +1728,8 @@ static void portRenderGfxTask(Gfx *dl)
         portNoteSwapReturn();   /* D600 (D969: pipelined, on the replay thread at its swap) */
         g_lastFrameUs = sysGetMicroseconds();
     }
-    if (++g_framesRendered <= 5 || (g_framesRendered % 300) == 0)
+    ++g_framesRendered;
+    if (s_ilOn && (g_framesRendered <= 5 || (g_framesRendered % 300) == 0))   /* GE_PERFSTAT only */
         sysLogPrintf(LOG_NOTE, "frame %d %s in %llu us",
                      g_framesRendered, gfx_frame_thread_active() ? "decoded" : "rendered",
                      (unsigned long long)(sysGetMicroseconds() - t0));
@@ -2270,7 +2271,8 @@ static void portRenderGfxTaskInterp(Gfx *dl, uint64_t viUs, int hz)
     }
     videoEndFrame();
     g_lastFrameUs = sysGetMicroseconds();
-    if (++g_framesRendered <= 5 || (g_framesRendered % 300) == 0)
+    ++g_framesRendered;
+    if (s_ilOn && (g_framesRendered <= 5 || (g_framesRendered % 300) == 0))   /* GE_PERFSTAT only */
         sysLogPrintf(LOG_NOTE, "frame %d rendered (%d interp pass(es), %.0f us each, %d Hz presents)",
                      g_framesRendered, filled, s_ipPassEma, hz);
 

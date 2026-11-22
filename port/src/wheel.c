@@ -156,15 +156,6 @@ void portWheelGameTick(void)
                 if (sel >= 0 && sel < m) equip(p, &items[sel]);
             }
         }
-        {   /* a shoulder button is held: say what the wheel saw (one line a second at most) */
-            const int rl = inputPadButton(pd, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) != 0, rr = inputPadButton(pd, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) != 0;
-            static Uint32 lastAll = 0;
-            if ((rl || rr) && SDL_GetTicks() - lastAll > 1000) {
-                lastAll = SDL_GetTicks();
-                sysLogPrintf(LOG_NOTE, "wheel: seat %d LB=%d RB=%d player=%d modern=%d kind=%d items=%d count=%d", seat, rl, rr, p != NULL,
-                             inputPadIsModern(seat), kind, n, (int)getPlayerCount());
-            }
-        }
         if (kind == KIND_NONE) s_openKind[seat] = KIND_NONE;
         SDL_AtomicLock(&s_lock);
         s_snap[seat].kind = kind;
