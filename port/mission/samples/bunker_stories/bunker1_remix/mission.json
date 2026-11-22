@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "name": "Bunker 1 remix",
+  "level": "bunker1",
+  "description": "A locked door, a key to find and a new guard.",
+  "briefing": "The bunker's security has been reshuffled. Find the key, unlock the door, then make your way to the exit.",
+  "pads": [
+    { "id": "p1", "pos": [-1313, 185, 2034], "look": [1, 0, 0], "room": 1 }
+  ],
+  "zones": [
+    { "id": "exit", "pos": [-1013, 185, 1768], "radius": 220, "room": 1 }
+  ],
+  "guards": [
+    { "op": "move", "prop": 121, "pad": 88 },
+    { "op": "add", "pad": "p1", "model": 2, "ai": 2, "weapon": 17 }
+  ],
+  "objects": [
+    { "op": "add", "type": 8, "pad": 89, "model": 248, "item": 61 }
+  ],
+  "objectives": [
+    { "id": "key", "text": "Find the key and unlock the door", "difficulty": 0 }
+  ],
+  "scripts": [
+    { "use": "key_door", "target": { "kind": "prop", "prop": 115 },
+      "props": { "key": 61, "message": "This door needs the key.", "objective": "key" } },
+    { "use": "exit_unlock", "target": { "kind": "zone", "zone": "exit" },
+      "props": { "message": "The way out is open." } }
+  ]
+}

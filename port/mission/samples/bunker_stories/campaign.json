@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "name": "Bunker stories",
+  "author": "project-dam samples",
+  "description": "One reshuffled Bunker 1.",
+  "affects": ["story"],
+  "unlock": "ordered",
+  "missions": ["bunker1_remix"]
+}
