@@ -1500,8 +1500,8 @@ static bool gfx_tex_pitch_fix(void) {
     return cached != 0;
 }
 
-extern "C" unsigned portThumbSalt(void);   /* port/src/missions_thumb.c */
-extern "C" const uint8_t* portThumbTexture(const void* addr, int w, int h, int line);
+extern "C" unsigned portThumbSalt(int fmt, int siz, int w, int h, const void* addr);   /* port/src/missions_thumb.c */
+extern "C" const uint8_t* portThumbTexture(const void* addr, const uint8_t* cur, int fmt, int siz, int w, int h, int line);
 
 static void import_texture(int i, int tile, bool importReplacement) {
     s_tick_texloads++;   /* D583 SLOW line */
@@ -1671,10 +1671,10 @@ static void import_texture(int i, int tile, bool importReplacement) {
 
     /* Custom missions (#103): the mission select's 68x44 I8 level photos can be swapped for a mod's thumbs
      * (port/src/missions_thumb.c); the salt keeps the cached original apart from the replaced one. */
-    const bool thumb_shape = fmt == G_IM_FMT_I && siz == G_IM_SIZ_8b &&
-                             ((rdp.texture_tile[tile].lrs - rdp.texture_tile[tile].uls) >> 2) + 1 == 68 &&
-                             ((rdp.texture_tile[tile].lrt - rdp.texture_tile[tile].ult) >> 2) + 1 == 44;
-    if (thumb_shape) key.palette_hash ^= portThumbSalt();
+    const int thumb_w = (int)(((rdp.texture_tile[tile].lrs - rdp.texture_tile[tile].uls) >> 2) + 1);
+    const int thumb_h = (int)(((rdp.texture_tile[tile].lrt - rdp.texture_tile[tile].ult) >> 2) + 1);
+    const unsigned thumb_salt = portThumbSalt(fmt, siz, thumb_w, thumb_h, orig_addr);
+    key.palette_hash ^= thumb_salt;
 
     /* Intro blood (M-201): textures the game regenerates IN PLACE in the
      * per-frame dynamic pool (dynAllocate, [g_VtxBuffers[0], g_VtxBuffers[2]))
@@ -1769,8 +1769,8 @@ static void import_texture(int i, int tile, bool importReplacement) {
         loaded_texture.addr = d75_buf.data();
     }
 
-    if (thumb_shape && portThumbSalt()) {   /* custom missions (#103) */
-        const uint8_t* thumb = portThumbTexture(orig_addr, 68, 44, (int)rdp.texture_tile[tile].line_size_bytes);
+    if (thumb_salt) {   /* custom missions (#103) */
+        const uint8_t* thumb = portThumbTexture(orig_addr, loaded_texture.addr, fmt, siz, thumb_w, thumb_h, (int)rdp.texture_tile[tile].line_size_bytes);
         if (thumb) loaded_texture.addr = thumb;
     }
 

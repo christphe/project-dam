@@ -35,6 +35,7 @@ int         modsSlotGate(int slot);               /* mission select slot: -1 hid
 void        modsUnbind(void);                     /* give the folder entry its original mission_num back (mission select) */
 const char *modsSlotName(int slot);
 int         modsSelectSlot(int slot, int *stage); /* activates the slot's mission; 1 = ok, *stage = its level */
+int         modsSlotCount(void);                  /* the chosen mod's missions */
 int         modsActiveSlot(void);                 /* the active mission's slot, -1 none */
 
 

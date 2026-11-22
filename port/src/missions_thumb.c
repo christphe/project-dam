@@ -27,7 +27,9 @@
 #define THUMB_W 68
 #define THUMB_H 44
 
-static uint8_t s_pix[20][THUMB_W * THUMB_H];
+#define FULL_W 320
+#define FULL_H 240
+static uint8_t s_pix[20][FULL_W * FULL_H];   /* the thumb as grey, 320x240 (whatever size the PNG is) */
 static int     s_have[20];
 static unsigned s_gen = 1;
 
@@ -126,9 +128,9 @@ void modsThumbsLoad(const char *modDir, const char (*folders)[MISSION_ID_LEN], i
         char path[760];
         snprintf(path, sizeof path, "%s/%s/thumb.png", modDir, folders[i]);
         if (!fsExists(path)) continue;
-        if (pngGray(path, THUMB_W, THUMB_H, s_pix[i])) {
+        if (pngGray(path, FULL_W, FULL_H, s_pix[i])) {
             s_have[i] = 1;
-            sysLogPrintf(LOG_INFO, "missions: thumb %s (%dx%d grey)", path, THUMB_W, THUMB_H);
+            sysLogPrintf(LOG_INFO, "missions: thumb %s (grey %dx%d)", path, FULL_W, FULL_H);
         } else {
             sysLogPrintf(LOG_WARNING, "missions: cannot read %s (8-bit non-interlaced PNG expected)", path);
         }
@@ -138,35 +140,104 @@ void modsThumbsLoad(const char *modDir, const char (*folders)[MISSION_ID_LEN], i
 
 /* ---- fast3d hooks (render thread) ----------------------------------------- */
 
-static const void *s_addr[20];
+/* Area average of the grey window (x0,y0,ww,hh) of slot `slot` into dw x dh. */
+static void window(int slot, int x0, int y0, int ww, int hh, int dw, int dh, uint8_t *out, int ostride)
+{
+    for (int oy = 0; oy < dh; oy++) {
+        int ya = y0 + oy * hh / dh, yb = y0 + (oy + 1) * hh / dh;
+        if (yb <= ya) yb = ya + 1;
+        for (int ox = 0; ox < dw; ox++) {
+            int xa = x0 + ox * ww / dw, xb = x0 + (ox + 1) * ww / dw, n = 0;
+            unsigned sum = 0;
+            if (xb <= xa) xb = xa + 1;
+            for (int y = ya; y < yb && y < FULL_H; y++)
+                for (int x = xa; x < xb && x < FULL_W; x++, n++) sum += s_pix[slot][y * FULL_W + x];
+            out[oy * ostride + ox] = n ? (uint8_t)(sum / n) : 0;
+        }
+    }
+}
+
+static const void *s_addr[20];            /* mission select: the n-th 68x44 import is slot n */
 static int s_naddr = 0;
 static unsigned s_mapGen = 0;
 static uint8_t s_out[20][72 * THUMB_H];
+static const void *s_baddr[2];            /* briefing polaroid: the first 128x64 I4 import is the top half */
+static int s_nb = 0, s_bslot = -2;
+static unsigned s_bgen = 0;
+static uint8_t s_bout[2][4096];
 
-static int thumbsOn(void)
+static int activeThumb(void)
 {
-    return modsStoryActive() && (int)current_menu == (int)MENU_MISSION_SELECT;
+    int slot = modsActiveSlot();
+    return (slot >= 0 && slot < 20 && s_have[slot]) ? slot : -1;
 }
 
-/* 0 = leave the texture alone; else a value for the texture cache key. */
-unsigned portThumbSalt(void)
+/* 0 = leave the texture alone; else a value for the texture cache key (every import asks, before the cache lookup). */
+unsigned portThumbSalt(int fmt, int siz, int w, int h, const void *addr)
 {
-    return thumbsOn() ? (0x7B000000u ^ (s_gen * 2654435761u)) | 1u : 0u;
+    (void)addr;
+    if (!modsStoryActive()) return 0u;
+    if ((int)current_menu == (int)MENU_MISSION_SELECT && fmt == 4 && siz == 1 && w == THUMB_W && h == THUMB_H)
+        return (0x7B000000u ^ (s_gen * 2654435761u)) | 1u;
+    if ((int)current_menu == (int)MENU_BRIEFING && fmt == 4 && siz == 0 && w == 128 && h == 64 && activeThumb() >= 0)
+        return (0x6C000000u ^ (s_gen * 2654435761u) ^ ((unsigned)activeThumb() * 40503u)) | 1u;
+    return 0u;
 }
 
-/* The replacement for the 68x44 I8 texture at `addr` (line = row bytes of the upload), or NULL. */
-const uint8_t *portThumbTexture(const void *addr, int w, int h, int line)
+/* The replacement bytes for the texture at `addr` (line = row bytes of the upload), or NULL. */
+const uint8_t *portThumbTexture(const void *addr, const uint8_t *cur, int fmt, int siz, int w, int h, int line)
 {
-    int slot = -1;
-    if (!thumbsOn() || w != THUMB_W || h != THUMB_H || line < THUMB_W || line > 72) return NULL;
-    if (s_mapGen != s_gen) { s_mapGen = s_gen; s_naddr = 0; }
-    for (int i = 0; i < s_naddr; i++)
-        if (s_addr[i] == addr) { slot = i; break; }
-    if (slot < 0 && s_naddr < 20) { slot = s_naddr; s_addr[s_naddr++] = addr; }
-    if (slot < 0 || !s_have[slot]) return NULL;
-    memset(s_out[slot], 0, sizeof s_out[slot]);
-    for (int y = 0; y < THUMB_H; y++)
-        memcpy(s_out[slot] + (size_t)y * line, s_pix[slot] + y * THUMB_W, THUMB_W);
-    sysLogPrintf(LOG_INFO, "missions: mission select photo %d replaced by the mod's thumb", slot);
-    return s_out[slot];
+    if (fmt == 4 && siz == 1 && w == THUMB_W && h == THUMB_H && line >= THUMB_W && line <= 72) {
+        int slot = -1;
+        if (s_mapGen != s_gen) { s_mapGen = s_gen; s_naddr = 0; }
+        for (int i = 0; i < s_naddr; i++)
+            if (s_addr[i] == addr) { slot = i; break; }
+        if (slot < 0 && s_naddr < 20) { slot = s_naddr; s_addr[s_naddr++] = addr; }
+        if (slot < 0) return NULL;
+        memset(s_out[slot], 0, sizeof s_out[slot]);
+        if (slot < modsSlotCount() && s_have[slot]) {
+            /* the frame shows 68:44; take that crop of the 4:3 source (centred), not a squeezed copy */
+            int ch = FULL_W * THUMB_H / THUMB_W;
+            window(slot, 0, (FULL_H - ch) / 2, FULL_W, ch, THUMB_W, THUMB_H, s_out[slot], line);
+            for (int y = 0; y < THUMB_H / 2; y++) {   /* the strip textures are stored bottom-up, like the polaroid's */
+                for (int x = 0; x < THUMB_W; x++) {
+                    uint8_t t = s_out[slot][y * line + x];
+                    s_out[slot][y * line + x] = s_out[slot][(THUMB_H - 1 - y) * line + x];
+                    s_out[slot][(THUMB_H - 1 - y) * line + x] = t;
+                }
+            }
+            sysLogPrintf(LOG_INFO, "missions: mission select photo %d replaced by the mod's thumb", slot);
+        } else if (slot >= modsSlotCount()) {
+            sysLogPrintf(LOG_INFO, "missions: mission select photo %d: no mission, drawn empty", slot);
+        } else {
+            return NULL;   /* a mission without a thumb keeps the level's photo */
+        }
+        return s_out[slot];
+    }
+    if (fmt == 4 && siz == 0 && w == 128 && h == 64 && line == 64 && activeThumb() >= 0) {
+        int slot = activeThumb(), half = -1;
+        if (s_bgen != s_gen || s_bslot != slot) { s_bgen = s_gen; s_bslot = slot; s_nb = 0; }
+        for (int i = 0; i < s_nb; i++)
+            if (s_baddr[i] == addr) { half = i; break; }
+        if (half < 0 && s_nb < 2) { half = s_nb; s_baddr[s_nb++] = addr; }
+        if (half < 0) return NULL;
+        {   /* a 128x128 polaroid: a white frame, the centred square of the source inside, 4 bits per pixel */
+            uint8_t sq[124 * 124];
+            window(slot, (FULL_W - FULL_H) / 2, 0, FULL_H, FULL_H, 124, 124, sq, 124);
+            for (int y = 0; y < 64; y++) {
+                int gy = half * 64 + (63 - y);   /* the polaroid halves are stored bottom-up: buffer row y shows composite row 63 - y */
+                for (int x = 0; x < 128; x += 2) {
+                    unsigned v[2];
+                    for (int k = 0; k < 2; k++) {
+                        int gx = x + k;
+                        v[k] = (gx < 2 || gx > 125 || gy < 2 || gy > 125) ? 15u : (unsigned)(sq[(gy - 2) * 124 + (gx - 2)] >> 4);
+                    }
+                    s_bout[half][y * 64 + x / 2] = (uint8_t)((v[0] << 4) | v[1]);
+                }
+            }
+        }
+        sysLogPrintf(LOG_INFO, "missions: briefing polaroid half %d replaced by the mod's thumb", half);
+        return s_bout[half];
+    }
+    return NULL;
 }
