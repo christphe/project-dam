@@ -3330,7 +3330,17 @@ s32 get_highest_unlocked_difficulty_for_level(s32 arg0)
 #ifdef PORT
     if (modsStoryActive())
     {
-        return modsSlotDifficulty(arg0);   /* the chosen mod's missions, in its campaign order (#103) */
+        /* the chosen mod's missions, in its campaign order (#103): slot n is mission index n of the mod's own save,
+         * so an ordered campaign asks the game's save exactly like the original (below) */
+        s32 gate = modsSlotGate(arg0);
+        if (gate != -2)
+        {
+            return gate;
+        }
+        if (arg0 < 0 || arg0 >= 20)
+        {
+            return -1;
+        }
     }
 #endif
     if (mission_folder_setup_entries[pull_and_display_text_for_folder_a0(arg0)].stage_id >= 0)
@@ -3399,6 +3409,9 @@ void interface_menu07_missionsel(void)
     ModelNode *mnode;
     s32 padding;
 
+#ifdef PORT
+    modsUnbind();   /* the grid reads the original mission numbers again (a mod mission binds its slot while it is chosen) */
+#endif
     viSetFovY(FOV_Y_F);
     viSetAspect(ASPECT_RATIO_SD);
     viSetZRange(100.0f, 10000.0f);
@@ -3837,6 +3850,23 @@ Gfx * print_current_solo_briefing_stage_name(Gfx *DL, char *text)
         DL = frontPrintText(DL, &x, &y, text, ptrFontZurichBoldChars, ptrFontZurichBold, 0xff, viGetX(), viGetY(), 0, 0);
     }
 
+#ifdef PORT
+    {
+        /* a custom mission names itself: "Mission <n>: <mod>" / "<mission>" instead of the original level's names */
+        char hl1[200];
+        char hl2[200];
+        if (missionsHeaderLines(hl1, hl2, sizeof(hl1)))
+        {
+            x = 0x37;
+            y = 0x67;
+            DL = frontPrintText(DL, &x, &y, hl1, ptrFontZurichBoldChars, ptrFontZurichBold, 0xff, viGetX(), viGetY(), 0, 0);
+            x = 0x37;
+            y = 0x77;
+            DL = frontPrintText(DL, &x, &y, hl2, ptrFontZurichBoldChars, ptrFontZurichBold, 0xff, viGetX(), viGetY(), 0, 0);
+            return DL;
+        }
+    }
+#endif
     chapter = get_chapter_briefing_entry(briefingpage);
     if (chapter >=0 )
     {

@@ -29,3 +29,15 @@ void missionMakeDir(const char *dir)
     mkdir(dir, 0755);
 #endif
 }
+
+int missionEepPath(const char *id, char *out, size_t n)
+{
+    size_t len = id ? strlen(id) : 0;
+    if (n) out[0] = 0;
+    if (len < 8 || len > 63) return 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = id[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || c == '-')) return 0;
+    }
+    return snprintf(out, n, "$S/mods/%s.eep", id) < (int)n;
+}

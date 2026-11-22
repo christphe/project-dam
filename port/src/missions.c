@@ -193,6 +193,7 @@ static void dirOf(const char *file, char *out, size_t n)
 
 void missionsDeactivate(void)
 {
+    modsUnbind();
     if (s_served[0]) {
         pccgRestoreRow(s_served);
         s_served[0] = 0;

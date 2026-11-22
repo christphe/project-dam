@@ -3,8 +3,9 @@
  *
  * The player picks the mod on the game's mode select (a port row, front.c, D960 pattern); after that the game's own
  * mission select, difficulty select and briefing are filled from the mod: this file answers their questions
- * (which missions, in which order, which are open, what they are called). The player's progress lives in
- * <save dir>/mods/<mod>.json: never in the mod folder, never in the game's EEPROM save.
+ * (which missions, in which order, which are open, what they are called). The player's progress is the game's own
+ * save, one EEPROM file per mod (<save dir>/mods/<campaign id>.eep, libultra.c portEepromSelect): while a mod is chosen
+ * ge007.eep is never read or written, and the game's save code, folders, unlocks and best times work unchanged.
  */
 #include "platform.h"
 #include <stdlib.h>
@@ -18,13 +19,15 @@
 #include "missions.h"
 #include "missions_priv.h"
 #include "mission_dir.h"
-#include "cJSON.h"
+#include "game/front.h"   /* mission_folder_setup_entries */
+
+extern int  portEepromSelect(const char *path);   /* libultra.c */
+extern void fileValidateSaves(void);              /* file2.c: re-read the save data from the EEPROM */
 
 typedef struct ModSlot {
     char folder[MISSION_ID_LEN];
     char name[MISSION_TEXT_LEN];
     int stage;
-    int done;                   /* bit d: completed on difficulty d */
 } ModSlot;
 
 typedef struct ModEntry {
@@ -39,6 +42,9 @@ static ModEntry s_mods[MODS_MAX];
 static int s_nmods = 0, s_scanned = 0, s_cur = -1;
 static ModSlot s_slots[SLOTS_MAX];
 static int s_nslots = 0;
+
+static void loadSlots(void);
+static void switchSave(void);
 
 static void scan(void)
 {
@@ -70,71 +76,22 @@ static void scan(void)
             s_mods[j - 1] = t;
         }
     sysLogPrintf(LOG_INFO, "missions: %d mod(s) in %s", s_nmods, base);
+    {   /* --mod FOLDER: start with that mod chosen (the same as picking it on the mode select) */
+        const char *want = sysArgGetString("--mod");
+        for (int i = 0; want && i < s_nmods; i++) {
+            if (!strcmp(s_mods[i].folder, want)) {
+                s_cur = i;
+                loadSlots();
+                switchSave();
+            }
+        }
+    }
 }
 
 int modsCount(void)
 {
     if (!s_scanned) scan();
     return s_nmods;
-}
-
-/* ---- progress: <save dir>/mods/<mod>.json  {"missions": {"<mission folder>": <mask of completed difficulties>}} ---- */
-
-static void progressPath(char *out, size_t n)
-{
-    snprintf(out, n, "%s/%s.json", sysResolvePath("$S/mods"), s_mods[s_cur].folder);
-}
-
-static void progressLoad(void)
-{
-    char path[700];
-    FSFile *f;
-    int32_t sz;
-    char *buf;
-    cJSON *root, *ms, *it;
-    progressPath(path, sizeof path);
-    if (!fsExists(path)) return;
-    f = fsOpen(path, "rb");
-    if (!f) return;
-    sz = fsSize(f);
-    buf = (char *)malloc((size_t)sz + 1);
-    if (!buf) { fsClose(f); return; }
-    sz = fsRead(f, buf, sz);
-    fsClose(f);
-    buf[sz < 0 ? 0 : sz] = 0;
-    root = cJSON_Parse(buf);
-    free(buf);
-    if (!root) return;
-    ms = cJSON_GetObjectItem(root, "missions");
-    for (int i = 0; i < s_nslots; i++) {
-        it = ms ? cJSON_GetObjectItem(ms, s_slots[i].folder) : NULL;
-        if (cJSON_IsNumber(it)) s_slots[i].done = (int)it->valuedouble & 15;
-    }
-    cJSON_Delete(root);
-}
-
-static void progressSave(void)
-{
-    char path[700], dir[600];
-    cJSON *root = cJSON_CreateObject(), *ms = cJSON_CreateObject();
-    char *txt;
-    FSFile *f;
-    for (int i = 0; i < s_nslots; i++)
-        if (s_slots[i].done) cJSON_AddNumberToObject(ms, s_slots[i].folder, s_slots[i].done);
-    cJSON_AddItemToObject(root, "missions", ms);
-    txt = cJSON_Print(root);
-    cJSON_Delete(root);
-    progressPath(path, sizeof path);
-    snprintf(dir, sizeof dir, "%s", sysResolvePath("$S/mods"));
-    missionMakeDir(dir);
-    f = txt ? fsOpen(path, "wb") : NULL;
-    if (f) {
-        fsWrite(f, txt, (int32_t)strlen(txt));
-        fsClose(f);
-    } else {
-        sysLogPrintf(LOG_WARNING, "missions: cannot write %s", path);
-    }
-    free(txt);
 }
 
 /* The mod's missions in campaign order, with the facts the mission select shows. */
@@ -160,8 +117,33 @@ static void loadSlots(void)
         missionFree(&m);
         s_nslots++;
     }
-    progressLoad();
+    {   /* the mission select photos: mods/<mod>/<mission>/thumb.png */
+        char folders[SLOTS_MAX][MISSION_ID_LEN];
+        for (int i = 0; i < s_nslots; i++) snprintf(folders[i], sizeof folders[i], "%s", s_slots[i].folder);
+        modsThumbsLoad(me->dir, (const char (*)[MISSION_ID_LEN])folders, s_nslots);
+    }
     sysLogPrintf(LOG_INFO, "missions: mod \"%s\": %d mission(s)", me->c.name, s_nslots);
+}
+
+static int s_boundEntry = -1, s_boundNum = 0;   /* the folder entry whose mission_num is the mod slot */
+
+static void unbindEntry(void)
+{
+    if (s_boundEntry >= 0) mission_folder_setup_entries[s_boundEntry].mission_num = s_boundNum;
+    s_boundEntry = -1;
+}
+
+/* The game's save follows the chosen mod: its own EEPROM file, and the game re-reads it. */
+static void switchSave(void)
+{
+    char rel[128] = "";
+    int changed;
+    if (s_cur >= 0 && !missionEepPath(s_mods[s_cur].c.id, rel, sizeof rel)) {
+        sysLogPrintf(LOG_WARNING, "missions: bad campaign id \"%s\": the mod would share ge007.eep, refused", s_mods[s_cur].c.id);
+        s_cur = -1;
+    }
+    changed = portEepromSelect(s_cur >= 0 ? rel : NULL);
+    if (changed) fileValidateSaves();   /* saves[] from the new file; a fresh file gets fresh folders */
 }
 
 void modsCycle(void)
@@ -171,7 +153,11 @@ void modsCycle(void)
     s_cur = (s_cur + 1 >= s_nmods) ? -1 : s_cur + 1;
     s_nslots = 0;
     if (s_cur >= 0) loadSlots();
+    else modsThumbsLoad("", NULL, 0);
+    switchSave();
 }
+
+void modsUnbind(void) { unbindEntry(); }
 
 int modsStoryActive(void)
 {
@@ -191,16 +177,13 @@ const char *modsRowText(void)
     return buf;
 }
 
-/* Slot n of the mission select's grid: the highest difficulty the player may pick, -1 = not shown (no such mission,
- * or still locked). Same meaning as the game's get_highest_unlocked_difficulty_for_level. */
-int modsSlotDifficulty(int slot)
+/* Slot n of the mission select's grid, before the game's own save is asked: -1 = no such mission (hidden); an open
+ * campaign: 2 (all difficulties); an ordered one: -2 = let the game's save decide (the slot is stored as mission
+ * index n, see modsSelectSlot). */
+int modsSlotGate(int slot)
 {
-    int best = -1;
     if (!modsStoryActive() || slot < 0 || slot >= s_nslots) return -1;
-    if (s_mods[s_cur].c.unlock == CAMPAIGN_UNLOCK_ORDERED && slot > 0 && !s_slots[slot - 1].done) return -1;
-    for (int d = 0; d < 3; d++)
-        if (s_slots[slot].done & (1 << d)) best = d;
-    return best + 1 > 2 ? 2 : best + 1;      /* Agent always; completing one opens the next */
+    return s_mods[s_cur].c.unlock == CAMPAIGN_UNLOCK_OPEN ? 2 : -2;
 }
 
 const char *modsSlotName(int slot)
@@ -215,15 +198,23 @@ int modsSelectSlot(int slot, int *stage)
     snprintf(path, sizeof path, "%s/%s/mission.json", s_mods[s_cur].dir, s_slots[slot].folder);
     if (!missionsActivateFile(path, -1, s_mods[s_cur].dir, slot)) return 0;
     *stage = s_slots[slot].stage;
+    /* The game's save (file.c) stores a finished mission under entries[briefingpage].mission_num: make that the mod's
+     * slot, so mission n of the mod is mission index n of the mod's save. Undone on deactivation. */
+    unbindEntry();
+    for (int i = 0; mission_folder_setup_entries[i].folder_text_preset != 0; i++) {
+        if (mission_folder_setup_entries[i].stage_id == *stage) {
+            s_boundEntry = i;
+            s_boundNum = mission_folder_setup_entries[i].mission_num;
+            mission_folder_setup_entries[i].mission_num = slot;
+            break;
+        }
+    }
     return 1;
 }
 
-/* The active mission was won on `difficulty`. */
-void missionsRecordComplete(int difficulty)
+int modsSlotCount(void) { return s_nslots; }
+
+const char *modsModName(void)
 {
-    int slot = modsActiveSlot();
-    if (s_cur < 0 || slot < 0 || slot >= s_nslots) return;
-    s_slots[slot].done |= 1 << (difficulty < 0 ? 0 : difficulty > 3 ? 3 : difficulty);
-    progressSave();
-    sysLogPrintf(LOG_INFO, "missions: progress saved: %s on difficulty %d", s_slots[slot].folder, difficulty);
+    return s_cur >= 0 ? s_mods[s_cur].c.name : "";
 }

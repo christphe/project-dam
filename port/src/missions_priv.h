@@ -6,10 +6,10 @@
 void missionsEnsureArgs(void);
 int  missionsActivateFile(const char *path, int spawn_pad, const char *mod_dir, int slot);
 const char *missionsModDir(void);
-void missionsRecordComplete(int difficulty);
 const Mission *missionsCurrent(void);
 const char *missionsDir(void);
 int  missionsSpawnPad(void);
+void modsThumbsLoad(const char *modDir, const char (*folders)[MISSION_ID_LEN], int count);   /* missions_thumb.c */
 void missionsHostReset(void);          /* missions_host.c: drop the running scripts */
 
 #endif

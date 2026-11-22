@@ -353,6 +353,8 @@ int l_win(lua_State *L)
     MissionRuntime *rt = rtOf(L);
     rt->log("mission.win()");
     if (rt->host.win) rt->host.win(rt->host.ud);
+    /* the host call may take long (it ends the level): it is not the script's time */
+    rt->deadline = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(kResumeBudget));
     return 0;
 }
 

@@ -2,6 +2,7 @@
 #include "ge_test.h"
 #include "mission.h"
 #include "mission_apply.h"
+#include "mission_dir.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -174,6 +175,17 @@ int main(void)
         GE_CHECK(fabsf(rdf(r.data + pp + 3 * 56) - 125.0f) < 1e-3f);
         GE_CHECK(fabsf(rdf(r.data + pp + 3 * 56 + 4) - 10.0f) < 1e-3f);
         missionApplyFree(&r);
+    }
+
+    /* the per-mod EEPROM file: only a campaign UUID may name it */
+    {
+        char eep[128];
+        GE_CHECK_EQ_INT(missionEepPath("3f0c9a52-7d41-4b1e-9a0e-2c6f5b8d1e47", eep, sizeof eep), 1);
+        GE_CHECK_STR(eep, "$S/mods/3f0c9a52-7d41-4b1e-9a0e-2c6f5b8d1e47.eep");
+        GE_CHECK_EQ_INT(missionEepPath("../ge007", eep, sizeof eep), 0);
+        GE_CHECK_EQ_INT(missionEepPath("", eep, sizeof eep), 0);
+        GE_CHECK_EQ_INT(missionEepPath("abc", eep, sizeof eep), 0);
+        GE_CHECK_EQ_INT(missionEepPath("3f0c9a52/7d41", eep, sizeof eep), 0);
     }
 
     /* a file that is not a setup */

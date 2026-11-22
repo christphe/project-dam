@@ -31,7 +31,8 @@ int         modsCount(void);                      /* installed mods (mods/<mod>/
 void        modsCycle(void);                      /* GoldenEye -> mod 1 -> ... -> GoldenEye */
 const char *modsRowText(void);                    /* "GoldenEye" or "<name> (Story, Multiplayer)" */
 int         modsStoryActive(void);                /* the chosen mod replaces the solo / co-op mission select */
-int         modsSlotDifficulty(int slot);         /* get_highest_unlocked_difficulty_for_level for a mod slot; -1 = hidden */
+int         modsSlotGate(int slot);               /* mission select slot: -1 hidden (no such mission), 2 open campaign, -2 ask the game's save */
+void        modsUnbind(void);                     /* give the folder entry its original mission_num back (mission select) */
 const char *modsSlotName(int slot);
 int         modsSelectSlot(int slot, int *stage); /* activates the slot's mission; 1 = ok, *stage = its level */
 int         modsActiveSlot(void);                 /* the active mission's slot, -1 none */
@@ -40,10 +41,21 @@ int         modsActiveSlot(void);                 /* the active mission's slot, 
 /* ---- briefing and report (front.c) ------------------------------------ */
 /* A custom mission is chosen AND it is the level the front end is on (so the next campaign level never shows its text). */
 int         missionsObjectivesActive(void);
+/* The two header lines of the briefing / difficulty / report screens in place of "Mission 2: Severnaya" and
+ * "Part ii: Bunker": "Mission <n>: <mod>" and "<mission>". 1 = filled (newline-terminated), 0 = not a mission. */
+int         missionsHeaderLines(char *line1, char *line2, int size);
+const char *modsModName(void);
 /* Briefing page text for a custom mission: page 1 = name + briefing, others blank; NULL = not a mission. */
 const char *missionsBriefingPageText(int page);
 /* The objectives list, in place of print_objectives_and_status_to_menu's. */
 Gfx        *missionsObjectivesDraw(Gfx *gdl, int ytop, int withStatus);
+/* The in-game pause menu (options.c, watch briefing pages) while a mission runs. */
+int         missionsPauseActive(void);
+int         missionsPauseObjCount(void);
+int         missionsPauseObjDifficulty(int i);
+const char *missionsPauseObjText(int i);          /* wrapped, newline-terminated, like the game's strings */
+int         missionsPauseObjStatus(int i);        /* OBJECTIVESTATUS_*: 1 complete, 0 incomplete */
+const char *missionsPausePageText(int page);      /* NULL: use the level's own */
 /* frontCompleteAllObjectivesAliveSuccess for a custom mission (1 = every objective of this difficulty done). */
 int         missionsObjectivesSuccess(void);
 

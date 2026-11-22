@@ -36,6 +36,7 @@ extern s32 g_ClockTimer;
 extern s32 g_GlobalTimer;
 extern int bondinvHasInvItem(ITEM_IDS item);
 extern s32 lvlGetSelectedDifficulty(void);
+extern void end_of_mission_briefing(void);   /* file.c */
 
 #define KEY_LOCK_BIT 0x80000000u   /* a key bit no key has: the door stays shut for the player */
 
@@ -260,8 +261,9 @@ static void hWin(void *ud)
     (void)ud;
     if (s_winSent) return;
     s_winSent = 1;
-    /* the level end WITHOUT bossReturnTitleStage: its end_of_mission_briefing would write the campaign save (EEPROM) */
-    missionsRecordComplete((int)lvlGetSelectedDifficulty());
+    /* bossReturnTitleStage minus its objectiveIsAllComplete() gate (the level's own objectives): a mod mission is won by its scripts */
+    if (modsActiveSlot() >= 0)
+        end_of_mission_briefing();   /* the game's own progress save (file.c), into the mod's EEPROM file */
     bossRunTitleStage();
     missionRtEnd(s_rt, 1);
 }

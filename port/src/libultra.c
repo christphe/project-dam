@@ -55,6 +55,7 @@
 #include "input.h"
 #include "fs.h"
 #include "romdata.h"
+#include "mission_dir.h"   /* missionMakeDir: the mods save dir */
 #include "watchsettings.h"
 #include "crash.h"
 
@@ -1424,16 +1425,30 @@ s32 osContReset(OSMesgQueue *mq, OSContStatus *status)
 
 static u8   s_eeprom[GE_EEP_SIZE];
 static int  s_eepromLoaded = 0;
+static char s_eepPath[256] = GE_EEP_PATH;   /* custom missions: a mod keeps its own save ("$S/mods/<campaign id>.eep") */
+
+/* Point the EEPROM at another save file (NULL = the game's own ge007.eep). Every write is already on disk, so
+ * "flushing" the current file is a no-op; the next access loads the new one. The caller then makes the game
+ * re-read it (fileValidateSaves). Returns 1 if the path changed. */
+int portEepromSelect(const char *path)
+{
+    const char *want = path ? path : GE_EEP_PATH;
+    if (!strcmp(want, s_eepPath)) return 0;
+    snprintf(s_eepPath, sizeof s_eepPath, "%s", want);
+    s_eepromLoaded = 0;
+    sysLogPrintf(LOG_INFO, "eeprom: save file is now %s", sysResolvePath(s_eepPath));
+    return 1;
+}
 
 static void geEepromLoad(void)
 {
     if (s_eepromLoaded) return;
     s_eepromLoaded = 1;
-    const char *path = sysResolvePath(GE_EEP_PATH);
+    const char *path = sysResolvePath(s_eepPath);
     /* D514: before the game's first EEPROM read, convert an emulator-format
      * save in place (port/src/eepimport.c). Runs before fopen so the load
      * below sees the converted bytes; no-op for a port-format save. */
-    geEepImportEmulatorSave(path);
+    if (!strcmp(s_eepPath, GE_EEP_PATH)) geEepImportEmulatorSave(path);
     FILE *fp = fopen(path, "rb");
     if (fp) {
         fread(s_eeprom, 1, GE_EEP_SIZE, fp);
@@ -1447,7 +1462,8 @@ static void geEepromLoad(void)
 
 static void geEepromStore(void)
 {
-    const char *path = sysResolvePath(GE_EEP_PATH);
+    if (strcmp(s_eepPath, GE_EEP_PATH)) missionMakeDir(sysResolvePath("$S/mods"));   /* before the path: sysResolvePath reuses one buffer */
+    const char *path = sysResolvePath(s_eepPath);
     FILE *fp = fopen(path, "wb");
     if (fp) {
         fwrite(s_eeprom, 1, GE_EEP_SIZE, fp);
