@@ -61,6 +61,13 @@ ge_add_pure_test(test_input_enhanced test_input_enhanced.c
 ge_add_pure_test(test_input_original test_input_original.c
   ${GE_INPUT_DIR}/input_common.c ${GE_INPUT_DIR}/style_original.c ${GE_INPUT_DIR}/n64bridge.c)
 
+# The shared mission formats (port/mission, port/levelrec): pure, no core.
+ge_add_pure_test(test_mission_format test_mission_format.c)
+target_link_libraries(test_mission_format ge_mission)
+set_property(TARGET test_mission_format PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}"
+  "${CMAKE_SOURCE_DIR}/port/mission" "${CMAKE_SOURCE_DIR}/port/levelrec")
+set_property(TARGET test_mission_format PROPERTY COMPILE_OPTIONS "")
+
 if(GE007_ROM_TESTS)
   # Tests that read the ROM: local opt-in only (the ROM is never in the repo).
   # Add them here with ge_add_test() and make them skip unless GE007_ROM names
