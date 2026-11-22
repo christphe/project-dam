@@ -78,6 +78,11 @@ static void test_validate(void)
 {
     Mission m;
     char err[128];
+    missionInit(&m);
+    GE_CHECK_EQ_INT(m.env.mood, MISSION_MOOD_KEEP);
+    char *fresh = missionToJson(&m);
+    GE_CHECK(strstr(fresh, "environment") == NULL);
+    free(fresh);
     GE_CHECK(missionParse("{\"format\":1,\"name\":\"x\",\"level\":\"nowhere\"}", &m, err, sizeof(err)));
     GE_CHECK(!missionValidate(&m, err, sizeof(err)));
     missionFree(&m);

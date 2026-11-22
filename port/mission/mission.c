@@ -38,6 +38,7 @@ void missionInit(Mission *m)
 {
     memset(m, 0, sizeof(*m));
     m->format = MISSION_FORMAT;
+    m->env.mood = MISSION_MOOD_KEEP;   /* 0 would be "day": a new mission keeps the level's mood */
 }
 
 void missionFree(Mission *m)
