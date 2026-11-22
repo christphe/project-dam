@@ -28,6 +28,7 @@ void fontsBuild();
 bool setData(const char* json, size_t len, std::string* err);
 
 void setConsole(bool console);   /* "console" in expressions: no keyboard/mouse (a run-time setting, not the platform) */
+void setPadFamily(int fam);   /* the menu pad's family, 0 Xbox, 1 PlayStation, 2 Nintendo (input.c PADFAM_*): the button names and icons follow */
 void setPlatform(bool pc);   /* which defaults and which "platform ==" rules apply */
 /* The link to the game's values: get fills the config value of a control's key (false = no such value), set stores
  * one. Without it the menu keeps its own values (the viewer). */
@@ -52,6 +53,7 @@ void setUpdate(int state, const char* tag, const char* notes, const char* versio
 void setContext(bool fileSelect, bool inStage, bool updateAvailable, bool profile);   /* where the game is: the rules "fileselect" and "stage" read it */
 /* where the gamepad drawing sits in the texture (uv of its corners) and its width over its height */
 void setPadImage(float u0, float v0, float u1, float v1, float aspect);
+void setIconImage(int icon, float u0, float v0, float u1, float v1);   /* a kMenuIcon* (menu_icons.h) in the atlas */
 void setOwner(int seat);     /* the player whose pad drives the menu (0-based; -1 = not shown): named in the header */
 void setDev(bool dev);       /* dev mode: the controls marked "dev" show up */
 bool isPc();
