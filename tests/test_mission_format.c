@@ -19,6 +19,8 @@ static const char *kSample =
     "  \"scripts\": [ { \"use\": \"key_door\", \"target\": { \"kind\": \"prop\", \"prop\": 52 },\n"
     "                 \"props\": { \"key\": 33, \"message\": \"Locked\", \"once\": true } },\n"
     "               { \"use\": \"exit_unlock\", \"target\": { \"kind\": \"zone\", \"zone\": \"z1\" } } ],\n"
+    "  \"environment\": { \"mood\": \"dusk\", \"sun\": { \"azimuth\": 120, \"elevation\": 12 },\n"
+    "                   \"sky\": [0.5, 0.6, 0.7], \"sea\": { \"enabled\": true, \"height\": -120, \"swell\": 2 } },\n"
     "  \"x_future\": { \"keep\": 1 } }\n";
 
 static void check_mission(const Mission *m)
@@ -44,6 +46,15 @@ static void check_mission(const Mission *m)
     GE_CHECK_EQ_INT(m->scripts[0].nprops, 3);
     GE_CHECK_EQ_INT(m->scripts[1].kind, MISSION_TGT_ZONE);
     GE_CHECK(m->extra != NULL);
+    GE_CHECK_EQ_INT(m->env.mood, MISSION_MOOD_DUSK);
+    GE_CHECK_EQ_INT(m->env.has_sun, 1);
+    GE_CHECK(m->env.sun_azimuth == 120.0f);
+    GE_CHECK_EQ_INT(m->env.has_sky, 1);
+    GE_CHECK_EQ_INT(m->env.has_clouds, 0);
+    GE_CHECK_EQ_INT(m->env.has_sea, 1);
+    GE_CHECK_EQ_INT(m->env.sea_enabled, 1);
+    GE_CHECK(m->env.sea_height == -120.0f);
+    GE_CHECK_EQ_INT(m->env.has_chop, 0);
 }
 
 static void test_roundtrip(void)
@@ -117,11 +128,38 @@ static void test_levelrec(void)
     GE_CHECK(!levelrecParse(&bad, copy, sizeof(h)));
 }
 
+static void test_campaign(void)
+{
+    Campaign c, c2;
+    char err[128];
+    GE_CHECK(campaignParse("{\"format\":1,\"name\":\"Bunker stories\",\"author\":\"me\","
+                           "\"missions\":[\"bunker_remix\",\"dam_night\"],\"x\":2}", &c, err, sizeof(err)));
+    GE_CHECK_EQ_INT(c.nmissions, 2);
+    GE_CHECK_EQ_INT(c.unlock, CAMPAIGN_UNLOCK_ORDERED);
+    GE_CHECK_EQ_INT(c.affects, CAMPAIGN_AFFECTS_STORY);
+    GE_CHECK(campaignValidate(&c, err, sizeof(err)));
+    char *json = campaignToJson(&c);
+    GE_CHECK(campaignParse(json, &c2, err, sizeof(err)));
+    GE_CHECK(!strcmp(c2.missions[1], "dam_night"));
+    GE_CHECK(strstr(json, "\"x\"") != NULL);
+    free(json);
+    campaignFree(&c); campaignFree(&c2);
+    GE_CHECK(campaignParse("{\"format\":1,\"name\":\"x\",\"unlock\":\"open\",\"affects\":[\"story\",\"multiplayer\"],\"missions\":[\"../evil\"]}", &c, err, sizeof(err)));
+    GE_CHECK_EQ_INT(c.unlock, CAMPAIGN_UNLOCK_OPEN);
+    GE_CHECK_EQ_INT(c.affects, CAMPAIGN_AFFECTS_STORY | CAMPAIGN_AFFECTS_MULTIPLAYER);
+    GE_CHECK(!campaignValidate(&c, err, sizeof(err)));
+    campaignFree(&c);
+    GE_CHECK(campaignParse("{\"format\":1,\"name\":\"x\",\"missions\":[]}", &c, err, sizeof(err)));
+    GE_CHECK(!campaignValidate(&c, err, sizeof(err)));
+    campaignFree(&c);
+}
+
 int main(void)
 {
     GE_TEST_BEGIN("mission format");
     test_roundtrip();
     test_validate();
     test_levelrec();
+    test_campaign();
     return GE_TEST_END();
 }
