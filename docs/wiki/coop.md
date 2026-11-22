@@ -42,6 +42,8 @@ When co-op is off, `coopActive()` is 0 and every hook returns what the original 
 | `coopStageNumPlayers` | Stage start (`src/boss.c`) asks for the chosen 2 to 4 players. |
 | `coopAiTick` | A guard's AI tick runs with the nearest living player as "Bond". |
 | `coopSimOwner` | `chrTick` runs once per view (props tick inside the render loop): the simulation part runs for one view per frame only. |
+| `GE_SIM_OWNER` | The other views' `chrTick` pass restores the guard's `prevpos`, or the next waypoint arrival test sees no movement. |
+| `coopBodySlots` | One extra chr and animated-model slot per player: each keeps a body chr all mission, which solo's 10 spares do not count. |
 | `coopSpawnOffset` | Players 2..N spawn around the start pad, at distinct spots. |
 | `coopFrameTick` | Enemy health, down and revive. |
 | `coopPickupOp` / `coopPickupTaken` | Per-player copies of pickups. |

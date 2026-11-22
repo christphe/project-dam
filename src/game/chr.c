@@ -2481,12 +2481,21 @@ s32 chrTick(PropRecord *prop)
 #endif
     s32 headVisible;
     s32 tickamount;
+#ifdef PORT
+    coord3d savedprevpos;
+#endif
 
     renderdata = D_8002CC6C;
     chr = prop->chr;
     model = chr->model;
     headVisible = 1;
     tickamount = GE_SIM_TICKS(g_ClockTimer);
+#ifdef PORT
+    /* Co-op: chrTick runs once per view, the simulation in the first one only. chrUpdateAnim copies the position
+     * into prevpos even with tickamount 0, so the later view's pass set prevpos = pos after the move, and the next
+     * action tick's waypoint arrival test (chrlvIsArrivingLaterallyAtPos, prevpos -> pos) saw no movement. */
+    savedprevpos = chr->prevpos;
+#endif
 
 #ifdef PORT
     d193aSample(chr, model);
@@ -2672,6 +2681,12 @@ s32 chrTick(PropRecord *prop)
     }
 
 after_position_update:
+#ifdef PORT
+    if (!GE_SIM_OWNER())
+    {
+        chr->prevpos = savedprevpos;
+    }
+#endif
     if (((chr->actiontype != ACT_STAND) || (model->anim2 != NULL)) || (prop->type == PROP_TYPE_VIEWER))
     {
         chr->hidden |= CHRHIDDEN_BACKGROUND_AI;
