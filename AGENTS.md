@@ -59,7 +59,7 @@ docker compose build windows            # once: Dockerfile.windows (MinGW-w64)
 docker compose run --rm windows         # -> build-win/ge007.x86_64.exe + DLLs
 ```
 
-The Switch build is the reference: `.github/workflows/switch.yml` builds it in the same pinned devkitA64 image and is the only workflow that runs on this fork. Linux and Windows check that the PC port still compiles. SD-card layout, nxlink test builds and release packaging: `docs/building.md` §Nintendo Switch.
+The Switch build is the reference: `.github/workflows/ci.yml`, the only workflow on this fork, builds it in the same pinned devkitA64 image, plus the Windows zip, the Linux unit tests and the generated-file checks. SD-card layout, nxlink test builds and release packaging: `docs/building.md` §Nintendo Switch.
 
 A native Windows build (`./build-pc.sh ntsc-final` from the MSYS2 MINGW64 shell, upstream's reference) still works. Its three recurring failures, to check in this order:
 

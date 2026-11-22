@@ -71,6 +71,6 @@ SDL pad ──> InputSnapshot ──> strategy.map() ──> InputCommands ─�
   copy of the old inline mapping, so a behaviour change shows up as a failing case to update on
   purpose.
 - Build the Linux host target and run `ctest` (CI runs it in the `tests` job of
-  `switch.yml`), or run the test executables of the Windows build.
+  `ci.yml`), or run the test executables of the Windows build.
 - Rules of the move and traps: `docs/porting-notes.md` D54 (test binaries linking the core) and
   D55 (moving a style rule by rule).

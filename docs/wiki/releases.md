@@ -2,7 +2,7 @@
 title: Releases
 sources:
   - CHANGELOG.md
-  - .github/workflows/switch.yml
+  - .github/workflows/ci.yml
   - tools/switch/package_release.sh
   - docs/dev/RELEASE-GATE.md
 verified: 7d15f029
@@ -33,10 +33,12 @@ version number.
 
 ## What CI does with the tag
 
-`.github/workflows/switch.yml` runs on `project-dam-v*` tags: it builds the NRO in the pinned
-devkitA64 image, packages it (`tools/switch/package_release.sh <version> dist`) and creates the
-GitHub release with the zip, `project-dam.nro` and the changelog section as notes. The in-game
+`.github/workflows/ci.yml` runs on `project-dam-v*` tags: it builds the NRO in the pinned
+devkitA64 image and the Windows exe, packages them (`tools/switch/package_release.sh <version> dist`
+gives `project-dam-<version>-switch.zip`, `package_release_win.sh` the `-windows-x64` zip) and creates
+the GitHub release with both zips, `project-dam.nro` and the changelog section as notes. The in-game
 update (#76) looks for these releases.
 
-`ci.yml` and `selfhosted.yml` are upstream's desktop workflows; their release job only reacts to
-upstream's own `vX.Y.Z` tags.
+`ci.yml` replaced upstream's workflow of the same name (and `selfhosted.yml` is gone). GitHub keeps
+a workflow's disabled state by path, and upstream's `ci.yml` was disabled here: if CI does not run
+on `main`, `gh workflow enable CI --repo christphe/project-dam-nx`.

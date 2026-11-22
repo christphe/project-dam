@@ -162,9 +162,9 @@ For day-to-day work, `python tools/dev.py` wraps these builds and the runs that 
 
 #### Nintendo Switch
 
-`.github/workflows/switch.yml` runs the same build in the same pinned image on
-every push and pull request, and it is the only workflow that runs on this
-fork. A `project-dam-vX.Y.Z` tag also publishes a release.
+`.github/workflows/ci.yml` (the only workflow on this fork) runs the same build
+in the same pinned image on every push and pull request, next to the Windows zip,
+the unit tests and the generated-file checks; a docs-only change skips the builds. A `project-dam-vX.Y.Z` tag also publishes a release.
 
 - **SD card for a test install:** after the build, from the `shell` service,
   `tools/switch/make_sd.sh <rom.z64> [out_dir]` (default `build-switch/sd`)
@@ -233,7 +233,7 @@ and a null fast3d backend in `tests/platform/`):
 cmake --build <host build dir> && ctest --test-dir <host build dir> --output-on-failure
 ```
 
-The `tests` job of `.github/workflows/switch.yml` does exactly that on every
+The `tests` job of `.github/workflows/ci.yml` does exactly that on every
 push. `-DGE007_BUILD_TESTS=OFF` skips them; the Switch build never has them.
 `-DGE007_ROM_TESTS=ON` is the hook for tests that need the ROM (local only; the
 ROM is never in the repo, tests read its path from `GE007_ROM`); none exist yet.

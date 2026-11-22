@@ -4,7 +4,7 @@
 #   tools/switch/package_release.sh <version> [out_dir]
 #
 # Run from the repo root after the NRO is built (build-switch/). Produces
-# <out_dir>/project-dam-<version>.zip with:
+# <out_dir>/project-dam-<version>-switch.zip with:
 #
 #   switch/project-dam/project-dam.nro   copy switch/ to the root of the SD card
 #   README.txt, LICENSE, NOTICE
@@ -18,7 +18,8 @@ OUT="${2:-dist}"
 NRO=build-switch/ge007.aarch64.nro
 [ -f "$NRO" ] || { echo "error: $NRO missing; build the NRO first" >&2; exit 1; }
 
-STAGE="$OUT/project-dam-$VERSION"
+NAME="project-dam-$VERSION-switch"
+STAGE="$OUT/$NAME"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/switch/project-dam/data"
 
@@ -30,5 +31,5 @@ cp "$NRO" "$OUT/project-dam.nro"
 cp LICENSE NOTICE "$STAGE/"
 sed "s/@VERSION@/$VERSION/g" tools/switch/README-release.txt > "$STAGE/README.txt"
 
-(cd "$OUT" && rm -f "project-dam-$VERSION.zip" && zip -qr "project-dam-$VERSION.zip" "project-dam-$VERSION")
-echo "$OUT/project-dam-$VERSION.zip"
+(cd "$OUT" && rm -f "$NAME.zip" && zip -qr "$NAME.zip" "$NAME")
+echo "$OUT/$NAME.zip"
