@@ -250,6 +250,18 @@ static void append_str(char* buf, size_t* len, const char* str) {
     }
 }
 
+/* ES default float precision of the combiner programs. highp: the N64's sky quad (sky.c) sits at w ~ 7000, and
+ * its texture coordinates and fog went out of range at mediump (fp16 on Mali), drawing the original sky black.
+ * GE_ES_MEDIUMP=1 restores mediump for A/B. */
+static const char* gl_es_precision(void) {
+    static int mediump = -1;
+    if (mediump < 0) {
+        const char* e = getenv("GE_ES_MEDIUMP");
+        mediump = e && e[0] == '1';
+    }
+    return mediump ? "precision mediump float;" : "precision highp float;";
+}
+
 static void append_line(char* buf, size_t* len, const char* str) {
     while (*str != '\0') {
         buf[(*len)++] = *str++;
@@ -393,7 +405,7 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
     vs_len += sprintf(vs_buf + vs_len, "#version %s\n", water ? "460" : gl_glsl_version_str);
 
     if (gl_es) {
-        append_line(vs_buf, &vs_len, "precision mediump float;");
+        append_line(vs_buf, &vs_len, gl_es_precision());
     }
 
     if (gl_glsl_version >= 130 || water) {
@@ -519,7 +531,7 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
     fs_len += sprintf(fs_buf + fs_len, "#version %s\n", gl_glsl_version_str);
 
     if (gl_es) {
-        append_line(fs_buf, &fs_len, "precision mediump float;");
+        append_line(fs_buf, &fs_len, gl_es_precision());
     }
 
     if (gl_glsl_version >= 130) {
