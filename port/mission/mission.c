@@ -53,7 +53,7 @@ void missionFree(Mission *m)
 
 static const char *kKnownKeys[] = {
     "format", "name", "level", "description", "briefing", "pads", "zones",
-    "guards", "objects", "objectives", "scripts",
+    "guards", "objects", "objectives", "scripts", "environment",
 };
 
 static int getnum(const cJSON *o, const char *k, double def)
@@ -112,6 +112,57 @@ static void *allocarr(const cJSON *root, const char *k, size_t sz, int *n, const
     *arr = cJSON_GetObjectItemCaseSensitive(root, k);
     *n = cJSON_IsArray(*arr) ? cJSON_GetArraySize(*arr) : 0;
     return *n ? calloc((size_t)*n, sz) : NULL;
+}
+
+/* Reads an optional number / RGB array; returns 1 when present. */
+static int optf(const cJSON *o, const char *k, float *out)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, k);
+    if (!cJSON_IsNumber(v)) return 0;
+    *out = (float)v->valuedouble;
+    return 1;
+}
+
+static int optrgb(const cJSON *o, const char *k, float out[3])
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, k);
+    if (!cJSON_IsArray(v) || cJSON_GetArraySize(v) != 3) return 0;
+    getvec(o, k, out);
+    return 1;
+}
+
+static void parseenv(const cJSON *e, MissionEnv *env)
+{
+    memset(env, 0, sizeof(*env));
+    env->mood = MISSION_MOOD_KEEP;
+    if (!cJSON_IsObject(e)) return;
+    const char *mood = getstr(e, "mood");
+    if (mood && !strcmp(mood, "day")) env->mood = MISSION_MOOD_DAY;
+    else if (mood && !strcmp(mood, "dusk")) env->mood = MISSION_MOOD_DUSK;
+    else if (mood && !strcmp(mood, "night")) env->mood = MISSION_MOOD_NIGHT;
+    const cJSON *sun = cJSON_GetObjectItemCaseSensitive(e, "sun");
+    if (cJSON_IsObject(sun)) {
+        env->has_sun = 1;
+        env->sun_azimuth = getf(sun, "azimuth", 0);
+        env->sun_elevation = getf(sun, "elevation", 30);
+        env->sun_color[0] = env->sun_color[1] = env->sun_color[2] = 1;
+        optrgb(sun, "color", env->sun_color);
+        env->sun_glow = getf(sun, "glow", 0.4f);
+    }
+    env->has_sky = optrgb(e, "sky", env->sky);
+    env->has_clouds = optrgb(e, "clouds", env->clouds);
+    env->has_cloud_speed = optf(e, "cloud_speed", &env->cloud_speed);
+    const cJSON *sea = cJSON_GetObjectItemCaseSensitive(e, "sea");
+    if (cJSON_IsObject(sea)) {
+        const cJSON *en = cJSON_GetObjectItemCaseSensitive(sea, "enabled");
+        env->has_sea = 1;
+        env->sea_enabled = cJSON_IsBool(en) ? cJSON_IsTrue(en) : 1;
+        env->has_sea_height = optf(sea, "height", &env->sea_height);
+        env->has_sea_color = optrgb(sea, "color", env->sea_color);
+        env->has_swell = optf(sea, "swell", &env->swell);
+        env->has_chop = optf(sea, "chop", &env->chop);
+        env->has_speed = optf(sea, "speed", &env->speed);
+    }
 }
 
 int missionParse(const char *json, Mission *m, char *err, size_t errlen)
@@ -203,6 +254,8 @@ int missionParse(const char *json, Mission *m, char *err, size_t errlen)
             }
         }
     }
+
+    parseenv(cJSON_GetObjectItemCaseSensitive(root, "environment"), &m->env);
 
     /* Keep unknown top-level keys. */
     cJSON *extra = cJSON_CreateObject();
@@ -343,6 +396,32 @@ char *missionToJson(const Mission *m)
         }
         cJSON_AddItemToArray(a, o);
     }
+    const MissionEnv *env = &m->env;
+    if (env->mood != MISSION_MOOD_KEEP || env->has_sun || env->has_sky || env->has_clouds ||
+        env->has_cloud_speed || env->has_sea) {
+        cJSON *e = cJSON_AddObjectToObject(root, "environment");
+        static const char *moods[] = { "day", "dusk", "night" };
+        if (env->mood != MISSION_MOOD_KEEP) cJSON_AddStringToObject(e, "mood", moods[env->mood]);
+        if (env->has_sun) {
+            cJSON *s = cJSON_AddObjectToObject(e, "sun");
+            cJSON_AddNumberToObject(s, "azimuth", env->sun_azimuth);
+            cJSON_AddNumberToObject(s, "elevation", env->sun_elevation);
+            cJSON_AddItemToObject(s, "color", vec(env->sun_color));
+            cJSON_AddNumberToObject(s, "glow", env->sun_glow);
+        }
+        if (env->has_sky) cJSON_AddItemToObject(e, "sky", vec(env->sky));
+        if (env->has_clouds) cJSON_AddItemToObject(e, "clouds", vec(env->clouds));
+        if (env->has_cloud_speed) cJSON_AddNumberToObject(e, "cloud_speed", env->cloud_speed);
+        if (env->has_sea) {
+            cJSON *s = cJSON_AddObjectToObject(e, "sea");
+            cJSON_AddBoolToObject(s, "enabled", env->sea_enabled);
+            if (env->has_sea_height) cJSON_AddNumberToObject(s, "height", env->sea_height);
+            if (env->has_sea_color) cJSON_AddItemToObject(s, "color", vec(env->sea_color));
+            if (env->has_swell) cJSON_AddNumberToObject(s, "swell", env->swell);
+            if (env->has_chop) cJSON_AddNumberToObject(s, "chop", env->chop);
+            if (env->has_speed) cJSON_AddNumberToObject(s, "speed", env->speed);
+        }
+    }
     if (m->extra)
         for (cJSON *it = ((cJSON *)m->extra)->child; it; it = it->next)
             cJSON_AddItemToObject(root, it->string, cJSON_Duplicate(it, 1));
@@ -350,6 +429,151 @@ char *missionToJson(const Mission *m)
     char *out = cJSON_Print(root);
     cJSON_Delete(root);
     return out;
+}
+
+static int writefile(const char *path, char *json, char *err, size_t errlen)
+{
+    if (!json) { seterr(err, errlen, "out of memory", NULL); return 0; }
+    FILE *f = fopen(path, "wb");
+    if (!f) { free(json); seterr(err, errlen, "cannot write", path); return 0; }
+    size_t n = strlen(json);
+    int ok = fwrite(json, 1, n, f) == n;
+    ok &= fputc('\n', f) != EOF;
+    ok &= fclose(f) == 0;
+    free(json);
+    if (!ok) seterr(err, errlen, "write failed", path);
+    return ok;
+}
+
+static char *readfile(const char *path, char *err, size_t errlen)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) { seterr(err, errlen, "cannot open", path); return NULL; }
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = malloc(n > 0 ? (size_t)n + 1 : 1);
+    size_t got = buf ? fread(buf, 1, (size_t)n, f) : 0;
+    fclose(f);
+    if (!buf) { seterr(err, errlen, "out of memory", NULL); return NULL; }
+    buf[got] = 0;
+    return buf;
+}
+
+/* ---- campaign ------------------------------------------------------------- */
+
+void campaignInit(Campaign *c)
+{
+    memset(c, 0, sizeof(*c));
+    c->format = CAMPAIGN_FORMAT;
+}
+
+void campaignFree(Campaign *c)
+{
+    free(c->missions);
+    if (c->extra) cJSON_Delete((cJSON *)c->extra);
+    campaignInit(c);
+}
+
+static const char *kCampaignKeys[] = { "format", "name", "author", "description", "affects", "unlock", "missions" };
+
+int campaignParse(const char *json, Campaign *c, char *err, size_t errlen)
+{
+    campaignInit(c);
+    cJSON *root = cJSON_Parse(json);
+    if (!root || !cJSON_IsObject(root)) {
+        seterr(err, errlen, "not a JSON object", cJSON_GetErrorPtr());
+        cJSON_Delete(root);
+        return 0;
+    }
+    c->format = getnum(root, "format", 0);
+    if (c->format != CAMPAIGN_FORMAT) {
+        seterr(err, errlen, "unsupported campaign format", NULL);
+        cJSON_Delete(root);
+        return 0;
+    }
+    copystr(c->name, sizeof(c->name), getstr(root, "name"));
+    copystr(c->author, sizeof(c->author), getstr(root, "author"));
+    copystr(c->description, sizeof(c->description), getstr(root, "description"));
+    const char *unlock = getstr(root, "unlock");
+    c->unlock = unlock && !strcmp(unlock, "open") ? CAMPAIGN_UNLOCK_OPEN : CAMPAIGN_UNLOCK_ORDERED;
+    const cJSON *aff = cJSON_GetObjectItemCaseSensitive(root, "affects"), *e;
+    c->affects = 0;
+    cJSON_ArrayForEach(e, aff) {
+        if (!cJSON_IsString(e)) continue;
+        if (!strcmp(e->valuestring, "story")) c->affects |= CAMPAIGN_AFFECTS_STORY;
+        if (!strcmp(e->valuestring, "multiplayer")) c->affects |= CAMPAIGN_AFFECTS_MULTIPLAYER;
+    }
+    if (!c->affects) c->affects = CAMPAIGN_AFFECTS_STORY;
+    const cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "missions");
+    int n = cJSON_IsArray(arr) ? cJSON_GetArraySize(arr) : 0;
+    if (n) c->missions = calloc((size_t)n, MISSION_ID_LEN);
+    cJSON_ArrayForEach(e, arr)
+        if (cJSON_IsString(e)) copystr(c->missions[c->nmissions++], MISSION_ID_LEN, e->valuestring);
+
+    cJSON *extra = cJSON_CreateObject();
+    cJSON *it = root->child;
+    while (it) {
+        cJSON *next = it->next;
+        int known = 0;
+        for (size_t k = 0; k < sizeof(kCampaignKeys) / sizeof(kCampaignKeys[0]); k++)
+            if (it->string && !strcmp(it->string, kCampaignKeys[k])) known = 1;
+        if (!known) cJSON_AddItemToObject(extra, it->string, cJSON_DetachItemViaPointer(root, it));
+        it = next;
+    }
+    c->extra = extra;
+    cJSON_Delete(root);
+    return 1;
+}
+
+int campaignLoadFile(const char *path, Campaign *out, char *err, size_t errlen)
+{
+    char *buf = readfile(path, err, errlen);
+    if (!buf) { campaignInit(out); return 0; }
+    int ok = campaignParse(buf, out, err, errlen);
+    free(buf);
+    return ok;
+}
+
+char *campaignToJson(const Campaign *c)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "format", CAMPAIGN_FORMAT);
+    cJSON_AddStringToObject(root, "name", c->name);
+    cJSON_AddStringToObject(root, "author", c->author);
+    cJSON_AddStringToObject(root, "description", c->description);
+    cJSON *aff = cJSON_AddArrayToObject(root, "affects");
+    if (c->affects & CAMPAIGN_AFFECTS_STORY) cJSON_AddItemToArray(aff, cJSON_CreateString("story"));
+    if (c->affects & CAMPAIGN_AFFECTS_MULTIPLAYER) cJSON_AddItemToArray(aff, cJSON_CreateString("multiplayer"));
+    cJSON_AddStringToObject(root, "unlock", c->unlock == CAMPAIGN_UNLOCK_OPEN ? "open" : "ordered");
+    cJSON *a = cJSON_AddArrayToObject(root, "missions");
+    for (int i = 0; i < c->nmissions; i++) cJSON_AddItemToArray(a, cJSON_CreateString(c->missions[i]));
+    if (c->extra)
+        for (cJSON *it = ((cJSON *)c->extra)->child; it; it = it->next)
+            cJSON_AddItemToObject(root, it->string, cJSON_Duplicate(it, 1));
+    char *out = cJSON_Print(root);
+    cJSON_Delete(root);
+    return out;
+}
+
+int campaignSaveFile(const char *path, const Campaign *c, char *err, size_t errlen)
+{
+    return writefile(path, campaignToJson(c), err, errlen);
+}
+
+int campaignValidate(const Campaign *c, char *err, size_t errlen)
+{
+    if (c->format != CAMPAIGN_FORMAT) { seterr(err, errlen, "unsupported campaign format", NULL); return 0; }
+    if (!c->name[0]) { seterr(err, errlen, "campaign has no name", NULL); return 0; }
+    if (c->nmissions == 0) { seterr(err, errlen, "campaign has no mission", NULL); return 0; }
+    for (int i = 0; i < c->nmissions; i++) {
+        const char *d = c->missions[i];
+        if (!d[0] || strchr(d, '/') || strchr(d, '\\') || strstr(d, ".."))
+            { seterr(err, errlen, "bad mission folder name", d); return 0; }
+        for (int j = 0; j < i; j++)
+            if (!strcmp(d, c->missions[j])) { seterr(err, errlen, "mission listed twice", d); return 0; }
+    }
+    return 1;
 }
 
 int missionSaveFile(const char *path, const Mission *m, char *err, size_t errlen)

@@ -10,9 +10,33 @@
  * item id, model id). Only this file and the mission's own Luau scripts are
  * ever shared between people.
  *
- * On disk: <missions dir>/<name>/mission.json + <name>/scripts/*.luau
- * (<missions dir> = <data dir>/missions, sdmc:/switch/project-dam/missions
- * on the Switch).
+ * A mod IS a campaign: an ordered list of missions. The player picks the mod
+ * on the game's main screen (port row, D960 pattern; "GoldenEye" = no mod);
+ * after that the game's OWN menus are filled with the mod's content: the
+ * mission select shows the mod's missions (names, thumb.png images, unlock
+ * state) in place of the original ones, then the normal difficulty and
+ * briefing screens (the mission's briefing text and objectives). No extra
+ * screens. There is no mission outside a campaign. On disk, next to data/
+ * (sdmc:/switch/project-dam/mods/ on the Switch):
+ *   mods/<mod>/campaign.json          the campaign (format below)
+ *   mods/<mod>/scripts/*.luau         the mod's own scripts, usable by all its missions
+ *   mods/<mod>/<mission>/mission.json one mission
+ *   mods/<mod>/<mission>/thumb.png    its image in the mission grid, 4:3
+ *                                     (the editor's Capture button, 320x240)
+ * Progress (unlocked missions, difficulties completed) is the player's, not
+ * the mod's: <save dir>/mods/<mod>.json, never inside the mod folder.
+ *
+ * campaign.json, format 1:
+ * {
+ *   "format": 1,
+ *   "name": "Bunker stories",
+ *   "author": "display name",
+ *   "description": "text for the mod list",
+ *   "affects": ["story"],         what the mod replaces: "story" (the solo/co-op mission select)
+ *                                 and/or "multiplayer"; shown on the mod chooser
+ *   "unlock": "ordered",          "ordered" (as the game: mission n+1 opens when n is completed) | "open"
+ *   "missions": [ "bunker_remix", "dam_night" ]   mission folder names, in campaign order
+ * }
  *
  * mission.json, format 1:
  * {
@@ -36,6 +60,14 @@
  *     { "op": "remove", "prop": 41 }
  *   ],
  *   "objectives": [ { "id": "o1", "text": "Find the key", "difficulty": 0 } ],
+ *   "environment": {                              optional; every key optional, absent = the level's own
+ *     "mood": "dusk",                             "day" | "dusk" | "night" (sun glow, stars, moon)
+ *     "sun": { "azimuth": 120, "elevation": 12, "color": [1, 0.8, 0.6], "glow": 0.6 },   degrees
+ *     "sky": [0.55, 0.62, 0.7], "clouds": [0.9, 0.9, 0.95], "cloud_speed": 1.0,
+ *     "sea": { "enabled": true, "height": -120, "color": [0.1, 0.3, 0.35],
+ *              "swell": 1.0, "chop": 0.5, "speed": 1.0 }
+ *   },                                            colours 0..1; applied port-side (skyplus.c and the
+ *                                                 level's env record copy); fog distance is not here
  *   "scripts": [
  *     { "use": "key_door", "target": { "kind": "prop", "prop": 52 },
  *       "props": { "key": 33, "message": "Locked" } }
@@ -130,8 +162,26 @@ typedef struct MissionScript {
     MissionProp *props; int nprops;
 } MissionScript;
 
+typedef enum MissionMood { MISSION_MOOD_KEEP = -1, MISSION_MOOD_DAY, MISSION_MOOD_DUSK, MISSION_MOOD_NIGHT } MissionMood;
+
+/* environment: each has_* flag says the key was present (0 = keep the level's). */
+typedef struct MissionEnv {
+    MissionMood mood;
+    int has_sun;    float sun_azimuth, sun_elevation, sun_color[3], sun_glow;
+    int has_sky;    float sky[3];
+    int has_clouds; float clouds[3];
+    int has_cloud_speed; float cloud_speed;
+    int has_sea;    int sea_enabled;      /* "sea" present: sea_enabled from "enabled" (default 1) */
+    int has_sea_height; float sea_height;
+    int has_sea_color;  float sea_color[3];
+    int has_swell;  float swell;
+    int has_chop;   float chop;
+    int has_speed;  float speed;
+} MissionEnv;
+
 typedef struct Mission {
     int format;
+    MissionEnv env;
     char name[MISSION_TEXT_LEN];
     char level[MISSION_ID_LEN];
     char description[MISSION_TEXT_LEN];
@@ -159,6 +209,35 @@ int  missionValidate(const Mission *m, char *err, size_t errlen);
 
 /* Solo level name -> the -level_XX stage number (e.g. "bunker1" -> 9), -1 if unknown. */
 int  missionLevelNumber(const char *name);
+
+/* ---- campaign.json (a mod) ---- */
+#define CAMPAIGN_FORMAT 1
+
+#define CAMPAIGN_AFFECTS_STORY       1
+#define CAMPAIGN_AFFECTS_MULTIPLAYER 2
+
+typedef enum CampaignUnlock { CAMPAIGN_UNLOCK_ORDERED, CAMPAIGN_UNLOCK_OPEN } CampaignUnlock;
+
+typedef struct Campaign {
+    int format;
+    char name[MISSION_TEXT_LEN];
+    char author[MISSION_TEXT_LEN];
+    char description[MISSION_TEXT_LEN];
+    CampaignUnlock unlock;
+    int affects;                        /* CAMPAIGN_AFFECTS_* bits; default story */
+    char (*missions)[MISSION_ID_LEN];  /* mission folder names, in order */
+    int nmissions;
+    void *extra;                        /* cJSON* of unknown top-level keys (owned) */
+} Campaign;
+
+void  campaignInit(Campaign *c);
+void  campaignFree(Campaign *c);
+int   campaignParse(const char *json, Campaign *out, char *err, size_t errlen);
+int   campaignLoadFile(const char *path, Campaign *out, char *err, size_t errlen);
+char *campaignToJson(const Campaign *c);
+int   campaignSaveFile(const char *path, const Campaign *c, char *err, size_t errlen);
+/* name set, at least one mission, folder names non-empty, unique, no '/', '\\' or "..". */
+int   campaignValidate(const Campaign *c, char *err, size_t errlen);
 
 #ifdef __cplusplus
 }
