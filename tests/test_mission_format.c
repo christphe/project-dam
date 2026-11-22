@@ -132,7 +132,7 @@ static void test_campaign(void)
 {
     Campaign c, c2;
     char err[128];
-    GE_CHECK(campaignParse("{\"format\":1,\"name\":\"Bunker stories\",\"author\":\"me\","
+    GE_CHECK(campaignParse("{\"format\":1,\"id\":\"3f0c9a52-7d41-4b1e-9a0e-2c6f5b8d1e47\",\"name\":\"Bunker stories\",\"author\":\"me\","
                            "\"missions\":[\"bunker_remix\",\"dam_night\"],\"x\":2}", &c, err, sizeof(err)));
     GE_CHECK_EQ_INT(c.nmissions, 2);
     GE_CHECK_EQ_INT(c.unlock, CAMPAIGN_UNLOCK_ORDERED);
@@ -141,6 +141,7 @@ static void test_campaign(void)
     char *json = campaignToJson(&c);
     GE_CHECK(campaignParse(json, &c2, err, sizeof(err)));
     GE_CHECK(!strcmp(c2.missions[1], "dam_night"));
+    GE_CHECK(!strcmp(c2.id, "3f0c9a52-7d41-4b1e-9a0e-2c6f5b8d1e47"));
     GE_CHECK(strstr(json, "\"x\"") != NULL);
     free(json);
     campaignFree(&c); campaignFree(&c2);
@@ -148,6 +149,9 @@ static void test_campaign(void)
     GE_CHECK_EQ_INT(c.unlock, CAMPAIGN_UNLOCK_OPEN);
     GE_CHECK_EQ_INT(c.affects, CAMPAIGN_AFFECTS_STORY | CAMPAIGN_AFFECTS_MULTIPLAYER);
     GE_CHECK(!campaignValidate(&c, err, sizeof(err)));
+    campaignFree(&c);
+    GE_CHECK(campaignParse("{\"format\":1,\"name\":\"x\",\"missions\":[\"a\"]}", &c, err, sizeof(err)));
+    GE_CHECK(!campaignValidate(&c, err, sizeof(err)));   /* no id */
     campaignFree(&c);
     GE_CHECK(campaignParse("{\"format\":1,\"name\":\"x\",\"missions\":[]}", &c, err, sizeof(err)));
     GE_CHECK(!campaignValidate(&c, err, sizeof(err)));

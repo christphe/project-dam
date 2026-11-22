@@ -23,12 +23,18 @@
  *   mods/<mod>/<mission>/mission.json one mission
  *   mods/<mod>/<mission>/thumb.png    its image in the mission grid, 4:3
  *                                     (the editor's Capture button, 320x240)
- * Progress (unlocked missions, difficulties completed) is the player's, not
- * the mod's: <save dir>/mods/<mod>.json, never inside the mod folder.
+ * Progress is the game's own save, per mod: while a mod is selected the port
+ * points the game's EEPROM file at <save dir>/mods/<id>.eep instead of
+ * ge007.eep, so the game's own save code, folders, unlocks and best times
+ * work unchanged and the original campaign save is never written. <id> is
+ * the campaign's "id" (a UUID made by the editor when the mod is created),
+ * so renaming the mod folder keeps the progress. A mod has at most as many
+ * missions as the original campaign's mission select.
  *
  * campaign.json, format 1:
  * {
  *   "format": 1,
+ *   "id": "3f0c9a52-7d41-4b1e-9a0e-2c6f5b8d1e47",   UUID, set once by the editor; the save key
  *   "name": "Bunker stories",
  *   "author": "display name",
  *   "description": "text for the mod list",
@@ -37,6 +43,8 @@
  *   "unlock": "ordered",          "ordered" (as the game: mission n+1 opens when n is completed) | "open"
  *   "missions": [ "bunker_remix", "dam_night" ]   mission folder names, in campaign order
  * }
+ * thumb.png is the editor's Capture with its "old photo" look baked in; the
+ * game shows it as the mission's image in the mission select.
  *
  * mission.json, format 1:
  * {
@@ -218,8 +226,12 @@ int  missionLevelNumber(const char *name);
 
 typedef enum CampaignUnlock { CAMPAIGN_UNLOCK_ORDERED, CAMPAIGN_UNLOCK_OPEN } CampaignUnlock;
 
+#define CAMPAIGN_ID_LEN 64
+#define CAMPAIGN_MAX_MISSIONS 20
+
 typedef struct Campaign {
     int format;
+    char id[CAMPAIGN_ID_LEN];           /* UUID; empty in a hand-written file: campaignValidate fails */
     char name[MISSION_TEXT_LEN];
     char author[MISSION_TEXT_LEN];
     char description[MISSION_TEXT_LEN];

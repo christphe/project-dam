@@ -475,7 +475,7 @@ void campaignFree(Campaign *c)
     campaignInit(c);
 }
 
-static const char *kCampaignKeys[] = { "format", "name", "author", "description", "affects", "unlock", "missions" };
+static const char *kCampaignKeys[] = { "format", "id", "name", "author", "description", "affects", "unlock", "missions" };
 
 int campaignParse(const char *json, Campaign *c, char *err, size_t errlen)
 {
@@ -492,6 +492,7 @@ int campaignParse(const char *json, Campaign *c, char *err, size_t errlen)
         cJSON_Delete(root);
         return 0;
     }
+    copystr(c->id, sizeof(c->id), getstr(root, "id"));
     copystr(c->name, sizeof(c->name), getstr(root, "name"));
     copystr(c->author, sizeof(c->author), getstr(root, "author"));
     copystr(c->description, sizeof(c->description), getstr(root, "description"));
@@ -539,6 +540,7 @@ char *campaignToJson(const Campaign *c)
 {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "format", CAMPAIGN_FORMAT);
+    cJSON_AddStringToObject(root, "id", c->id);
     cJSON_AddStringToObject(root, "name", c->name);
     cJSON_AddStringToObject(root, "author", c->author);
     cJSON_AddStringToObject(root, "description", c->description);
@@ -561,11 +563,26 @@ int campaignSaveFile(const char *path, const Campaign *c, char *err, size_t errl
     return writefile(path, campaignToJson(c), err, errlen);
 }
 
+static int uuidok(const char *s)
+{
+    static const int dash[] = { 8, 13, 18, 23 };
+    if (strlen(s) != 36) return 0;
+    for (int i = 0; i < 36; i++) {
+        int isdash = i == dash[0] || i == dash[1] || i == dash[2] || i == dash[3];
+        char ch = s[i];
+        if (isdash ? ch != '-' : !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')))
+            return 0;
+    }
+    return 1;
+}
+
 int campaignValidate(const Campaign *c, char *err, size_t errlen)
 {
     if (c->format != CAMPAIGN_FORMAT) { seterr(err, errlen, "unsupported campaign format", NULL); return 0; }
+    if (!uuidok(c->id)) { seterr(err, errlen, "campaign id is not a UUID", c->id); return 0; }
     if (!c->name[0]) { seterr(err, errlen, "campaign has no name", NULL); return 0; }
     if (c->nmissions == 0) { seterr(err, errlen, "campaign has no mission", NULL); return 0; }
+    if (c->nmissions > CAMPAIGN_MAX_MISSIONS) { seterr(err, errlen, "too many missions (max 20)", NULL); return 0; }
     for (int i = 0; i < c->nmissions; i++) {
         const char *d = c->missions[i];
         if (!d[0] || strchr(d, '/') || strchr(d, '\\') || strstr(d, ".."))
