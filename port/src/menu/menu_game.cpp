@@ -9,6 +9,7 @@
  * the right one on a Switch pad, as on each console. */
 #include <PR/gbi.h>
 #include <SDL.h>
+#include "sdl_compat.h"   /* SDL_GetTicks64 on SDL < 2.0.18 */
 #include "../../third_party/imgui/imgui.h"
 #include "../../fast3d/gfx_api.h"
 #include "../../fast3d/gfx_ui.h"

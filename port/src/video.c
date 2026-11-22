@@ -885,7 +885,7 @@ static void videoMigrateDefaults(void)
  * the driver, so it is not repeated and the cautious result (quarter sky, no A2C, 2x MSAA at most) is applied instead.
  * GE_GPUPROBE=0 disables it, =1 runs it again and applies the result over the current values (testing);
  * GE_GPUPROBE_HIDDEN=1 runs it without showing it. */
-#define GPUPROBE_HOLD_MS 200      /* the summary stays on screen this long: the whole probe stays near 1.1 s on the H700 */
+#define GPUPROBE_HOLD_MS 200      /* the summary stays on screen this long: the whole probe stays near 1.1 s on a Mali-G31 handheld */
 #define GPUPROBE_MSAA_DEFAULT 4   /* Video.MSAA's default (defaults.json "pc"): below this the player or a preset chose it */
 static int s_probeOnGl = 0;       /* this session runs on GL only for the first-launch probe (renderer setting is Vulkan) */
 

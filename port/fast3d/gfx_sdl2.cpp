@@ -399,7 +399,7 @@ static void gfx_sdl_init(const struct GfxWindowInitSettings *set) {
 #endif
 #ifndef __SWITCH__
     // Console mode off the Switch (portIsConsole: GE_CONSOLE=1 / System.Console,
-    // e.g. an H700 handheld on muOS, fbdev + libmali): the window IS the panel.
+    // e.g. an arm64 handheld on muOS, fbdev + libmali): the window IS the panel.
     // Without this the 85%/4:3 auto size clamps to 640x480 and the picture is
     // pillarboxed on the 720x480 panel. Always the full desktop size, always fullscreen.
     if (portIsConsole()) {

@@ -64,7 +64,7 @@ option's position or its `value` in `menu.json`.
 | `Game.AimStop` | 1 | 1 | Input > Aiming > Stop on aim |
 | `Game.AimZoom` | 2 | — | Input > Aiming > Aim zoom (handheld) |
 | `Game.AllUnlocked` | 0 | 0 | Game > Gameplay > All unlocked |
-| `Game.BloodOnHit` | 1 | 1 | Video > Effects > Blood on hit |
+| `Game.BloodOnHit` | 1 | 0 | Video > Effects > Blood on hit |
 | `Game.CheckUpdates` | 0 | 0 | Game > Updates > Check for updates at start |
 | `Game.CoopEnemyHealth` | 1 | 1 | Game > Gameplay > Co-op enemy health |
 | `Game.HudScale` | 100 | 100 | Game > Screen > HUD scale |
@@ -125,7 +125,7 @@ option's position or its `value` in `menu.json`.
 | `Video.Fullscreen` | 0 | 0 | Video > Display > Fullscreen |
 | `Video.FullscreenMode` | 0 | 0 | Video > Display > Fullscreen mode |
 | `Video.LodDistance` | 200 | 200 | Video > Performance > LOD distance |
-| `Video.MSAA` | 4 | 4 | Video > Performance > Anti-aliasing (docked on the Switch) |
+| `Video.MSAA` | 4 | 2 | Video > Performance > Anti-aliasing (docked on the Switch) |
 | `Video.MSAAHandheld` | 2 | — | Video > Performance > Anti-aliasing (handheld) |
 | `Video.PerPixelFog` | 1 | 1 | Video > Performance > Per-pixel fog |
 | `Video.SafeAreaCrop` | 1 | 1 | Video > Display > Crop overscan |

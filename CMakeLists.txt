@@ -609,20 +609,24 @@ configure_file(
   "${CMAKE_SOURCE_DIR}/port/include/realzlib.h.in"
   "${CMAKE_BINARY_DIR}/port/include/realzlib.h" @ONLY)
 
-# project-dam: Allwinner H700 handhelds under muOS (Dockerfile.h700). The
+# project-dam: Linux arm64 handhelds (PortMaster; Dockerfile.arm64). The
 # firmware has only the libmali GLES blob and no libGL; glad resolves every GL
 # entry point through SDL_GL_GetProcAddress, so nothing GL is linked.
-option(GE_H700 "Linux aarch64 build for H700 handhelds (muOS): GLES, no libGL" OFF)
-if(GE_H700)
-  add_compile_definitions(GE_H700=1)
+option(GE_ARM64 "Linux arm64 build for PortMaster handhelds: GLES, no libGL" OFF)
+if(GE_ARM64)
+  add_compile_definitions(GE_ARM64=1)
 endif()
 
 if(GE_SWITCH)
   # goldeneye-nx hook: GL comes from mesa through SDL2::SDL2's link interface.
   set(GL_LIBRARY "")
   set(EXTRA_LIBRARIES stdc++)
-elseif(GE_H700)
+elseif(GE_ARM64)
   set(GL_LIBRARY "")
+  # The C++ runtime goes into the binary (like MinGW): an explicit -lstdc++
+  # would pull the shared one, and older firmwares ship an older libstdc++
+  # than the build's GCC 10 (GLIBCXX_3.4.28).
+  set(EXTRA_LIBRARIES -static-libstdc++ -static-libgcc m dl pthread)
 elseif(NOT GL_LIBRARY)
   if(WIN32)
     set(GL_LIBRARY opengl32)

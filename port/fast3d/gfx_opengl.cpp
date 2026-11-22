@@ -2349,7 +2349,7 @@ extern "C" void gfx_opengl_fxaa_pass(int src_fb_id) {
     }
     Framebuffer& src = framebuffers[src_fb_id];
     if (!s_fxaa_prog) {
-        /* Desktop GL: 330 core. ES (the Mali blob of H700 handhelds): the context's own
+        /* Desktop GL: 330 core. ES (the Mali blob of arm64 handhelds): the context's own
          * "300 es" + a default float precision, as the sky pass does; a 330 core
          * vertex shader fails to link there and the pass drew nothing (black screen). */
         char head[64];

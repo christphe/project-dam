@@ -75,6 +75,7 @@
 #include <string.h>
 
 #include <SDL.h>
+#include "sdl_compat.h"   /* names newer than the arm64 build's SDL 2.0.12 */
 
 #include "platform.h"
 #include "system.h"
