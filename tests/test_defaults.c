@@ -24,12 +24,13 @@ static void tables(void)
 
 static void values(void)
 {
-    /* Values the console build relies on, and the one place Switch and PC differ on purpose. */
+    /* Values the console build relies on, and a place Switch and PC differ on purpose. */
     static const struct { const char *key; double sw, pc; } t[] = {
         { "Game.CheckUpdates", 0, 0 },    /* the update check is opt-in */
         { "Game.AllUnlocked",  0, 0 },
         { "Audio.MasterVolume", 100, 100 },
-        { "Input.AimMode",     1, 0 },
+        { "Input.AimMode",     1, 1 },      /* Centered everywhere */
+        { "Input.PadTriggerPct", 10, 25 },  /* the Switch-tuned trigger point */
     };
     for (unsigned i = 0; i < sizeof t / sizeof t[0]; i++) {
         double v = -1;
@@ -42,8 +43,8 @@ static void values(void)
     GE_CHECK(0);   /* the tests never build for the Switch */
 #else
     double v = -1;
-    GE_CHECK(defaultsGet("Input.AimMode", &v));   /* defaultsGet = this platform's table (PC) */
-    GE_CHECK(v == 0);
+    GE_CHECK(defaultsGet("Input.PadTriggerPct", &v));   /* defaultsGet = this platform's table (PC) */
+    GE_CHECK(v == 25);
 #endif
 }
 
