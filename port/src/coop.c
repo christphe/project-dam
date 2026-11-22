@@ -23,7 +23,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
-#include <time.h>
 
 #include <ultra64.h>
 #include "game/chr.h"
@@ -583,18 +582,6 @@ static int coopChooseTarget(struct ChrRecord *chr, int save)
         s_stick[slot].chr = chr;
         s_stick[slot].player = chosen;
     }
-    if (chosen != prev) {
-        static double last = 0.0;
-        struct timespec ts;
-        double now;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
-        if (now - last >= 1.0) {
-            last = now;
-            sysLogPrintf(LOG_NOTE, "coop: chr %d (body %d%s) now follows / targets player %d (was %d)", (int)chr->chrnum,
-                         (int)chr->bodynum, coopIsEscort(chr) ? ", escort" : "", chosen, prev);
-        }
-    }
     return chosen;
 }
 
@@ -1014,25 +1001,11 @@ s32 coopAnyCopiedGoldenEye(void)
     return 0;
 }
 
-/*
- * NPC shots at a player (chraction.c chrlvUpdateShotbondsum -> GE_NPC_HURT): logged, at most one line per second,
- * so a console log shows who hurts whom: "coop: player N hurt by chr C body B ailist P offset O weapon W attacktype T dmg D".
- */
+/* NPC shots at a player (chraction.c chrlvUpdateShotbondsum -> GE_NPC_HURT). */
 void coopNpcHurt(struct ChrRecord *chr, f32 damage, f32 subroty, s32 item)
 {
-    if (s_active) {
-        static double last = 0.0;
-        struct timespec ts;
-        double now;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
-        if (now - last >= 1.0) {
-            last = now;
-            sysLogPrintf(LOG_NOTE, "coop: player %d hurt by chr %d body %d ailist %p offset %d weapon %d attacktype %d dmg %.3f",
-                         get_cur_playernum(), (int)chr->chrnum, (int)chr->bodynum, (void *)chr->ailist, (int)chr->aioffset, (int)item,
-                         chr->actiontype == ACT_ATTACK ? (int)chr->act_attack.attacktype : -1, (double)damage);
-        }
-    }
+    (void)chr;
+    (void)item;
     bondviewCallRecordDamageKills(damage, subroty, -1, 1);
 }
 
@@ -1123,7 +1096,6 @@ s32 coopPickupOp(struct PropRecord *prop, s32 op)
     struct CoopTaken *e;
     int cur;
     unsigned all;
-    char what[40];
     if (!s_active || op != TICKOP_FREE || getPlayerCount() < 2) {
         return op;
     }
@@ -1149,19 +1121,10 @@ s32 coopPickupOp(struct PropRecord *prop, s32 op)
         e->mask = 0;
     }
     e->mask |= 1u << cur;
-    switch (obj->type) {
-        case PROPDEF_COLLECTABLE: snprintf(what, sizeof(what), "weapon %d", (int)((struct WeaponObjRecord *)obj)->weaponnum); break;
-        case PROPDEF_MAGAZINE:    snprintf(what, sizeof(what), "ammo crate type %d", (int)((struct AmmoCrateRecord *)obj)->ammoType); break;
-        case PROPDEF_AMMO:        snprintf(what, sizeof(what), "ammo box"); break;
-        case PROPDEF_ARMOUR:      snprintf(what, sizeof(what), "body armour %d", (int)((struct BodyArmourRecord *)obj)->amount); break;
-        default:                  snprintf(what, sizeof(what), "object type %d", (int)obj->type); break;
-    }
     if ((e->mask & all) == all) {
-        sysLogPrintf(LOG_NOTE, "coop: player %d took %s @%p (all players took it -> removed)", cur, what, (void *)prop);
         *e = s_taken[--s_nTaken];   /* the prop is freed now: forget it */
         return op;
     }
-    sysLogPrintf(LOG_NOTE, "coop: player %d took %s @%p (others: still available)", cur, what, (void *)prop);
     return TICKOP_NONE;   /* keep the prop for the other players */
 }
 
@@ -1365,43 +1328,6 @@ static void coopMirrorFade(void)
 }
 
 /* src/game/lv.c, once per frame right after lvlSetMultipliersForDifficulty (which resets g_AiHealthModifier). */
-/* Permanent diagnostics: one "coop:" log line per CHANGE of a state the end-of-mission / pause logic depends on
- * (not per frame), so a hang leaves the last state reached in the log. */
-static void coopLogChanges(void)
-{
-    static int init = 0;
-    static s32 mission, cam, stopt, lock, mainstage, full, driver, od;
-    static s32 w[COOP_MAX_PLAYERS], dd[COOP_MAX_PLAYERS];
-    s32 nw[COOP_MAX_PLAYERS], nd[COOP_MAX_PLAYERS];
-    int i, same;
-    s32 nmission = (s32)get_mission_state(), ncam = (s32)bondviewGetCameraMode(), nstop = stop_time_flag;
-    s32 nlock = lvlGetControlsLockedFlag(), nmain = g_MainStageNum, nfull = coopFullPlayer(), ndriver = coopDriver();
-    s32 nod = (s32)objectiveIsAllComplete();
-    for (i = 0; i < COOP_MAX_PLAYERS; i++) {
-        nw[i] = g_playerPointers[i] ? (s32)g_playerPointers[i]->watch_animation_state : -1;
-        nd[i] = g_playerPointers[i] ? (s32)g_playerPointers[i]->bonddead : -1;
-    }
-    same = init && nmission == mission && ncam == cam && nstop == stopt && nlock == lock && nmain == mainstage &&
-           nfull == full && ndriver == driver && nod == od;
-    for (i = 0; i < COOP_MAX_PLAYERS && same; i++) {
-        same = nw[i] == w[i] && nd[i] == dd[i];
-    }
-    if (same) {
-        return;
-    }
-    sysLogPrintf(LOG_NOTE, "coop: state missionstate=%d cameramode=%d stop_time_flag=%d locked=%d mainstage=%d fullscreen=%d driver=%d "
-                           "watch=%d/%d/%d/%d dead=%d/%d/%d/%d scripted=%d objectives_complete=%d",
-                 (int)nmission, (int)ncam, (int)nstop, (int)nlock, (int)nmain, (int)nfull, (int)ndriver,
-                 (int)nw[0], (int)nw[1], (int)nw[2], (int)nw[3], (int)nd[0], (int)nd[1], (int)nd[2], (int)nd[3],
-                 gameScriptedCameraActive(), (int)nod);
-    init = 1;
-    mission = nmission; cam = ncam; stopt = nstop; lock = nlock; mainstage = nmain; full = nfull; driver = ndriver; od = nod;
-    for (i = 0; i < COOP_MAX_PLAYERS; i++) {
-        w[i] = nw[i];
-        dd[i] = nd[i];
-    }
-}
-
 void coopFrameTick(void)
 {
     static const f32 kBonus[3] = { 0.0f, 0.5f, 1.0f };   /* enemy health bonus per partner */
@@ -1411,7 +1337,6 @@ void coopFrameTick(void)
     if (s_cineDriver >= 0 && stop_time_flag == 0 && !gameScriptedCameraActive()) {
         s_cineDriver = -1;
     }
-    coopLogChanges();
     if (getPlayerCount() < 2) {
         return;
     }
