@@ -531,6 +531,7 @@ bool setData(const char* json, size_t len, std::string* err) {
             for (const Control& c : it.controls) g_model.byId[c.id] = &c;
     State fresh;
     fresh.pc = g_state.pc;
+    fresh.console = g_state.console;   /* set before setData (menu_game.cpp): a fresh State would show the window rows */
     fresh.dev = g_state.dev;
     fresh.reset(g_model);
     for (auto& kv : fresh.v) {   /* keep what was set */
