@@ -75,6 +75,21 @@ const double kPressFlash = 0.28;   /* seconds */
 std::string g_selId;         /* the select whose list is open, or "" */
 int g_ownerSeat = -1;
 float g_padUv[4] = { 0, 0, 0, 0 }, g_padAspect = 0;
+int g_padFam = -1;   /* setPadFamily: 0 Xbox, 1 PlayStation, 2 Nintendo; -1 = not told (the viewer): by platform */
+float g_iconUv[4][4];   /* setIconImage, kMenuIcon* order (menu_icons.h) */
+bool g_iconOk[4];
+bool padNin() { return g_padFam >= 0 ? g_padFam == 2 : !g_state.pc; }
+bool padPs() { return g_padFam == 1 && g_iconOk[0] && g_iconOk[1] && g_iconOk[2] && g_iconOk[3]; }
+/* the PlayStation icon at a face button's place, in Xbox names (a bottom, b right, x left, y top); -1 = none */
+int psIcon(const char* pos) {
+    if (!pos || !pos[0] || pos[1]) return -1;
+    switch (pos[0]) { case 'a': return 0; case 'b': return 1; case 'x': return 2; case 'y': return 3; default: return -1; }
+}
+void drawIcon(ImDrawList* dl, int k, ImVec2 c, float size, ImU32 col) {
+    const float h = size * 0.5f;
+    dl->AddImage((ImTextureID)(intptr_t)1, ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h),
+                 ImVec2(g_iconUv[k][0], g_iconUv[k][1]), ImVec2(g_iconUv[k][2], g_iconUv[k][3]), col);
+}
 /* how far a wheel notch scrolls an area that has nothing to select (the release text, a form of text only) */
 float wheelScrollStep(float wheel, float u) { return wheel * 6.0f * u; }
 
@@ -391,7 +406,7 @@ void drawDiagram(ImDrawList* dl, const Control& c, float x, float y, float w, fl
     /* PC draws an Xbox pad, the Switch a Pro Controller: same places, other names. A layout is written with Xbox names;
      * one that goes by letter ("_by" absent) puts a Nintendo letter where that letter is printed, one that goes by position
      * ("_by": "position") keeps the place. */
-    const bool nin = !g_state.pc;
+    const bool nin = padNin(), ps = padPs();
     auto byPos = L.find("_by");
     const bool positional = byPos != L.end() && byPos->second == "position";
     auto place = [&](const std::string& slot) -> std::string {   /* where a slot's button sits, in Xbox names */
@@ -406,6 +421,11 @@ void drawDiagram(ImDrawList* dl, const Control& c, float x, float y, float w, fl
     for (const auto& kv : L)
         if (kv.first != "_by") at_[place(kv.first)] = kv.second;
     auto nameAt = [&](const char* pos, const char* xbox) -> const char* {
+        if (ps) {   /* the face buttons are icons (psIcon); the shoulders have numbers */
+            static const char* const kPs[][2] = { { "lt", "L2" }, { "rt", "R2" }, { "lb", "L1" }, { "rb", "R1" } };
+            for (const auto& p : kPs) if (!strcmp(p[0], pos)) return p[1];
+            return xbox;
+        }
         if (!nin) return xbox;
         static const char* const kNin[][2] = { { "lt", "ZL" }, { "rt", "ZR" }, { "lb", "L" }, { "rb", "R" },
                                                { "y", "X" }, { "x", "Y" }, { "b", "A" }, { "a", "B" } };
@@ -415,8 +435,10 @@ void drawDiagram(ImDrawList* dl, const Control& c, float x, float y, float w, fl
     /* the letters printed on the face buttons */
     const struct { const char* pos; float fx, fy; } faces[4] = { { "y", .735f, .2226f }, { "x", .6566f, .3435f }, { "b", .8142f, .3435f }, { "a", .735f, .45f } };
     for (const auto& f : faces) {
+        const ImVec2 c0 = at(f.fx, f.fy);
+        if (ps) { drawIcon(dl, psIcon(f.pos), c0, 1.05f * u, kMut); continue; }
         const char* letter = nameAt(f.pos, f.pos[0] == 'y' ? "Y" : f.pos[0] == 'x' ? "X" : f.pos[0] == 'b' ? "B" : "A");
-        const ImVec2 c0 = at(f.fx, f.fy), ts = textSize(g_head, 1.15f * u, letter);
+        const ImVec2 ts = textSize(g_head, 1.15f * u, letter);
         text(dl, g_head, 1.15f * u, ImVec2(c0.x - ts.x * 0.5f, c0.y - ts.y * 0.5f), kMut, letter);
     }
     struct Lab { const char* slot; const char* name; bool left; ImVec2 to; };
@@ -432,9 +454,15 @@ void drawDiagram(ImDrawList* dl, const Control& c, float x, float y, float w, fl
     for (const Lab& lb : labs) {
         auto it = at_.find(lb.slot);
         if (it == at_.end() || it->second.empty()) continue;
-        const std::string t = std::string(nameAt(lb.slot, lb.name)) + ": " + tr(it->second);
+        const int icon = ps ? psIcon(lb.slot) : -1;   /* a face button on a PlayStation pad: its icon, then the action */
+        const std::string t = icon >= 0 ? tr(it->second) : std::string(nameAt(lb.slot, lb.name)) + ": " + tr(it->second);
         const float ry = y + 0.6f * u + (lb.left ? rowL++ : rowR++) * 2.9f * u;
-        if (lb.left) {
+        if (icon >= 0 && !lb.left) {   /* the face buttons are all on the right */
+            const float lx = px + pw + 3.0f * u;
+            drawIcon(dl, icon, ImVec2(lx + fs * 0.5f, ry + fs * 0.55f), fs, ink);
+            text(dl, g_body, fs, ImVec2(lx + fs * 1.4f, ry), ink, t.c_str());
+            dl->AddLine(ImVec2(lx - 0.4f * u, ry + fs * 0.55f), lb.to, line, 1.0f);
+        } else if (lb.left) {
             const ImVec2 ts = textSize(g_body, fs, t.c_str());
             const float lx = px - 3.0f * u;
             text(dl, g_body, fs, ImVec2(lx - ts.x, ry), ink, t.c_str());
@@ -548,6 +576,12 @@ bool setData(const char* json, size_t len, std::string* err) {
 
 void setOwner(int seat) { g_ownerSeat = seat; }
 
+void setIconImage(int icon, float u0, float v0, float u1, float v1) {
+    if (icon < 0 || icon >= 4) return;
+    g_iconUv[icon][0] = u0; g_iconUv[icon][1] = v0; g_iconUv[icon][2] = u1; g_iconUv[icon][3] = v1;
+    g_iconOk[icon] = true;
+}
+
 void setPadImage(float u0, float v0, float u1, float v1, float aspect) {
     g_padUv[0] = u0; g_padUv[1] = v0; g_padUv[2] = u1; g_padUv[3] = v1;
     g_padAspect = aspect;
@@ -625,6 +659,7 @@ void setPlatform(bool pc) {
     g_focus = -1;
 }
 void setConsole(bool console) { g_state.console = console; g_entry = 0; g_focus = -1; }
+void setPadFamily(int fam) { g_padFam = fam; }
 void setDev(bool dev) { g_state.dev = dev; g_entry = 0; g_focus = -1; }
 bool isPc() { return g_state.pc; }
 bool devOn() { return g_state.dev; }
@@ -636,10 +671,16 @@ void drawFooter(ImDrawList* dl, float W, float H, float footH, float u, const ch
     float x = 2.4f * u;
     for (int i = 0; i < n; i++) {
         const char* const* h = hints[i];
-        const ImVec2 ks = textSize(g_head, px, h[0]);
+        /* the keys are written with the confirm / cancel letters (A, B): a PlayStation pad shows its icons there */
+        const int icon = padPs() ? (!strcmp(h[0], "A") ? 0 : !strcmp(h[0], "B") ? 1 : -1) : -1;
+        const char* key = padPs() && !strcmp(h[0], "L / R") ? "L1 / R1" : h[0];
+        const ImVec2 ks = icon >= 0 ? ImVec2(px, px) : textSize(g_head, px, key);
         const float bw = ks.x + 1.2f * u;
         dl->AddRectFilled(ImVec2(x, cy - 0.3f * u), ImVec2(x + bw, cy + px + 0.3f * u), kInk, 0.0f);
-        text(dl, g_head, px, ImVec2(x + 0.6f * u, cy), IM_COL32(21, 22, 15, 255), h[0]);
+        if (icon >= 0)
+            drawIcon(dl, icon, ImVec2(x + bw * 0.5f, cy + px * 0.5f), px * 0.95f, IM_COL32(21, 22, 15, 255));
+        else
+            text(dl, g_head, px, ImVec2(x + 0.6f * u, cy), IM_COL32(21, 22, 15, 255), key);
         x += bw + 0.9f * u;
         const std::string label = tr(h[1]);
         text(dl, g_body, px, ImVec2(x, cy), kInk, label.c_str());

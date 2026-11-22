@@ -53,6 +53,9 @@ SDL pad ──> InputSnapshot ──> strategy.map() ──> InputCommands ─�
   the gadget cycle, the wheels in `wheel.c`) stays in the adapter.
 - **Buttons by label vs. by position:** `INB_A` is the button SDL calls A (bottom on an Xbox pad,
   right on a Nintendo pad). A style that goes by position resolves it with `InputSnapshot.family`.
+  The family comes from SDL's pad type (always Nintendo on the Switch); `GE_PADFAMILY=xbox|ps|nintendo`
+  forces it for a pad SDL cannot type, such as a handheld's built-in pad. The options menu follows the
+  same family: Nintendo letters, or the PlayStation icons (`port/src/menu/icons`, `tools_pc/gen_menuicons.py`).
 - **GameDirect (#78):** in Enhanced and Modern, the left stick's analog walk and strafe go
   straight into the game's movement through one `#ifdef PORT` hook in `src/game/bondview2.c`
   (signed off under rule #2), for every player in split screen. Buttons still reach the game as

@@ -700,6 +700,23 @@ static int padRumbleOn[MAX_PADS];
  * "A" on a Nintendo pad, so only shoulders/triggers/Back/Start differ there. */
 enum { PADFAM_XBOX = 0, PADFAM_PS = 1, PADFAM_NINTENDO = 2 };
 
+/* GE_PADFAMILY=xbox|ps|nintendo: the family of every pad, -1 = detect. D471
+ * made it a dev knob for headless screenshots (button names only); it now also
+ * sets the family Modern places its face buttons by, for pads SDL reports with
+ * an unknown type: a PortMaster handheld's built-in pad (muOS "Deeplay-keys")
+ * mapped by the letters of a Nintendo layout. The launcher exports it. */
+static int padFamilyOverride(void)
+{
+    static int ov = -2;
+    if (ov == -2) {
+        const char *e = getenv("GE_PADFAMILY");
+        ov = !e ? -1 : !SDL_strcasecmp(e, "ps") ? PADFAM_PS
+           : !SDL_strcasecmp(e, "nintendo") ? PADFAM_NINTENDO
+           : !SDL_strcasecmp(e, "xbox") ? PADFAM_XBOX : -1;
+    }
+    return ov;
+}
+
 static void padDetectFamily(int seat)
 {
 #ifdef __SWITCH__
@@ -708,6 +725,7 @@ static void padDetectFamily(int seat)
     padFamily[seat] = PADFAM_NINTENDO;
     return;
 #endif
+    if (padFamilyOverride() >= 0) { padFamily[seat] = (u8)padFamilyOverride(); return; }
     padFamily[seat] = PADFAM_XBOX;
 #if SDL_VERSION_ATLEAST(2, 0, 12)
     switch (SDL_GameControllerGetType(pads[seat])) {
@@ -2698,17 +2716,11 @@ int inputMenuPointerLive(void)
  * stage) would persist and the mouse UI would be unusable. Force the cursor
  * free + visible every poll; the normal reconcile resumes once the overlay
  * closes and the early-return no longer fires. */
-/* D471: family of a seat's pad (GE_PADFAMILY=xbox|ps|nintendo overrides,
- * a cached dev knob for headless screenshots). */
+/* D471: family of a seat's pad (GE_PADFAMILY overrides, see padFamilyOverride;
+ * it also holds with no pad open, for headless screenshots). */
 int inputPadFamily(int seat)
 {
-    static int ov = -2;
-    if (ov == -2) {
-        const char *e = getenv("GE_PADFAMILY");
-        ov = !e ? -1 : !SDL_strcasecmp(e, "ps") ? PADFAM_PS
-           : !SDL_strcasecmp(e, "nintendo") ? PADFAM_NINTENDO
-           : !SDL_strcasecmp(e, "xbox") ? PADFAM_XBOX : -1;
-    }
+    const int ov = padFamilyOverride();
     if (ov >= 0) return ov;
     return (seat >= 0 && seat < MAX_PADS && pads[seat]) ? padFamily[seat] : PADFAM_XBOX;
 }

@@ -19,6 +19,7 @@
 #include "menu_data.h"
 #include "menu_pad.h"
 #include "console.h"
+#include "menu_icons.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -30,6 +31,7 @@ int inputPadButton(int idx, SDL_GameControllerButton b);
 short inputPadAxis(int idx, SDL_GameControllerAxis a);
 int inputOverlayOwnerPad(void);
 int inputOverlayOwnerSeat(void);
+int inputPadFamily(int seat);
 int portDevMode(void);
 const char* portMenuLanguage(void);
 const char* sysResolvePath(const char* path);
@@ -72,6 +74,8 @@ static void buildAtlas() {
     ImGuiIO& io = ImGui::GetIO();
     menu::fontsBuild();
     const int padRect = io.Fonts->AddCustomRectRegular(kMenuPadW, kMenuPadH);   /* the gamepad drawing, in the same texture */
+    int iconRect[kMenuIconCount];   /* the PlayStation face-button icons, likewise */
+    for (int k = 0; k < kMenuIconCount; k++) iconRect[k] = io.Fonts->AddCustomRectRegular(kMenuIconSize, kMenuIconSize);
     unsigned char* px = nullptr;
     int w = 0, h = 0;
     io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
@@ -84,6 +88,18 @@ static void buildAtlas() {
             }
         menu::setPadImage((float)r->X / (float)w, (float)r->Y / (float)h, (float)(r->X + kMenuPadW) / (float)w,
                           (float)(r->Y + kMenuPadH) / (float)h, (float)kMenuPadW / (float)kMenuPadH);
+    }
+    for (int k = 0; k < kMenuIconCount; k++) {
+        const ImFontAtlasCustomRect* r = io.Fonts->GetCustomRectByIndex(iconRect[k]);
+        if (!r) continue;
+        for (int y = 0; y < kMenuIconSize; y++)
+            for (int x = 0; x < kMenuIconSize; x++) {
+                unsigned char* d = px + ((size_t)(r->Y + y) * (size_t)w + (size_t)(r->X + x)) * 4;
+                d[0] = d[1] = d[2] = 255;
+                d[3] = kMenuIcons[k][y * kMenuIconSize + x];
+            }
+        menu::setIconImage(k, (float)r->X / (float)w, (float)r->Y / (float)h, (float)(r->X + kMenuIconSize) / (float)w,
+                           (float)(r->Y + kMenuIconSize) / (float)h);
     }
     io.Fonts->SetTexID((ImTextureID)(intptr_t)1);
     gfx_ui_set_atlas(px, w, h);
@@ -133,6 +149,7 @@ void feedMouse(ImGuiIO& io, float W, float H);
 
 void feedInput(ImGuiIO& io, float W, float H) {
     const int pad = inputOverlayOwnerPad();
+    menu::setPadFamily(inputPadFamily(pad));   /* the Switch is Nintendo; elsewhere SDL's pad type, or GE_PADFAMILY on a handheld */
     auto btn = [&](SDL_GameControllerButton b) { return inputPadButton(pad, b) != 0; };
     io.AddKeyEvent(ImGuiKey_GamepadDpadUp, btn(SDL_CONTROLLER_BUTTON_DPAD_UP));
     io.AddKeyEvent(ImGuiKey_GamepadDpadDown, btn(SDL_CONTROLLER_BUTTON_DPAD_DOWN));
