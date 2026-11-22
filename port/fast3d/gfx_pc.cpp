@@ -1509,6 +1509,9 @@ static bool gfx_tex_pitch_fix(void) {
     return cached != 0;
 }
 
+extern "C" unsigned portThumbSalt(int fmt, int siz, int w, int h, const void* addr);   /* port/src/missions_thumb.c */
+extern "C" const uint8_t* portThumbTexture(const void* addr, const uint8_t* cur, int fmt, int siz, int w, int h, int line);
+
 static void import_texture(int i, int tile, bool importReplacement) {
     s_tick_texloads++;   /* D583 SLOW line */
     TickTexTimer tick_tex_timer;
@@ -1675,6 +1678,13 @@ static void import_texture(int i, int tile, bool importReplacement) {
                           loaded_texture.size_bytes > rdp.texture_tile[tile].line_size_bytes;
     if (d75_swap) key.palette_hash ^= 0xD75D75D7u;
 
+    /* Custom missions (#103): the mission select's 68x44 I8 level photos can be swapped for a mod's thumbs
+     * (port/src/missions_thumb.c); the salt keeps the cached original apart from the replaced one. */
+    const int thumb_w = (int)(((rdp.texture_tile[tile].lrs - rdp.texture_tile[tile].uls) >> 2) + 1);
+    const int thumb_h = (int)(((rdp.texture_tile[tile].lrt - rdp.texture_tile[tile].ult) >> 2) + 1);
+    const unsigned thumb_salt = portThumbSalt(fmt, siz, thumb_w, thumb_h, orig_addr);
+    key.palette_hash ^= thumb_salt;
+
     /* Intro blood (M-201): textures the game regenerates IN PLACE in the
      * per-frame dynamic pool (dynAllocate, [g_VtxBuffers[0], g_VtxBuffers[2]))
      * -- e.g. the gun-barrel / death blood-drip image rebuilt by
@@ -1767,6 +1777,11 @@ static void import_texture(int i, int tile, bool importReplacement) {
             }
         }
         loaded_texture.addr = d75_buf.data();
+    }
+
+    if (thumb_salt) {   /* custom missions (#103) */
+        const uint8_t* thumb = portThumbTexture(orig_addr, loaded_texture.addr, fmt, siz, thumb_w, thumb_h, (int)rdp.texture_tile[tile].line_size_bytes);
+        if (thumb) loaded_texture.addr = thumb;
     }
 
     /* GE_DTEX: dump the load parameters for the first N textures of a frame so

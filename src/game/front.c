@@ -41,6 +41,12 @@
 #ifdef PORT
 #include <stdio.h>
 #include "romdata.h" /* D178: briefing-segment byte-order fixup */
+#include "missions.h" /* custom campaigns (mods), port/src/missions*.c */
+/* The mission number the difficulty select / cursor use: while a mod's story is chosen it is the mod's slot in the
+ * mission select, not the original level's number. */
+#define FRONT_MNUM(b) (modsStoryActive() ? modsActiveSlot() : mission_folder_setup_entries[b].mission_num)
+#else
+#define FRONT_MNUM(b) (mission_folder_setup_entries[b].mission_num)
 #endif
 #include "chrai.h"
 #include "title.h"
@@ -3007,6 +3013,18 @@ void interface_menu06_modesel(void)
             sndPlaySfx(g_musicSfxBufferPtr, DOOR_METAL_CLOSE2_SFX, 0);
         }
     }
+#ifdef COOP_MODEMENU
+    else if (modsCount() > 0 && cursor_v_pos >= (is_cheat_menu_available ? MODE_V_CHEAT : MODE_V_MULTI) + 24.0f)
+    {
+        /* the mods row (#103): A cycles GoldenEye / the installed mods; Select Mission then shows the mod's missions */
+        mission_difficulty_highlighted = 4;
+        if (joyGetButtonsPressedThisFrame(PLAYER_1, START_BUTTON|Z_TRIG|A_BUTTON))
+        {
+            modsCycle();
+            sndPlaySfx(g_musicSfxBufferPtr, DOOR_METAL_CLOSE_SFX, 0);
+        }
+    }
+#endif
     else if ((is_cheat_menu_available) && (MODE_V_CHEAT <= cursor_v_pos))
     {
         mission_difficulty_highlighted = MODE_HL_CHEAT;
@@ -3241,6 +3259,24 @@ Gfx* constructor_menu06_modesel(Gfx* DL)
         DL = frontPrintText(DL, &x, &y, textstring, ptrFontZurichBoldChars, ptrFontZurichBold, 0xFF, viGetX(), viGetY(), 0, 0);
     }
 
+#ifdef COOP_MODEMENU
+    if (modsCount() > 0)
+    {
+        static char modrow[240];
+
+        x = 0x96;
+        y = is_cheat_menu_available ? 0x13C : MODE_Y_CHEAT;
+        DL = frontPrintText(DL, &x, &y, is_cheat_menu_available ? "5.\n" : "4.\n", ptrFontZurichBoldChars, ptrFontZurichBold, 0xFF, viGetX(), viGetY(), 0, 0);
+        snprintf(modrow, sizeof(modrow), "MODS: %s\n", modsRowText());
+        textMeasure(&x2, &y2, modrow, ptrFontZurichBoldChars, ptrFontZurichBold, 0);
+        x = 0xAA;
+        if (mission_difficulty_highlighted == 4)
+        {
+            DL = microcode_constructor_related_to_menus(DL, 0x94, y - 2, y2 + 0xAF, y + 14, 0x32);
+        }
+        DL = frontPrintText(DL, &x, &y, modrow, ptrFontZurichBoldChars, ptrFontZurichBold, 0xFF, viGetX(), viGetY(), 0, 0);
+    }
+#endif
     DL = frontAddPreviousTabText(DL);
 #ifdef COOP_MODEMENU
     if (coopModalActive())
@@ -3291,6 +3327,22 @@ s32 get_highest_unlocked_difficulty_for_level(s32 arg0)
     s32 difficulty;
     s32 temp_v0;
 
+#ifdef PORT
+    if (modsStoryActive())
+    {
+        /* the chosen mod's missions, in its campaign order (#103): slot n is mission index n of the mod's own save,
+         * so an ordered campaign asks the game's save exactly like the original (below) */
+        s32 gate = modsSlotGate(arg0);
+        if (gate != -2)
+        {
+            return gate;
+        }
+        if (arg0 < 0 || arg0 >= 20)
+        {
+            return -1;
+        }
+    }
+#endif
     if (mission_folder_setup_entries[pull_and_display_text_for_folder_a0(arg0)].stage_id >= 0)
     {
         num = DIFFICULTY_00;
@@ -3357,6 +3409,9 @@ void interface_menu07_missionsel(void)
     ModelNode *mnode;
     s32 padding;
 
+#ifdef PORT
+    modsUnbind();   /* the grid reads the original mission numbers again (a mod mission binds its slot while it is chosen) */
+#endif
     viSetFovY(FOV_Y_F);
     viSetAspect(ASPECT_RATIO_SD);
     viSetZRange(100.0f, 10000.0f);
@@ -3495,9 +3550,39 @@ void interface_menu07_missionsel(void)
         }
         else if (mission_difficulty_highlighted >= 0)
         {
+#ifdef PORT
+            if (modsStoryActive())
+            {
+                s32 mstage = 0;
+
+                /* the mod's mission in this slot: activate it, then the normal difficulty select and briefing follow
+                 * (any of the level's own folder entries serves as the briefing page; its text is replaced) */
+                if (modsSelectSlot(mission_difficulty_highlighted, &mstage))
+                {
+                    for (i = 0; mission_folder_setup_entries[i].folder_text_preset != 0; i++)
+                    {
+                        if (mission_folder_setup_entries[i].stage_id == mstage)
+                        {
+                            briefingpage = i;
+                            selected_stage = mstage;
+                            tab_next_selected = 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                missionsDeactivate();   /* a campaign level: no custom mission */
+                briefingpage = pull_and_display_text_for_folder_a0(mission_difficulty_highlighted);
+                selected_stage = mission_folder_setup_entries[briefingpage].stage_id;
+                tab_next_selected = 1;
+            }
+#else
             briefingpage = pull_and_display_text_for_folder_a0(mission_difficulty_highlighted);
             selected_stage = mission_folder_setup_entries[briefingpage].stage_id;
             tab_next_selected = 1;
+#endif
 
             sndPlaySfx((struct ALBankAlt_s *) g_musicSfxBufferPtr, DOOR_METAL_CLOSE2_SFX, NULL);
         }
@@ -3523,7 +3608,7 @@ void interface_menu07_missionsel(void)
         else
 #endif
         {
-            set_cursor_pos_difficulty(get_highest_unlocked_difficulty_for_level(mission_folder_setup_entries[briefingpage].mission_num));
+            set_cursor_pos_difficulty(get_highest_unlocked_difficulty_for_level(FRONT_MNUM(briefingpage)));
         }
     }
     else if (tab_prev_selected != 0)
@@ -3581,6 +3666,14 @@ Gfx *constructor_menu07_missionsel(Gfx *DL)
                     var_s5 = -0x100;
                 }
 
+#ifdef PORT
+                if (modsStoryActive())
+                {
+                    strncpy((char *)sp90, modsSlotName(var_s3), sizeof(sp90) - 1);   /* the mod mission's own name */
+                    sp90[sizeof(sp90) - 1] = 0;
+                }
+                else
+#endif
                 if (mission_folder_setup_entries[temp_s0].icon_text_preset)
                 {
                     strcpy(sp90, langGet(mission_folder_setup_entries[temp_s0].icon_text_preset));
@@ -3657,7 +3750,7 @@ void interface_menu08_difficulty(void)
 {
     s32 unlockedDifficulty;
 
-    unlockedDifficulty = get_highest_unlocked_difficulty_for_level(mission_folder_setup_entries[briefingpage].mission_num);
+    unlockedDifficulty = get_highest_unlocked_difficulty_for_level(FRONT_MNUM(briefingpage));
     viSetFovY(FOV_Y_F);
     viSetAspect(ASPECT_RATIO_SD);
     viSetZRange(100.0f, 10000.0f);
@@ -3736,7 +3829,7 @@ void interface_menu08_difficulty(void)
     if (tab_prev_selected)
     {
         frontChangeMenu(MENU_MISSION_SELECT, FALSE);
-        set_cursor_to_stage_solo(mission_folder_setup_entries[briefingpage].mission_num);
+        set_cursor_to_stage_solo(FRONT_MNUM(briefingpage));
     }
 }
 
@@ -3757,6 +3850,23 @@ Gfx * print_current_solo_briefing_stage_name(Gfx *DL, char *text)
         DL = frontPrintText(DL, &x, &y, text, ptrFontZurichBoldChars, ptrFontZurichBold, 0xff, viGetX(), viGetY(), 0, 0);
     }
 
+#ifdef PORT
+    {
+        /* a custom mission names itself: "Mission <n>: <mod>" / "<mission>" instead of the original level's names */
+        char hl1[200];
+        char hl2[200];
+        if (missionsHeaderLines(hl1, hl2, sizeof(hl1)))
+        {
+            x = 0x37;
+            y = 0x67;
+            DL = frontPrintText(DL, &x, &y, hl1, ptrFontZurichBoldChars, ptrFontZurichBold, 0xff, viGetX(), viGetY(), 0, 0);
+            x = 0x37;
+            y = 0x77;
+            DL = frontPrintText(DL, &x, &y, hl2, ptrFontZurichBoldChars, ptrFontZurichBold, 0xff, viGetX(), viGetY(), 0, 0);
+            return DL;
+        }
+    }
+#endif
     chapter = get_chapter_briefing_entry(briefingpage);
     if (chapter >=0 )
     {
@@ -3824,7 +3934,7 @@ Gfx *constructor_menu08_difficulty(Gfx *DL)
     struct sImageTableEntry *image;   // sp ??
     s32 i;
 
-    unlockedDifficulty = get_highest_unlocked_difficulty_for_level(mission_folder_setup_entries[briefingpage].mission_num);
+    unlockedDifficulty = get_highest_unlocked_difficulty_for_level(FRONT_MNUM(briefingpage));
 
     DL = viSetFillColor(DL, 0, 0, 0);
     DL = viFillScreen(DL);
@@ -6953,7 +7063,7 @@ void interface_menu0A_briefing(void)
     if (tab_prev_selected)
     {
         frontChangeMenu(MENU_MISSION_SELECT, FALSE);
-        set_cursor_to_stage_solo(mission_folder_setup_entries[briefingpage].mission_num);
+        set_cursor_to_stage_solo(FRONT_MNUM(briefingpage));
     }
 }
 
@@ -6974,6 +7084,12 @@ Gfx *print_objectives_and_status_to_menu(Gfx *DL, s32 arg1, u8 *arg2, s32 arg3)
     u8* text;
     s32 v1;
 
+#ifdef PORT
+    if (missionsObjectivesActive())
+    {
+        return missionsObjectivesDraw(DL, arg1, arg3);   /* a custom mission's objectives */
+    }
+#endif
     sp98 = 0;
     var_fp = 0;
     i = 0;
@@ -7123,6 +7239,12 @@ Gfx *constructor_menu0A_briefing(Gfx *DL)
             break;
         }
 
+#ifdef PORT
+        {
+            const char *mt = missionsBriefingPageText(current_menu_briefing_page);   /* a custom mission's own text */
+            if (mt) { spC0C = (u8*)mt; }
+        }
+#endif
         spC08 = 0x37;
         spC04 = 0xA7;
         textWrap(0x140, (s8*)spC0C, (s8*)&sp4C, ptrFontZurichBoldChars, ptrFontZurichBold);
@@ -7241,7 +7363,7 @@ void interface_menu0C_missionfailed(void)
     if (tab_prev_selected)
     {
         frontChangeMenu(MENU_MISSION_SELECT, FALSE);
-        set_cursor_to_stage_solo(mission_folder_setup_entries[briefingpage].mission_num);
+        set_cursor_to_stage_solo(FRONT_MNUM(briefingpage));
     }
 }
 
@@ -7259,6 +7381,12 @@ s32 frontCompleteAllObjectivesAliveSuccess(void)
     {
         return 0;
     }
+#ifdef PORT
+    if (missionsObjectivesActive())
+    {
+        return missionsObjectivesSuccess();
+    }
+#endif
 
     for (i=0; i<10; i++)
     {
@@ -7425,6 +7553,14 @@ void interface_menu0D_missioncomplete()
     {
         if (frontCompleteAllObjectivesAliveSuccess() && (!g_AppendCheatSinglePlayer))
         {
+#ifdef PORT
+            if (modsStoryActive())
+            {
+                frontChangeMenu(MENU_MISSION_SELECT, FALSE);   /* a mod's campaign: back to its mission select */
+                set_cursor_to_stage_solo(FRONT_MNUM(briefingpage));
+            }
+            else
+#endif
             if (mission_folder_setup_entries[briefingpage].mission_num == SP_LEVEL_CRADLE)
             {
                 frontChangeMenu(MENU_RUN_STAGE, TRUE);
@@ -7433,7 +7569,7 @@ void interface_menu0D_missioncomplete()
             else if (mission_folder_setup_entries[briefingpage].mission_num >= SP_LEVEL_AZTEC)
             {
                 frontChangeMenu(MENU_MISSION_SELECT, FALSE);
-                set_cursor_to_stage_solo((s32)mission_folder_setup_entries[briefingpage].mission_num);
+                set_cursor_to_stage_solo((s32)FRONT_MNUM(briefingpage));
             }
             else
             {
@@ -7465,7 +7601,7 @@ void interface_menu0D_missioncomplete()
     else if (tab_prev_selected)
     {
         frontChangeMenu(MENU_MISSION_SELECT, FALSE);
-        set_cursor_to_stage_solo((s32)mission_folder_setup_entries[briefingpage].mission_num);
+        set_cursor_to_stage_solo((s32)FRONT_MNUM(briefingpage));
     }
 
     return;
