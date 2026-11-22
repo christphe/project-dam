@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- PC: a fresh install now uses the Switch's defaults for the Centered aim style, 4x anti-aliasing and blood on hit; an existing ini keeps its values
+
 ## [0.4.0] - 2026-11-21
 
 ### Added
