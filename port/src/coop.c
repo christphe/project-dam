@@ -296,6 +296,15 @@ s32 coopRespawnButton(s32 pressed)
     return s_active ? 0 : pressed;     /* versus respawn on a button; co-op revives instead */
 }
 
+/* prop.c proplvreset2: chr and animated-model slots are sized from the setup's guards plus a fixed spare (10 chrs,
+ * ANIM_MODEL_SPARE_SLOTS), which in solo serves reinforcements and Bond's cutscene body. In co-op each player keeps
+ * a body chr all mission: on Dam 4 players took 40 of 46 chr slots, 4 of the 10 spares. Add one slot per player so
+ * the spares stay what solo has. */
+s32 coopBodySlots(void)
+{
+    return s_active ? coopN() : 0;
+}
+
 s32 coopSimOwner(void)
 {
     if (!s_active) {

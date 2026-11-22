@@ -1575,8 +1575,8 @@ void proplvreset2(enum LEVELID stageId)
 
         if (withchrs)
         {
-            alloc_init_GUARDdata_entries(load_proptype(PROPDEF_GUARD));
-            numAnimatedObjects += load_proptype(PROPDEF_GUARD);
+            alloc_init_GUARDdata_entries(load_proptype(PROPDEF_GUARD) + GE_COOP_BODY_SLOTS());
+            numAnimatedObjects += load_proptype(PROPDEF_GUARD) + GE_COOP_BODY_SLOTS();
             numObjects += load_proptype(PROPDEF_COLLECTABLE);
             numObjects += load_proptype(PROPDEF_KEY);
             numObjects += load_proptype(PROPDEF_HAT);

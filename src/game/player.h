@@ -117,6 +117,7 @@ s32 coopRuleMulti(void);
 s32 coopDeathFinal(void);
 s32 coopPvpAllowed(void);
 s32 coopSimOwner(void);
+s32 coopBodySlots(void);
 void coopVersusDeathState(void);
 f32 coopDownFade(f32 frac);
 f32 coopDownChrFade(f32 frac);
@@ -158,6 +159,8 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
 #define GE_SET_BOND_KIA()        coopSetBondKia()
 #define GE_MISSION_END_OK()      coopMissionEndOk()
 #define GE_SIM_TICKS(x)          (coopSimOwner() ? (x) : 0)
+#define GE_SIM_OWNER()           coopSimOwner()
+#define GE_COOP_BODY_SLOTS()     coopBodySlots()
 #define GE_AI_TICK_VIEW(chr)     coopAiTick((chr), 1)
 #define GE_AI_TICK_FRAME(chr)    coopAiTick((chr), 0)
 #define GE_COOP_FRAME_TICK()     coopFrameTick()
@@ -215,6 +218,8 @@ extern int portAimIsMouse(void);
 #define GE_SET_BOND_KIA()        (g_isBondKIA = 1)
 #define GE_MISSION_END_OK()      1
 #define GE_SIM_TICKS(x)          (x)
+#define GE_SIM_OWNER()           1
+#define GE_COOP_BODY_SLOTS()     0
 #define GE_AI_TICK_VIEW(chr)     chrlvActionTick(chr)
 #define GE_AI_TICK_FRAME(chr)    chrlvActionTick(chr)
 #define GE_COOP_FRAME_TICK()
