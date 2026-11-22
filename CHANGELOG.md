@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- PC: the first launch measures the GPU for about a second (shown on screen) and lowers the sky and sea detail, the anti-aliasing and alpha-to-coverage only where they cost frames; settings you changed are left alone. Sky and sea detail gets a Quarter (fastest) level
+
 ### Changed
 - PC: a fresh install now uses the Switch's defaults for the Centered aim style, 4x anti-aliasing and blood on hit; an existing ini keeps its values
 
