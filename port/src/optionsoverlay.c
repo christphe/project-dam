@@ -48,6 +48,7 @@ extern MENU current_menu;
 #include "defaults.h"
 #include "video.h"
 #include "input.h"
+#include "console.h"
 #include "front.h"   /* selected_folder_num (D356 stage probe) */
 #include "lv.h"   /* lvlGetCurrentMultiPlayerSec (D606 mission timer) */
 #include "bondtypes.h"   /* sImageTableEntry (D555 crosshair pointer: typed field reads) */
@@ -113,7 +114,7 @@ static const char *const kP1Type[]    = { "Keyboard + mouse", "Gamepad", "Auto",
 static const char *const kHold[]      = { "Hold", "Toggle", NULL };
 static const char *const kAspectMode[] = { "Fill window", "Original", "16:9", "21:9", NULL };   /* D447: Original = 4:3 (16:9 with the game Ratio) bars; D508: 2..3 force a ratio */
 static const char *const kRenderer[]  = { "OpenGL", "Vulkan", NULL };   /* Video.Renderer (issue #44) */
-static const char *const kSkyScale[]   = { "Full", "Half (faster)", NULL };   /* Video.SkyScale */
+static const char *const kSkyScale[]   = { "Full", "Half (faster)", "Quarter (fastest)", NULL };   /* Video.SkyScale */
 static const char *const kVisuals[]   = { "Original", "Fixed", "Enhanced", NULL };   /* Video.Visuals (D982) */
 static const char *const kTexFilter[] = { "Nearest", "Bilinear", "3-point", "Trilinear", NULL };   /* Trilinear option (playtest 2026-10-03) */
 static const char *const kPadPreset[] = { "1.1 Jinx", "1.2 Christmas", "1.3 Frost", "Custom", "1.4 Elektra", NULL };   /* D498: index = stored value; inputPadPresetStep gives the display order */
@@ -124,11 +125,7 @@ static int s_padSeat = 0;   /* D469: seat edited by the Controller page rows */
 static const char *const kCoopHealth[] = { "+0%", "+50%", "+100%", NULL };   /* project-dam: coop.c, per extra player */
 static const char *const kAimAssist[] = { "Off", "Low", "High", NULL };   /* project-dam: nxgame.c */
 static const char *const kAimEntry[]  = { "Off", "Move view", "Centre crosshair", NULL };   /* project-dam: nxgame.c */
-#if defined(__SWITCH__)
-#define PAD_PAGE_ALWAYS 1   /* the console's Controller page is always the gamepad one */
-#else
-#define PAD_PAGE_ALWAYS 0
-#endif
+#define PAD_PAGE_ALWAYS portIsConsole()   /* the console's Controller page is always the gamepad one (no keyboard/mouse) */
 #if defined(__SWITCH__)
 static const char *const kControlScheme[] = { "Extended", "Original", "Modern", NULL };   /* D513/D554: display text only (index = stored value) */
 #else
@@ -1238,11 +1235,13 @@ static int rowInputOk(const struct Row *r)
     if (hdr < 0 || strcmp(rows[hdr].key, "__HdrController")) return 1;
     /* player 1: keyboard + mouse rows unless it plays on a gamepad, pad rows unless it plays
      * on the keyboard + mouse (Auto shows both: either device drives the player). */
-    const int t = s_padSeat == 0 ? inputP1Type() : 1;
+    /* Console mode (no keyboard/mouse): every player is a gamepad player; no input-type choice. */
+    const int console = portIsConsole();
+    const int t = (s_padSeat == 0 && !console) ? inputP1Type() : 1;
     const int kbm = t == 0;
     if (!strncmp(r->key, "__Kbm", 5)) return 0;   /* range markers */
     if (idx > rowIndexByKey("__KbmBegin") && idx < rowIndexByKey("__KbmEnd")) return t != 1;
-    if (!strcmp(r->key, "Input.P1Type")) return s_padSeat == 0;
+    if (!strcmp(r->key, "Input.P1Type")) return s_padSeat == 0 && !console;
     if (!strcmp(r->key, "Input.PlayerPad")) return !kbm;
     /* device-neutral: Mode, aim style, aim range; page furniture */
     if (isSepRow(r) || isBackRow(r) || !strcmp(r->key, "Input.ControlScheme") ||
@@ -1280,6 +1279,17 @@ static int rowPlatformOk(const struct Row *r)
         if (!strcmp(r->key, kDesktopOnly[k])) return 0;
     }
 #else
+    /* A non-Switch console (GE_CONSOLE): the window rows do not apply, the
+     * display is the active mode in fullscreen (gfx_sdl2.cpp). The relaunch
+     * row stays: Restart Game works there. */
+    if (portIsConsole()) {
+        static const char *const kWindowOnly[] = {
+            "Video.Fullscreen", "Video.FullscreenMode", "__CenterWindow", "__Resolution", NULL,
+        };
+        for (int k = 0; kWindowOnly[k]; k++) {
+            if (!strcmp(r->key, kWindowOnly[k])) return 0;
+        }
+    }
     /* PC: Enhanced / Original keep the hardware rows (the presets do not
      * set them there); Custom shows the rest too. */
     static const char *const kCustomOnly[] = {
@@ -4732,7 +4742,7 @@ static const struct { const char *key, *help; } kRowHelp[] = {
     { "Video.MSAA", "Smooths jagged edges while docked. Higher is cleaner but slower." },
     { "Video.MSAAHandheld", "Smooths jagged edges in handheld mode. Higher is cleaner but slower." },
     { "Video.FXAA", "A final pass that smooths edges without blurring flat textures." },
-    { "Video.SkyScale", "How sharp the Enhanced sky and sea are. Half draws them at a quarter of the pixels: faster, softer." },
+    { "Video.SkyScale", "How sharp the Enhanced sky and sea are. Half draws them at a quarter of the pixels, Quarter at a sixteenth: faster, softer." },
     { "Video.Visuals", "Fixed: the original game's display flaws corrected. Enhanced: also a richer sky, scenery and effects." },
     { "Input.CrosshairCursor", "Uses the crosshair as the mouse pointer in this menu." },
     { "Input.ControlScheme", "Modern, the remastered layouts (Enhanced) or the original game's controls." },

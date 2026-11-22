@@ -24,6 +24,12 @@ void gfx_opengl_interp_show(int slot);
 /* project-dam: FXAA pass, reads the single-sample colour texture of framebuffer
  * src_fb_id and draws it, anti-aliased, to the default framebuffer. */
 void gfx_opengl_fxaa_pass(int src_fb_id);
+
+/* First-launch GPU mini-benchmark (port/src/gpuprobe.h): fills run->skyMs / msaaMs / a2cDeltaMs / choice by drawing off screen at
+ * run->w x run->h (and showing each phase on the window when run->visible). Unmeasured values come back as GPUPROBE_UNMEASURED.
+ * Returns 1 if anything was measured. Main thread with the context, right after gfx_init. */
+struct GpuProbeRun;
+int gfx_opengl_gpuprobe(struct GpuProbeRun* run);
 #ifdef __cplusplus
 }
 #endif

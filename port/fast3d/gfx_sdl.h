@@ -41,6 +41,9 @@ void gfx_sdl_set_external_swap_interval(void (*set_interval)(int));
 void gfx_sdl_set_vulkan_window(bool on);
 /* The SDL_Window* (for SDL_Vulkan_CreateSurface). */
 void* gfx_sdl_get_sdl_window(void);
+/* First-launch GPU probe on a Vulkan player: 1 if a throw-away hidden window gets any GL context (the probe runs on GL once,
+ * then Vulkan is used from the next launch); 0 = stay on Vulkan and skip the probe. */
+int gfx_sdl_gl_usable(void);
 #endif
 
 #ifdef __cplusplus

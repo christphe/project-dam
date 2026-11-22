@@ -3202,9 +3202,11 @@ void gfx_vulkan_skyplus_pass(int slot) {
     }
     /* the sea at half width: its heavy per-pixel work (the waves) runs on half the pixels into a small target, the sky pass then
      * reads it bilinearly. With the half-scale final pass it is halved on both axes too (it feeds a half-size image). */
-    const bool reduce = gfx_skyplus_half && d.vp[2] / 2 >= 16 && d.vp[3] / 2 >= 16;
+    /* Video.SkyScale: 1 half, 2 quarter (the composite samples in normalized coordinates, so any divisor works) */
+    const int skyDiv = gfx_skyplus_half >= 2 ? 4 : 2;
+    const bool reduce = gfx_skyplus_half && d.vp[2] / skyDiv >= 16 && d.vp[3] / skyDiv >= 16;
     if (sea && lut && d.vp[2] / 2 >= 16) {
-        const int sdiv = reduce ? 2 : 1;
+        const int sdiv = reduce ? skyDiv : 1;
         const int hw = d.vp[2] / sdiv / 2, hh = d.vp[3] / sdiv;
         const int fb = sky_target(&s_hsea_fb, hw, hh, fb_clamp);
         if (fb >= 0) {
@@ -3217,7 +3219,7 @@ void gfx_vulkan_skyplus_pass(int slot) {
     /* the final pass at half size: the sky and the sea (whose heavy part is already behind us) are smooth, so they are drawn into a
      * target of a quarter of the pixels, then enlarged onto the screen by the composite (uPass 5) */
     if (reduce) {
-        const int rw = d.vp[2] / 2, rh = d.vp[3] / 2;
+        const int rw = d.vp[2] / skyDiv, rh = d.vp[3] / skyDiv;
         const int fb = sky_target(&s_skyr_fb, rw, rh, fb_clamp);
         if (fb >= 0) {
             into(s_sky_frag, fb, rw, rh);   /* uPass is 2 (or 0): the whole sky and sea */

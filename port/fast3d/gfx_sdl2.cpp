@@ -9,6 +9,7 @@
 #include "gfx_window_manager_api.h"
 #include "gfx_screen_config.h"
 #include "input.h"
+#include "console.h"
 #ifdef __SWITCH__
 #include "audio.h"   /* D959: audioNotifyDeviceRemoved */
 #endif
@@ -253,6 +254,27 @@ static void create_gl_window(const char *title, int posX, int posY, Uint32 flags
             SDL_DestroyWindow(wnd);
             wnd = nullptr;
         }
+#if defined(__linux__) && !defined(__SWITCH__)
+        /* A desktop context is only worth keeping if it reaches what the desktop path needs (GLSL 3.30: FXAA, the
+         * blits): Mesa drivers such as V3D (Raspberry Pi 4/5, GL 3.1 + GLES 3.1) hand out a "3.0 compat" context
+         * that is below it, and the ES 3.0 entry further down then works fully. Linux only: there a GLES context
+         * through EGL is always the next try; macOS has no ES and keeps its 3.2 core. A --gl-version override and
+         * the 2.1 last resort are never refused. */
+        if (ctx && i != 0 && vprof != SDL_GL_CONTEXT_PROFILE_ES && !(vmaj == 2 && vmin == 1)) {
+            typedef const unsigned char *(*GetStringFn)(unsigned int);
+            GetStringFn getString = (GetStringFn)SDL_GL_GetProcAddress("glGetString");
+            const char *ver = getString ? (const char *)getString(0x1F02 /* GL_VERSION */) : NULL;
+            int gmaj = 0, gmin = 0;
+            if (ver && sscanf(ver, "%d.%d", &gmaj, &gmin) == 2 && (gmaj < 3 || (gmaj == 3 && gmin < 3))) {
+                sysLogPrintf(LOG_NOTE, "SDL: GL%d.%d%s context is GL %d.%d (\"%s\"), below the 3.3 the desktop path needs; trying the next one",
+                             vmaj, vmin, vprofstr, gmaj, gmin, ver);
+                SDL_GL_DeleteContext(ctx);
+                ctx = nullptr;
+                SDL_DestroyWindow(wnd);
+                wnd = nullptr;
+            }
+        }
+#endif
     }
 
     if (!wnd || !ctx) {
@@ -281,6 +303,27 @@ static void create_gl_window(const char *title, int posX, int posY, Uint32 flags
 }
 
 #ifdef GE_VULKAN
+extern "C" int gfx_sdl_gl_usable(void) {
+    static const int vers[][3] = {   /* the same tries as create_gl_window, minus the 2.1 last resort */
+        { 3, 0, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY }, { 4, 1, SDL_GL_CONTEXT_PROFILE_CORE },
+        { 3, 2, SDL_GL_CONTEXT_PROFILE_CORE }, { 3, 0, SDL_GL_CONTEXT_PROFILE_ES },
+    };
+    int ok = 0;
+    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) return 0;
+    for (size_t i = 0; i < sizeof(vers) / sizeof(*vers) && !ok; i++) {
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, vers[i][0]);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, vers[i][1]);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, vers[i][2]);
+        SDL_Window *w = SDL_CreateWindow("", 0, 0, 64, 64, SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL);
+        if (!w) continue;
+        SDL_GLContext c = SDL_GL_CreateContext(w);
+        if (c) { ok = 1; SDL_GL_DeleteContext(c); }
+        SDL_DestroyWindow(w);
+    }
+    SDL_GL_ResetAttributes();
+    return ok;
+}
+
 static void create_vk_window(const char *title, int posX, int posY, Uint32 flags) {
     flags = (flags & ~(Uint32)SDL_WINDOW_OPENGL) | SDL_WINDOW_VULKAN;
     wnd = SDL_CreateWindow(title, posX, posY, window_width, window_height, flags);
@@ -354,6 +397,23 @@ static void gfx_sdl_init(const struct GfxWindowInitSettings *set) {
         }
     }
 #endif
+#ifndef __SWITCH__
+    // Console mode off the Switch (portIsConsole: GE_CONSOLE=1 / System.Console,
+    // e.g. an arm64 handheld on muOS, fbdev + libmali): the window IS the panel.
+    // Without this the 85%/4:3 auto size clamps to 640x480 and the picture is
+    // pillarboxed on the 720x480 panel. Always the full desktop size, always fullscreen.
+    if (portIsConsole()) {
+        SDL_DisplayMode dm;
+        if (SDL_GetDesktopDisplayMode(primary_display_index(), &dm) == 0 && dm.w > 0 && dm.h > 0) {
+            window_width = dm.w;
+            window_height = dm.h;
+        } else {
+            window_width = 720;
+            window_height = 480;
+        }
+        sysLogPrintf(LOG_INFO, "SDL(console): window = panel %dx%d, fullscreen", window_width, window_height);
+    }
+#endif
     if (window_width <= 0 || window_height <= 0) {
         SDL_DisplayMode dm;
         if (SDL_GetDesktopDisplayMode(primary_display_index(), &dm) == 0 && dm.w > 0 && dm.h > 0) {
@@ -401,7 +461,11 @@ static void gfx_sdl_init(const struct GfxWindowInitSettings *set) {
     Uint32 flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL;
 
     // if fullscreen was requested, start the window in fullscreen right away
-    if (set->fullscreen) {
+    bool want_fullscreen = set->fullscreen;
+#ifndef __SWITCH__
+    if (portIsConsole()) want_fullscreen = true;   // the window is the panel
+#endif
+    if (want_fullscreen) {
         flags |= fullscreen_flag;
         fullscreen_state = true;
     }

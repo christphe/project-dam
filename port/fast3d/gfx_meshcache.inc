@@ -255,7 +255,7 @@ static int mc_on(void) {
     static int on = -1;
     if (on < 0) {
         const char* e = getenv("GE_MESHCACHE");
-#if defined(__SWITCH__)
+#if defined(__SWITCH__) || defined(GE_ARM64)
         on = !(e != NULL && e[0] == '0');           /* the Switch: on unless GE_MESHCACHE=0 */
 #else
         on = (e && e[0] && e[0] != '0') ? 1 : 0;    /* elsewhere: opt-in */

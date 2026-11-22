@@ -79,6 +79,7 @@ bool loadModel(const char* json, size_t len, Model* m, std::string* err);
 /* The values the menu shows. The harness keeps them itself; the game's adapter reads and writes the real settings. */
 struct State {
     bool pc = true;
+    bool console = false;              /* no keyboard/mouse (portIsConsole): hides the window, mouse and key-binding settings */
     bool dev = false;
     bool fileSelect = false;           /* the game is on the file select screen (the profile can be chosen) */
     bool profile = false;              /* a save file is selected: the per-profile settings can be read and written */

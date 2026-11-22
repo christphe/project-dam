@@ -1,0 +1,72 @@
+# project-dam: Linux arm64 cross-compilation for PortMaster handhelds
+# (tested on an Anbernic RG34XX, Mali-G31, muOS).
+#
+#   docker compose build arm64          # once
+#   docker compose run --rm arm64       # -> build-arm64/ge007.aarch64
+#
+# Ubuntu 20.04 = glibc 2.31, PortMaster's base for ports that must also run on
+# older firmwares: a binary runs on any device whose glibc is at least the one
+# it was built against. The project is C++20, so the compiler is focal's GCC 10
+# cross toolchain (the default GCC 9 is too old); libstdc++ and libgcc are
+# linked statically (cmake/toolchain-arm64.cmake), so the firmware's own C++
+# runtime does not matter. SDL2 is compiled and linked against 2.0.12, the
+# SDL of the stock Anbernic H700 firmware (Ubuntu 22.04 based), built here with
+# no backends: a call newer than 2.0.12 fails to link instead of crashing on a
+# device, and port/include/sdl_compat.h supplies the stubs. At run time the
+# firmware's own libSDL2-2.0.so.0 is used (the one with the video driver).
+# GL is not linked at all: these firmwares ship a GLES blob, and glad resolves every GL entry point through
+# SDL_GL_GetProcAddress. CMake comes from pip (focal's 3.16 is the floor, a
+# newer one avoids its bugs). Base image pinned by digest; bump deliberately.
+# No game files are copied in.
+FROM docker.io/library/ubuntu:20.04@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214
+
+# arm64 packages live on ports.ubuntu.com, not on archive.ubuntu.com: restrict
+# the stock sources to the host arch and add the ports mirror for arm64.
+RUN sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list \
+    && printf '%s\n' \
+        'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main universe' \
+        'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main universe' \
+        'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main universe' \
+        > /etc/apt/sources.list.d/arm64.list \
+    && dpkg --add-architecture arm64 \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        ccache \
+        gcc-10-aarch64-linux-gnu \
+        g++-10-aarch64-linux-gnu \
+        git \
+        ninja-build \
+        python3 \
+        python3-pip \
+        curl \
+        make \
+        zlib1g-dev:arm64 \
+    && pip3 install --no-cache-dir cmake==3.28.3 \
+    && for t in gcc g++ cpp; do \
+         ln -s aarch64-linux-gnu-$t-10 /usr/bin/aarch64-linux-gnu-$t; \
+       done \
+    && rm -rf /var/lib/apt/lists/*
+
+# SDL2 2.0.12 for arm64, headers and an import library only, in /opt/sdl2: the
+# floor the binary is built against (see above). Autotools, the build system
+# 2.0.12 cross-compiles best with; every backend is off, nothing of it ships.
+RUN curl -fsSL -o /tmp/sdl.tar.gz https://github.com/libsdl-org/SDL/releases/download/release-2.0.12/SDL2-2.0.12.tar.gz \
+    && echo "349268f695c02efbc9b9148a70b85e58cefbbf704abd3e91be654db7f1e2c863  /tmp/sdl.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/sdl.tar.gz -C /tmp \
+    && cd /tmp/SDL2-2.0.12 \
+    && ./configure --host=aarch64-linux-gnu --prefix=/opt/sdl2 --disable-static \
+        --disable-video-x11 --disable-video-wayland --disable-video-kmsdrm --disable-video-vulkan \
+        --disable-video-opengl --disable-pulseaudio --disable-alsa --disable-jack --disable-sndio \
+        --disable-esd --disable-arts --disable-nas --disable-libsamplerate --disable-libudev \
+        --disable-dbus --disable-ime --disable-ibus >/dev/null \
+    && make -j"$(nproc)" >/dev/null && make install >/dev/null \
+    && cd / && rm -rf /tmp/sdl.tar.gz /tmp/SDL2-2.0.12
+
+ENV CCACHE_DIR=/ccache \
+    CCACHE_MAXSIZE=5G \
+    CCACHE_BASEDIR=/src \
+    CCACHE_NOHASHDIR=1
+
+RUN git config --system --add safe.directory '*'
+WORKDIR /src

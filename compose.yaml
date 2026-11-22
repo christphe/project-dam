@@ -56,6 +56,25 @@ services:
     volumes:
       - .:/src
     command: ["sh", "tools_pc/docker-build-win.sh"]
+  # Linux arm64 handhelds (PortMaster, e.g. muOS) (Dockerfile.arm64, Ubuntu 20.04, glibc 2.31)
+  # -> build-arm64/ge007.aarch64.
+  arm64:
+    build:
+      context: .
+      dockerfile: Dockerfile.arm64
+    image: local/project-dam-build-arm64:latest
+    working_dir: /src
+    volumes:
+      - .:/src
+      - ccache:/ccache
+    command:
+      - sh
+      - -c
+      - >-
+        cmake -S . -B build-arm64 -G Ninja -DROMID=ntsc-final
+        -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-arm64.cmake -DGE_ARM64=ON
+        -DGE_VULKAN=OFF -DGE007_BUILD_TESTS=OFF
+        && cmake --build build-arm64
   shell:
     image: local/project-dam-build:latest
     working_dir: /src

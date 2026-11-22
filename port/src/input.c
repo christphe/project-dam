@@ -75,6 +75,7 @@
 #include <string.h>
 
 #include <SDL.h>
+#include "sdl_compat.h"   /* names newer than the arm64 build's SDL 2.0.12 */
 
 #include "platform.h"
 #include "system.h"
@@ -83,6 +84,7 @@
 #include "assign.h"
 #include "input.h"
 #include "envflag.h"
+#include "console.h"
 #include "optionsoverlay.h"
 #include "video.h"
 /* D194 absolute aim: read-only access to the live camera (struct player).
@@ -179,11 +181,11 @@ static int mpRoute(void)
         n = 0;
         for (int s = 0; s < MAX_PADS; ++s) n += (s_matchSeatMask >> s) & 1;
     }
-#ifdef __SWITCH__
     /* D974: no keyboard/mouse on the console, so it is never player 1 (with
-     * one pad it made the game count two controllers). */
-    return n >= 2 ? MPR_PADSP1 : 0;
-#endif
+     * one pad it made the game count two controllers). Run-time CONSOLE mode:
+     * the Switch, or a handheld run with GE_CONSOLE=1. */
+    if (portIsConsole())
+        return n >= 2 ? MPR_PADSP1 : 0;
     if ((p1Type == 0 && n >= 1) || (p1Type == 2 && n == 1))
         return MPR_KBMP1;
     return n >= 2 ? MPR_PADSP1 : 0;
@@ -209,16 +211,12 @@ static int inStage(void)
 {
     return current_menu == GE_MENU_RUN_STAGE || current_menu == GE_MENU_INVALID;
 }
-#ifndef __SWITCH__
-/* Player 1 plays with the keyboard + mouse only: the pad is ignored in a stage. */
-static int padBlockedForP1(void) { return p1Type == 0 && inStage(); }
+/* Player 1 plays with the keyboard + mouse only: the pad is ignored in a stage.
+ * Never in console mode (no keyboard/mouse: the pad is the only device). */
+static int padBlockedForP1(void) { return !portIsConsole() && p1Type == 0 && inStage(); }
 /* Player 1 plays with a gamepad only: the keyboard + mouse is ignored in a stage
  * (unless no gamepad is connected, so the game stays playable). */
-static int kbmBlockedForP1(void) { return p1Type == 1 && nRealPads > 0 && inStage(); }
-#else
-static int padBlockedForP1(void) { return 0; }
-static int kbmBlockedForP1(void) { return 0; }
-#endif
+static int kbmBlockedForP1(void) { return !portIsConsole() && p1Type == 1 && nRealPads > 0 && inStage(); }
 static SDL_GameController *slotPad(int idx)
 {
     if (idx < 0 || idx >= MAX_PADS) return NULL;
@@ -1099,7 +1097,7 @@ void inputPadPrefSet(int player, const char *id)
     snprintf(padPref[player], sizeof padPref[player], "%s", id ? id : "");
     inputRequestRescan();   /* re-seat the pads now */
 }
-int inputP1Type(void) { return p1Type; }
+int inputP1Type(void) { return portIsConsole() ? 1 : p1Type; }   /* console: always a gamepad */
 
 /* A pad whose button went down since the last call: its id (as the Controller row stores it). 0 = none. */
 int inputAnyPadHeld(void)
@@ -3146,8 +3144,31 @@ static void padMapSelfTest(void)
     sysLogPrintf(fail ? LOG_ERROR : LOG_INFO, "GE_PADMAPTEST: %s", fail ? "FAIL" : "PASS");
 }
 
+/* CONSOLE mode (port/include/console.h): no keyboard/mouse. Resolved once on
+ * first use, which is after configLoad (main.c) so the ini key is readable. */
+static int cfgConsole;   /* System.Console: hidden ini override, 0/1 */
+int portIsConsole(void)
+{
+    static int resolved = -1;
+    if (resolved < 0) {
+        static const char *const kWhy[] = { "off", "Switch", "GE_CONSOLE", "ini" };
+        int why = 0;
+#ifdef __SWITCH__
+        const int isSwitch = 1;
+#else
+        const int isSwitch = 0;
+#endif
+        resolved = portConsoleResolve(isSwitch, getenv("GE_CONSOLE"),
+                                      configIntKeyWasLoaded("System.Console") ? cfgConsole : -1, &why);
+        sysLogPrintf(LOG_NOTE, resolved ? "console mode: on (%s)" : "console mode: %s",
+                     resolved ? kWhy[why] : kWhy[0]);
+    }
+    return resolved;
+}
+
 PD_CONSTRUCTOR static void inputConfigInit(void)
 {
+    configRegisterInt("System.Console", &cfgConsole, 0, 1);   /* hidden: not in the options menu */
     /* D518: per seat. The pre-D518 global key is kept as seat 1's, so an
      * existing ini keeps its value for P1 and P2-P4 start at Jinx. */
     configRegisterInt("Input.PadPreset",  &padPreset[0], 0, 5);   /* D498: 0 Jinx 1.1, 1 Christmas 1.2, 2 Frost 1.3, 3 Custom, 4 Elektra 1.4 */

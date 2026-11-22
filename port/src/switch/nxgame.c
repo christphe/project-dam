@@ -20,6 +20,7 @@
 #include "game/bondview.h"   /* struct player (Game.AimAssist) */
 #include "game/stan.h"
 #include "config.h"
+#include "console.h"
 #include "system.h"
 
 #define PUFF_YELLOW 1   /* g_BulletSparkColors[1], the game's body and wall puff */
@@ -63,7 +64,7 @@ PD_CONSTRUCTOR static void nxBloodRegisterConfig(void)
 }
 
 /*
- * Game.AimZoom: extra zoom while aiming, handheld only. On the 6.2" panel a
+ * Game.AimZoom: extra zoom while aiming, on a console (the Switch: handheld only). On the 6.2" panel a
  * guard's head is a few pixels wide, so the weapon's own aim zoom (none for
  * most guns) is not enough to place a headshot. With the option on, the
  * rendered vertical FOV is divided by this factor while the player aims
@@ -78,9 +79,19 @@ PD_CONSTRUCTOR static void nxBloodRegisterConfig(void)
 
 #if defined(PLATFORM_SWITCH)
 extern int nxIsHandheld(void);
-#else
-static int nxIsHandheld(void) { return 0; }   /* Game.AimZoom is a handheld option (nxmem.c) */
 #endif
+/* Game.AimZoom applies on a console (no keyboard/mouse, small screen): on the
+ * Switch only while handheld (the docked TV is big), on any other console
+ * (a PortMaster handheld, GE_CONSOLE=1) always. Never on a desktop. */
+static int aimZoomAllowed(void)
+{
+    if (!portIsConsole()) return 0;
+#if defined(PLATFORM_SWITCH)
+    return nxIsHandheld();
+#else
+    return 1;
+#endif
+}
 extern s32 getPlayerCount(void);
 extern bool currentPlayerGetIsAiming(void);
 
@@ -326,7 +337,7 @@ float nxAimZoomFactor(void)
     double aimMode = 0.0;   /* Input.AimMode: 0 = Original, 1 / 2 = centred */
 
     configGetValue("Input.AimMode", &aimMode);
-    if (s_aimZoom > 0 && nxIsHandheld() && coopIsMission() &&
+    if (s_aimZoom > 0 && aimZoomAllowed() && coopIsMission() &&
         aimMode != 0.0 && currentPlayerGetIsAiming()) {
         target = (s_aimZoom == 1) ? 1.5f : 2.0f;
     }

@@ -21,6 +21,7 @@
 #endif
 
 #include <SDL.h>
+#include "sdl_compat.h"   /* SDL_OpenURL on SDL < 2.0.14 */
 
 #include "platform.h"
 #include "system.h"

@@ -33,6 +33,7 @@ struct Expr {
     EV ident(const std::string& name) {
         EV e;
         if (name == "platform") { e.isStr = true; e.s = ctx.st->pc ? "pc" : "switch"; return e; }
+        if (name == "console") { e.n = ctx.st->console ? 1 : 0; return e; }
         if (name == "dev") { e.n = ctx.st->dev ? 1 : 0; return e; }
         if (name == "fileselect") { e.n = ctx.st->fileSelect ? 1 : 0; return e; }
         if (name == "profile") { e.n = ctx.st->profile ? 1 : 0; return e; }

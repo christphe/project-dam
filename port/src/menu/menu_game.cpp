@@ -9,6 +9,7 @@
  * the right one on a Switch pad, as on each console. */
 #include <PR/gbi.h>
 #include <SDL.h>
+#include "sdl_compat.h"   /* SDL_GetTicks64 on SDL < 2.0.18 */
 #include "../../third_party/imgui/imgui.h"
 #include "../../fast3d/gfx_api.h"
 #include "../../fast3d/gfx_ui.h"
@@ -17,6 +18,7 @@
 #include "menu_fonts.h"
 #include "menu_data.h"
 #include "menu_pad.h"
+#include "console.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -101,6 +103,7 @@ void init() {
 #else
     menu::setPlatform(true);
 #endif
+    menu::setConsole(portIsConsole() != 0);   /* the Switch, or GE_CONSOLE=1 / System.Console on a handheld */
     menu::setDev(portDevMode() != 0);   /* Dev.Mode in the ini */
     {
         std::string err;
