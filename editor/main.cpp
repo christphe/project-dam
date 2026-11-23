@@ -331,7 +331,7 @@ int main(int argc, char **argv)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
     ImGui::GetStyle().WindowRounding = 0;
-    io.FontGlobalScale = 1.15f;
+    ImGui::GetStyle().FontScaleMain = 1.15f;   // 1.92: was io.FontGlobalScale
     ImGui_ImplSDL2_InitForOpenGL(app.win, app.gl);
     ImGui_ImplOpenGL3_Init("#version 330");
 

@@ -664,9 +664,6 @@ file(GLOB_RECURSE SRC_PORT_CXX CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/src/*
 # Dear ImGui (MIT, vendored): the menu's widget layer. Core files only; the port draws it through
 # port/src/menu/imgui_gbi.cpp (no ImGui platform or renderer backend is used in the game).
 file(GLOB SRC_IMGUI CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/third_party/imgui/*.cpp")
-# include/math.h (the N64 SDK's) shadows the system one: <cmath> first pulls in the real <math.h>, so ImGui's
-# own #include <math.h> then finds sqrtf, powf, fabsf... already declared.
-set_source_files_properties(${SRC_IMGUI} PROPERTIES COMPILE_OPTIONS "-include;cmath")
 file(GLOB_RECURSE SRC_FAST3D CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/fast3d/*.cpp"
                                "${CMAKE_SOURCE_DIR}/port/fast3d/glad/*.c")
 
@@ -945,7 +942,6 @@ set(SRC
   ${SRC_ROMASSETS}
   ${SRC_DRAM_SYMS}
   ${SRC_PORT_CXX}
-  ${SRC_IMGUI}
   ${SRC_FAST3D}
   ${SRC_LIBAUDIO}
   ${SRC_LIBULTRARE_AUDIO}
@@ -975,6 +971,25 @@ set(BIN_NAME "ge007${BIN_REGION}.${TARGET_ARCH}")
 # (tests/) link the same objects with their own main.
 # The Switch build is untouched: no library, one executable from SRC (an object
 # library would compile the objects -fPIC instead of the executable's -fPIE).
+# Dear ImGui is compiled by its own static library with ONLY its own directory on the include path: the game's
+# include/ holds N64 SDK headers named like system ones (stdarg.h, math.h, ...), and include/stdarg.h pulls in
+# ultra64.h -> PR/os.h, whose `#define BLOCKSIZE 32` breaks imgui_internal.h (D66). The vendored ImGui stays
+# pristine and needs no -include workaround. Everything else (language standard, -O level, -fno-pie, warnings,
+# platform flags) is inherited from the directory; only the force-included versioninfo.h and the game's defines go.
+get_directory_property(_imgui_opts COMPILE_OPTIONS)
+list(FILTER _imgui_opts EXCLUDE REGEX "^(-include|versioninfo[.]h)$")
+add_library(ge_imgui STATIC ${SRC_IMGUI})
+set_property(TARGET ge_imgui PROPERTY INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/port/third_party/imgui")
+set_property(TARGET ge_imgui PROPERTY COMPILE_OPTIONS ${_imgui_opts})
+set_property(TARGET ge_imgui PROPERTY COMPILE_DEFINITIONS "")
+if(GE_SWITCH)
+  # The devkitA64 toolchain turns POSITION_INDEPENDENT_CODE on globally: CMake compiles executables -fPIE but a
+  # library -fPIC. ImGui used to be part of the executable (-fPIE); keep exactly that.
+  set_property(TARGET ge_imgui PROPERTY POSITION_INDEPENDENT_CODE OFF)
+  target_compile_options(ge_imgui PRIVATE -fPIE)
+endif()
+list(APPEND LIBS ge_imgui)   # a static library, so the CTest binaries (GE_CORE_LIBS) link it too
+
 set(GE_CORE_LIBS ${LIBS} ${GE_GAME_LINK_FLAGS})   # what a binary containing the core objects links
 if(GE_SWITCH)
   add_executable(ge007 ${SRC})

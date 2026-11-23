@@ -87,7 +87,7 @@ int psIcon(const char* pos) {
 }
 void drawIcon(ImDrawList* dl, int k, ImVec2 c, float size, ImU32 col) {
     const float h = size * 0.5f;
-    dl->AddImage((ImTextureID)(intptr_t)1, ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h),
+    dl->AddImage(ImGui::GetIO().Fonts->TexRef, ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h),
                  ImVec2(g_iconUv[k][0], g_iconUv[k][1]), ImVec2(g_iconUv[k][2], g_iconUv[k][3]), col);
 }
 /* how far a wheel notch scrolls an area that has nothing to select (the release text, a form of text only) */
@@ -397,7 +397,7 @@ void drawDiagram(ImDrawList* dl, const Control& c, float x, float y, float w, fl
     const float fs = 1.35f * u;
     const ImU32 ink = kInk, line = kRule;
     if (g_padAspect > 0)   /* the outline (a mask: its lines take this colour) */
-        dl->AddImage((ImTextureID)(intptr_t)1, ImVec2(px, py), ImVec2(px + pw, py + ph), ImVec2(g_padUv[0], g_padUv[1]), ImVec2(g_padUv[2], g_padUv[3]), IM_COL32(150, 150, 135, 255));
+        dl->AddImage(ImGui::GetIO().Fonts->TexRef, ImVec2(px, py), ImVec2(px + pw, py + ph), ImVec2(g_padUv[0], g_padUv[1]), ImVec2(g_padUv[2], g_padUv[3]), IM_COL32(150, 150, 135, 255));
     else
         box(dl, ImVec2(px, py), ImVec2(px + pw, py + ph), IM_COL32(21, 22, 15, 255), kRule);
     /* where each element is on the drawing, as fractions of it */
@@ -1375,7 +1375,7 @@ int g_modsFirst = 0;   /* the first card shown in the list */
 
 void modsPicture(ImDrawList* dl, int id, ImVec2 a, ImVec2 b, ImU32 tint, const char* alt, float u) {
     if (id >= 0 && id < 256 && g_thumbOk[id]) {
-        dl->AddImage((ImTextureID)(intptr_t)1, a, b, ImVec2(g_thumbUv[id][0], g_thumbUv[id][1]), ImVec2(g_thumbUv[id][2], g_thumbUv[id][3]), tint);
+        dl->AddImage(ImGui::GetIO().Fonts->TexRef, a, b, ImVec2(g_thumbUv[id][0], g_thumbUv[id][1]), ImVec2(g_thumbUv[id][2], g_thumbUv[id][3]), tint);
         dl->AddRect(a, b, kRule, 0.0f, 0, 1.0f);
     } else {
         box(dl, a, b, IM_COL32(24, 25, 20, 255), kRule);

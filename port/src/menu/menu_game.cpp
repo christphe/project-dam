@@ -102,45 +102,48 @@ static void buildAtlas() {
     std::vector<int> thumbRect;
     for (int k = 0; k < nThumb; k++) {
         int tw = 0, th = 0;
-        thumbRect.push_back(modsScreenThumbPixels(k, &tw, &th) ? io.Fonts->AddCustomRectRegular(tw, th) : -1);
+        thumbRect.push_back(modsScreenThumbPixels(k, &tw, &th) ? io.Fonts->AddCustomRect(tw, th) : -1);
     }
-    const int padRect = io.Fonts->AddCustomRectRegular(kMenuPadW, kMenuPadH);   /* the gamepad drawing, in the same texture */
+    const int padRect = io.Fonts->AddCustomRect(kMenuPadW, kMenuPadH);   /* the gamepad drawing, in the same texture */
     int iconRect[kMenuIconCount];   /* the PlayStation face-button icons, likewise */
-    for (int k = 0; k < kMenuIconCount; k++) iconRect[k] = io.Fonts->AddCustomRectRegular(kMenuIconSize, kMenuIconSize);
+    for (int k = 0; k < kMenuIconCount; k++) iconRect[k] = io.Fonts->AddCustomRect(kMenuIconSize, kMenuIconSize);
     unsigned char* px = nullptr;
     int w = 0, h = 0;
     io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
-    if (const ImFontAtlasCustomRect* r = io.Fonts->GetCustomRectByIndex(padRect)) {
+    if (ImFontAtlasRect rr; io.Fonts->GetCustomRect(padRect, &rr)) {
+        const ImFontAtlasRect* r = &rr;
         for (int y = 0; y < kMenuPadH; y++)
             for (int x = 0; x < kMenuPadW; x++) {
-                unsigned char* d = px + ((size_t)(r->Y + y) * (size_t)w + (size_t)(r->X + x)) * 4;
+                unsigned char* d = px + ((size_t)(r->y + y) * (size_t)w + (size_t)(r->x + x)) * 4;
                 d[0] = d[1] = d[2] = 255;
                 d[3] = kMenuPad[y * kMenuPadW + x];
             }
-        menu::setPadImage((float)r->X / (float)w, (float)r->Y / (float)h, (float)(r->X + kMenuPadW) / (float)w,
-                          (float)(r->Y + kMenuPadH) / (float)h, (float)kMenuPadW / (float)kMenuPadH);
+        menu::setPadImage((float)r->x / (float)w, (float)r->y / (float)h, (float)(r->x + kMenuPadW) / (float)w,
+                          (float)(r->y + kMenuPadH) / (float)h, (float)kMenuPadW / (float)kMenuPadH);
     }
     for (int k = 0; k < kMenuIconCount; k++) {
-        const ImFontAtlasCustomRect* r = io.Fonts->GetCustomRectByIndex(iconRect[k]);
-        if (!r) continue;
+        ImFontAtlasRect rr;
+        if (!io.Fonts->GetCustomRect(iconRect[k], &rr)) continue;
+        const ImFontAtlasRect* r = &rr;
         for (int y = 0; y < kMenuIconSize; y++)
             for (int x = 0; x < kMenuIconSize; x++) {
-                unsigned char* d = px + ((size_t)(r->Y + y) * (size_t)w + (size_t)(r->X + x)) * 4;
+                unsigned char* d = px + ((size_t)(r->y + y) * (size_t)w + (size_t)(r->x + x)) * 4;
                 d[0] = d[1] = d[2] = 255;
                 d[3] = kMenuIcons[k][y * kMenuIconSize + x];
             }
-        menu::setIconImage(k, (float)r->X / (float)w, (float)r->Y / (float)h, (float)(r->X + kMenuIconSize) / (float)w,
-                           (float)(r->Y + kMenuIconSize) / (float)h);
+        menu::setIconImage(k, (float)r->x / (float)w, (float)r->y / (float)h, (float)(r->x + kMenuIconSize) / (float)w,
+                           (float)(r->y + kMenuIconSize) / (float)h);
     }
     menu::setThumbImage(-1, 0, 0, 0, 0);
     for (int k = 0; k < nThumb; k++) {
         int tw = 0, th = 0;
         const unsigned char* src = thumbRect[k] >= 0 ? modsScreenThumbPixels(k, &tw, &th) : nullptr;
-        const ImFontAtlasCustomRect* r = src ? io.Fonts->GetCustomRectByIndex(thumbRect[k]) : nullptr;
-        if (!r) continue;
+        ImFontAtlasRect rr;
+        if (!src || !io.Fonts->GetCustomRect(thumbRect[k], &rr)) continue;
+        const ImFontAtlasRect* r = &rr;
         for (int y = 0; y < th; y++)
-            memcpy(px + ((size_t)(r->Y + y) * (size_t)w + (size_t)r->X) * 4, src + (size_t)y * (size_t)tw * 4, (size_t)tw * 4);
-        menu::setThumbImage(k, (float)r->X / (float)w, (float)r->Y / (float)h, (float)(r->X + tw) / (float)w, (float)(r->Y + th) / (float)h);
+            memcpy(px + ((size_t)(r->y + y) * (size_t)w + (size_t)r->x) * 4, src + (size_t)y * (size_t)tw * 4, (size_t)tw * 4);
+        menu::setThumbImage(k, (float)r->x / (float)w, (float)r->y / (float)h, (float)(r->x + tw) / (float)w, (float)(r->y + th) / (float)h);
     }
     io.Fonts->SetTexID((ImTextureID)(intptr_t)1);
     gfx_ui_set_atlas(px, w, h);

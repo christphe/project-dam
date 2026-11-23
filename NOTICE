@@ -78,9 +78,15 @@ It does NOT cover:
 THIRD-PARTY CODE: DEAR IMGUI
 --------------------------------------------------
 
-port/third_party/imgui/ is Dear ImGui 1.91.9, Copyright (c) 2014-2025 Omar Cornut,
+port/third_party/imgui/ is Dear ImGui 1.92.9b, Copyright (c) 2014-2026 Omar Cornut,
 MIT license (port/third_party/imgui/LICENSE.txt). It also contains stb_truetype,
 stb_rect_pack and stb_textedit by Sean Barrett (public domain / MIT).
+One local edit to the upstream files: imconfig.h disables the file and shell functions. The rest is
+the unmodified 1.92.9b release; the build compiles it without the game's include directories (CMakeLists.txt, ge_imgui).
+editor/third_party/imgui_backends/ holds the unmodified 1.92.9b SDL2 and OpenGL3 backends
+(imgui_impl_sdl2.*, imgui_impl_opengl3.*, imgui_impl_opengl3_loader.h) for the mission editor, same
+MIT license (editor/third_party/imgui_backends/LICENSE.txt). tools_pc/menuview/backends/ (Win32 and
+OpenGL3, a dev tool) holds the unmodified 1.92.9b files too.
 
 THIRD-PARTY FONTS: BARLOW CONDENSED AND FIRA SANS
 --------------------------------------------------
