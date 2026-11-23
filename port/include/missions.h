@@ -90,6 +90,7 @@ int         missionsObjectivesSuccess(void);
 
 /* ---- pccg: the setup row is rebuilt after the sidecar table is patched ---- */
 void        missionsOnPatchTable(void);
+void        missionsBeforeSetupLoad(int stage);    /* prop.c: rebuild the mission setup for the chosen difficulty */
 
 #ifdef __cplusplus
 }

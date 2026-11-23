@@ -21,6 +21,7 @@
 #include "mission_setup.h"
 #include "missions.h"
 #include "missions_priv.h"
+#include "game/lv.h"   /* lvlGetSelectedDifficulty */
 
 extern char *setup_text_pointers[];   /* src/game/chraidata.c: stage number -> "Usetup<name>Z" */
 int  pccgRowData(const char *name, const uint8_t **data, uint32_t *size);
@@ -38,6 +39,7 @@ static char s_dir[512] = "";           /* the active mission's folder */
 static char s_modDir[512] = "";        /* its mod folder (own scripts), "" for --mission outside a mod */
 static int  s_slot = -1;               /* its place in the mod's mission select */
 static char s_served[64] = "";         /* the setup row currently replaced */
+static int  s_builtDiff = -1;          /* the difficulty that row was built for (guards present per difficulty) */
 
 
 int         missionsActive(void) { return s_active; }
@@ -120,7 +122,8 @@ static void buildOverride(void)
     }
     raw = missionRzInflate(rz, rzn, &rawn);
     if (!raw) { sysLogPrintf(LOG_WARNING, "missions: cannot inflate %s", name); return; }
-    if (!missionApplySetup(&s_m, raw, rawn, s_spawn, levelPosScale(s_stage), &res, err, sizeof err)) {
+    s_builtDiff = (int)lvlGetSelectedDifficulty();
+    if (!missionApplySetupEx(&s_m, raw, rawn, s_spawn, levelPosScale(s_stage), s_builtDiff, &res, err, sizeof err)) {
         sysLogPrintf(LOG_WARNING, "missions: cannot apply the mission to %s: %s", name, err);
         free(raw);
         return;
@@ -140,6 +143,17 @@ static void buildOverride(void)
         sysLogPrintf(LOG_WARNING, "missions: could not serve the rebuilt %s", name);
     }
     free(store);
+}
+
+/* Called by the game (prop.c, #ifdef PORT) just before it loads a stage's setup file. The difficulty is set by then
+ * (front.c init_menu0B_runstage); the row was built when the mission was chosen, before the difficulty screen, so it
+ * is rebuilt here when the difficulty differs: a guard can be present on some difficulties only. */
+void missionsBeforeSetupLoad(int stage)
+{
+    if (!s_active || stage != s_stage || !s_served[0] || s_builtDiff == (int)lvlGetSelectedDifficulty()) return;
+    pccgRestoreRow(s_served);
+    s_served[0] = 0;
+    buildOverride();
 }
 
 void missionsOnPatchTable(void)

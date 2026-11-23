@@ -24,6 +24,8 @@
 #include "missions.h"
 #include "missions_priv.h"
 #include "realzlib.h"
+
+static int iabs(int v) { return v < 0 ? -v : v; }   /* the game's stdlib.h shadows the host one: no abs() */
 #include "mission_thumb.h"
 #include "game/front.h"   /* current_menu, MENU_MISSION_SELECT */
 
@@ -94,7 +96,7 @@ static int pngGray(const char *path, int dw, int dh, uint8_t *out)
             case 1: v += a; break;
             case 2: v += b; break;
             case 3: v += (a + b) / 2; break;
-            case 4: { int p = a + b - c, pa = abs(p - a), pb = abs(p - b), pc = abs(p - c);
+            case 4: { int p = a + b - c, pa = iabs(p - a), pb = iabs(p - b), pc = iabs(p - c);
                       v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c); break; }
             case 0: break;
             default: goto done;
