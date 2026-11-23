@@ -11,6 +11,10 @@
 
 ### Changed
 - PC: a fresh install now uses the Switch's defaults for the Centered aim style, 4x anti-aliasing and blood on hit; an existing ini keeps its values
+- PC: the stick deadzone is 10% on both sticks by default, as on the Switch (it was 25%, which swallowed the small aim movements); a deadzone you set yourself is kept
+
+### Fixed
+- PC: a first launch that did not end with a clean quit (a crash, a killed window) left the stick deadzones at 0% from the next launch, so the sticks drifted; such inis are repaired to 10% once
 
 ## [0.4.0] - 2026-11-21
 

@@ -417,15 +417,14 @@ int *inputControlSchemePtr(int seat) { return &controlScheme[(seat >= 0 && seat 
  * "Look up/down" (watchsettings.c keeps the two in sync both ways). */
 #if defined(PLATFORM_SWITCH)
 /* project-dam: the console's controller defaults, the maintainer's tuned values:
- * both sticks' deadzone 10 %, look sensitivity 0.85x, look inverted vertically,
- * look smoothing 2, trigger point 10 %. */
-#define NX_DZ_L          3000
+ * look sensitivity 0.85x, look inverted vertically, look smoothing 2,
+ * trigger point 10 %. Both sticks' deadzone is 10 % on every platform
+ * (PAD_DZ_DEFAULT). */
 #define NX_LOOK_SENS     85
 #define NX_LOOK_SMOOTH   2
 #define NX_TRIGGER_PCT   10
 #define NX_LOOK_INVERT_Y 1
 #else
-#define NX_DZ_L          PAD_DZ_UNSET
 #define NX_LOOK_SENS     100
 #define NX_LOOK_SMOOTH   0
 #define NX_TRIGGER_PCT   25
@@ -873,17 +872,16 @@ static Uint64 s_lastLookPollCounter = 0;  /* D194(b): monotonic clock, gameplay-
 /* Gamepad tuning -- defaults reproduce the old hardcoded constants exactly.
  * Wave A (v0.5.0 controller/input wave, docs/dev/CONTROLLER-INPUT-PLAN.md):
  * per-stick deadzone splits the single Input.PadDeadzone into a left (movement)
- * and a right (look) value (padDeadzone stays registered so old inis load; the
- * unset L/R values migrate from it once in inputInit). The look knobs
- * (sens X/Y, smoothing) are feel-only and identity at their defaults. */
-#define PAD_DZ_UNSET (-1)   /* C init for padDeadzoneL/R: "not in ini -> migrate" */
-static int padDeadzoneL    = NX_DZ_L;    /* left (movement) stick deadzone, raw 0..32767 */
-#if defined(PLATFORM_SWITCH)
-#define NX_STICK_DEADZONE_R 3000   /* project-dam: 10 % right-stick deadzone on the console */
-static int padDeadzoneR    = NX_STICK_DEADZONE_R;
-#else
-static int padDeadzoneR    = PAD_DZ_UNSET;    /* right (look) stick deadzone, raw 0..32767 */
-#endif
+ * and a right (look) value (padDeadzone stays registered so old inis load; an
+ * ini that has the old key but not the new ones seeds L/R from it once in
+ * inputInit). The look knobs (sens X/Y, smoothing) are feel-only and identity
+ * at their defaults.
+ * project-dam: no "unset" sentinel any more. The first run writes the ini
+ * before inputInit, so a -1 initializer reached the file, and the next load
+ * clamped it to 0 = no deadzone (stick drift). */
+#define PAD_DZ_DEFAULT 3000   /* 10 % on both sticks, every platform (= defaults.json) */
+static int padDeadzoneL    = PAD_DZ_DEFAULT;    /* left (movement) stick deadzone, raw 0..32767 */
+static int padDeadzoneR    = PAD_DZ_DEFAULT;    /* right (look) stick deadzone, raw 0..32767 */
 static int padDeadzone     = STICK_DEADZONE;  /* legacy shared deadzone (Input.PadDeadzone) */
 static int padLookSensX    = NX_LOOK_SENS;             /* right-stick look: horizontal sensitivity, % (100 = native) */
 static int padLookSensY    = NX_LOOK_SENS;             /* right-stick look: vertical (pitch) sensitivity, % */
@@ -1395,10 +1393,11 @@ int inputInit(void)
 
     /* Wave A: one-time per-stick deadzone migration. Old inis carry a single
      * Input.PadDeadzone; if the player has not set the new per-stick keys, seed
-     * both from it (the C-init sentinel PAD_DZ_UNSET means "not in the ini").
-     * Runs before any configSave, so the saved L/R values are always valid. */
-    if (padDeadzoneL == PAD_DZ_UNSET) padDeadzoneL = padDeadzone;
-    if (padDeadzoneR == PAD_DZ_UNSET) padDeadzoneR = padDeadzone;
+     * both from it. A fresh install has neither key and keeps PAD_DZ_DEFAULT. */
+    if (configIntKeyWasLoaded("Input.PadDeadzone")) {
+        if (!configIntKeyWasLoaded("Input.PadDeadzoneL")) padDeadzoneL = padDeadzone;
+        if (!configIntKeyWasLoaded("Input.PadDeadzoneR")) padDeadzoneR = padDeadzone;
+    }
     /* D546: one-time move of the untouched old deadzone default (7000 = 23 %)
      * to the standardized 25 % (7500); a value the player set is kept. */
     if (inputDefaultsRev < 1) {
@@ -1406,6 +1405,19 @@ int inputInit(void)
         if (padDeadzoneL == 7000) padDeadzoneL = STICK_DEADZONE;
         if (padDeadzoneR == 7000) padDeadzoneR = STICK_DEADZONE;
         inputDefaultsRev = 1;
+    }
+    /* project-dam: the desktop default deadzone 25 % -> 10 % on both sticks,
+     * as on the console (modern shooters use 5-15 %; 25 % swallowed the small
+     * aim movements). Only the untouched old default moves. The console moved
+     * its right stick in NxDefaultsRev 2; its left stick was already 10 %.
+     * 0 is the old first-run bug (a -1 sentinel saved, then clamped to 0 by
+     * the next load): heal it too. The console never had the sentinel. */
+    if (inputDefaultsRev < 2) {
+#if !defined(PLATFORM_SWITCH)
+        if (padDeadzoneL == STICK_DEADZONE || padDeadzoneL <= 0) padDeadzoneL = PAD_DZ_DEFAULT;
+        if (padDeadzoneR == STICK_DEADZONE || padDeadzoneR <= 0) padDeadzoneR = PAD_DZ_DEFAULT;
+#endif
+        inputDefaultsRev = 2;
     }
 #if defined(PLATFORM_SWITCH)
     /* project-dam: inis written by 0.1.0 carry the N64 aim style as a plain
@@ -1418,7 +1430,7 @@ int inputInit(void)
      * use 5-12 %, and 25 % swallowed the small aim movements. Only the
      * untouched default moves; a value the player set is kept. */
     if (nxDefaultsRev < 2) {
-        if (padDeadzoneR == STICK_DEADZONE) padDeadzoneR = NX_STICK_DEADZONE_R;
+        if (padDeadzoneR == STICK_DEADZONE) padDeadzoneR = PAD_DZ_DEFAULT;
         nxDefaultsRev = 2;
     }
 #endif
@@ -3256,7 +3268,7 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
     configRegisterInt("Input.PadDeadzone", &padDeadzone, 0, 30000);  /* legacy; Wave A migrates to L/R */
     configRegisterInt("Input.PadDeadzoneL", &padDeadzoneL, 0, 30000);  /* Wave A: left (movement) stick */
     configRegisterInt("Input.PadDeadzoneR", &padDeadzoneR, 0, 30000);  /* Wave A: right (look) stick */
-    configRegisterInt("Input.DefaultsRev", &inputDefaultsRev, 0, 1);   /* D546 */
+    configRegisterInt("Input.DefaultsRev", &inputDefaultsRev, 0, 2);   /* D546; 2 = project-dam 10 % deadzone */
     configRegisterInt("Input.PadLookSensX", &padLookSensX, 25, 200);   /* Wave A: look horizontal sensitivity (%) */
     configRegisterInt("Input.PadLookSensY", &padLookSensY, 25, 200);
     configRegisterInt("Input.PadAimLookSens", &padAimLookSens, 25, 200);   /* project-dam */

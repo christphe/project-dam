@@ -245,14 +245,12 @@
    "why": "inverted look by default (maintainer's choice, #78)"
   },
   "Input.PadDeadzoneL": {
-   "switch": 3000,
-   "pc": 7500,
-   "why": "= STICK_DEADZONE (7500 = 25%, D546), Wave A"
+   "value": 3000,
+   "why": "10 % on both sticks, every platform (modern shooters use 5-15 %; the old desktop 25 % swallowed small aim movements)"
   },
   "Input.PadDeadzoneR": {
-   "switch": 3000,
-   "pc": 7500,
-   "why": "= STICK_DEADZONE (7500 = 25%, D546), Wave A"
+   "value": 3000,
+   "why": "10 % on both sticks, every platform (modern shooters use 5-15 %; the old desktop 25 % swallowed small aim movements)"
   },
   "Input.PadLookSensX": {
    "switch": 85,
