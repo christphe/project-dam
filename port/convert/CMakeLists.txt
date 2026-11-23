@@ -18,6 +18,7 @@ add_library(ge007_convert STATIC ${CONVERT_SRC})
 target_include_directories(ge007_convert PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(ge007_convert PRIVATE "${ZLIB_INCLUDE_DIR}")
 target_compile_options(ge007_convert PRIVATE -O2 -Wall -Wextra)
+target_link_libraries(ge007_convert PUBLIC m)   # conv_subdiv.c: sqrtf, floorf
 
 if(NOT GE_SWITCH)
   add_executable(ge007-convert ge007_convert_cli.c)

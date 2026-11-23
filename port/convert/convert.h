@@ -17,6 +17,14 @@
 
 #define CV_NREGIONS 3
 
+/* Generation of the model sidecars. Bump it whenever pcmodels.bin changes
+ * (it is written to pcmodels-<region>/converter.ver); the game re-converts
+ * the models once when the file is missing or differs (romconvert.c).
+ * 1 = the plain conversion, 2 = character models subdivided, 3 = only the head parts are
+ * subdivided, body parts keep the detailed mesh at every distance (conv_subdiv.c). */
+#define CV_CONVERTER_VERSION 3
+int cv_converter_version(void);
+
 typedef struct { uint32_t off, size; const char *base; } CvFileRow;
 typedef struct {
     const char *region;   /* "ntsc-final" */

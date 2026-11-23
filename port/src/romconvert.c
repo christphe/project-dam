@@ -15,6 +15,11 @@
  * no-op (two fsExists). On Switch the output lands next to the NRO
  * (sdmc:/switch/<app>/data/), since libnx starts with that as the CWD.
  *
+ * The model sidecars carry a converter version (pcmodels-<region>/converter.ver,
+ * written by the converter). When it is missing or differs from the compiled
+ * one (CV_CONVERTER_VERSION) the models are converted again, once, so a user
+ * with older sidecars gets the current models without deleting anything.
+ *
  * Returns 1 when both sidecars are present (already or after converting),
  * -1 when they could not be produced (caller should abort boot with a
  * message rather than crash later in modelPromoteNodeOffsetsToPointers, D179).
@@ -62,11 +67,40 @@ static int rcSidecarsPresent(const char *region)
     return rcExistsResolved(rel);
 }
 
+/* Version of the model sidecars on disk: the number in converter.ver, 1 when
+ * the file is missing (sidecars made before versioning), 0 when unreadable. */
+static int rcModelsVersion(const char *region)
+{
+    char rel[256];
+    char buf[16];
+    const char *p;
+    FSFile *f;
+    int32_t n;
+    int v = 0;
+
+    snprintf(rel, sizeof(rel), "$S/pcmodels-%s/converter.ver", region);
+    p = sysResolvePath(rel);
+    if (!fsExists(p))
+        return 1;
+    f = fsOpen(p, "rb");
+    if (!f)
+        return 0;
+    n = fsRead(f, buf, (int32_t)sizeof(buf) - 1);
+    fsClose(f);
+    for (int32_t i = 0; i < n && buf[i] >= '0' && buf[i] <= '9'; i++)
+        v = v * 10 + (buf[i] - '0');
+    return v;
+}
+
 /* port/convert/conv_main.c (CV_STEP_ALL == 7). Declared here, not via
  * convert.h: this TU sees the decomp include path. */
 extern int cv_convert_rom(const char *rom_path, const char *region, const char *out_root, int steps);
+extern int cv_converter_version(void);
 typedef void (*CvProgressFn)(void *user, int stage, int done, int total);
 extern void cv_set_progress(CvProgressFn fn, void *user);
+
+/* Models-only pass (version bump): the one stage fills the whole bar. */
+static int s_modelsOnly;
 
 /* Stages match convert.h (CV_NSTAGES == 3), weighted equally on the bar. */
 static void rcProgress(void *user, int stage, int done, int total)
@@ -77,15 +111,18 @@ static void rcProgress(void *user, int stage, int done, int total)
     float frac = total > 0 ? (float)done / (float)total : 0.f;
     (void)user;
     if (stage < 0 || stage > 2) return;
+    if (s_modelsOnly) { bootscreenProgress(labels[stage], frac); return; }
     bootscreenProgress(labels[stage], ((float)stage + frac) / 3.f);
 }
 
-static int rcConvert(const char *rom, const char *out)
+/* steps: CV_STEP_* mask (7 = everything, 1 = the models only) */
+static int rcConvert(const char *rom, const char *out, int steps)
 {
     int code;
+    s_modelsOnly = steps == 1;
     bootscreenProgress("Starting", 0.f);
     cv_set_progress(rcProgress, NULL);
-    code = cv_convert_rom(rom, NULL, out, 7);
+    code = cv_convert_rom(rom, NULL, out, steps);
     cv_set_progress(NULL, NULL);
     if (code == 0)
         bootscreenDone();
@@ -99,7 +136,9 @@ int romConvertEnsureSidecars(const unsigned char *romImg, const char *romRelPath
     if (!region)
         return 1;   /* unknown country — romHeaderValid() rejects it anyway */
 
-    if (rcSidecarsPresent(region))
+    const int present = rcSidecarsPresent(region);
+    const int stale = present && rcModelsVersion(region) != cv_converter_version();
+    if (present && !stale)
         return 1;
 
     /* Resolve the ROM path we were given ("$S/...", "$E/..." or "./...") to
@@ -111,9 +150,13 @@ int romConvertEnsureSidecars(const unsigned char *romImg, const char *romRelPath
     char outDir[1024];
     snprintf(outDir, sizeof(outDir), "%s", exedir[0] ? exedir : ".");
 
-    sysLogPrintf(LOG_INFO,
-        "romconvert: sidecars missing - converting the ROM (one-time, a few seconds)...");
-    int code = rcConvert(romPath, outDir);
+    if (stale)
+        sysLogPrintf(LOG_INFO,
+            "romconvert: model sidecars are from an older converter - converting the models again (one-time)...");
+    else
+        sysLogPrintf(LOG_INFO,
+            "romconvert: sidecars missing - converting the ROM (one-time, a few seconds)...");
+    int code = rcConvert(romPath, outDir, stale ? 1 : 7);
     if (code != 0)
         sysLogPrintf(LOG_ERROR,
             "romconvert: conversion failed (code %d) - a non-retail or "
@@ -130,6 +173,7 @@ int romConvertEnsureSidecars(const unsigned char *romImg, const char *romRelPath
             "The log has the details.");
         return -1;
     }
-    sysLogPrintf(LOG_INFO, "romconvert: sidecars generated — continuing boot");
+    sysLogPrintf(LOG_INFO, "romconvert: sidecars %s — continuing boot",
+                 stale ? "updated" : "generated");
     return 1;
 }

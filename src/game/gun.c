@@ -107,8 +107,9 @@ u32 D_80032458 = 0;
 /* PC port (D45): Gfx slots are 16B on x86-64, so model-file GDL regions double
  * and texture-marker expansion adds data-driven RDP commands. bondview's
  * body+head+held-prop chain worst case is 0x1DB9A; the suit path needs pool
- * 0xA0B0 + region 0x18000 = 0x220B0. See docs/dev/findings.md D45. */
-u32 size_item_buffer[] = {0x23000, 0x23000};
+ * 0xA0B0 + region 0x18000 = 0x220B0. See docs/dev/findings.md D45.
+ * Subdivided heads (conv_subdiv.c): Bond chain ~0x312B6 -> 0x3E000 (+25%). */
+u32 size_item_buffer[] = {0x3E000, 0x3E000};
 #else
 u32 size_item_buffer[] = {0x14820, 0x14820};
 #endif

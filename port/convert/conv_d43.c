@@ -5,12 +5,17 @@
  * outputs diff byte-identical; see its docstring and comments (D43..D120,
  * D303) for the format rationale.
  *
+ * Character models (names starting with 'C') go through conv_subdiv.c first:
+ * it rewrites the decompressed N64 image (subdivided near LOD + original far
+ * LOD per display-list node) and the rest of this file converts that image.
+ *
  * Not ported: the buffer-fit cross-checks the Python script prints after the
  * conversion (chain / stage-bank analysis). They gate converter *changes*, not
  * the output; run `python tools_pc/d43_emit.py --check-only` for them.
  */
 #include "convert.h"
 #include "cvbytes.h"
+#include "conv_subdiv.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -810,8 +815,20 @@ static int candidate(const char *name, int k, char *out, size_t cap)
     return 1;
 }
 
+static CvSdStats g_sd;
+
+/* Dev aid: GE_CONVERT_SUBDIV=0 converts the character models without the
+ * subdivision pass (to A/B a build or bisect a problem). */
+static int cv_subdiv_enabled(void)
+{
+    const char *e = getenv("GE_CONVERT_SUBDIV");
+    return !(e && e[0] == '0');
+}
+
 static int process(CvCtx *c, const char *name, CvBuf *comp_out)
 {
+    uint8_t *xp = NULL;
+    uint32_t xlen = 0;
     char key[160];
     const CvFileRow *row = NULL;
     CvBuf dec = {0};
@@ -840,6 +857,11 @@ static int process(CvCtx *c, const char *name, CvBuf *comp_out)
     ns = cv_nsnt[hk].ns; nt = cv_nsnt[hk].nt;
 
     f.c = c; f.name = name; f.src = dec.p; f.D = (uint32_t)dec.len; f.NS = ns; f.NT = nt;
+    if (name[0] == 'C' && cv_subdiv_enabled()) {
+        int r = cv_subdiv_model(dec.p, (uint32_t)dec.len, ns, nt, !strncmp(name, "Chead", 5), &xp, &xlen, &g_sd);
+        if (r < 0) { cv_err(c, "%s: subdivision failed", name); cv_buf_free(&dec); return -1; }
+        if (r == 1) { f.src = xp; f.D = xlen; }
+    }
     f.nodes = calloc(f.D + 1, sizeof(Node));
     f.node_newoff = malloc((f.D + 1) * sizeof(int32_t));
     f.rec_newoff = malloc((f.D + 1) * sizeof(int32_t));
@@ -892,6 +914,7 @@ done:
     VEC_FREE(f.zero_vtx); VEC_FREE(f.all_gdls); VEC_FREE(f.blobs);
     free(f.nodes); free(f.node_newoff); free(f.rec_newoff); free(f.gdl_newoff);
     free(f.is_coll); free(f.pointusage); free(f.rnew_idx); free(f.buf);
+    free(xp);
     cv_buf_free(&dec);
     return rc;
 }
@@ -901,6 +924,7 @@ int cv_run_d43(CvCtx *c, const char *out_dir)
     CvSidecar sc;
     int nmodels = 0;
     memset(&sc, 0, sizeof sc);
+    memset(&g_sd, 0, sizeof g_sd);
     for (int i = 0; i < cv_table_count; i++) {
         CvBuf comp = {0};
         cv_progress(0, i, cv_table_count);
@@ -917,6 +941,21 @@ int cv_run_d43(CvCtx *c, const char *out_dir)
     cv_buf_zero(&sc.img, (16 - (sc.img.len % 16)) % 16);
     if (cv_sc_write(&sc, out_dir, "pcmodels.bin")) { fprintf(stderr, "cannot write %s\n", out_dir); cv_sc_free(&sc); return -1; }
     printf("wrote %d sidecars to %s/pcmodels.bin\n", sc.n, out_dir);
+    printf("subdivision: %d character files, %d/%d DL nodes wrapped (%d skipped, %d verify failures), "
+           "triangles %ld -> %ld, vertices %ld -> %ld (%ld PN / %ld flat midpoints), highest vertex-cache slot used %d, "
+           "%d rebuilt DLs (most G_MTX in one: %d, %d with >= 32)\n",
+           g_sd.models, g_sd.done, g_sd.nodes, g_sd.skipped, g_sd.verify_fail,
+           g_sd.tri_before, g_sd.tri_after, g_sd.vtx_before, g_sd.vtx_after, g_sd.mid_pn, g_sd.mid_flat, g_sd.max_slot, g_sd.dls, g_sd.max_mtx, g_sd.mtx_over);
+    printf("head/body: %d head DL nodes, %d body DL nodes; head game LODs shifted %d, body game LODs collapsed to the detailed mesh %d "
+           "(%d simplified DLs dropped); %d head DLs under a game LOD fell back to wrapping; %d head DLs got a new LOD pair\n",
+           g_sd.head_nodes, g_sd.body_nodes, g_sd.lod_shifted, g_sd.lod_collapsed, g_sd.dl_dropped, g_sd.lod_fallback_dl, g_sd.dl_wrapped);
+    {   /* converter version, read by the game's first-launch check (romconvert.c) */
+        char path[1100];
+        FILE *vf;
+        snprintf(path, sizeof path, "%s/converter.ver", out_dir);
+        vf = fopen(path, "wb");
+        if (vf) { fprintf(vf, "%d\n", CV_CONVERTER_VERSION); fclose(vf); }
+    }
     printf("total reservation needed: %#zx bytes (romSize + this must fit the extended VirtualAlloc)\n", sc.img.len);
     cv_sc_free(&sc);
     return 0;

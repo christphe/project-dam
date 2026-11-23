@@ -8119,8 +8119,9 @@ void init_menu18_displaycast(void)
 #if defined(PORT)
     /* PC port (D45/D46): cast-screen chain strict bound is 0x240DC (rifle);
      * D46 overlap-safety analysis: R >= P_conv + 16*M_actual, so the zbuf
-     * below must not be clobbered by marker expansion into [P_conv, R). */
-    bufferRemaining = 0x25000; 
+     * below must not be clobbered by marker expansion into [P_conv, R).
+     * Subdivided heads (conv_subdiv.c): worst body + head ~0x37B6E -> 0x46000 (+25%). */
+    bufferRemaining = 0x46000;
 #else
     bufferRemaining = 0x18160; 
 #endif

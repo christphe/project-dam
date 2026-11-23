@@ -41,6 +41,11 @@ At boot `romdataInit()` calls `romConvertEnsureSidecars()` (`port/src/romconvert
 `.bin` files exist it does nothing. Otherwise it runs the converter in the game's own process,
 writes the trees into `data/`, and checks again. It takes a few seconds and runs once.
 
+The models tree also holds `converter.ver` (`CV_CONVERTER_VERSION` in `port/convert/convert.h`;
+a missing file counts as 1). When it differs from the running converter's, boot re-runs only the
+models step, once. Bump the version whenever a converter change alters model output
+([model-subdivision.md](model-subdivision.md)).
+
 If the files still cannot be produced, boot stops with a message asking for a retail `.z64` ROM.
 That is deliberate: a missing sidecar would otherwise crash much later, in model loading.
 

@@ -34,8 +34,9 @@ void init_menus_or_reset(void)
 #if defined(PORT)
     /* PC port (D45/D46): texpool 0x19000 + model region 0x25000 (D46) +
      * zbuf @ALIGN64(0x3E000) size 440x330x2=0x46B80 -> 0x84B80, rounded to
-     * 0x85000; logo/gunbarrel/wallet usage is unchanged. */
-    ptr_logo_and_walletbond_DL = (u8 *)mempAllocBytesInBank(0x85000, MEMPOOL_STAGE); // allocation in bytes so cast to u8 from gfx
+     * 0x85000; logo/gunbarrel/wallet usage is unchanged. Subdivided heads
+     * (conv_subdiv.c): model region 0x46000 -> 0x19000 + 0x46000 + 0x46B80 -> 0xA6000. */
+    ptr_logo_and_walletbond_DL = (u8 *)mempAllocBytesInBank(0xA6000, MEMPOOL_STAGE); // allocation in bytes so cast to u8 from gfx
 #else
     ptr_logo_and_walletbond_DL = (u8 *)mempAllocBytesInBank(0x78000, MEMPOOL_STAGE); // allocation in bytes so cast to u8 from gfx
 #endif

@@ -46,6 +46,8 @@ static int region_index_by_name(const char *name)
     return -1;
 }
 
+int cv_converter_version(void) { return CV_CONVERTER_VERSION; }
+
 int cv_convert_rom(const char *rom_path, const char *region, const char *out_root, int steps)
 {
     FILE *f;
