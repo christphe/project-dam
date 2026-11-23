@@ -2,6 +2,7 @@
 // so one action is one undo step (also when it creates a pad on the way).
 #include "doc.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -343,6 +344,157 @@ bool Doc::setMissionLevel(const std::string &lvl, std::string &err)
     if (lvl == mission.level) return true;
     const std::string snap = snapshot();
     snprintf(mission.level, sizeof mission.level, "%s", lvl.c_str());
+    commit(snap);
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// the emptied level, AI lists, objectives
+
+// The setup prop types of the things a player picks up: key (4), magazine (7), weapon / collectable (8; also the weapons
+// guards carry), ammo (20), body armour (21). Doors, glass, scenery and the other objects stay.
+static bool isPickupType(int t) { return t == 4 || t == 7 || t == 8 || t == 20 || t == 21; }
+
+bool Doc::emptyLevel(int &guards, int &objects, std::string &err)
+{
+    guards = objects = 0;
+    if (!hasMission) { err = "no mission is open"; return false; }
+    if (!hasLevel) { err = "no level export is loaded"; return false; }
+    std::string snap = snapshot();
+    for (const LProp &p : level.props) {
+        int op;
+        if (p.type == 9) {
+            if (findOp(true, p.index, op)) { if (mission.guards[op].op == MISSION_OP_REMOVE) continue; mission.guards[op].op = MISSION_OP_REMOVE; }
+            else {
+                MissionGuardOp g; memset(&g, 0, sizeof g);
+                g.op = MISSION_OP_REMOVE; g.prop = p.index; g.model = g.ai = -1;
+                arrPush(mission.guards, mission.nguards, g);
+            }
+            guards++;
+        } else if (isPickupType(p.type)) {
+            if (findOp(false, p.index, op)) { if (mission.objects[op].op == MISSION_OP_REMOVE) continue; mission.objects[op].op = MISSION_OP_REMOVE; }
+            else {
+                MissionObjectOp o; memset(&o, 0, sizeof o);
+                o.op = MISSION_OP_REMOVE; o.prop = p.index; o.type = o.model = o.item = -1;
+                arrPush(mission.objects, mission.nobjects, o);
+            }
+            objects++;
+        }
+    }
+    commit(snap);
+    return true;
+}
+
+bool Doc::emptyOrDefer(std::string &err)
+{
+    if (hasLevel && hasMission && level.name == mission.level) { int g = 0, o = 0; emptyPending = false; return emptyLevel(g, o, err); }
+    emptyPending = true;
+    return true;
+}
+
+bool Doc::setGuardAi(const ItemRef &it, int ai, std::string &err)
+{
+    if (!hasMission) { err = "no mission is open"; return false; }
+    if (!it.valid || !it.guard) { err = "not a guard"; return false; }
+    if (ai < 0 || ai > 0xFFFF) { err = "the AI list id must be 0..65535"; return false; }
+    if (!itemInRange(it)) { err = "no such guard"; return false; }
+    std::string snap = snapshot();
+    if (it.added) mission.guards[it.idx].ai = ai;
+    else {
+        const LProp *p = hasLevel ? level.prop(it.idx) : nullptr;
+        if (!p || p->type != 9) { err = "the level has no guard prop " + std::to_string(it.idx); return false; }
+        int op;
+        if (findOp(true, it.idx, op)) {
+            if (mission.guards[op].op == MISSION_OP_REMOVE) { err = "that guard is removed by the mission"; return false; }
+            mission.guards[op].ai = ai;
+        } else {
+            MissionGuardOp g; memset(&g, 0, sizeof g);
+            g.op = MISSION_OP_MOVE; g.prop = it.idx; g.pad.is_new = 0; g.pad.num = p->pad; g.model = -1; g.ai = ai;   // stays on its own pad
+            arrPush(mission.guards, mission.nguards, g);
+        }
+    }
+    commit(snap);
+    return true;
+}
+
+bool Doc::addObjective(const std::string &text, int difficulty, std::string &err)
+{
+    if (!hasMission) { err = "no mission is open"; return false; }
+    std::string snap = snapshot();
+    MissionObjective o; memset(&o, 0, sizeof o);
+    for (int n = 1;; n++) {
+        char id[MISSION_ID_LEN];
+        snprintf(id, sizeof id, "o%d", n);
+        bool used = false;
+        for (int i = 0; i < mission.nobjectives; i++) if (strcmp(mission.objectives[i].id, id) == 0) used = true;
+        if (!used) { snprintf(o.id, sizeof o.id, "%s", id); break; }
+    }
+    fillStr(o.text, sizeof o.text, text);
+    o.difficulty = difficulty < 0 ? 0 : difficulty > 2 ? 2 : difficulty;
+    arrPush(mission.objectives, mission.nobjectives, o);
+    commit(snap);
+    return true;
+}
+
+bool Doc::removeObjective(int index, std::string &err)
+{
+    if (!hasMission || index < 0 || index >= mission.nobjectives) { err = "no such objective"; return false; }
+    std::string snap = snapshot();
+    arrErase(mission.objectives, mission.nobjectives, index);
+    commit(snap);
+    return true;
+}
+
+bool Doc::moveObjective(int index, int newIndex, std::string &err)
+{
+    if (!hasMission || index < 0 || index >= mission.nobjectives || newIndex < 0 || newIndex >= mission.nobjectives) { err = "no such objective"; return false; }
+    if (index == newIndex) return true;
+    std::string snap = snapshot();
+    const MissionObjective o = mission.objectives[index];
+    arrErase(mission.objectives, mission.nobjectives, index);
+    // re-insert at newIndex
+    MissionObjective last; memset(&last, 0, sizeof last);
+    arrPush(mission.objectives, mission.nobjectives, last);
+    for (int k = mission.nobjectives - 1; k > newIndex; k--) mission.objectives[k] = mission.objectives[k - 1];
+    mission.objectives[newIndex] = o;
+    commit(snap);
+    return true;
+}
+
+bool Doc::setPresence(const ItemRef &it, int mask, std::string &err)
+{
+    if (!hasMission) { err = "no mission is open"; return false; }
+    if (!it.valid) { err = "no such item"; return false; }
+    if (!itemInRange(it)) { err = "no such item"; return false; }
+    if (isAssignedWeapon(it)) { err = "a weapon a guard carries goes with its guard: set the guard"; return false; }
+    mask &= MISSION_DIFF_ALL;
+    if (mask == MISSION_DIFF_ALL) mask = 0;
+    if (!it.added && hasLevel && !level.prop(it.idx)) { err = "the level has no prop " + std::to_string(it.idx); return false; }
+    std::string snap = snapshot();
+    if (it.added) {
+        if (it.guard) mission.guards[it.idx].diff_mask = mask; else mission.objects[it.idx].diff_mask = mask;
+    } else {
+        int op;
+        if (findOp(it.guard, it.idx, op)) {
+            if (it.guard) {
+                if (mission.guards[op].op == MISSION_OP_REMOVE) { err = "that prop is removed by the mission"; return false; }
+                mission.guards[op].diff_mask = mask;
+            } else {
+                if (mission.objects[op].op == MISSION_OP_REMOVE) { err = "that prop is removed by the mission"; return false; }
+                mission.objects[op].diff_mask = mask;
+            }
+        } else if (mask == 0) {
+            return true;   // nothing to say about it
+        } else if (it.guard) {
+            MissionGuardOp g; memset(&g, 0, sizeof g);
+            g.op = MISSION_OP_MOVE; g.prop = it.idx; g.pad.is_new = 0; g.pad.num = -1; g.model = g.ai = -1; g.diff_mask = mask;
+            arrPush(mission.guards, mission.nguards, g);
+        } else {
+            MissionObjectOp o; memset(&o, 0, sizeof o);
+            o.op = MISSION_OP_MOVE; o.prop = it.idx; o.pad.is_new = 0; o.pad.num = -1; o.type = o.model = o.item = -1; o.diff_mask = mask;
+            arrPush(mission.objects, mission.nobjects, o);
+        }
+    }
     commit(snap);
     return true;
 }

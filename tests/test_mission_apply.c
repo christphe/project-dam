@@ -133,6 +133,114 @@ static void test_fields(void)
     missionApplyFree(&r);
 }
 
+/* A guard "move" op may carry "ai": the record gets the new AI list; without it the list stays; "ai" survives a save. */
+static void test_move_ai(void)
+{
+    static const char *json =
+        "{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\",\n"
+        "  \"guards\": [ { \"op\": \"move\", \"prop\": 0, \"pad\": 0, \"ai\": 1025 },\n"
+        "              { \"op\": \"move\", \"prop\": 1, \"pad\": 2 } ] }\n";
+    MissionApplyResult r;
+    char err[128] = "";
+    const Mission *m;
+    const uint8_t *g0;
+    char *back;
+    build();
+    m = load(json);
+    GE_CHECK(m != NULL);
+    if (!m) return;
+    GE_CHECK_EQ_INT(m->guards[0].ai, 1025);
+    GE_CHECK_EQ_INT(m->guards[1].ai, -1);
+    GE_CHECK_EQ_INT(missionApplySetup(m, g_file, g_size, -1, 1.0f, &r, err, sizeof err), 1);
+    GE_CHECK_EQ_INT(r.skipped, 0);
+    g0 = r.data + rd32(r.data + 8 * 3);
+    GE_CHECK_EQ_INT(rd16(g0 + 10), 1025);                  /* guard 0: the new AI list, same pad */
+    GE_CHECK_EQ_INT(rd16(g0 + 6), 0);
+    GE_CHECK_EQ_INT(rd16(g0 + 32 + 10), 3);                /* guard 1: moved, AI list untouched */
+    GE_CHECK_EQ_INT(rd16(g0 + 32 + 6), 2);
+    missionApplyFree(&r);
+    back = missionToJson(m);
+    GE_CHECK(back != NULL);
+    {
+        Mission again;
+        missionInit(&again);
+        GE_CHECK_EQ_INT(back ? missionParse(back, &again, err, sizeof err) : 0, 1);
+        GE_CHECK(again.nguards == 2 && again.guards[0].ai == 1025 && again.guards[1].ai == -1);
+        missionFree(&again);
+    }
+    free(back);
+}
+
+/* "difficulties": objects get the game's do-not-load bits (flags2 0x10 << difficulty) for the others; the game loads every guard at
+ * every difficulty, so a guard that is not listed for the chosen one is sunk with its weapons; an added guard is not added. */
+static void test_difficulties(void)
+{
+    static const char *json =
+        "{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\",\n"
+        "  \"guards\": [ { \"op\": \"move\", \"prop\": 0, \"difficulties\": [2, 3] },\n"
+        "              { \"op\": \"move\", \"prop\": 1, \"difficulties\": [0] },\n"
+        "              { \"op\": \"add\", \"pad\": 2, \"model\": 5, \"difficulties\": [3] } ],\n"
+        "  \"objects\": [ { \"op\": \"move\", \"prop\": 2, \"difficulties\": [1] },\n"
+        "               { \"op\": \"add\", \"type\": 3, \"pad\": 2, \"model\": 38, \"difficulties\": [0, 3] } ] }\n";
+    MissionApplyResult r;
+    char err[128] = "";
+    const Mission *m;
+    const uint8_t *s;
+    char *back;
+    build();
+    m = load(json);
+    GE_CHECK(m != NULL);
+    if (!m) return;
+    GE_CHECK_EQ_INT(m->guards[0].diff_mask, 12);
+    GE_CHECK_EQ_INT(m->guards[0].pad.num, -1);             /* no pad: a presence edit */
+    GE_CHECK_EQ_INT(missionValidate(m, err, sizeof err), 1);
+
+    /* difficulty 0 (Agent): guard 0 is not listed -> sunk; guard 1 stays; the 007-only added guard is not added */
+    GE_CHECK_EQ_INT(missionApplySetupEx(m, g_file, g_size, -1, 1.0f, 0, &r, err, sizeof err), 1);
+    s = r.data + rd32(r.data + 8 * 3);
+    GE_CHECK_EQ_INT(rd16(s + 6), 3);                       /* the sink pad (index 3, after the three originals) */
+    GE_CHECK_EQ_INT(rd16(s + 32 + 6), 1);                  /* guard 1 where it was */
+    GE_CHECK_EQ_INT(rd32(s + 208 + 12) & 0xF0, 0);         /* chr 1's weapon still loads */
+    GE_CHECK_EQ_INT(rd32(s + 64 + 12) & 0xF0, 0xD0);       /* prop 2: only Secret Agent */
+    GE_CHECK_EQ_INT(r.guards_added, 0);
+    GE_CHECK_EQ_INT(r.guards_removed, 1);
+    GE_CHECK_EQ_INT(rd32(s + 528 + 12) & 0xF0, 0x60);      /* the added object: Agent and 007 only */
+    missionApplyFree(&r);
+
+    /* difficulty 2 (00 Agent): guard 0 stays, guard 1 sunk and its weapon not loaded */
+    GE_CHECK_EQ_INT(missionApplySetupEx(m, g_file, g_size, -1, 1.0f, 2, &r, err, sizeof err), 1);
+    s = r.data + rd32(r.data + 8 * 3);
+    GE_CHECK_EQ_INT(rd16(s + 6), 0);
+    GE_CHECK_EQ_INT(rd16(s + 32 + 6), 3);
+    GE_CHECK_EQ_INT(rd32(s + 208 + 12) & 0xF0, 0xF0);
+    GE_CHECK_EQ_INT(rd32(s + 368 + 12) & 0xF0, 0);         /* the pickup (not carried) is untouched */
+    GE_CHECK_EQ_INT(r.guards_added, 0);
+    missionApplyFree(&r);
+
+    /* difficulty 3 (007): the added guard is there; unknown difficulty (-1): every guard present, object bits still set */
+    GE_CHECK_EQ_INT(missionApplySetupEx(m, g_file, g_size, -1, 1.0f, 3, &r, err, sizeof err), 1);
+    GE_CHECK_EQ_INT(r.guards_added, 1);
+    missionApplyFree(&r);
+    GE_CHECK_EQ_INT(missionApplySetupEx(m, g_file, g_size, -1, 1.0f, -1, &r, err, sizeof err), 1);
+    s = r.data + rd32(r.data + 8 * 3);
+    GE_CHECK_EQ_INT(rd16(s + 6), 0);
+    GE_CHECK_EQ_INT(rd16(s + 32 + 6), 1);
+    GE_CHECK_EQ_INT(rd32(s + 64 + 12) & 0xF0, 0xD0);
+    missionApplyFree(&r);
+
+    /* round trip */
+    back = missionToJson(m);
+    GE_CHECK(back != NULL);
+    {
+        Mission again;
+        missionInit(&again);
+        GE_CHECK_EQ_INT(back ? missionParse(back, &again, err, sizeof err) : 0, 1);
+        GE_CHECK(again.guards[0].diff_mask == 12 && again.guards[1].diff_mask == 1 && again.objects[1].diff_mask == 9);
+        missionFree(&again);
+    }
+    free(back);
+}
+
 /* The editor's reader sees the same setup the apply code edits: pads (scaled), props with their fields, AI lists. */
 static void test_setup_decode(void)
 {
@@ -308,6 +416,8 @@ int main(void)
     }
 
     test_fields();
+    test_move_ai();
+    test_difficulties();
     test_weapons();
     test_setup_decode();
 

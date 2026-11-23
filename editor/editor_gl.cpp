@@ -102,3 +102,19 @@ void editorOffscreenPresent(int w, int h)
     glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
+
+bool editorGlReadFrame(bool offscreen, int winH, int x, int y, int w, int h, std::vector<uint8_t> &rgba)
+{
+    std::vector<uint8_t> raw((size_t)w * h * 4);
+    glBindFramebuffer(GL_FRAMEBUFFER, offscreen ? s_offFbo : 0);
+    glReadBuffer(offscreen ? GL_COLOR_ATTACHMENT0 : GL_BACK);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(x, winH - (y + h), w, h, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+    const bool ok = glGetError() == GL_NO_ERROR;
+    if (offscreen) glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (!ok) return false;
+    rgba.resize(raw.size());
+    for (int r = 0; r < h; r++)
+        memcpy(&rgba[(size_t)r * w * 4], &raw[(size_t)(h - 1 - r) * w * 4], (size_t)w * 4);
+    return true;
+}

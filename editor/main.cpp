@@ -69,6 +69,15 @@ struct Options {
     float mouseAt[2] = { 0, 0 };    // --mouse-at X,Y: the cursor rests there from frame 4
     float mouseThen[3] = { -1, 0, 0 };   // --mouse-then FRAME,X,Y: from that frame it rests there instead
     bool portGiven = false;               // --port was on the command line (else the saved setting is used)
+    bool hasMouseFrom = false;       // --mouse-from X,Y: the --mouse-drag starts there instead of at the gizmo (test aid: drag a Props browser cell onto the view)
+    float mouseFrom[2] = { 0, 0 };
+    bool capture = false;            // --capture: Capture the view on frame 10 (test aid: the Thumbnail section needs an image)
+    float thumbAdj[2] = { 1.0f, 0.0f };   // --thumb-adjust CONTRAST,BRIGHTNESS (test aid)
+    bool hasThumbAdj = false;
+    bool hasPlace = false;          // --place-model object|guard:MODEL,TYPE,ITEM@X,Y (test aid: what a drop from the Props browser does)
+    bool placeGuard = false;
+    int placeModel = 0, placeType = 3, placeItem = -1;
+    float placeAt[2] = { 0, 0 };
     std::string openMenu, openWindow, openTab;   // test aids: --open-menu File, --open-window settings|help|log, --open-tab selection|mission|mod
 };
 
@@ -133,7 +142,11 @@ void usage()
          "    --mouse-then FRAME,X,Y            test aid: from that frame the cursor rests at X,Y instead\n"
          "    --log-cam                         test aid: print camera moves and the wheel-zoom pixel check to stderr\n"
          "    --open-menu NAME                  test aid: open a menu of the menu bar (File, Edit, View, Mission, Mod, Tools, Help)\n"
-         "    --open-window NAME                test aid: open the settings, help or log window / panel\n"
+         "    --open-window NAME                test aid: open a window: settings, help, log, props (Props browser), newmission (the New mission dialog)\n"
+         "    --place-model KIND:MODEL,TYPE,ITEM@X,Y  test aid: place a guard|object with that model where the view pixel X,Y points (as a drop does)\n"
+         "    --mouse-from X,Y                  test aid: --mouse-drag DX,DY starts at this window pixel (e.g. a Props browser cell)\n"
+         "    --capture                         test aid: Capture the view into the Thumbnail section on frame 10\n"
+         "    --thumb-adjust CONTRAST,BRIGHTNESS  test aid: the Thumbnail sliders from frame 12\n"
          "    --open-tab NAME                   test aid: select the right panel tab (selection, mission, mod)\n"
          "  Camera: hold the right mouse button to fly: mouse = look, WASD/ZQSD/arrows = move, Space = up, Ctrl = down, Shift = fast.\n"
          "          The movement keys do nothing without the right button, so shortcuts (Ctrl+C/V/D, G, X/Y/Z) never move the camera.\n"
@@ -179,7 +192,17 @@ bool parseArgs(int argc, char **argv, Options &o)
             o.hasMouseAt = sscanf(argv[++i], "%f,%f", &o.mouseAt[0], &o.mouseAt[1]) == 2;
         } else if (s == "--open-menu") { next(o.openMenu);
         } else if (s == "--open-window") { next(o.openWindow);
+        } else if (s == "--mouse-from" && i + 1 < argc) {
+            o.hasMouseFrom = sscanf(argv[++i], "%f,%f", &o.mouseFrom[0], &o.mouseFrom[1]) == 2;
+        } else if (s == "--capture") { o.capture = true;
+        } else if (s == "--thumb-adjust" && i + 1 < argc) {
+            o.hasThumbAdj = sscanf(argv[++i], "%f,%f", &o.thumbAdj[0], &o.thumbAdj[1]) == 2;
         } else if (s == "--open-tab") { next(o.openTab);
+        } else if (s == "--place-model" && i + 1 < argc) {
+            const char *v = argv[++i];
+            o.placeGuard = strncmp(v, "guard:", 6) == 0;
+            const char *rest = strchr(v, ':');
+            o.hasPlace = rest && sscanf(rest + 1, "%d,%d,%d@%f,%f", &o.placeModel, &o.placeType, &o.placeItem, &o.placeAt[0], &o.placeAt[1]) == 5;
         } else if (s == "--mouse-click") { o.mouseClickMode = true;
         } else if (s == "--mouse-middle") { o.mouseMiddle = true;
         } else if (s == "--mouse-drag" && i + 1 < argc) {
@@ -334,6 +357,8 @@ int main(int argc, char **argv)
     if (opt.openWindow == "settings") app.showSettings = true;
     else if (opt.openWindow == "help") app.showHelp = true;
     else if (opt.openWindow == "log") app.showLog = true;
+    else if (opt.openWindow == "props") app.showPropsWin = true;
+    else if (opt.openWindow == "newmission") doNewMission(app);
     app.forceTab = opt.openTab == "selection" ? 0 : opt.openTab == "mission" ? 1 : opt.openTab == "mod" ? 2 : -1;
     Vec3 lastCam = app.cam.pos;
     while (!quit) {
@@ -345,7 +370,7 @@ int main(int argc, char **argv)
                 SDL_Event en; memset(&en, 0, sizeof en);
                 en.type = SDL_WINDOWEVENT; en.window.windowID = SDL_GetWindowID(app.win); en.window.event = SDL_WINDOWEVENT_ENTER;
                 SDL_PushEvent(&en);
-                mdStart = app.gizC;
+                mdStart = opt.hasMouseFrom ? ImVec2(opt.mouseFrom[0], opt.mouseFrom[1]) : app.gizC;
                 if (opt.dragAxis >= 0) mdStart = ImVec2((app.gizC.x + app.gizTip[opt.dragAxis].x) * 0.5f, (app.gizC.y + app.gizTip[opt.dragAxis].y) * 0.5f);
                 TransformInfo t0 = app.doc.getTransform(app.doc.sel);
                 fprintf(stderr, "mouse-drag: camera at %.0f %.0f %.0f\n", app.cam.pos[0], app.cam.pos[1], app.cam.pos[2]);
@@ -421,6 +446,7 @@ int main(int argc, char **argv)
         SDL_GetWindowSize(app.win, &ww, &wh);
         if (SDL_GetWindowFlags(app.win) & SDL_WINDOW_MINIMIZED) { SDL_Delay(50); continue; }
 
+        processOwnerQueue(app, dw, dh);   // the Props browser's model thumbnails, between two frames
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         if (opt.hasMouseAt && frame >= 4 && !opt.hasMouseDrag) { const bool then = opt.mouseThen[0] >= 0 && frame >= (int)opt.mouseThen[0]; ImGui::GetIO().AddMousePosEvent(then ? opt.mouseThen[1] : opt.mouseAt[0], then ? opt.mouseThen[2] : opt.mouseAt[1]); }   // over the real cursor
@@ -470,6 +496,13 @@ int main(int argc, char **argv)
             applyClick(app, h);
             fprintf(stderr, "click: selection kind %d, mission has %d guard ops, %d objects, %d pads\n", (int)app.doc.sel.kind,
                     app.doc.mission.nguards, app.doc.mission.nobjects, app.doc.mission.npads);
+        }
+        if (opt.capture && frame == 10) doCapture(app);
+        if (opt.hasThumbAdj && frame == 12) { app.thumbContrast = opt.thumbAdj[0]; app.thumbBright = opt.thumbAdj[1]; app.thumbDirty = true; }
+        if (opt.hasPlace && frame == 8) {   // test aid: a drop from the Props browser
+            Vec3 org, dir;
+            app.cam.ray(opt.placeAt[0] - app.vx, opt.placeAt[1] - app.vy, app.vw, app.vh, org, dir);
+            placeModelAt(app, opt.placeGuard, opt.placeModel, opt.placeType, opt.placeItem, org, dir);
         }
         if (opt.hasDrag && frame == 4) {   // test aid: a gizmo drag of the selection, like the mouse does it
             TransformInfo t0 = app.doc.getTransform(app.doc.sel);

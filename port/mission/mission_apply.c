@@ -99,8 +99,30 @@ static uint8_t *clone_rec(const uint8_t *file, const Rec *r)
     return c;
 }
 
+/* the do-not-load bits (flags2) of the difficulties a mask leaves out */
+static uint32_t diff_noload_bits(int mask)
+{
+    uint32_t b = 0;
+    if (!mask) return 0;
+    for (int d = 0; d < 4; d++) if (!(mask & (1 << d))) b |= 0x10u << d;
+    return b;
+}
+
+static int diff_excluded(int mask, int difficulty)
+{
+    return mask && difficulty >= 0 && difficulty <= 3 && !(mask & (1 << difficulty));
+}
+
+static int has_pad(const MissionPadRef *p) { return p->is_new || p->num >= 0; }
+
 int missionApplySetup(const Mission *m, const uint8_t *in, uint32_t insize, int spawn_pad, float room_scale,
                       MissionApplyResult *out, char *err, size_t errlen)
+{
+    return missionApplySetupEx(m, in, insize, spawn_pad, room_scale, -1, out, err, errlen);
+}
+
+int missionApplySetupEx(const Mission *m, const uint8_t *in, uint32_t insize, int spawn_pad, float room_scale, int difficulty,
+                        MissionApplyResult *out, char *err, size_t errlen)
 {
     uint32_t H[10];
     Rec *recs = NULL;
@@ -168,7 +190,8 @@ int missionApplySetup(const Mission *m, const uint8_t *in, uint32_t insize, int 
         }
     }
 
-    for (int i = 0; i < m->nguards; i++) if (m->guards[i].op == MISSION_OP_REMOVE) has_remove_guard = 1;
+    for (int i = 0; i < m->nguards; i++)
+        if (m->guards[i].op == MISSION_OP_REMOVE || (m->guards[i].op == MISSION_OP_MOVE && diff_excluded(m->guards[i].diff_mask, difficulty))) has_remove_guard = 1;
     total_new_pads = m->npads + (has_remove_guard ? 1 : 0);
     if (has_remove_guard) sink_idx = (int)padn + m->npads;
 
@@ -226,6 +249,7 @@ int missionApplySetup(const Mission *m, const uint8_t *in, uint32_t insize, int 
         if (g->op == MISSION_OP_ADD) {
             uint8_t *c;
             int pad = resolve_pad(m, &g->pad, (int)padn), chrnum;
+            if (diff_excluded(g->diff_mask, difficulty)) { logf_(out, "guard add: not present at difficulty %d, not added", difficulty); continue; }
             if (!guard_tpl) { logf_(out, "guard add: skipped, the level has no guard to clone"); out->skipped++; continue; }
             if (pad < 0) { logf_(out, "guard add: skipped, unknown pad"); out->skipped++; continue; }
             if (pad >= 10000) { logf_(out, "guard add: skipped, pad %d is a bound pad", pad); out->skipped++; continue; }
@@ -274,11 +298,26 @@ int missionApplySetup(const Mission *m, const uint8_t *in, uint32_t insize, int 
                 continue;
             }
             REC_AT(idx, p);
+            if (g->op == MISSION_OP_MOVE && diff_excluded(g->diff_mask, difficulty)) {   /* absent at this difficulty: as "remove", weapons too */
+                int chr = rd16(p + 4);
+                wr16(p + 6, (unsigned)sink_idx);
+                for (int k = 0; k < endrec; k++) {
+                    uint8_t *wq;
+                    if (recs[k].type != PD_COLLECT) continue;
+                    REC_AT(k, wq);
+                    if ((rd32(wq + 8) & PROPFLAG_ASSIGNEDTOCHR) && rd16(wq + 6) == chr) wr32(wq + 12, rd32(wq + 12) | FLAGS2_NOLOAD_ALL);
+                }
+                logf_(out, "guard move: prop %d (chr %d) not present at difficulty %d: sunk with its weapons", idx, chr, difficulty);
+                out->guards_removed++;
+                continue;
+            }
             if (g->op == MISSION_OP_MOVE) {
-                int pad = resolve_pad(m, &g->pad, (int)padn);
+                int pad = has_pad(&g->pad) ? resolve_pad(m, &g->pad, (int)padn) : -2;
+                if (pad == -2) { logf_(out, "guard edit: prop %d (chr %d)%s", idx, rd16(p + 4), g->ai >= 0 ? ", new AI list" : ""); if (g->ai >= 0) wr16(p + 10, (unsigned)g->ai); out->guards_moved++; continue; }
                 if (pad < 0 || pad >= 10000) { logf_(out, "guard move: skipped, bad pad for prop %d", idx); out->skipped++; continue; }
                 wr16(p + 6, (unsigned)pad);
-                logf_(out, "guard move: prop %d (chr %d) to pad %d", idx, rd16(p + 4), pad);
+                if (g->ai >= 0) wr16(p + 10, (unsigned)g->ai);     /* a move may also carry a new AI list (the pad stays when it names the same one) */
+                logf_(out, "guard move: prop %d (chr %d) to pad %d%s", idx, rd16(p + 4), pad, g->ai >= 0 ? ", new AI list" : "");
                 out->guards_moved++;
             } else {
                 wr16(p + 6, (unsigned)sink_idx);
@@ -309,6 +348,7 @@ int missionApplySetup(const Mission *m, const uint8_t *in, uint32_t insize, int 
             if (o->type == PD_KEY && o->item >= 0) wr32(c + OBJ_PREFIX, (uint32_t)o->item);
             apply_fields(c, o->type, &o->f);        /* after the op's own keys: an explicit field wins */
             wr32(c + 8, rd32(c + 8) & ~PROPFLAG_ASSIGNEDTOCHR);
+            if (o->diff_mask) wr32(c + 12, (rd32(c + 12) & ~FLAGS2_NOLOAD_ALL) | diff_noload_bits(o->diff_mask));
             extra = realloc(extra, (size_t)(nextra + 2) * sizeof *extra);
             extra[nextra++] = c;
             logf_(out, "object add: type %d model %d item %d at pad %d", o->type, o->model, o->item, pad);
@@ -323,7 +363,9 @@ int missionApplySetup(const Mission *m, const uint8_t *in, uint32_t insize, int 
             }
             REC_AT(idx, p);
             if (o->op == MISSION_OP_MOVE) {
-                int pad = resolve_pad(m, &o->pad, (int)padn);
+                int pad = has_pad(&o->pad) ? resolve_pad(m, &o->pad, (int)padn) : -2;
+                if (o->diff_mask) wr32(p + 12, (rd32(p + 12) & ~FLAGS2_NOLOAD_ALL) | diff_noload_bits(o->diff_mask));
+                if (pad == -2) { logf_(out, "object edit: prop %d (type %d), presence mask %d", idx, recs[idx].type, o->diff_mask); out->objects_moved++; continue; }
                 if (pad < 0) { logf_(out, "object move: skipped, bad pad for prop %d", idx); out->skipped++; continue; }
                 wr16(p + 6, (unsigned)pad);
                 logf_(out, "object move: prop %d (type %d) to pad %d", idx, recs[idx].type, pad);

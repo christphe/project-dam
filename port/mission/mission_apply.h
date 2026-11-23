@@ -55,6 +55,12 @@ typedef struct MissionApplyResult {
  * file that is not a setup this code understands (err says why). */
 int  missionApplySetup(const Mission *m, const uint8_t *in, uint32_t insize, int spawn_pad,
                        float room_scale, MissionApplyResult *out, char *err, size_t errlen);
+/* The same for a chosen difficulty (0 Agent .. 3 007; -1 = unknown, every prop is present). The game loads every guard at
+ * every difficulty, so a guard op with "difficulties" that leaves `difficulty` out is sunk like a "remove" (its carried
+ * weapons not loaded) and an added guard of that kind is not added; objects get the game's per-difficulty do-not-load
+ * flags2 bits whatever `difficulty` is. The setup depends on `difficulty`: rebuild it when the player picks another. */
+int  missionApplySetupEx(const Mission *m, const uint8_t *in, uint32_t insize, int spawn_pad, float room_scale, int difficulty,
+                         MissionApplyResult *out, char *err, size_t errlen);
 void missionApplyFree(MissionApplyResult *r);
 
 /* The stage setup file name for a solo level number ("UsetupsevbunkerZ"), from the

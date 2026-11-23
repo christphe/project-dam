@@ -5,7 +5,9 @@
  * story is chosen and that screen is up, fast3d's import_texture (port/fast3d/gfx_pc.cpp) asks this file for a
  * replacement of every such texture: the n-th one imported is the n-th slot (the model's tiles are drawn in slot
  * order, the first frame imports them all), and the answer is the slot mission's thumb.png (320x240, the editor's
- * capture with the old-photo look baked in) reduced to the same 68x44 grey image. No thumb, no change: the level's
+ * capture, a plain colour crop of its view) reduced to the same 68x44 grey image. The briefing polaroid gets the same
+ * image as 16 greys. The pixel conversion is port/mission/mission_thumb.c (shared with the editor's preview); this
+ * file decodes the PNG and answers fast3d's hooks. No thumb, no change: the level's
  * own photo stays. Textures are cached by source address, so the cache key carries a salt that changes with the
  * mod: leaving the screen or the mod brings the original photos back.
  *
@@ -22,6 +24,7 @@
 #include "missions.h"
 #include "missions_priv.h"
 #include "realzlib.h"
+#include "mission_thumb.h"
 #include "game/front.h"   /* current_menu, MENU_MISSION_SELECT */
 
 #define THUMB_W 68
@@ -99,21 +102,7 @@ static int pngGray(const char *path, int dw, int dh, uint8_t *out)
             dst[x] = (uint8_t)v;
         }
     }
-    for (int oy = 0; oy < dh; oy++) {                       /* grey, area average */
-        uint32_t y0 = (uint32_t)((uint64_t)oy * h / dh), y1 = (uint32_t)((uint64_t)(oy + 1) * h / dh);
-        if (y1 <= y0) y1 = y0 + 1;
-        for (int ox = 0; ox < dw; ox++) {
-            uint32_t x0 = (uint32_t)((uint64_t)ox * w / dw), x1 = (uint32_t)((uint64_t)(ox + 1) * w / dw), n = 0;
-            uint64_t sum = 0;
-            if (x1 <= x0) x1 = x0 + 1;
-            for (uint32_t y = y0; y < y1 && y < h; y++)
-                for (uint32_t x = x0; x < x1 && x < w; x++, n++) {
-                    const uint8_t *p = pix + (size_t)y * stride + (size_t)x * ch;
-                    sum += (ch < 3) ? p[0] : (uint32_t)(p[0] * 77 + p[1] * 150 + p[2] * 29) >> 8;
-                }
-            out[oy * dw + ox] = n ? (uint8_t)(sum / n) : 0;
-        }
-    }
+    mthumbGrey(pix, (int)w, (int)h, (int)ch, dw, dh, out);   /* grey, area average */
     ok = 1;
 done:
     free(file); free(idat); free(raw); free(pix);
@@ -139,23 +128,6 @@ void modsThumbsLoad(const char *modDir, const char (*folders)[MISSION_ID_LEN], i
 }
 
 /* ---- fast3d hooks (render thread) ----------------------------------------- */
-
-/* Area average of the grey window (x0,y0,ww,hh) of slot `slot` into dw x dh. */
-static void window(int slot, int x0, int y0, int ww, int hh, int dw, int dh, uint8_t *out, int ostride)
-{
-    for (int oy = 0; oy < dh; oy++) {
-        int ya = y0 + oy * hh / dh, yb = y0 + (oy + 1) * hh / dh;
-        if (yb <= ya) yb = ya + 1;
-        for (int ox = 0; ox < dw; ox++) {
-            int xa = x0 + ox * ww / dw, xb = x0 + (ox + 1) * ww / dw, n = 0;
-            unsigned sum = 0;
-            if (xb <= xa) xb = xa + 1;
-            for (int y = ya; y < yb && y < FULL_H; y++)
-                for (int x = xa; x < xb && x < FULL_W; x++, n++) sum += s_pix[slot][y * FULL_W + x];
-            out[oy * ostride + ox] = n ? (uint8_t)(sum / n) : 0;
-        }
-    }
-}
 
 static const void *s_addr[20];            /* mission select: the n-th 68x44 import is slot n */
 static int s_naddr = 0;
@@ -196,16 +168,7 @@ const uint8_t *portThumbTexture(const void *addr, const uint8_t *cur, int fmt, i
         if (slot < 0) return NULL;
         memset(s_out[slot], 0, sizeof s_out[slot]);
         if (slot < modsSlotCount() && s_have[slot]) {
-            /* the frame shows 68:44; take that crop of the 4:3 source (centred), not a squeezed copy */
-            int ch = FULL_W * THUMB_H / THUMB_W;
-            window(slot, 0, (FULL_H - ch) / 2, FULL_W, ch, THUMB_W, THUMB_H, s_out[slot], line);
-            for (int y = 0; y < THUMB_H / 2; y++) {   /* the strip textures are stored bottom-up, like the polaroid's */
-                for (int x = 0; x < THUMB_W; x++) {
-                    uint8_t t = s_out[slot][y * line + x];
-                    s_out[slot][y * line + x] = s_out[slot][(THUMB_H - 1 - y) * line + x];
-                    s_out[slot][(THUMB_H - 1 - y) * line + x] = t;
-                }
-            }
+            mthumbStrip(s_pix[slot], s_out[slot], line);
             sysLogPrintf(LOG_INFO, "missions: mission select photo %d replaced by the mod's thumb", slot);
         } else if (slot >= modsSlotCount()) {
             sysLogPrintf(LOG_INFO, "missions: mission select photo %d: no mission, drawn empty", slot);
@@ -222,19 +185,9 @@ const uint8_t *portThumbTexture(const void *addr, const uint8_t *cur, int fmt, i
         if (half < 0 && s_nb < 2) { half = s_nb; s_baddr[s_nb++] = addr; }
         if (half < 0) return NULL;
         {   /* a 128x128 polaroid: a white frame, the centred square of the source inside, 4 bits per pixel */
-            uint8_t sq[124 * 124];
-            window(slot, (FULL_W - FULL_H) / 2, 0, FULL_H, FULL_H, 124, 124, sq, 124);
-            for (int y = 0; y < 64; y++) {
-                int gy = half * 64 + (63 - y);   /* the polaroid halves are stored bottom-up: buffer row y shows composite row 63 - y */
-                for (int x = 0; x < 128; x += 2) {
-                    unsigned v[2];
-                    for (int k = 0; k < 2; k++) {
-                        int gx = x + k;
-                        v[k] = (gx < 2 || gx > 125 || gy < 2 || gy > 125) ? 15u : (unsigned)(sq[(gy - 2) * 124 + (gx - 2)] >> 4);
-                    }
-                    s_bout[half][y * 64 + x / 2] = (uint8_t)((v[0] << 4) | v[1]);
-                }
-            }
+            uint8_t img[MTHUMB_POL_SIZE * MTHUMB_POL_SIZE];
+            mthumbPolaroidImage(s_pix[slot], img);
+            mthumbPolaroidHalf(img, half, s_bout[half]);
         }
         sysLogPrintf(LOG_INFO, "missions: briefing polaroid half %d replaced by the mod's thumb", half);
         return s_bout[half];

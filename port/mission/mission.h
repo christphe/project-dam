@@ -59,6 +59,10 @@
  *   "zones": [ { "id": "z1", "pos": [x, y, z], "radius": 150, "room": 12 } ],
  *   "guards": [
  *     { "op": "move",   "prop": 17, "pad": 0x2715 },
+ *     { "op": "move",   "prop": 21, "difficulties": [2, 3] },     a move without "pad" leaves the prop where it is:
+ *                                                                      a presence edit (or "ai") of an original prop
+ *     { "op": "move",   "prop": 19, "pad": 0x2716, "ai": 0x401 },    a move may carry "ai": the guard's new AI list
+ *                                                                      (the same pad number keeps it where it is)
  *     { "op": "add",    "pad": "p1", "model": 3, "ai": 0x401, "weapons": [ { "item": 17 } ] },
  *     { "op": "remove", "prop": 18 }
  *   ],
@@ -98,6 +102,11 @@
  *   in file order (as level.json from --export-level lists them).
  * - "type": the setup prop type number (PROPDEF_*), "model" a model id,
  *   "item" an ITEM_IDS value, "ai" an AI list id.
+ * - "difficulties": [0, 1, 2, 3] on an add / move op of a guard or object: it is present only on those difficulties
+ *   (0 Agent, 1 Secret Agent, 2 00 Agent, 3 007); absent = all. An object gets the game's own per-difficulty "do not
+ *   load" bits (flags2 0x10 << difficulty) for the others; a guard is loaded at every difficulty by the game, so the
+ *   port builds the setup for the chosen difficulty and sinks (as "remove") a guard that is not listed, with its weapons
+ *   (missionApplySetupEx). An added guard that is not listed is simply not added.
  * - "difficulty": lowest difficulty the objective applies to (0 Agent,
  *   1 Secret Agent, 2 00 Agent).
  * - script "target.kind": "mission" (no other field), "prop" (+ "prop"),
@@ -150,11 +159,17 @@ typedef struct MissionWeapon {
     MissionFieldVals f;             /* the record's own fields (mission_fields.h, type 8): flags (hand), timer, ... */
 } MissionWeapon;
 
+/* "difficulties": [0, 1, 2, 3] on a guard / object op that is not "remove": the difficulties the prop is present on
+ * (0 Agent, 1 Secret Agent, 2 00 Agent, 3 007). In memory a bit mask, bit n = difficulty n; 0 = no key = all of them
+ * (so a zeroed op is "everywhere"; a list of all four is read as absent). */
+#define MISSION_DIFF_ALL 0xF
+
 typedef struct MissionGuardOp {
     MissionOpKind op;
+    int diff_mask;                  /* ADD / MOVE: the difficulties it is present on (0 = all) */
     int prop;                       /* MOVE/REMOVE: original setup prop index */
     MissionPadRef pad;              /* MOVE/ADD */
-    int model, ai;                  /* ADD (-1 = level default) */
+    int model, ai;                  /* ADD (-1 = level default); MOVE: ai = the guard's new AI list (-1 = keep its own) */
     int nweapons;                   /* ADD: the carried weapons */
     MissionWeapon weapons[MISSION_MAX_WEAPONS];
     MissionFieldVals f;             /* ADD: the other record fields (mission_fields.h, type 9) */
@@ -162,6 +177,7 @@ typedef struct MissionGuardOp {
 
 typedef struct MissionObjectOp {
     MissionOpKind op;
+    int diff_mask;                  /* ADD / MOVE: the difficulties it is present on (0 = all) */
     int prop;                       /* MOVE/REMOVE */
     MissionPadRef pad;              /* MOVE/ADD */
     int type, model, item;          /* ADD (-1 = none) */

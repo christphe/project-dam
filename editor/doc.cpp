@@ -283,6 +283,12 @@ bool Doc::openLevel(const std::string &dir, std::string &err)
     hasLevel = true;
     levelGen++;
     sel = Selection();
+    if (emptyPending && hasMission && mission.level == level.name) {   // File > New mission, "Emptied level", level not loaded yet
+        int g = 0, o = 0;
+        std::string e2;
+        emptyPending = false;
+        if (emptyLevel(g, o, e2)) { undoStack.clear(); dirty = true; }
+    }
     return true;
 }
 
@@ -310,7 +316,7 @@ std::string Doc::defaultMissionPath(const std::string &name) const
     return root + folder + "/mission.json";
 }
 
-bool Doc::newMission(const std::string &name, const std::string &levelName, std::string &err)
+bool Doc::newMission(const std::string &name, const std::string &levelName, std::string &err, bool emptied)
 {
     std::string lvl = levelName.empty() && hasLevel ? level.name : levelName;
     if (missionLevelNumber(lvl.c_str()) < 0) { err = "unknown level '" + lvl + "'"; return false; }
@@ -325,6 +331,13 @@ bool Doc::newMission(const std::string &name, const std::string &levelName, std:
     undoStack.clear();
     dirty = true;
     sel = Selection();
+    if (emptied) {
+        if (hasLevel && level.name == lvl) {
+            int g = 0, o = 0;
+            if (!emptyLevel(g, o, err)) return false;
+            undoStack.clear();
+        } else emptyPending = true;   // the level is exported / loaded next: openLevel does it then
+    } else emptyPending = false;
     return true;
 }
 
@@ -353,6 +366,7 @@ bool Doc::openMission(const std::string &path, std::string &err)
     missionFree(&mission);
     mission = m;   // takes over the owned pointers; m is dropped without freeing
     hasMission = true;
+    emptyPending = false;
     missionPath = path;
     undoStack.clear();
     dirty = false;
@@ -457,12 +471,24 @@ std::vector<Item> Doc::items() const
                 for (int i = 0; i < n; i++)
                     if (ops[i].op != MISSION_OP_ADD && ops[i].prop == p.index) {
                         if (ops[i].op == MISSION_OP_REMOVE) it.removed = true;
-                        else { it.removed = false; it.moved = true; it.pad = ops[i].pad; }
+                        else {
+                            it.removed = false;
+                            if (ops[i].pad.is_new || ops[i].pad.num >= 0) {   // an AI / presence-only op has no pad: the guard stays
+                                it.pad = ops[i].pad;
+                                it.moved = !(!ops[i].pad.is_new && ops[i].pad.num == p.pad);
+                            }
+                            if (ops[i].ai >= 0) it.ai = ops[i].ai;
+                            it.diffMask = ops[i].diff_mask;
+                        }
                     }
                 for (int i = 0; i < on; i++)
                     if (oops[i].op != MISSION_OP_ADD && oops[i].prop == p.index) {
                         if (oops[i].op == MISSION_OP_REMOVE) it.removed = true;
-                        else { it.removed = false; it.moved = true; it.pad = oops[i].pad; }
+                        else {
+                            it.removed = false;
+                            if (oops[i].pad.is_new || oops[i].pad.num >= 0) { it.moved = true; it.pad = oops[i].pad; }
+                            it.diffMask = oops[i].diff_mask;
+                        }
                     }
             }
             it.hasPos = padPos(it.pad, it.pos);
@@ -493,7 +519,7 @@ std::vector<Item> Doc::items() const
         for (int i = 0; i < mission.nguards; i++) {
             const MissionGuardOp &g = mission.guards[i];
             if (g.op != MISSION_OP_ADD) continue;
-            Item it; it.added = true; it.guard = true; it.idx = i; it.pad = g.pad; it.type = 9;
+            Item it; it.added = true; it.guard = true; it.idx = i; it.pad = g.pad; it.type = 9; it.diffMask = g.diff_mask;
             it.model = g.model; it.ai = g.ai;
             for (int k = 0; k < g.nweapons && k < MISSION_MAX_WEAPONS; k++) it.weapons.push_back(g.weapons[k]);
             fillAddedFields(*this, it, g.f);
@@ -508,7 +534,7 @@ std::vector<Item> Doc::items() const
         for (int i = 0; i < mission.nobjects; i++) {
             const MissionObjectOp &o = mission.objects[i];
             if (o.op != MISSION_OP_ADD) continue;
-            Item it; it.added = true; it.guard = false; it.idx = i; it.pad = o.pad;
+            Item it; it.added = true; it.guard = false; it.idx = i; it.pad = o.pad; it.diffMask = o.diff_mask;
             it.type = o.type; it.model = o.model; it.item = o.item;
             fillAddedFields(*this, it, o.f);
             it.owner = hasLevel ? level.ownerForModel(false, o.model) : -1;
@@ -520,44 +546,215 @@ std::vector<Item> Doc::items() const
     return out;
 }
 
-std::vector<std::string> Doc::validate() const
+// ---- the mission check ----
+
+// Squared distance of (x, z) to the segment a-b on the ground plane.
+static float segDist2(float x, float z, const Vec3 &a, const Vec3 &b)
 {
-    std::vector<std::string> out;
-    if (!hasMission) { out.push_back("no mission is open"); return out; }
+    const float dx = b[0] - a[0], dz = b[2] - a[2], l2 = dx * dx + dz * dz;
+    float t = l2 > 1e-9f ? ((x - a[0]) * dx + (z - a[2]) * dz) / l2 : 0.0f;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const float px = a[0] + t * dx - x, pz = a[2] + t * dz - z;
+    return px * px + pz * pz;
+}
+
+bool Doc::floorUnder(const Vec3 &p, float tol, float tolY) const
+{
+    if (!hasLevel || level.stan.empty()) return true;
+    for (const LPoly &poly : level.stan) {
+        const size_t n = poly.v.size();
+        if (n < 3) continue;
+        bool in = false;
+        float d2 = 1e30f;
+        for (size_t i = 0, j = n - 1; i < n; j = i++) {
+            const Vec3 &a = poly.v[i], &b = poly.v[j];
+            if (((a[2] > p[2]) != (b[2] > p[2])) && (p[0] < (b[0] - a[0]) * (p[2] - a[2]) / (b[2] - a[2]) + a[0])) in = !in;
+            d2 = std::min(d2, segDist2(p[0], p[2], a, b));
+        }
+        if (!in && d2 > tol * tol) continue;
+        const Vec3 &v0 = poly.v[0], &v1 = poly.v[1], &v2 = poly.v[2];
+        const Vec3 e1 = { v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2] }, e2 = { v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2] };
+        const float nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
+        const float y = fabsf(ny) > 1e-6f ? v0[1] - (nx * (p[0] - v0[0]) + nz * (p[2] - v0[2])) / ny : v0[1];
+        if (fabsf(y - p[1]) <= tolY) return true;
+    }
+    return false;
+}
+
+static std::string padName(const MissionPadRef &r)
+{
+    char b[48];
+    if (r.is_new) snprintf(b, sizeof b, "%s", r.id); else snprintf(b, sizeof b, "0x%x", r.num);
+    return b;
+}
+
+std::vector<Issue> Doc::checkIssues() const
+{
+    std::vector<Issue> out;
+    if (!hasMission) { Issue i; i.text = "no mission is open"; out.push_back(i); return out; }
     char e[256] = "";
-    if (!missionValidate(&mission, e, sizeof e)) out.push_back(e);
+    char buf[400];
+    auto add = [&](int sev, const std::string &t) { Issue i; i.sev = sev; i.text = t; out.push_back(i); };
+    auto addItem = [&](int sev, const std::string &t, bool added, bool guard, int idx) {
+        Issue i; i.sev = sev; i.text = t; i.hasSel = true;
+        i.sel.kind = Selection::ITEM; i.sel.item.valid = true; i.sel.item.added = added; i.sel.item.guard = guard; i.sel.item.idx = idx;
+        out.push_back(i);
+    };
+    auto addPad = [&](int sev, const std::string &t, const MissionPadRef &r) {
+        Issue i; i.sev = sev; i.text = t; i.hasSel = true;
+        if (r.is_new) { i.sel.kind = Selection::MPAD; i.sel.id = r.id; } else { i.sel.kind = Selection::PAD; i.sel.num = r.num; }
+        out.push_back(i);
+    };
+    if (!missionValidate(&mission, e, sizeof e)) add(2, e);
     if (!hasLevel) return out;
-    char buf[200];
     if (level.name != mission.level) {
         snprintf(buf, sizeof buf, "mission level '%s' differs from the loaded export '%s'", mission.level, level.name.c_str());
-        out.push_back(buf);
+        add(2, buf);
     }
-    auto checkPad = [&](const MissionPadRef &r, const char *what, int i) {
+    auto checkPad = [&](const MissionPadRef &r, const char *what, int i, bool added, bool guard, int idx) {
         if (!r.is_new && !level.pad(r.num)) {
             snprintf(buf, sizeof buf, "%s %d: pad 0x%x is not in the level", what, i, r.num);
-            out.push_back(buf);
+            addItem(2, buf, added, guard, idx);
+            return false;
         }
+        return true;
     };
+    // ops against the level
     for (int i = 0; i < mission.nguards; i++) {
         const MissionGuardOp &g = mission.guards[i];
-        if (g.op != MISSION_OP_ADD) {
+        const bool added = g.op == MISSION_OP_ADD;
+        const int idx = added ? i : g.prop;
+        if (!added) {
             const LProp *p = level.prop(g.prop);
-            if (!p) { snprintf(buf, sizeof buf, "guard op %d: prop %d does not exist", i, g.prop); out.push_back(buf); }
-            else if (p->type != 9) { snprintf(buf, sizeof buf, "guard op %d: prop %d is not a guard (type %d)", i, g.prop, p->type); out.push_back(buf); }
+            if (!p) { snprintf(buf, sizeof buf, "guard op %d: prop %d does not exist", i, g.prop); add(2, buf); }
+            else if (p->type != 9) { snprintf(buf, sizeof buf, "guard op %d: prop %d is not a guard (type %d)", i, g.prop, p->type); add(2, buf); }
         }
-        if (g.op != MISSION_OP_REMOVE) checkPad(g.pad, "guard op", i);
+        if (g.op != MISSION_OP_REMOVE && (g.pad.is_new || g.pad.num >= 0) && checkPad(g.pad, "guard op", i, added, true, idx)) {
+            Vec3 pp;
+            if (padPos(g.pad, pp) && !floorUnder(pp)) {
+                snprintf(buf, sizeof buf, "guard op %d stands on pad %s, which is off the walkable floor: it will not spawn", i, padName(g.pad).c_str());
+                addItem(2, buf, added, true, idx);
+            }
+        }
     }
     for (int i = 0; i < mission.nobjects; i++) {
         const MissionObjectOp &o = mission.objects[i];
-        if (o.op != MISSION_OP_ADD) {
+        const bool added = o.op == MISSION_OP_ADD;
+        const int idx = added ? i : o.prop;
+        if (!added) {
             const LProp *p = level.prop(o.prop);
-            if (!p) { snprintf(buf, sizeof buf, "object op %d: prop %d does not exist", i, o.prop); out.push_back(buf); }
-            else if (p->type == 9) { snprintf(buf, sizeof buf, "object op %d: prop %d is a guard", i, o.prop); out.push_back(buf); }
+            if (!p) { snprintf(buf, sizeof buf, "object op %d: prop %d does not exist", i, o.prop); add(2, buf); }
+            else if (p->type == 9) { snprintf(buf, sizeof buf, "object op %d: prop %d is a guard", i, o.prop); add(2, buf); }
         } else if (o.type <= 0 || o.model < 0) {
             snprintf(buf, sizeof buf, "object op %d: add needs a type and a model", i);
-            out.push_back(buf);
+            addItem(2, buf, true, false, i);
         }
-        if (o.op != MISSION_OP_REMOVE) checkPad(o.pad, "object op", i);
+        if (o.op != MISSION_OP_REMOVE && (o.pad.is_new || o.pad.num >= 0) && checkPad(o.pad, "object op", i, added, false, idx)) {
+            Vec3 pp;
+            if (padPos(o.pad, pp) && !floorUnder(pp, 35.0f, 400.0f)) {
+                snprintf(buf, sizeof buf, "object op %d stands on pad %s, which is off the walkable floor", i, padName(o.pad).c_str());
+                addItem(1, buf, added, false, idx);
+            }
+        }
+    }
+    // the mission's own pads: nobody can walk to one that is off the floor
+    for (int i = 0; i < mission.npads; i++) {
+        const MissionPad &mp = mission.pads[i];
+        const Vec3 pp = { mp.pos[0], mp.pos[1], mp.pos[2] };
+        if (!floorUnder(pp)) {
+            MissionPadRef r; memset(&r, 0, sizeof r); r.is_new = 1; snprintf(r.id, sizeof r.id, "%s", mp.id);
+            snprintf(buf, sizeof buf, "mission pad %s is unreachable: no walkable floor (stan tile) under it", mp.id);
+            addPad(1, buf, r);
+        }
+    }
+    // the original pads a script points at
+    {
+        std::vector<int> seen;
+        for (int i = 0; i < mission.nscripts; i++) {
+            const MissionScript &s = mission.scripts[i];
+            if (s.kind != MISSION_TGT_PAD || s.pad.is_new || std::find(seen.begin(), seen.end(), s.pad.num) != seen.end()) continue;
+            seen.push_back(s.pad.num);
+            Vec3 pp;
+            if (padPos(s.pad, pp) && !floorUnder(pp, 35.0f, 400.0f)) {
+                snprintf(buf, sizeof buf, "pad 0x%x (a script's target) is off the walkable floor", s.pad.num);
+                addPad(1, buf, s.pad);
+            }
+        }
+    }
+    // scripts: target, key, objective
+    if (mission.nscripts > 0) {
+        const std::vector<Item> its = items();
+        auto removedProp = [&](int prop) { for (const Item &it : its) if (!it.added && it.idx == prop) return it.removed; return false; };
+        std::vector<int> given;   // item ids that something provides
+        for (const Item &it : its) {
+            if (it.removed) continue;
+            if (it.item >= 0) given.push_back(it.item);
+            for (const MissionWeapon &w : it.weapons) if (w.item >= 0) given.push_back(w.item);
+        }
+        auto propNum = [&](const MissionScript &s, const char *name, double &v) {
+            for (int k = 0; k < s.nprops; k++) if (!strcmp(s.props[k].name, name) && s.props[k].kind == MISSION_VAL_NUMBER) { v = s.props[k].num; return true; }
+            return false;
+        };
+        for (int i = 0; i < mission.nscripts; i++) {
+            const MissionScript &s = mission.scripts[i];
+            double v = 0;
+            if (!strcmp(s.use, "give_item") && propNum(s, "item", v)) given.push_back((int)v);
+        }
+        for (int i = 0; i < mission.nscripts; i++) {
+            const MissionScript &s = mission.scripts[i];
+            double v = 0;
+            if (s.kind == MISSION_TGT_PROP) {
+                const LProp *p = level.prop(s.prop);
+                if (!p) {
+                    snprintf(buf, sizeof buf, "script %d (%s): its target prop %d does not exist in the level", i, s.use, s.prop);
+                    add(2, buf);
+                } else if (removedProp(s.prop)) {
+                    snprintf(buf, sizeof buf, "script %d (%s): its target prop %d is removed by this mission", i, s.use, s.prop);
+                    addItem(2, buf, false, p->type == 9, s.prop);
+                }
+            } else if (s.kind == MISSION_TGT_PAD && !s.pad.is_new && !level.pad(s.pad.num)) {
+                snprintf(buf, sizeof buf, "script %d (%s): its target pad 0x%x is not in the level", i, s.use, s.pad.num);
+                add(2, buf);
+            }
+            if (!strcmp(s.use, "key_door") && propNum(s, "key", v) && std::find(given.begin(), given.end(), (int)v) == given.end()) {
+                snprintf(buf, sizeof buf, "script %d (key_door): key item %d is provided by no object of the mission or the level", i, (int)v);
+                add(1, buf);
+            }
+            for (int k = 0; k < s.nprops; k++)
+                if (!strcmp(s.props[k].name, "objective") && s.props[k].kind == MISSION_VAL_STRING) {
+                    bool found = false;
+                    for (int o = 0; o < mission.nobjectives; o++) if (!strcmp(mission.objectives[o].id, s.props[k].str)) found = true;
+                    if (!found) {
+                        snprintf(buf, sizeof buf, "script %d (%s): objective '%s' is not in the mission's objectives", i, s.use, s.props[k].str);
+                        add(1, buf);
+                    }
+                }
+        }
+    }
+    return out;
+}
+
+std::vector<std::string> Doc::validate() const
+{
+    std::vector<std::string> out;
+    for (const Issue &i : checkIssues()) out.push_back(i.text);
+    return out;
+}
+
+std::vector<ModelUse> Doc::levelModels() const
+{
+    std::vector<ModelUse> out;
+    if (!hasLevel) return out;
+    for (const auto &kv : level.modelOwners) {
+        ModelUse u;
+        u.guard = kv.first.first; u.model = kv.first.second; u.owner = kv.second;
+        bool first = true;
+        for (const LProp &p : level.props)
+            if (p.model == u.model && (p.type == 9) == u.guard) {
+                u.count++;
+                if (first) { u.type = p.type; u.item = p.item; first = false; }
+            }
+        if (u.owner >= 0) out.push_back(u);
     }
     return out;
 }
@@ -680,8 +877,8 @@ std::string Doc::describe(const std::string &detail) const
 bool Doc::testRun(const std::string &spawnIn, bool coop, std::string &err)
 {
     if (!hasMission) { err = "no mission is open"; return false; }
-    std::vector<std::string> issues = validate();
-    if (!issues.empty()) { err = "mission is not valid: " + issues[0]; return false; }
+    for (const Issue &i : checkIssues())      // warnings do not stop a test run
+        if (i.sev >= 2) { err = "mission is not valid: " + i.text; return false; }
     if (missionPath.empty() && hasLevel) missionPath = level.dir + "/mission.json";
     if (!saveMission("", err)) return false;
     int lvl = missionLevelNumber(mission.level);

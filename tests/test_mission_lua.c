@@ -27,6 +27,7 @@ typedef struct Fake {
     int doorstate;
     char logs[64][160];
     int nlog;
+    int diff;
 } Fake;
 
 static void fLog(void *u, const char *l) { Fake *f = u; if (getenv("LUA_TEST_V")) printf("  [log] %s\n", l); if (f->nlog < 64) snprintf(f->logs[f->nlog++], 160, "%s", l); }
@@ -43,7 +44,7 @@ static int  fDoorState(void *u, int i) { return i == 5 ? ((Fake *)u)->doorstate 
 static void fDoorCmd(void *u, int i, int c) { Fake *f = u; (void)i; if (f->ndoor < 16) f->door_cmds[f->ndoor++] = c; }
 static int  fDead(void *u, int i) { return i == 6 && ((Fake *)u)->dead6; }
 static void fWin(void *u) { ((Fake *)u)->won = 1; }
-static int  fDiff(void *u) { (void)u; return 0; }
+static int  fDiff(void *u) { return ((Fake *)u)->diff; }
 
 static MissionHost host(Fake *f)
 {
@@ -201,6 +202,36 @@ int main(void)
     GE_CHECK(hasMsg(&f, "picked true"));
     GE_CHECK(hasMsg(&f, "nilnilnil"));                       /* no os, io, debug */
     missionRtDestroy(rt);
+
+    /* mission.difficulty(): the host's difficulty, -1 without one */
+    {
+        FILE *fp = fopen("tmp_missiontest/scripts/diff.luau", "wb");
+        Mission m3;
+        if (fp) { fputs("message('difficulty ' .. mission.difficulty())\nwait(event('start'))\n", fp); fclose(fp); }
+        missionInit(&m3);
+        GE_CHECK_EQ_INT(missionParse(
+            "{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\", \"scripts\": [\n"
+            "  { \"use\": \"diff\", \"target\": { \"kind\": \"mission\" } } ] }", &m3, err, sizeof err), 1);
+        memset(&f, 0, sizeof f);
+        f.nplayers = 1; f.diff = 3;
+        h = host(&f);
+        rt = missionRtCreate(&m3, &h, "tmp_missiontest", NULL, err, sizeof err);
+        GE_CHECK(rt != NULL);
+        run(rt, 0.3);
+        GE_CHECK(hasMsg(&f, "difficulty 3"));
+        missionRtDestroy(rt);
+        memset(&f, 0, sizeof f);
+        f.nplayers = 1;
+        h = host(&f);
+        h.difficulty = NULL;
+        rt = missionRtCreate(&m3, &h, "tmp_missiontest", NULL, err, sizeof err);
+        GE_CHECK(rt != NULL);
+        run(rt, 0.3);
+        GE_CHECK(hasMsg(&f, "difficulty -1"));
+        missionRtDestroy(rt);
+        missionFree(&m3);
+        remove("tmp_missiontest/scripts/diff.luau");
+    }
 
     missionFree(&m);
     missionFree(&m2);

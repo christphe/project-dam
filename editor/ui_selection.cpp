@@ -138,6 +138,24 @@ void drawSelectionTab(App &a)
         }
         else ImGui::Text("item  %d", it->item);
         if (it->owner >= 0) ImGui::Text("recorded model: owner %d", it->owner); else ImGui::TextDisabled("no recorded model (marker)");
+        if (!it->assigned && a.doc.hasMission) {   // present on: the difficulties it is in (all ticked = no key)
+            static const char *kNames[4] = { "Agent", "Secret Agent", "00 Agent", "007" };
+            const int mask = it->diffMask ? it->diffMask : MISSION_DIFF_ALL;
+            int nm = mask;
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Present on");
+            for (int d = 0; d < 4; d++) {
+                bool on = (mask >> d) & 1;
+                if (d == 1 || d == 3) ImGui::SameLine();
+                ImGui::PushID(100 + d);
+                if (ImGui::Checkbox(kNames[d], &on)) nm = on ? (nm | (1 << d)) : (nm & ~(1 << d));
+                ImGui::PopID();
+            }
+            if (nm != mask) {
+                if (nm == 0) a.say("edit: a prop must be present on at least one difficulty (remove it instead)");
+                else if (!a.doc.setPresence(sel.item, nm, err)) a.say("edit: %s", err.c_str());
+            }
+        }
         ImGui::Separator();
         if (it->added) {
             if (!(a.editFor == sel.item)) {

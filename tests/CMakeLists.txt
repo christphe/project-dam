@@ -82,8 +82,8 @@ if(GE007_ROM_TESTS)
   message(STATUS "GE007_ROM_TESTS=ON: ROM-backed tests enabled (set GE007_ROM=<.z64>)")
 endif()
 
-# Mission setup rebuild (port/mission/mission_apply.c) and the Luau runtime (mission_lua.cpp): pure, no core.
-foreach(_t test_mission_apply test_mission_lua)
+# Mission setup rebuild (port/mission/mission_apply.c) the Luau runtime (mission_lua.cpp) and the thumb.png pixel conversion (mission_thumb.c): pure, no core.
+foreach(_t test_mission_apply test_mission_lua test_mission_thumb)
   ge_add_pure_test(${_t} ${_t}.c)
   target_link_libraries(${_t} ge_mission)
   set_property(TARGET ${_t} PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}"

@@ -297,10 +297,45 @@ static void test_weapons(void)
     missionFree(&m2);
 }
 
+/* "difficulties" on guard / object ops: a bit mask, absent / empty / all four = everywhere; a move needs no pad. */
+static void test_difficulties(void)
+{
+    static const char *json =
+        "{ \"format\": 1, \"name\": \"d\", \"level\": \"bunker1\",\n"
+        "  \"guards\": [ { \"op\": \"move\", \"prop\": 3, \"difficulties\": [1, 3] },\n"
+        "              { \"op\": \"add\", \"pad\": 5, \"difficulties\": [0, 1, 2, 3] },\n"
+        "              { \"op\": \"remove\", \"prop\": 4, \"difficulties\": [0] } ],\n"
+        "  \"objects\": [ { \"op\": \"move\", \"prop\": 7, \"difficulties\": [2] },\n"
+        "               { \"op\": \"add\", \"type\": 3, \"pad\": 5, \"model\": 1, \"difficulties\": [] } ] }\n";
+    Mission m;
+    char err[160] = "";
+    char *out;
+    Mission again;
+    missionInit(&m);
+    GE_CHECK_EQ_INT(missionParse(json, &m, err, sizeof err), 1);
+    GE_CHECK_EQ_INT(m.guards[0].diff_mask, 10);
+    GE_CHECK_EQ_INT(m.guards[1].diff_mask, 0);
+    GE_CHECK_EQ_INT(m.objects[0].diff_mask, 4);
+    GE_CHECK_EQ_INT(m.objects[1].diff_mask, 0);
+    GE_CHECK_EQ_INT(missionValidate(&m, err, sizeof err), 1);   /* the pad-less move is fine */
+    out = missionToJson(&m);
+    GE_CHECK(out != NULL);
+    missionInit(&again);
+    GE_CHECK_EQ_INT(out ? missionParse(out, &again, err, sizeof err) : 0, 1);
+    GE_CHECK_EQ_INT(again.guards[0].diff_mask, 10);
+    GE_CHECK_EQ_INT(again.objects[0].diff_mask, 4);
+    GE_CHECK_EQ_INT(again.guards[0].pad.num, -1);
+    GE_CHECK(strstr(out, "\"difficulties\"") != NULL);
+    free(out);
+    missionFree(&again);
+    missionFree(&m);
+}
+
 int main(void)
 {
     GE_TEST_BEGIN("mission format");
     test_roundtrip();
+    test_difficulties();
     test_validate();
     test_levelrec();
     test_campaign();

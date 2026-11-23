@@ -27,11 +27,21 @@ void drawStatusBar(App &a, float x, float y, float w, float h)
     }
     if (ImGui::SmallButton("Hide log")) a.showLog = false;
     ImGui::SameLine();
-    auto issues = a.doc.validate();
+    refreshIssues(a, false);
+    const std::vector<Issue> &issues = a.issues;
     if (a.doc.hasMission && issues.empty()) ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), "mission valid");
     else if (!issues.empty()) ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "%zu issue(s)", issues.size());
     if (a.mcpPort) { ImGui::SameLine(); ImGui::TextDisabled("MCP :%d", a.mcpPort); }
-    for (auto &s : issues) ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "! %s", s.c_str());
+    for (size_t k = 0; k < issues.size(); k++) {   // a finding about an item or a pad selects it and looks at it
+        const Issue &i = issues[k];
+        ImGui::PushID((int)k);
+        ImGui::PushStyleColor(ImGuiCol_Text, i.sev >= 2 ? ImVec4(1, 0.5f, 0.4f, 1) : ImVec4(1.0f, 0.82f, 0.48f, 1));
+        const std::string line = std::string(i.sev >= 2 ? "! " : "? ") + i.text;
+        if (ImGui::Selectable(line.c_str(), false) && i.hasSel) selectIssue(a, i);
+        ImGui::PopStyleColor();
+        if (i.hasSel && ImGui::IsItemHovered()) ImGui::SetTooltip("Select it and look at it");
+        ImGui::PopID();
+    }
     ImGui::Separator();
     for (auto it = a.log.rbegin(); it != a.log.rend(); ++it) ImGui::TextColored(sevColor(it->sev), "%s", it->text.c_str());
     ImGui::End();

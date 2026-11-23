@@ -22,6 +22,8 @@
  *   objectives.is_complete(id) -> bool        objectives.all_complete() -> bool   (of the current difficulty)
  *   alarm.trigger()
  *   mission.win()                                   end the level as a success
+ *   mission.difficulty() -> 0..3                    the difficulty being played: 0 Agent, 1 Secret Agent, 2 00 Agent, 3 007
+ *                                                   (-1 when the host has no difficulty)
  *   door(prop) / guard(prop) -> target              a target for a setup prop number
  *   target (global of the script)                   the script's own target (kind "prop", "pad", "zone", "mission")
  *   props (global of the script)                    the typed values from mission.json

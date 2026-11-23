@@ -81,8 +81,8 @@ Options: `--port N`, `--no-mcp`, `--game EXE`, `--mcp-stdio`, `--mcp-http`, `--s
 * **Window layout.** A menu bar (File, Edit, View, Mission, Mod, Tools, Help), a short toolbar (tools Select /
   Move / Guard / Object, Play + Co-op + the spawn label, snapping; Zone and Geometry are greyed out for #105), the
   *Scene* tree on the left (filter box; Guards, Objects, Zones, Scripts, Mission pads, Free pads, Rooms, each with
-  its count), the 3D view, and on the right three tabs: *Selection*, *Mission* (the mission, its level, files,
-  environment, thumbnail) and *Mod* (the campaign). The bottom is one status line (the last message, red for a
+  its count), the 3D view, and on the right three tabs: *Selection*, *Mission* (the mission's properties: sections General, Start and test,
+  Objectives, Environment, Thumbnail, File) and *Mod* (the mod's properties and its missions). The bottom is one status line (the last message, red for a
   failure); click it, or View > Show log, for the full log. Help > Controls lists the mouse and keys. The code is
   split by panel (`ui_*.cpp`, see below).
 * **Settings** (Tools > Settings...): the game executable (Browse... on Windows), the export cache folder (Open
@@ -115,8 +115,8 @@ fast3d OpenGL backend, so textures and colours match the game (fog is off).
   an original prop gives it a mission pad of its own at the new spot (an existing one is reused);
   original pads are level data and cannot be moved. Toolbar snaps: *Grid* (step), *Floor* (stan tile
   under the point), *Pads*. One drag is one undo step.
-* **Opening and saving.** The top of the Mission tab shows the open mission's name, its path (shortened, the full
-  path in a tooltip) and a `*` while it has unsaved changes; the window title reads `<mission>[*] - <level> -
+* **Opening and saving.** The Mission tab says "unsaved changes" and its File section shows the mission's path (shortened,
+  the full path in a tooltip); the window title carries a `*` while it has unsaved changes and reads `<mission>[*] - <level> -
   GoldenEye mission editor`. A new mission is saved to `<game data dir>/missions/<name>/mission.json` (the data
   folder next to the game, or `GE_EDITOR_DATA`), never to the export cache; a mission of an open mod keeps
   `mods/<mod>/<mission>/mission.json`. On Windows, *Open...* and *Save as...* open the standard file dialogs
@@ -124,11 +124,38 @@ fast3d OpenGL backend, so textures and colours match the game (fog is off).
   8 opened or saved missions are listed under *recent* (stored in `ge-editor-recent.txt` next to the editor,
   missing files dropped). Closing the window, opening or creating another mission or mod while the mission has
   unsaved changes asks *Save / Discard / Cancel*; MCP `mission_open` refuses the same case unless `discard: true`.
-* **Mod (campaign) panel.** A mod is `mods/<mod>/campaign.json` + `<mission>/mission.json` +
-  `thumb.png`. Open or create a folder, edit name, author, description, affects, unlock; add,
-  reorder, remove and open missions. *Mission > Capture thumbnail* (or the button in the Mission tab) renders
-  the view, 4:3 cropped, without markers or any effect, to 320x240: `thumb.png` of the open mission when it
-  is in the open mod, else the path in the Mission tab.
+* **New mission** (File > New mission..., or the buttons of the Mission and Mod tabs). A dialog asks the name, the base
+  level (fixed once the mission exists) and the starting point: *Level as is* (all the original guards and objects are
+  there) or *Emptied level* (remove ops for every original guard, the weapons they carry and every pickup: keys,
+  magazines, weapons, ammo, body armour; doors, glass, scenery and the objective objects stay). With a mod open a
+  checkbox adds the mission to its campaign. The dialog says where the file goes
+  (`mods/<mod>/<folder>/mission.json`, or `<game data>/missions/<folder>/mission.json`) and whether the level is loaded or
+  exported first. MCP `mission_open` takes `emptied: true` with `new`. The recent lists (File > Recent, the Mission tab)
+  show each mission's name and level; the path is the tooltip, and paths that differ only by slash direction are one entry.
+* **Mission tab.** *General*: name, the base level (read only; red with *Load* / *Move the mission to...* when the loaded
+  level is another one), briefing. The mission's `description` is not edited (kept in the file when present).
+  *Start and test*: the play spawn (level start, or a pad picked in the view), Co-op, Play. *Objectives*: letter, text,
+  lowest difficulty (Agent / Secret Agent / 00 Agent), add, remove, reorder; an objective is completed by a script or
+  a zone. *Environment*: below. *Thumbnail*: *Capture the view* stores a plain 4:3 crop as the base image; Contrast and
+  Brightness are baked into `thumb.png` on capture and on save; the previews show what the player sees, converted by
+  `port/mission/mission_thumb.c` (the game's own code path): the mission select film strip (68x44 grey) and the
+  briefing polaroid (16 greys in two 128x64 halves). The base image is the last capture of the session, or the loaded
+  `thumb.png`. *File*: the mission path, Open / Save as, the recent list, the level to open or re-export.
+* **Mod tab.** A mod is `mods/<mod>/campaign.json` + `<mission>/mission.json` + `thumb.png`. Open or create a folder; edit
+  name, author, description, affects (Story / Multiplayer) and the unlock order (ordered / open); the missions are a list
+  with thumbnail, name and level: open, reorder, remove (the folder stays), *New mission...*, *Add the open mission*
+  (saved into the mod's folder); *Save mod* / *Check mod*. `thumb.png` of a mission in the open mod is next to its
+  `mission.json`; any other mission uses the folder of its file.
+* **Check (Mission > Validate, the log).** Format and ids; pads and ops against the level; every pad in use against the
+  walkable floor (a stan tile within 35 units on the ground plane): a guard standing off the floor is an *error* (it does
+  not spawn), an object or a mission pad is a *warning*; scripts whose target prop is removed or missing, whose
+  `key_door` key item no object of the mission or the level gives (a `give_item` script counts), or whose `objective`
+  is not listed. A finding about an item or a pad selects it and frames it when clicked in the log. MCP `validate`
+  returns `errors` (texts) and `issues` (severity, text, the item / pad it is about).
+* **Props browser** (View > Props browser). The models the open level uses (the export's models table), each
+  rendered once with the same fast3d replay as the view and cached as a texture; search by model id, `guard`, `object` or
+  type. Drag a cell onto the 3D view to place an object (or a guard) with that model at the point under the mouse
+  (as Ctrl+V does); a click makes it the default of the Guard / Object tool. Only the level's own models are listed.
 * **Environment panel.** Per-field overrides (checkbox = the key is present; unchecked = the level's
   own): mood, sun, sky, clouds, sea. Save only: the editor draws no sky or sea, preview in the game.
   The sun marker in the view is draggable (azimuth 0 = +z).
@@ -147,12 +174,15 @@ foreign `Origin` or `Host` are refused (403). `--mcp-stdio` is newline-delimited
 stdin/stdout; `--mcp-http` serves HTTP without a window.
 
 Test aids for scripted runs and screenshots: `--click X,Y`, `--mouse-at X,Y`, `--mouse-then FRAME,X,Y`,
-`--key FRAME[xLEN]:SPEC` (ctrl+c, ctrl+d, rmb+ctrl, wheel1 ...), `--mouse-drag`, `--log-cam` (see `--help`).
+`--key FRAME[xLEN]:SPEC` (ctrl+c, ctrl+d, rmb+ctrl, wheel1 ...), `--mouse-drag` (+ `--mouse-from X,Y`), `--open-tab`,
+`--open-menu`, `--open-window settings|help|log|props|newmission`, `--capture` and `--thumb-adjust C,B` (the Thumbnail
+section), `--place-model object|guard:MODEL,TYPE,ITEM@X,Y`, `--log-cam` (see `--help`).
 
 Tools: `level_describe` (`detail`: summary, pads, props, mission), `level_open`, `mission_open`
-(`path`, or `new` + `level` + `name`; optional `export`), `mission_save`, `place_guard`,
+(`path`, or `new` + `level` + `name` [+ `emptied`]; optional `export`), `mission_save`, `place_guard`,
 `place_object`, `move`, `remove` (original props by `prop`, added ones by `kind` + `op`), `undo`,
-`validate`, `test_run`, `set_transform` (pos, yaw, axis, snap), `capture_thumb`, `mod_open`, `mod_save`,
+`validate`, `set_guard_behavior` (a guard's AI list: an original guard gets a `move` op that keeps its pad and carries
+`ai`, an added one its own `ai`), `test_run`, `set_transform` (pos, yaw, axis, snap), `capture_thumb`, `mod_open`, `mod_save`,
 `mod_add_mission`, `mod_reorder`, `set_environment`, `duplicate` (a guard or object, with all its fields and its facing, as a new item; optional `pad` / `pos`). `level_describe` `props` lists every item's record fields. `move` also takes `pos` (+ `axis`, `snap`). A pad is an original pad number or a mission pad id; `pos: [x, y, z]`
 creates a new mission pad there.
 
@@ -173,7 +203,8 @@ python editor/tools/mcp_smoke.py <ge-editor exe> <export dir> <scratch dir> [--g
 | `ui_app.h` | the GUI state (`App`) and the helpers shared by the panel files |
 | `ui_menubar.cpp`, `ui_toolbar.cpp`, `ui_scene.cpp` | menu bar, toolbar, the left Scene tree |
 | `ui_selection.cpp`, `ui_mission.cpp`, `ui_mod.cpp` | the right panel's tabs (its tab bar is in `ui_frame.cpp`) |
-| `ui_settings.cpp`, `ui_modals.cpp`, `ui_log.cpp` | Settings window, popups (unsaved changes, mission level, Controls), status line + log |
+| `ui_thumb.cpp`, `ui_props.cpp` | the Mission tab's Thumbnail section (previews through `port/mission/mission_thumb.c`); the Props browser |
+| `ui_settings.cpp`, `ui_modals.cpp`, `ui_log.cpp` | Settings window, popups (unsaved changes, mission level, New mission, Controls), status line + log |
 | `ui_overlay.cpp`, `ui_frame.cpp`, `ui_actions.cpp` | 3D overlay + gizmo + sun marker; one frame (layout, camera, shortcuts); actions shared by menus, buttons and keys |
 | `launch.cpp` | starting the game |
 | `third_party/` | cpp-httplib, the ImGui SDL2 and OpenGL3 backends (see `NOTICE`) |

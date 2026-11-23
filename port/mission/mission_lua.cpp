@@ -348,6 +348,14 @@ int l_alarm_trigger(lua_State *L)
     return 0;
 }
 
+// mission.difficulty() -> 0 Agent .. 3 007; -1 when the host has no difficulty
+int l_difficulty(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    lua_pushinteger(L, rt->host.difficulty ? rt->host.difficulty(rt->host.ud) : -1);
+    return 1;
+}
+
 int l_win(lua_State *L)
 {
     MissionRuntime *rt = rtOf(L);
@@ -740,7 +748,7 @@ MissionRuntime *missionRtCreate(const Mission *m, const MissionHost *host, const
     table("objectives", { Fn{ "add", l_obj_add }, Fn{ "complete", l_obj_complete }, Fn{ "is_complete", l_obj_is_complete },
                           Fn{ "all_complete", l_obj_all } });
     table("alarm", { Fn{ "trigger", l_alarm_trigger } });
-    table("mission", { Fn{ "win", l_win } });
+    table("mission", { Fn{ "win", l_win }, Fn{ "difficulty", l_difficulty } });
     luaL_newmetatable(L, kTargetMT);
     lua_pushvalue(L, -1);
     lua_setfield(L, -2, "__index");

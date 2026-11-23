@@ -18,7 +18,7 @@ void drawMenuBar(App &a)
     };
 
     if (title("File")) {
-        if (ImGui::MenuItem("New mission")) doNewMission(a);
+        if (ImGui::MenuItem("New mission...")) doNewMission(a);
         if (ImGui::MenuItem("Open...", "Ctrl+O", false, dlg)) guarded(a, [&a] { doOpenDialog(a); });
         if (ImGui::BeginMenu("Recent")) { recentList(a, true); ImGui::EndMenu(); }
         ImGui::Separator();
@@ -45,6 +45,7 @@ void drawMenuBar(App &a)
         ImGui::MenuItem("Portals", nullptr, &a.showPortals);
         ImGui::MenuItem("Stan tiles", nullptr, &a.showStan);
         ImGui::Separator();
+        ImGui::MenuItem("Props browser", nullptr, &a.showPropsWin);
         ImGui::MenuItem("Show log", nullptr, &a.showLog);
         ImGui::EndMenu();
     }

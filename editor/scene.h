@@ -22,6 +22,9 @@ public:
     // Whole-frame offscreen rendering (editor_gl.h); the caller copies the frame to the window after its GUI.
     void setOffscreen(bool on) { m_offscreen = on; }
     bool offscreen() const { return m_offscreen; }
+    // One owner's recorded model alone, in a size x size picture (RGBA, top-down): the Props browser's thumbnails. Draws into the
+    // window frame like render(), so call it between two frames, never inside one.
+    bool renderOwner(int owner, int winW, int winH, int size, std::vector<uint8_t> &rgba);
     int runCount() const { return (int)m_runs.size(); }
     int drawn() const { return m_drawn; }
 

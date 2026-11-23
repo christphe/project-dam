@@ -135,6 +135,190 @@ def duplicate_checks(exe, export, work):
     s.close()
 
 
+def item_of(d, kind, key, idx):
+    for it in d["items"]:
+        if it["kind"] == kind and it.get(key) == idx:
+            return it
+    return None
+
+
+def validator_checks(exe, export, work):
+    """Validator (#103): pads off the floor, unreachable mission pads, scripts whose target / key / objective is gone."""
+    s = Stdio(exe, export)
+    s.call("initialize", {"protocolVersion": "2025-06-18"})
+    s.tool("mission_open", new=True, level="bunker1", name="Validator test")
+    err, d = s.tool("validate")
+    check(not err and d["valid"] and d["issues"] == [], "validator: an empty mission is valid")
+    # inside a room, and 20 units outside its wall (inside the tolerance): fine
+    s.tool("place_guard", pos=[300, 0, 300], model=3)
+    s.tool("place_guard", pos=[-20, 0, 400], model=3)
+    err, d = s.tool("validate")
+    check(d["valid"], "validator: pads on the floor and at its edge are fine: " + json.dumps(d["errors"]))
+    # far outside every room: a guard there does not spawn
+    err, d = s.tool("place_guard", pos=[5000, 0, 5000], model=3)
+    pad = d["new_pad"]
+    err, d = s.tool("validate")
+    guard_err = [i for i in d["issues"] if "off the walkable floor" in i["text"] and i["severity"] == "error" and "will not spawn" in i["text"]]
+    check(len(guard_err) == 1 and guard_err[0].get("item") == {"kind": "guard", "op": 2},
+          "validator: a guard on a pad off the floor is an error naming the guard: " + json.dumps(d["issues"]))
+    unreach = [i for i in d["issues"] if "unreachable" in i["text"]]
+    check(len(unreach) == 1 and unreach[0].get("mission_pad") == pad, "validator: the mission pad off the floor is unreachable, selectable: " + json.dumps(unreach))
+    err, d = s.tool("place_object", type=3, model=120, pad=pad)
+    err, d = s.tool("validate")
+    obj = [i for i in d["issues"] if "object op" in i["text"] and i["severity"] == "warning"]
+    check(len(obj) == 1 and obj[0].get("item", {}).get("kind") == "object", "validator: an object off the floor is a warning: " + json.dumps(obj))
+    # an original guard moved off the floor
+    err, d = s.tool("move", prop=0, pad=pad)
+    err, d = s.tool("validate")
+    check(any("guard op" in i["text"] and i.get("item") == {"kind": "guard", "prop": 0} for i in d["issues"]),
+          "validator: a moved original guard is named by its prop")
+    s.close()
+
+    # scripts: target / key / objective
+    mpath = os.path.join(work, "smoke_scripts.json")
+    mission = {
+        "format": 1, "name": "Scripts", "level": "bunker1",
+        "objectives": [{"id": "o1", "text": "x", "difficulty": 0}],
+        "guards": [{"op": "remove", "prop": 0}],
+        "scripts": [
+            {"use": "key_door", "target": {"kind": "prop", "prop": 3}, "props": {"key": 99}},
+            {"use": "key_door", "target": {"kind": "prop", "prop": 4}, "props": {"key": 33}},
+            {"use": "exit_unlock", "target": {"kind": "prop", "prop": 0}, "props": {}},
+            {"use": "exit_unlock", "target": {"kind": "prop", "prop": 77}, "props": {}},
+            {"use": "key_door", "target": {"kind": "prop", "prop": 3}, "props": {"key": 33, "objective": "zzz"}},
+            {"use": "give_item", "target": {"kind": "prop", "prop": 3}, "props": {"item": 99}},
+        ],
+    }
+    json.dump(mission, open(mpath, "w"))
+    s = Stdio(exe, export)
+    s.call("initialize", {"protocolVersion": "2025-06-18"})
+    err, d = s.tool("mission_open", path=mpath)
+    check(not err, "validator: the scripts mission opens: " + str(d)[:80])
+    err, d = s.tool("validate")
+    texts = [i["text"] for i in d["issues"]]
+    check(any("script 2" in t and "removed by this mission" in t for t in texts), "validator: a script on a removed prop: " + json.dumps(texts))
+    check(any("script 3" in t and "does not exist" in t for t in texts), "validator: a script on a missing prop")
+    check(not any("key item 99" in t for t in texts), "validator: give_item providing the key silences the key warning (script 0)")
+    check(not any("script 1" in t and "key item" in t for t in texts), "validator: the key the level provides (33) is fine")
+    check(any("script 4" in t and "objective 'zzz'" in t for t in texts), "validator: a script naming an objective the mission lacks")
+    rem = [i for i in d["issues"] if "removed by this mission" in i["text"]]
+    check(len(rem) == 1 and rem[0].get("item") == {"kind": "guard", "prop": 0}, "validator: the removed target is selectable")
+    err, d = s.tool("remove", prop=5)       # the level's key goes: key 33 is provided by nothing now
+    err, d = s.tool("validate")
+    check(any("script 1" in i["text"] and "key item 33" in i["text"] for i in d["issues"]), "validator: a key whose only giver was removed")
+    s.close()
+
+
+def behavior_checks(exe, export, work):
+    """set_guard_behavior (#102): an original guard gets a move op carrying ai, an added guard its own ai; emptied start."""
+    mpath = os.path.join(work, "smoke_behavior.json")
+    if os.path.exists(mpath):
+        os.remove(mpath)
+    s = Stdio(exe, export)
+    s.call("initialize", {"protocolVersion": "2025-06-18"})
+    names = [t["name"] for t in s.call("tools/list")["result"]["tools"]]
+    check("set_guard_behavior" in names, "tools/list has set_guard_behavior")
+    s.tool("mission_open", new=True, level="bunker1", name="Behavior test")
+    err, d = s.tool("set_guard_behavior", prop=1, ai=1027)
+    check(not err and d["guard"] == {"kind": "guard", "prop": 1} and d["ai"] == 1027 and d["level_own_list"],
+          "set_guard_behavior on an original guard: " + json.dumps(d))
+    err, d = s.tool("level_describe", detail="props")
+    g = item_of(d, "guard", "prop", 1)
+    check(g and g["ai"] == 1027 and not g["moved"], "the guard shows its new ai and has not moved: " + json.dumps(g))
+    err, d = s.tool("set_guard_behavior", prop=1, ai="0x401")
+    check(not err and d["ai"] == 1025, "ai given as a hex string")
+    err, d = s.tool("set_guard_behavior", prop=1, ai=70000)
+    check(err, "an AI list id out of range is an error")
+    err, d = s.tool("set_guard_behavior", prop=3, ai=1025)
+    check(err, "an object is not a guard")
+    err, d = s.tool("set_guard_behavior", prop=1)
+    check(err, "ai is required")
+    err, d = s.tool("set_guard_behavior", prop=99, ai=1025)
+    check(err, "a missing prop is an error")
+    err, d = s.tool("set_guard_behavior", prop=0, ai=2000)
+    check(not err and d["level_own_list"] is False and "note" in d, "a list the level does not own is accepted with a note")
+    err, d = s.tool("place_guard", pad=4, model=3, ai=1025)
+    op = d["added"]["op"]
+    err, d = s.tool("set_guard_behavior", kind="guard", op=op, ai=1026)
+    check(not err and d["guard"] == {"kind": "guard", "op": op}, "set_guard_behavior on an added guard")
+    err, d = s.tool("undo")
+    err, d = s.tool("level_describe", detail="props")
+    check(item_of(d, "guard", "op", op)["ai"] == 1025, "undo restores the added guard's ai")
+    err, d = s.tool("set_guard_behavior", kind="guard", op=op, ai=1026)
+    err, d = s.tool("remove", prop=2)
+    err, d = s.tool("set_guard_behavior", prop=2, ai=1025)
+    check(err, "a removed guard cannot be given a behaviour")
+    err, d = s.tool("mission_save", path=mpath)
+    saved = json.load(open(mpath))
+    mv = [x for x in saved["guards"] if x["op"] == "move" and x["prop"] == 1]
+    check(len(mv) == 1 and mv[0]["ai"] == 1025 and mv[0]["pad"] == 3, "saved: one move op for prop 1, same pad, ai 0x401: " + json.dumps(mv))
+    check(any(x["op"] == "add" and x["ai"] == 1026 for x in saved["guards"]), "saved: the added guard's ai")
+    s.close()
+    s = Stdio(exe, export)
+    s.call("initialize", {"protocolVersion": "2025-06-18"})
+    err, d = s.tool("mission_open", path=mpath)
+    err, d = s.tool("level_describe", detail="props")
+    g = item_of(d, "guard", "prop", 1)
+    check(g and g["ai"] == 1025 and g["pad"] == 3, "reopened: the guard keeps its pad and the new ai")
+    s.close()
+
+    # an emptied start: every original guard and pickup removed, doors / scenery (type 3 props) kept
+    epath = os.path.join(work, "smoke_emptied.json")
+    s = Stdio(exe, export)
+    s.call("initialize", {"protocolVersion": "2025-06-18"})
+    err, d = s.tool("mission_open", new=True, level="bunker1", name="Emptied", emptied=True)
+    check(not err, "mission_open emptied")
+    err, d = s.tool("mission_save", path=epath)
+    saved = json.load(open(epath))
+    check(sorted(x["prop"] for x in saved["guards"] if x["op"] == "remove") == [0, 1, 2], "emptied: the three original guards are removed")
+    check(sorted(x["prop"] for x in saved["objects"] if x["op"] == "remove") == [5],
+          "emptied: the key pickup is removed, the scenery (type 3) is kept: " + json.dumps(saved["objects"]))
+    s.close()
+
+
+def presence_checks(exe, export, work):
+    """set_presence: per-difficulty presence of original and added guards / objects."""
+    mpath = os.path.join(work, "smoke_presence.json")
+    if os.path.exists(mpath):
+        os.remove(mpath)
+    s = Stdio(exe, export)
+    s.call("initialize", {"protocolVersion": "2025-06-18"})
+    names = [t["name"] for t in s.call("tools/list")["result"]["tools"]]
+    check("set_presence" in names, "tools/list has set_presence")
+    s.tool("mission_open", new=True, level="bunker1", name="Presence test")
+    err, d = s.tool("set_presence", prop=1, difficulties=[2, 3])
+    check(not err and d["difficulties"] == [2, 3], "set_presence on an original guard: " + json.dumps(d))
+    err, d = s.tool("level_describe", detail="props")
+    g = item_of(d, "guard", "prop", 1)
+    check(g and not g["moved"] and g["pad"] == 3, "a presence edit does not move the guard: " + json.dumps(g))
+    err, d = s.tool("set_presence", prop=3, difficulties=[0])
+    check(not err, "set_presence on an original object")
+    err, d = s.tool("place_guard", pad=4, model=3)
+    op = d["added"]["op"]
+    err, d = s.tool("set_presence", kind="guard", op=op, difficulties=[1])
+    check(not err, "set_presence on an added guard")
+    err, d = s.tool("set_presence", prop=1, difficulties=[])
+    check(err, "no difficulty at all is an error")
+    err, d = s.tool("set_presence", prop=1, difficulties=[7])
+    check(err, "a difficulty out of range is an error")
+    err, d = s.tool("validate")
+    check(d["valid"], "a presence-only move op validates: " + json.dumps(d["errors"]))
+    err, d = s.tool("mission_save", path=mpath)
+    saved = json.load(open(mpath))
+    mv = [x for x in saved["guards"] if x["op"] == "move" and x["prop"] == 1]
+    check(len(mv) == 1 and mv[0]["difficulties"] == [2, 3] and "pad" not in mv[0], "saved: a move op with difficulties and no pad: " + json.dumps(mv))
+    ob = [x for x in saved["objects"] if x["op"] == "move" and x["prop"] == 3]
+    check(len(ob) == 1 and ob[0]["difficulties"] == [0], "saved: the object's presence")
+    check(any(x["op"] == "add" and x["difficulties"] == [1] for x in saved["guards"]), "saved: the added guard's presence")
+    err, d = s.tool("set_presence", prop=1, difficulties=[0, 1, 2, 3])
+    err, d = s.tool("mission_save", path=mpath)
+    saved = json.load(open(mpath))
+    check(not any("difficulties" in x for x in saved["guards"] if x["op"] == "move"), "all four difficulties = the key is gone")
+    err, d = s.tool("undo")
+    err, d = s.tool("undo")
+    s.close()
+
+
 def mod_checks(exe, export, work):
     """mod (campaign): create, two missions, reorder, save, reload; environment block."""
     import shutil
@@ -382,6 +566,9 @@ def main():
     transform_checks(exe, export, work)
     duplicate_checks(exe, export, work)
     mod_checks(exe, export, work)
+    validator_checks(exe, export, work)
+    behavior_checks(exe, export, work)
+    presence_checks(exe, export, work)
     if "--gui" in sys.argv:
         gui_capture_check(exe, export, work)
 

@@ -61,11 +61,80 @@ void unsavedModal(App &a)
     ImGui::EndPopup();
 }
 
-// The popups, drawn last in the frame: unsaved changes, mission level, and Help > Controls.
+// File > New mission: the name, the base level, and where the mission starts from: the level as it is, or emptied (every
+// original guard, the weapons they carry and every pickup removed, the doors, glass, scenery and objective objects kept).
+void newMissionModal(App &a)
+{
+    if (a.askNewMission) { ImGui::OpenPopup("New mission"); a.askNewMission = false; }
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.3f), ImGuiCond_Appearing, ImVec2(0.5f, 0.0f));
+    if (!ImGui::BeginPopupModal("New mission", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    a.modalOpen = true;
+    Doc &d = a.doc;
+    const char *lvl = missionLevelNameAt(a.nmLevel) ? missionLevelNameAt(a.nmLevel) : "";
+    ImGui::TextUnformatted("Name");
+    ImGui::SetNextItemWidth(360);
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::InputText("##nmname", a.nmName, sizeof a.nmName);
+    ImGui::TextUnformatted("Base level");
+    ImGui::SetNextItemWidth(200);
+    if (ImGui::BeginCombo("##nmlevel", lvl)) {
+        for (int i = 0; missionLevelNameAt(i); i++)
+            if (ImGui::Selectable(missionLevelNameAt(i), a.nmLevel == i)) a.nmLevel = i;
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("fixed once the mission exists");
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Starting point");
+    ImGui::RadioButton("Level as is", &a.nmStart, 0);
+    ImGui::TextDisabled("    all the original guards and objects are there");
+    ImGui::RadioButton("Emptied level", &a.nmStart, 1);
+    ImGui::TextDisabled("    the original guards, their weapons and every pickup (weapons, ammo,\n    body armour, keys and other collectables) are removed; doors, glass,\n    scenery and the objective objects stay");
+    if (d.hasMod) {
+        ImGui::Spacing();
+        char label[200];
+        snprintf(label, sizeof label, "Add to the open mod's campaign (%s)", d.camp.name[0] ? d.camp.name : d.modDir.c_str());
+        ImGui::Checkbox(label, &a.nmAddToMod);
+    }
+    ImGui::Spacing();
+    ImGui::Separator();
+    {   // where it ends up, and what happens to the level
+        std::string where;
+        const bool toMod = d.hasMod && a.nmAddToMod;
+        if (toMod) {
+            const std::string mod = d.modDir.substr(d.modDir.find_last_of("/\\") == std::string::npos ? 0 : d.modDir.find_last_of("/\\") + 1);
+            where = "mods/" + mod + "/" + d.modMissionFolder(a.nmName) + "/mission.json";
+        } else {
+            where = d.defaultMissionPath(a.nmName);
+            const std::string data = d.gameDataDir();
+            if (where.compare(0, data.size(), data) == 0) where = "<game data>" + where.substr(data.size());
+        }
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420);
+        ImGui::TextDisabled("Saved to %s", where.c_str());
+        const bool loaded = d.hasLevel && d.level.name == lvl;
+        ImGui::TextDisabled("%s", loaded ? "The level is loaded." : exportPresent(exportDirFor(a.gameExe, lvl)) ? "The level loads from the export cache."
+                                                                                                           : "The level is exported by the game the first time (a few seconds).");
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::Spacing();
+    const bool okName = a.nmName[0] != 0;
+    ImGui::BeginDisabled(!okName);
+    if (ImGui::Button("Create", ImVec2(100, 0)) || (okName && ImGui::IsKeyPressed(ImGuiKey_Enter, false) && !ImGui::IsAnyItemActive())) {
+        createNewMission(a);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(100, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
+// The popups, drawn last in the frame: unsaved changes, mission level, New mission, and Help > Controls.
 void drawModals(App &a)
 {
     unsavedModal(a);
     levelSwitchModal(a);
+    newMissionModal(a);
     drawHelpWindow(a);
 }
 

@@ -104,10 +104,16 @@ void frameUi(App &a, int winW, int winH, bool &quit)
     const float top = menuH + toolH;
     a.vx = leftW; a.vy = top; a.vw = std::max(W - leftW - rightW, 1.0f); a.vh = std::max(H - top - statusH, 1.0f);
     a.items = a.doc.items();
-    {   // the thumbnail goes next to the open mission when it is a mission of the open mod
+    a.frameNo++;
+    {   // the thumbnail goes next to the open mission: in its mod's folder, else the mission file's own folder
         std::string t = a.doc.defaultThumbPath();
+        if (t.empty() && a.doc.hasMission && !a.doc.missionPath.empty()) {
+            const size_t s = a.doc.missionPath.find_last_of("/\\");
+            t = (s == std::string::npos ? std::string() : a.doc.missionPath.substr(0, s + 1)) + "thumb.png";
+        }
         if (!t.empty() && t != a.lastAutoThumb) { a.lastAutoThumb = t; snprintf(a.thumbPath, sizeof a.thumbPath, "%s", t.c_str()); }
     }
+    thumbSync(a);
 
     drawMenuBar(a);
     drawToolbar(a, menuH, toolH);
@@ -115,6 +121,7 @@ void frameUi(App &a, int winW, int winH, bool &quit)
     drawRightPanel(a, W - rightW, top, rightW, H - top - statusH);
     drawStatusBar(a, leftW, H - statusH, W - leftW, statusH);
     drawSettingsWindow(a);
+    drawPropsWindow(a);
     drawModals(a);
 
     const ImVec2 mp = io.MousePos;

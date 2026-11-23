@@ -17,6 +17,9 @@ bool editorGlReadWindow(int w, int h, std::vector<uint8_t> &rgba);
 // Reads a rectangle of the window's back buffer (x, y from the top left) as top-down RGBA8 rows.
 bool editorGlReadRect(int winH, int x, int y, int w, int h, std::vector<uint8_t> &rgba);
 
+// Reads a rectangle (x, y from the top left) of what was just drawn: the offscreen frame when it is in use, else the window's back buffer.
+bool editorGlReadFrame(bool offscreen, int winH, int x, int y, int w, int h, std::vector<uint8_t> &rgba);
+
 // RGBA8 texture for ImGui::Image (mod panel thumbnails). 0 on failure.
 uint32_t editorGlUploadTexture(int w, int h, const uint8_t *rgba);
 void editorGlDeleteTexture(uint32_t id);

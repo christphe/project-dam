@@ -137,26 +137,69 @@ static std::string slug(const std::string &s)
     return o.empty() ? "mission" : o;
 }
 
-bool Doc::modAddMission(const std::string &name, const std::string &level, const std::string &folderIn, std::string &outFolder, std::string &err)
+// A free folder name in the open mod for a mission called `name` (or for `folderIn`).
+std::string Doc::modMissionFolder(const std::string &name, const std::string &folderIn) const
 {
-    if (!hasMod) { err = "no mod is open (mod_open first)"; return false; }
     std::string base = slug(folderIn.empty() ? name : folderIn), folder = base;
     for (int n = 2;; n++) {
-        bool used = exists(modDir + "/" + folder);
+        bool used = hasMod && exists(modDir + "/" + folder);
         for (int i = 0; i < camp.nmissions; i++) if (folder == camp.missions[i]) used = true;
         if (!used) break;
         folder = base + "_" + std::to_string(n);
     }
-    if (folder.size() >= MISSION_ID_LEN) { err = "folder name too long"; return false; }
-    if (!newMission(name, level, err)) return false;
-    std::error_code ec;
-    fs::create_directories(fs::path(modDir + "/" + folder), ec);
-    if (ec) { err = "cannot create the mission folder"; return false; }
-    if (!saveMission(modDir + "/" + folder + "/mission.json", err)) return false;
+    return folder;
+}
+
+static void campaignAppend(Campaign &camp, const std::string &folder)
+{
     char (*nm)[MISSION_ID_LEN] = (char (*)[MISSION_ID_LEN])realloc(camp.missions, sizeof(char[MISSION_ID_LEN]) * (size_t)(camp.nmissions + 1));
     if (!nm) abort();
     camp.missions = nm;
     snprintf(camp.missions[camp.nmissions++], MISSION_ID_LEN, "%s", folder.c_str());
+}
+
+bool Doc::modAddMission(const std::string &name, const std::string &level, const std::string &folderIn, std::string &outFolder, std::string &err, bool emptied)
+{
+    if (!hasMod) { err = "no mod is open (mod_open first)"; return false; }
+    const std::string folder = modMissionFolder(name, folderIn);
+    if (folder.size() >= MISSION_ID_LEN) { err = "folder name too long"; return false; }
+    if (!newMission(name, level, err, emptied)) return false;
+    std::error_code ec;
+    fs::create_directories(fs::path(modDir + "/" + folder), ec);
+    if (ec) { err = "cannot create the mission folder"; return false; }
+    if (!saveMission(modDir + "/" + folder + "/mission.json", err)) return false;
+    campaignAppend(camp, folder);
+    outFolder = folder;
+    return saveMod(err);
+}
+
+// The open mission joins the open mod: saved into <mod>/<folder>/mission.json (its thumb.png copied along), appended to the
+// campaign. A mission that already lives in the mod's folders is just listed.
+bool Doc::modAddOpenMission(std::string &outFolder, std::string &err)
+{
+    if (!hasMod) { err = "no mod is open"; return false; }
+    if (!hasMission) { err = "no mission is open"; return false; }
+    std::string mp = missionPath;
+    for (auto &c : mp) if (c == '\\') c = '/';
+    std::string md = modDir;
+    for (auto &c : md) if (c == '\\') c = '/';
+    std::string folder;
+    if (!mp.empty() && mp.compare(0, md.size() + 1, md + "/") == 0) {
+        const size_t s1 = mp.find_last_of('/');
+        const size_t s0 = mp.find_last_of('/', s1 - 1);
+        folder = mp.substr(s0 + 1, s1 - s0 - 1);
+        if (mp.substr(0, s0) != md) { err = "the mission is nested deeper than one folder in the mod"; return false; }
+        for (int i = 0; i < camp.nmissions; i++) if (folder == camp.missions[i]) { err = "the mission is already in the mod"; return false; }
+    } else {
+        folder = modMissionFolder(mission.name, "");
+        if (folder.size() >= MISSION_ID_LEN) { err = "folder name too long"; return false; }
+        const std::string oldThumb = mp.empty() ? "" : mp.substr(0, mp.find_last_of('/') + 1) + "thumb.png";
+        std::error_code ec;
+        fs::create_directories(fs::path(modDir + "/" + folder), ec);
+        if (!saveMission(modDir + "/" + folder + "/mission.json", err)) return false;
+        if (!oldThumb.empty() && exists(oldThumb)) fs::copy_file(oldThumb, modDir + "/" + folder + "/thumb.png", fs::copy_options::overwrite_existing, ec);
+    }
+    campaignAppend(camp, folder);
     outFolder = folder;
     return saveMod(err);
 }

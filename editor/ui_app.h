@@ -3,8 +3,9 @@
 //   ui_menubar.cpp   main menu bar          ui_toolbar.cpp   tools / Play / snapping
 //   ui_scene.cpp     left tree (Scene)      ui_selection.cpp right panel, Selection tab
 //   ui_mission.cpp   right, Mission tab     ui_mod.cpp       right, Mod tab
-//   ui_settings.cpp  Settings window        ui_modals.cpp    unsaved / mission-level / Controls popups
+//   ui_settings.cpp  Settings window        ui_modals.cpp    unsaved / mission-level / New mission / Controls popups
 //   ui_log.cpp       status line + log      ui_overlay.cpp   3D overlay, gizmo, sun marker
+//   ui_thumb.cpp     Mission tab: thumbnail  ui_props.cpp     Props browser window (rendered model thumbnails, drag and drop)
 //   ui_frame.cpp     one frame: layout, the right panel's tab bar, camera, view input, shortcuts
 //   ui_actions.cpp   actions shared by menus, buttons and shortcuts (open / save / copy / level / prefs ...)
 // main.cpp keeps main(), the command line and the test aids.
@@ -115,6 +116,36 @@ struct App {
     int reexportTotal = 0;
     // test aids (main.cpp): open a menu / window / tab by name
     std::map<std::string, ImVec2> menuPos;   // centre of each top-level menu title, last frame
+
+    // ---- File > New mission (a modal) ----
+    bool askNewMission = false;
+    char nmName[128] = "New mission";
+    int nmLevel = 0;                   // index into missionLevelNameAt()
+    int nmStart = 0;                   // 0 the level as is, 1 an emptied level
+    bool nmAddToMod = true;
+    // Name and level of a mission file (the recent lists and the mod's mission list show these, not paths); cached.
+    struct MissionInfo { std::string name, level; bool ok = false; };
+    std::map<std::string, MissionInfo> infoCache;
+    // the Mission tab: picking the play spawn in the view, and the text-field undo snapshot
+    bool pickSpawn = false;
+    std::string fieldSnap;
+    // ---- thumbnail (Mission tab): the last capture (or the loaded thumb.png), contrast / brightness, the previews ----
+    std::vector<uint8_t> thumbBase;    // RGBA 320x240, as captured (before contrast / brightness)
+    std::string thumbBaseFor;          // the thumbPath it belongs to
+    float thumbContrast = 1.0f, thumbBright = 0.0f;
+    bool thumbDirty = false;           // contrast / brightness changed since thumb.png was written
+    int thumbGen = 0;                  // counts captures
+    uint32_t pvFull = 0, pvStrip = 0, pvPol = 0;   // preview textures: the colour image, the film strip, the polaroid
+    std::string pvKey;                 // what they were made from
+    // ---- the check results (Mission > Validate and the log) ----
+    std::vector<Issue> issues;
+    int issuesFrame = -100;
+    // ---- Props browser (View > Props browser) ----
+    bool showPropsWin = false;
+    char propFilter[64] = "";
+    std::map<int, uint32_t> ownerTex;      // renderer owner -> rendered thumbnail texture (0: could not be rendered)
+    std::vector<int> ownerQueue;           // owners waiting for their thumbnail (rendered between frames)
+    int frameNo = 0;
 
     SnapOpts snapOpts() const
     {
@@ -242,7 +273,11 @@ void doSave(App &a);
 void doSaveAs(App &a);
 void doOpenPath(App &a, const std::string &path);
 void doOpenDialog(App &a);
-void doNewMission(App &a);                                    // the New mission action (File menu, Mission tab)
+void doNewMission(App &a);                                    // File > New mission: asks about unsaved edits, opens the dialog
+void createNewMission(App &a);                                // the dialog's Create
+const App::MissionInfo &missionInfo(App &a, const std::string &path);   // name + level of a mission file (cached)
+void selectIssue(App &a, const Issue &i);                     // select what a check finding is about, and look at it
+void refreshIssues(App &a, bool force);
 void doCapture(App &a);
 void guarded(App &a, std::function<void()> fn);
 std::string missionStartDir(const App &a);
@@ -270,6 +305,15 @@ void drawModTab(App &a);
 void doSaveMod(App &a);
 void doCheckMod(App &a);
 void drawStatusBar(App &a, float x, float y, float w, float h);
+// ui_thumb.cpp
+void thumbSync(App &a);                                       // follows the open mission's thumb.png (base image, sliders)
+void thumbSection(App &a);                                    // the Mission tab's Thumbnail section
+bool thumbWriteBaked(App &a, const std::string &path, std::string &err);   // thumb.png from the base image with contrast / brightness
+// ui_props.cpp
+void drawPropsWindow(App &a);
+void clearOwnerThumbs(App &a);
+void processOwnerQueue(App &a, int winW, int winH);           // renders the queued model thumbnails (between frames, before the view)
+void placeModelAt(App &a, bool guard, int model, int type, int item, const Vec3 &org, const Vec3 &dir);
 void drawSettingsWindow(App &a);
 void drawModals(App &a);
 void drawHelpWindow(App &a);

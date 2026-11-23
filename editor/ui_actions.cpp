@@ -75,6 +75,15 @@ bool ensureMission(App &a)
 void applyClick(App &a, const Hit &h)
 {
     std::string err;
+    if (a.pickSpawn && (h.kind == Hit::PAD || h.kind == Hit::MPAD || h.kind == Hit::ITEM)) {   // Mission tab > Start and test > pick in the view
+        PadSpec ps;
+        if (padFromHit(a, h, ps)) {
+            if (ps.isNew) a.spawn = ps.id; else a.spawn = std::to_string(ps.num);
+            a.pickSpawn = false;
+            a.say("Play starts at pad %s", a.spawn.c_str());
+            return;
+        }
+    }
     if (a.tool == App::T_SELECT || h.kind == Hit::NONE) {
         a.doc.sel = Selection();
         if (h.kind == Hit::ITEM) a.doc.sel.kind = Selection::ITEM, a.doc.sel.item = h.item;
@@ -148,6 +157,7 @@ void duplicateSelected(App &a, const Vec3 &org, const Vec3 &dir)
 
 void reloadLevelGpu(App &a)
 {
+    clearOwnerThumbs(a);
     a.scene.setLevel(a.doc.hasLevel ? &a.doc.level : nullptr);
     a.seenLevelGen = a.doc.levelGen;
     if (a.doc.hasLevel) {
@@ -226,6 +236,12 @@ void doSave(App &a)
     if (a.doc.saveMission(a.missionPath, err)) {
         snprintf(a.missionPath, sizeof a.missionPath, "%s", a.doc.missionPath.c_str());
         a.say("saved %s", a.doc.missionPath.c_str());
+        a.infoCache.clear();
+        if (a.thumbDirty && !a.thumbBase.empty()) {   // contrast / brightness are baked into thumb.png on save
+            std::string e2;
+            if (thumbWriteBaked(a, a.thumbPath, e2)) a.say("thumbnail written: %s", a.thumbPath);
+            else a.say("capture: %s", e2.c_str());
+        }
     } else a.say("save: %s", err.c_str());
 }
 
@@ -254,6 +270,7 @@ void doSaveAs(App &a)
     if (a.doc.saveMission(path, err)) {
         snprintf(a.missionPath, sizeof a.missionPath, "%s", a.doc.missionPath.c_str());
         a.say("saved %s", a.doc.missionPath.c_str());
+        a.infoCache.clear();
     } else a.say("save as: %s", err.c_str());
 }
 
@@ -316,6 +333,21 @@ void savePrefs(App &a)
 
 // ---- recent missions: a small text file next to the editor, one path per line ----
 
+static std::string normSlash(std::string p)
+{
+    for (char &c : p) if (c == '\\') c = '/';
+    return p;
+}
+
+// The same file, whatever the slash direction or the case Windows does not care about.
+static bool samePath(const std::string &x, const std::string &y)
+{
+    if (normSlash(x) == normSlash(y)) return true;
+    std::error_code ec;
+    const bool eq = std::filesystem::equivalent(x, y, ec);
+    return !ec && eq;
+}
+
 void recentLoad(App &a)
 {
     a.recent.clear();
@@ -328,7 +360,10 @@ void recentLoad(App &a)
         std::string line = text.substr(p, e - p);
         p = e + 1;
         std::error_code ec;
-        if (!line.empty() && std::filesystem::exists(line, ec)) a.recent.push_back(line);
+        if (line.empty() || !std::filesystem::exists(line, ec)) continue;
+        bool dup = false;
+        for (const std::string &r : a.recent) if (samePath(r, line)) dup = true;
+        if (!dup) a.recent.push_back(normSlash(line));
     }
 }
 
@@ -336,8 +371,8 @@ void recentNote(App &a, const std::string &path)
 {
     std::error_code ec;
     if (path.empty() || !std::filesystem::exists(path, ec)) return;
-    for (size_t i = 0; i < a.recent.size();) { if (a.recent[i] == path) a.recent.erase(a.recent.begin() + (long)i); else i++; }
-    a.recent.insert(a.recent.begin(), path);
+    for (size_t i = 0; i < a.recent.size();) { if (samePath(a.recent[i], path)) a.recent.erase(a.recent.begin() + (long)i); else i++; }
+    a.recent.insert(a.recent.begin(), normSlash(path));
     while (a.recent.size() > 8) a.recent.pop_back();
     if (a.recentFile.empty()) return;
     FILE *f = fopen(a.recentFile.c_str(), "wb");
@@ -354,8 +389,26 @@ void recentClear(App &a)
     if (f) fclose(f);
 }
 
-// <folder>/mission.json: the folder says more than the file
-static std::string recentLabel(const std::string &path)
+// The name and level of a mission file, for lists: read once, kept until a mission is saved. The open mission is live.
+const App::MissionInfo &missionInfo(App &a, const std::string &path)
+{
+    static App::MissionInfo live;
+    if (a.doc.hasMission && !a.doc.missionPath.empty() && samePath(a.doc.missionPath, path)) {
+        live.name = a.doc.mission.name; live.level = a.doc.mission.level; live.ok = true;
+        return live;
+    }
+    auto it = a.infoCache.find(path);
+    if (it != a.infoCache.end()) return it->second;
+    App::MissionInfo mi;
+    Mission m; missionInit(&m);
+    char e[200] = "";
+    if (missionLoadFile(path.c_str(), &m, e, sizeof e)) { mi.name = m.name; mi.level = m.level; mi.ok = true; }
+    missionFree(&m);
+    return a.infoCache[path] = mi;
+}
+
+// <folder>/mission.json when the file has no readable name: the folder says more than the file
+static std::string recentFallback(const std::string &path)
 {
     std::string label = path;
     const size_t s1 = label.find_last_of("/\\");
@@ -366,13 +419,16 @@ static std::string recentLabel(const std::string &path)
     return shortPath(label, 42);
 }
 
+// The mission's name and level; the file path only in the tooltip.
 void recentList(App &a, bool menu)
 {
     if (a.recent.empty()) { ImGui::TextDisabled("(none)"); return; }
     for (size_t i = 0; i < a.recent.size(); i++) {
         ImGui::PushID((int)i);
         const std::string path = a.recent[i];
-        const bool hit = menu ? ImGui::MenuItem(recentLabel(path).c_str()) : ImGui::Selectable(recentLabel(path).c_str());
+        const App::MissionInfo &mi = missionInfo(a, path);
+        const std::string label = mi.ok ? mi.name + "  (" + mi.level + ")" : recentFallback(path);
+        const bool hit = menu ? ImGui::MenuItem(label.c_str()) : ImGui::Selectable(label.c_str());
         if (hit) guarded(a, [&a, path] { doOpenPath(a, path); });
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", path.c_str());
         ImGui::PopID();
@@ -385,11 +441,11 @@ std::string shortPath(const std::string &p, size_t n)
     return "..." + p.substr(p.size() - (n - 3));
 }
 
-// Renders the 3D view (no panels, no markers: those are ImGui) and saves a centred 4:3 crop of it,
-// scaled to 320x240. Runs on the main thread, outside an ImGui frame: the next frame redraws everything.
+// Renders the 3D view (no panels, no markers: those are ImGui) and returns a centred 4:3 crop of it, scaled to 320x240 RGBA.
+// Runs on the main thread, outside an ImGui frame: the next frame redraws everything.
 void invalidateThumbs(App &a);
 
-bool captureThumb(App &a, const std::string &path, std::string &err)
+static bool captureView(App &a, std::vector<uint8_t> &out, std::string &err)
 {
     int dw, dh, ww, wh;
     SDL_GL_GetDrawableSize(a.win, &dw, &dh);
@@ -403,7 +459,7 @@ bool captureThumb(App &a, const std::string &path, std::string &err)
     const int cx = vx + (vw - cw) / 2, cy = vy + (vh - ch) / 2;
     std::vector<uint8_t> src;
     if (!editorGlReadRect(dh, cx, cy, cw, ch, src)) { err = "reading the framebuffer failed"; return false; }
-    std::vector<uint8_t> out(320 * 240 * 4);
+    out.assign((size_t)320 * 240 * 4, 0);
     for (int y = 0; y < 240; y++)
         for (int x = 0; x < 320; x++) {   // box filter over the source pixels under this one
             int x0 = x * cw / 320, x1 = std::max(x0 + 1, (x + 1) * cw / 320);
@@ -418,12 +474,19 @@ bool captureThumb(App &a, const std::string &path, std::string &err)
             for (int k = 0; k < 3; k++) o[k] = (uint8_t)(n ? acc[k] / n : 0);
             o[3] = 255;
         }
-    std::error_code ec;
-    std::filesystem::path p(path);
-    if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path(), ec);
-    if (!writePng(path.c_str(), 320, 240, out.data())) { err = "cannot write " + path; return false; }
-    invalidateThumbs(a);
     return true;
+}
+
+// The capture becomes the session's base image for this thumb.png; the file is that image with the Mission tab's contrast
+// and brightness baked in (ui_thumb.cpp).
+bool captureThumb(App &a, const std::string &path, std::string &err)
+{
+    std::vector<uint8_t> px;
+    if (!captureView(a, px, err)) return false;
+    a.thumbBase = px;
+    a.thumbBaseFor = path;
+    a.thumbGen++;
+    return thumbWriteBaked(a, path, err);
 }
 
 void invalidateThumbs(App &a)
@@ -463,11 +526,42 @@ void viewCenterRay(const App &a, Vec3 &org, Vec3 &dir)
     a.cam.ray(a.vw * 0.5f, a.vh * 0.5f, a.vw, a.vh, org, dir);
 }
 
+// The mission check, cached for the log panel (a check every 20 frames), or now.
+void refreshIssues(App &a, bool force)
+{
+    if (!force && a.frameNo - a.issuesFrame < 20) return;
+    a.issuesFrame = a.frameNo;
+    a.issues = a.doc.hasMission ? a.doc.checkIssues() : std::vector<Issue>();
+}
+
+// Selects what a finding is about and looks at it.
+void selectIssue(App &a, const Issue &i)
+{
+    if (!i.hasSel) return;
+    a.doc.sel = i.sel;
+    Vec3 p{};
+    bool have = false;
+    if (i.sel.kind == Selection::ITEM) {
+        for (const Item &it : a.items)
+            if (it.added == i.sel.item.added && it.guard == i.sel.item.guard && it.idx == i.sel.item.idx && it.hasPos) { p = it.pos; have = true; }
+    } else if (i.sel.kind == Selection::PAD) {
+        if (const LPad *lp = a.doc.hasLevel ? a.doc.level.pad(i.sel.num) : nullptr) { p = lp->pos; have = true; }
+    } else if (i.sel.kind == Selection::MPAD) {
+        for (int k = 0; k < a.doc.mission.npads; k++)
+            if (i.sel.id == a.doc.mission.pads[k].id) { p = { a.doc.mission.pads[k].pos[0], a.doc.mission.pads[k].pos[1], a.doc.mission.pads[k].pos[2] }; have = true; }
+    }
+    if (have) focusOn(a, p);
+    a.forceTab = 0;
+}
+
+// Mission > Validate: every finding goes to the log (and the log opens).
 void doValidate(App &a)
 {
-    auto v = a.doc.validate();
-    if (v.empty()) a.say("mission is valid");
-    for (auto &s : v) a.say("invalid: %s", s.c_str());
+    refreshIssues(a, true);
+    if (!a.doc.hasMission) { a.say("invalid: no mission is open"); return; }
+    if (a.issues.empty()) a.say("mission is valid");
+    for (const Issue &i : a.issues) a.say("invalid: %s", i.text.c_str());
+    a.showLog = true;
 }
 
 void doCapture(App &a)
@@ -477,16 +571,41 @@ void doCapture(App &a)
     else a.say("capture: %s", e.c_str());
 }
 
-// On the level loaded, or the picked one (it is exported then); the name from the Mission tab.
+// On the level loaded, or the picked one (it is exported then). Asks about unsaved edits, then opens the New mission dialog
+// (ui_modals.cpp); createNewMission is its Create button.
 void doNewMission(App &a)
 {
     guarded(a, [&a] {
-        std::string e2;
-        if (a.doc.newMission(a.newName, a.doc.hasLevel ? "" : a.pickLevel, e2)) {
-            snprintf(a.missionPath, sizeof a.missionPath, "%s", a.doc.missionPath.c_str());
-            a.say("new mission for %s (saved to %s)", a.doc.mission.level, a.doc.missionPath.c_str());
-        } else a.say("new mission: %s", e2.c_str());
+        snprintf(a.nmName, sizeof a.nmName, "New mission");
+        const char *want = a.doc.hasLevel ? a.doc.level.name.c_str() : a.pickLevel;
+        a.nmLevel = 0;
+        for (int i = 0; missionLevelNameAt(i); i++) if (strcmp(missionLevelNameAt(i), want) == 0) a.nmLevel = i;
+        a.nmStart = 0;
+        a.nmAddToMod = true;
+        a.askNewMission = true;
     });
+}
+
+void createNewMission(App &a)
+{
+    std::string err, folder;
+    const std::string lvl = missionLevelNameAt(a.nmLevel) ? missionLevelNameAt(a.nmLevel) : "";
+    const bool emptied = a.nmStart == 1, toMod = a.doc.hasMod && a.nmAddToMod;
+    a.doc.gameExe = a.gameExe;
+    bool ok;
+    if (toMod) ok = a.doc.modAddMission(a.nmName, lvl, "", folder, err, emptied);
+    else ok = a.doc.newMission(a.nmName, lvl, err, emptied);
+    if (!ok) { a.say("new mission: %s", err.c_str()); return; }
+    a.infoCache.clear();
+    snprintf(a.missionPath, sizeof a.missionPath, "%s", a.doc.missionPath.c_str());
+    if (toMod) a.say("new mission '%s' for %s, added to the mod (saved to %s)", a.doc.mission.name, a.doc.mission.level, a.doc.missionPath.c_str());
+    else a.say("new mission '%s' for %s (not saved yet: Save writes %s)", a.doc.mission.name, a.doc.mission.level, a.doc.missionPath.c_str());
+    if (emptied) {
+        if (a.doc.emptyPending) a.say("emptied level: the original guards and pickups are removed as soon as the level has loaded");
+        else a.say("emptied level: %d operations remove the original guards, their weapons and the pickups", a.doc.mission.nguards + a.doc.mission.nobjects);
+    }
+    // the level: loaded now, or exported first (pollLevel brings it in)
+    if (!a.doc.hasLevel || a.doc.level.name != a.doc.mission.level) requestLevel(a, a.doc.mission.level, false);
 }
 
 // <game dir>/data/exports: the parent of every cached level export.

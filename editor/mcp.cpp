@@ -1,5 +1,6 @@
 #include "mcp.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -150,7 +151,8 @@ ToolResult toolMissionOpen(Doc &d, const cJSON *a)
     if (argHas(a, "path")) {
         if (!d.openMission(argStr(a, "path"), err)) return fail(err);
     } else if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(a, "new")) || argHas(a, "name") || argHas(a, "level")) {
-        if (!d.newMission(argStr(a, "name", "New mission"), argStr(a, "level"), err)) return fail(err);
+        const bool emptied = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(a, "emptied"));
+        if (!d.newMission(argStr(a, "name", "New mission"), argStr(a, "level"), err, emptied)) return fail(err);
     } else {
         return fail("give \"path\" to open a mission.json, or \"new\": true with \"level\" (e.g. bunker1) and \"name\"");
     }
@@ -330,11 +332,66 @@ ToolResult toolUndo(Doc &d, const cJSON *)
 
 ToolResult toolValidate(Doc &d, const cJSON *)
 {
-    std::vector<std::string> issues = d.validate();
+    const std::vector<Issue> issues = d.checkIssues();
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddBoolToObject(o, "valid", issues.empty());
-    cJSON *e = cJSON_AddArrayToObject(o, "errors");
-    for (auto &i : issues) cJSON_AddItemToArray(e, cJSON_CreateString(i.c_str()));
+    bool anyError = false;
+    for (const Issue &i : issues) if (i.sev >= 2) anyError = true;
+    cJSON_AddBoolToObject(o, "valid", !anyError);             // warnings do not make a mission invalid
+    cJSON *e = cJSON_AddArrayToObject(o, "errors");          // the texts of every finding, as before
+    cJSON *det = cJSON_AddArrayToObject(o, "issues");        // with severity and what each is about
+    for (const Issue &i : issues) {
+        cJSON_AddItemToArray(e, cJSON_CreateString(i.text.c_str()));
+        cJSON *x = cJSON_CreateObject();
+        cJSON_AddStringToObject(x, "severity", i.sev >= 2 ? "error" : "warning");
+        cJSON_AddStringToObject(x, "text", i.text.c_str());
+        if (i.hasSel) {
+            if (i.sel.kind == Selection::ITEM) {
+                cJSON_AddItemToObject(x, "item", refJson(i.sel.item));
+            } else if (i.sel.kind == Selection::PAD) cJSON_AddNumberToObject(x, "pad", i.sel.num);
+            else if (i.sel.kind == Selection::MPAD) cJSON_AddStringToObject(x, "mission_pad", i.sel.id.c_str());
+        }
+        cJSON_AddItemToArray(det, x);
+    }
+    return okJson(o);
+}
+
+// The difficulties a guard / object is present on: difficulties [0..3] (0 Agent, 1 Secret Agent, 2 00 Agent, 3 007); all four = everywhere.
+ToolResult toolSetPresence(Doc &d, const cJSON *a)
+{
+    ItemRef ref; std::string err;
+    if (!itemFromArgs(d, a, ref, err)) return fail(err);
+    const cJSON *arr = cJSON_GetObjectItemCaseSensitive(a, "difficulties");
+    if (!cJSON_IsArray(arr)) return fail("\"difficulties\": an array of 0..3 (0 Agent, 1 Secret Agent, 2 00 Agent, 3 007) is required");
+    int mask = 0;
+    const cJSON *e;
+    cJSON_ArrayForEach(e, arr) {
+        if (!cJSON_IsNumber(e) || e->valuedouble < 0 || e->valuedouble > 3) return fail("difficulties must be numbers 0..3");
+        mask |= 1 << (int)e->valuedouble;
+    }
+    if (!mask) return fail("a prop must be present on at least one difficulty (use remove to take it out)");
+    if (!d.setPresence(ref, mask, err)) return fail(err);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, "item", refJson(ref));
+    cJSON *r = cJSON_AddArrayToObject(o, "difficulties");
+    for (int k = 0; k < 4; k++) if (mask & (1 << k)) cJSON_AddItemToArray(r, cJSON_CreateNumber(k));
+    return okJson(o);
+}
+
+// The guard's AI list: an original guard gets a move op that keeps its pad and carries "ai"; an added guard's own "ai" changes.
+ToolResult toolSetGuardBehavior(Doc &d, const cJSON *a)
+{
+    ItemRef ref; std::string err;
+    if (!itemFromArgs(d, a, ref, err)) return fail(err);
+    if (!ref.guard) return fail("that is not a guard (prop of a guard, or kind guard + op)");
+    if (!argHas(a, "ai")) return fail("\"ai\" (an AI list id, e.g. 1025 or \"0x401\") is required");
+    const int ai = argInt(a, "ai", -1);
+    if (!d.setGuardAi(ref, ai, err)) return fail(err);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, "guard", refJson(ref));
+    cJSON_AddNumberToObject(o, "ai", ai);
+    const bool known = d.hasLevel && std::find(d.level.ailists.begin(), d.level.ailists.end(), ai) != d.level.ailists.end();
+    cJSON_AddBoolToObject(o, "level_own_list", known);
+    if (!known) cJSON_AddStringToObject(o, "note", "not one of this level's own AI lists: fine for a list the game shares between levels, else the guard stands idle");
     return okJson(o);
 }
 
@@ -374,7 +431,7 @@ const Tool kTools[] = {
       toolLevelOpen },
     { "mission_open", "Open a mission.json (path), or start a new mission for a level (new: true, level, name). The mission's level is loaded too (exported by the game when missing); export loads a given export directory instead. Fails while the open mission has unsaved changes unless discard: true is given (mission_save first to keep them).",
       "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"new\":{\"type\":\"boolean\"},\"name\":{\"type\":\"string\"},"
-      "\"level\":{\"type\":\"string\",\"description\":\"solo level name, e.g. bunker1\"},\"export\":{\"type\":\"string\"},\"discard\":{\"type\":\"boolean\",\"description\":\"replace an open mission that has unsaved changes\"}}}",
+      "\"level\":{\"type\":\"string\",\"description\":\"solo level name, e.g. bunker1\"},\"emptied\":{\"type\":\"boolean\",\"description\":\"with new: remove every original guard, the weapons they carry and every pickup (doors, glass, scenery stay)\"},\"export\":{\"type\":\"string\"},\"discard\":{\"type\":\"boolean\",\"description\":\"replace an open mission that has unsaved changes\"}}}",
       toolMissionOpen },
     { "mission_save", "Save the open mission to its file (or to path).",
       "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}", toolMissionSave },
@@ -423,6 +480,12 @@ const Tool kTools[] = {
       "{\"type\":\"object\",\"properties\":{\"prop\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"enum\":[\"guard\",\"object\"]},"
       "\"op\":{\"type\":\"integer\"}, KPAD }}",
       toolDuplicate },
+    { "set_presence", "Make a guard or object present only on some difficulties: difficulties = a list of 0 Agent, 1 Secret Agent, 2 00 Agent, 3 007 (all four = everywhere). prop = an original prop (it gets a move op without a pad), or kind + op = one the mission added. An object gets the game's per-difficulty do-not-load flags; a guard is sunk like a removed one on the other difficulties.",
+      "{\"type\":\"object\",\"properties\":{\"prop\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"enum\":[\"guard\",\"object\"]},\"op\":{\"type\":\"integer\"},"
+      "\"difficulties\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":3}}},\"required\":[\"difficulties\"]}", toolSetPresence },
+    { "set_guard_behavior", "Reassign a guard's AI list (what it does: patrol, guard, flee...). prop = an original guard (it gets a move op that keeps its pad and carries the new list), or kind guard + op = a guard the mission added. ai = the AI list id (number or \"0x401\"); level_describe props lists each guard's current ai.",
+      "{\"type\":\"object\",\"properties\":{\"prop\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"enum\":[\"guard\"]},\"op\":{\"type\":\"integer\"},"
+      "\"ai\":{\"type\":[\"integer\",\"string\"],\"description\":\"AI list id\"}},\"required\":[\"ai\"]}", toolSetGuardBehavior },
     { "undo", "Undo the last mission edit.", "{\"type\":\"object\",\"properties\":{}}", toolUndo },
     { "validate", "Check the mission (format, ids, pads and props against the level export).",
       "{\"type\":\"object\",\"properties\":{}}", toolValidate },

@@ -86,6 +86,7 @@ struct Item {
     int origPad = -1;          // original pad num (original props)
     int type = 0, model = -1, item = -1, ai = -1, weapon = -1;
     int owner = -1;
+    int diffMask = 0;          // the difficulties it is present on (bit n = difficulty n; 0 = all)
     bool hasPos = false;
     Vec3 pos{};
     float yawDeg = 0;          // facing: the look of the pad it stands on (0 = +z)
@@ -141,6 +142,24 @@ struct Selection {
     ItemRef item;              // ITEM
 };
 
+// One finding of the mission check: severity 1 warning / 2 error, the text, and what to select to look at it.
+struct Issue {
+    int sev = 2;
+    std::string text;
+    bool hasSel = false;
+    Selection sel;
+};
+
+// A model the open level uses (its setup props): the Props browser lists these.
+struct ModelUse {
+    bool guard = false;          // a guard body (else an object model)
+    int model = -1;
+    int owner = -1;              // the recorded renderer owner, -1 when the export has no drawing of it
+    int count = 0;               // how many setup props use it
+    int type = 0;                // the setup prop type of the first user (objects)
+    int item = -1;               // that user's item id, if any
+};
+
 struct Doc {
     Level level;
     bool hasLevel = false;
@@ -148,6 +167,7 @@ struct Doc {
     bool hasMission = false;
     std::string missionPath;
     bool dirty = false;
+    bool emptyPending = false;   // a new "emptied" mission waits for its level to load (openLevel)
     int levelGen = 0;          // counts openLevel calls: the GUI reloads its GPU copy when it changes
     Selection sel;
     std::string gameExe;       // GE_EDITOR_GAME or the sibling build dir's ge007
@@ -167,7 +187,12 @@ struct Doc {
     bool openLevelByName(const std::string &level, bool reexport, std::string &err);
     // The open mission's level when the loaded export is another one (or none), else "".
     std::string missingLevel() const;
-    bool newMission(const std::string &name, const std::string &levelName, std::string &err);
+    // emptied: also writes a remove op for every original guard, the weapons they carry and every pickup object (see emptyLevel).
+    bool newMission(const std::string &name, const std::string &levelName, std::string &err, bool emptied = false);
+    // Marks removed (ops, one undo step): every original guard and the weapons they carry, and every pickup object (keys,
+    // magazines, weapons, ammo, body armour). Doors, glass, scenery and the other objects are kept. Counts are returned.
+    bool emptyLevel(int &guards, int &objects, std::string &err);
+    bool emptyOrDefer(std::string &err);   // emptyLevel now, or when the mission's level has loaded
     // Moves the open mission to another solo level (one undo step; pads and items keep their positions).
     bool setMissionLevel(const std::string &levelName, std::string &err);
     // Where a new mission is saved unless it joins a mod: <game data dir>/missions/<slug of the name>/mission.json
@@ -180,7 +205,14 @@ struct Doc {
     std::vector<Item> items() const;               // original props with the delta applied, then the added ones
     bool padPos(const MissionPadRef &r, Vec3 &out) const;
     int roomAt(const Vec3 &p) const;               // room whose bounds contain p, -1 none
-    std::vector<std::string> validate() const;     // missionValidate + checks against the level; empty = ok
+    std::vector<std::string> validate() const;     // the texts of checkIssues(); empty = ok
+    // missionValidate + checks against the level: format, ids, pads, ops, the walkable floor under every pad in use,
+    // scripts whose target / key / objective is gone. Each finding names what to select.
+    std::vector<Issue> checkIssues() const;
+    // A stan (walkable floor) tile within `tol` units of p on the ground plane and within `tolY` in height. True when the
+    // level has no stan data (nothing to say).
+    bool floorUnder(const Vec3 &p, float tol = 35.0f, float tolY = 250.0f) const;
+    std::vector<ModelUse> levelModels() const;     // the models of the level's own setup props, one entry each
     std::string describe(const std::string &detail) const;   // JSON text for level_describe
 
     // ---- actions (each pushes an undo step on success) ----
@@ -230,12 +262,26 @@ struct Doc {
     std::vector<std::string> validateMod() const;
     // New mission folder (unique, from `folder` or the name), mission.json written, appended to the
     // campaign, campaign saved, the mission opened.
-    bool modAddMission(const std::string &name, const std::string &level, const std::string &folder, std::string &outFolder, std::string &err);
+    bool modAddMission(const std::string &name, const std::string &level, const std::string &folder, std::string &outFolder, std::string &err, bool emptied = false);
+    std::string modMissionFolder(const std::string &name, const std::string &folder = "") const;   // the free folder name a new mission would get
+    bool modAddOpenMission(std::string &outFolder, std::string &err);   // the open mission joins the mod (saved into it)
     bool modRemoveMission(int index, std::string &err);              // leaves the folder on disk
     bool modMoveMission(int index, int newIndex, std::string &err);
     bool modOpenMission(int index, std::string &err);
     std::string modMissionPath(int index) const;                     // <mod>/<folder>/mission.json
     std::string defaultThumbPath() const;                            // next to the open mission when it is in the mod
+
+    // The guard's AI list (original guard: a move op that keeps its pad and carries "ai"; added guard: its "ai"). One undo step.
+    bool setGuardAi(const ItemRef &it, int ai, std::string &err);
+
+    // The difficulties (mask: bit 0 Agent .. 3 007; 0 or 15 = all) a guard / object is present on. An original prop gets a move op
+    // without a pad (a presence edit). One undo step.
+    bool setPresence(const ItemRef &it, int mask, std::string &err);
+
+    // ---- objectives (undo covers them) ----
+    bool addObjective(const std::string &text, int difficulty, std::string &err);
+    bool removeObjective(int index, std::string &err);
+    bool moveObjective(int index, int newIndex, std::string &err);
 
     // ---- environment (mission.env; undo covers it) ----
     bool setEnv(const MissionEnv &e, bool commitUndo);

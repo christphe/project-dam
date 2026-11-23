@@ -101,6 +101,26 @@ static int getpad(const cJSON *o, const char *k, MissionPadRef *r)
     return 0;
 }
 
+/* "difficulties": [..] -> bit mask; absent, empty or all four = 0 (everywhere). */
+static int getdiff(const cJSON *o)
+{
+    const cJSON *a = cJSON_GetObjectItemCaseSensitive(o, "difficulties"), *e;
+    int mask = 0;
+    if (!cJSON_IsArray(a)) return 0;
+    cJSON_ArrayForEach(e, a)
+        if (cJSON_IsNumber(e) && e->valuedouble >= 0 && e->valuedouble <= 3) mask |= 1 << (int)e->valuedouble;
+    return mask == MISSION_DIFF_ALL ? 0 : mask;
+}
+
+static void adddiff(cJSON *o, int mask)
+{
+    cJSON *a;
+    if (!mask || mask == MISSION_DIFF_ALL) return;
+    a = cJSON_AddArrayToObject(o, "difficulties");
+    for (int d = 0; d < 4; d++)
+        if (mask & (1 << d)) cJSON_AddItemToArray(a, cJSON_CreateNumber(d));
+}
+
 static int getop(const cJSON *o, MissionOpKind *op)
 {
     const char *s = getstr(o, "op");
@@ -253,6 +273,7 @@ int missionParse(const char *json, Mission *m, char *err, size_t errlen)
         g->prop = getnum(e, "prop", -1);
         getpad(e, "pad", &g->pad);
         g->model = getnum(e, "model", -1); g->ai = getnum(e, "ai", -1);
+        g->diff_mask = getdiff(e);
         if (g->op == MISSION_OP_ADD) {
             const cJSON *ws = cJSON_GetObjectItemCaseSensitive(e, "weapons"), *we;
             if (cJSON_IsArray(ws)) {
@@ -277,6 +298,7 @@ int missionParse(const char *json, Mission *m, char *err, size_t errlen)
         o->prop = getnum(e, "prop", -1);
         getpad(e, "pad", &o->pad);
         o->type = getnum(e, "type", -1); o->model = getnum(e, "model", -1); o->item = getnum(e, "item", -1);
+        o->diff_mask = getdiff(e);
         if (o->op == MISSION_OP_ADD) missionFieldsFromJson(e, o->type, &o->f);
     }
     m->objectives = allocarr(root, "objectives", sizeof(MissionObjective), &m->nobjectives, &arr);
@@ -415,6 +437,8 @@ char *missionToJson(const Mission *m)
         cJSON_AddStringToObject(o, "op", opname(g->op));
         if (g->op != MISSION_OP_ADD) addopt(o, "prop", g->prop);
         if (g->op != MISSION_OP_REMOVE) addpad(o, "pad", &g->pad);
+        if (g->op == MISSION_OP_MOVE) addopt(o, "ai", g->ai);        /* a move may reassign the guard's AI list */
+        if (g->op != MISSION_OP_REMOVE) adddiff(o, g->diff_mask);
         if (g->op == MISSION_OP_ADD) { addopt(o, "model", g->model); addopt(o, "ai", g->ai); addfields(o, MISSION_REC_GUARD, &g->f);
             if (g->nweapons > 0) {
                 cJSON *ws = cJSON_AddArrayToObject(o, "weapons");
@@ -435,6 +459,7 @@ char *missionToJson(const Mission *m)
         cJSON_AddStringToObject(o, "op", opname(ob->op));
         if (ob->op != MISSION_OP_ADD) addopt(o, "prop", ob->prop);
         if (ob->op != MISSION_OP_REMOVE) addpad(o, "pad", &ob->pad);
+        if (ob->op != MISSION_OP_REMOVE) adddiff(o, ob->diff_mask);
         if (ob->op == MISSION_OP_ADD) { addopt(o, "type", ob->type); addopt(o, "model", ob->model); addopt(o, "item", ob->item); addfields(o, ob->type, &ob->f); }
         cJSON_AddItemToArray(a, o);
     }
@@ -708,13 +733,17 @@ int missionValidate(const Mission *m, char *err, size_t errlen)
         const MissionGuardOp *g = &m->guards[i];
         snprintf(ctx, sizeof(ctx), "guards[%d]", i);
         if (g->op != MISSION_OP_ADD && g->prop < 0) { seterr(err, errlen, "missing prop", ctx); return 0; }
-        if (g->op != MISSION_OP_REMOVE && !padknown(m, &g->pad)) { seterr(err, errlen, "unknown pad", ctx); return 0; }
+        if (g->op == MISSION_OP_ADD || (g->op == MISSION_OP_MOVE && (g->pad.is_new || g->pad.num >= 0))) {
+            if (!padknown(m, &g->pad)) { seterr(err, errlen, "unknown pad", ctx); return 0; }
+        }
     }
     for (int i = 0; i < m->nobjects; i++) {
         const MissionObjectOp *o = &m->objects[i];
         snprintf(ctx, sizeof(ctx), "objects[%d]", i);
         if (o->op != MISSION_OP_ADD && o->prop < 0) { seterr(err, errlen, "missing prop", ctx); return 0; }
-        if (o->op != MISSION_OP_REMOVE && !padknown(m, &o->pad)) { seterr(err, errlen, "unknown pad", ctx); return 0; }
+        if (o->op == MISSION_OP_ADD || (o->op == MISSION_OP_MOVE && (o->pad.is_new || o->pad.num >= 0))) {
+            if (!padknown(m, &o->pad)) { seterr(err, errlen, "unknown pad", ctx); return 0; }
+        }
         if (o->op == MISSION_OP_ADD && o->type < 0) { seterr(err, errlen, "added object without a type", ctx); return 0; }
     }
     for (int i = 0; i < m->nobjectives; i++) {

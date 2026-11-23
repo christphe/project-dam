@@ -1,5 +1,7 @@
 #include "scene.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "editor_gl.h"
@@ -136,4 +138,35 @@ void Scene::render(const Doc &doc, const Camera &cam, int winW, int winH, int vx
         }
     a->end_frame();
     editorGlScissorOff();
+}
+
+bool Scene::renderOwner(int owner, int winW, int winH, int size, std::vector<uint8_t> &rgba)
+{
+    if (!m_level || !m_level->hasRec || owner < 0 || (size_t)owner >= m_runsOfOwner.size() || (size_t)owner >= m_level->owners.size()) return false;
+    const OwnerInfo &oi = m_level->owners[(size_t)owner];
+    if (!oi.valid || m_runsOfOwner[(size_t)owner].empty() || size > winW || size > winH) return false;
+    GfxRenderingAPI *a = api();
+    m_drawn = 0;
+    a->start_frame();
+    a->start_draw_to_framebuffer(0, 1.0f);
+    if (m_offscreen) editorOffscreenBind(winW, winH);
+    editorGlClear(winW, winH, 0.16f, 0.17f, 0.20f);
+    editorGlScissor(0, 0, size, size);            // the bottom left corner of the frame; the next frame draws over it
+    a->set_viewport(0, 0, size, size);
+    a->set_scissor(0, 0, size, size);
+    // a model records facing +z: look at it from the front, a little from the side and above
+    Camera cam;
+    const Vec3 c = { (oi.mn[0] + oi.mx[0]) * 0.5f, (oi.mn[1] + oi.mx[1]) * 0.5f, (oi.mn[2] + oi.mx[2]) * 0.5f };
+    const float dx = oi.mx[0] - oi.mn[0], dy = oi.mx[1] - oi.mn[1], dz = oi.mx[2] - oi.mn[2];
+    const float radius = std::max(5.0f, 0.5f * sqrtf(dx * dx + dy * dy + dz * dz));
+    cam.yaw = -2.1f; cam.pitch = -0.35f;
+    const float dist = radius / sinf(cam.fov * 0.5f) * 1.05f;
+    cam.lookAtPoint(c, dist);
+    cam.znear = std::max(1.0f, dist - radius * 1.5f);
+    cam.zfar = dist + radius * 3.0f;
+    const Mat4 vp = mat4Mul(cam.proj(1.0f), cam.view());
+    for (int run : m_runsOfOwner[(size_t)owner]) drawRun(run, vp, mat4Identity());
+    a->end_frame();
+    editorGlScissorOff();
+    return editorGlReadFrame(m_offscreen, winH, 0, winH - size, size, size, rgba);
 }
