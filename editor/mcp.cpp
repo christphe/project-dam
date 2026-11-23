@@ -150,6 +150,8 @@ ToolResult toolMissionOpen(Doc &d, const cJSON *a)
     }
     if (argHas(a, "path")) {
         if (!d.openMission(argStr(a, "path"), err)) return fail(err);
+        std::string e2;
+        if (d.openModOfOpenMission(e2) < 0) d.modNotice = e2;   // a mission of a mod opens its mod too
     } else if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(a, "new")) || argHas(a, "name") || argHas(a, "level")) {
         const bool emptied = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(a, "emptied"));
         if (!d.newMission(argStr(a, "name", "New mission"), argStr(a, "level"), err, emptied)) return fail(err);
@@ -558,10 +560,10 @@ cJSON *handleOne(Doc &d, const cJSON *req)
         cJSON *tools = cJSON_AddObjectToObject(caps, "tools");
         cJSON_AddBoolToObject(tools, "listChanged", false);
         cJSON *si = cJSON_AddObjectToObject(r, "serverInfo");
-        cJSON_AddStringToObject(si, "name", "ge-editor");
+        cJSON_AddStringToObject(si, "name", "project-dam-editor");
         cJSON_AddStringToObject(si, "version", "0.1.0");
         cJSON_AddStringToObject(r, "instructions",
-            "GoldenEye co-op mission editor. level_describe shows the level export (rooms, pads, setup props); "
+            "Project Dam co-op mission editor. level_describe shows the level export (rooms, pads, setup props); "
             "mission_open starts or loads a mission; place_guard/place_object/move/remove edit it as a delta over the "
             "solo level; validate, mission_save and test_run finish the loop. Pads are original pad numbers or the "
             "ids of mission pads; a pos [x,y,z] creates a mission pad.");

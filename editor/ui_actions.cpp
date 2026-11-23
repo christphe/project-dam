@@ -274,13 +274,51 @@ void doSaveAs(App &a)
     } else a.say("save as: %s", err.c_str());
 }
 
+// The mod's state changed (opened, switched): the UI's caches and the Mod tab's folder field follow it.
+void modOpened(App &a)
+{
+    Doc &d = a.doc;
+    snprintf(a.modDirBuf, sizeof a.modDirBuf, "%s", d.modDir.c_str());
+    invalidateThumbs(a);
+    a.infoCache.clear();
+    a.say("mod '%s' (%d missions)", d.camp.name, d.camp.nmissions);
+    if (!d.modNotice.empty()) a.say("%s", d.modNotice.c_str());
+    recentNote(a, d.modDir + "/campaign.json");
+}
+
 void doOpenPath(App &a, const std::string &path)
 {
     std::string err;
     if (a.doc.openMission(path, err)) {
         snprintf(a.missionPath, sizeof a.missionPath, "%s", path.c_str());
         a.say("opened %s", path.c_str());
+        const int m = a.doc.openModOfOpenMission(err);   // a mission of a mod opens its mod too: one open, not two
+        if (m > 0) modOpened(a);
+        else if (m < 0) a.say("mod: %s", err.c_str());
     } else a.say("open mission: %s", err.c_str());
+}
+
+// Opens a mod and its first mission; `dir` is the mod folder, or its campaign.json.
+void doOpenModPath(App &a, std::string dir)
+{
+    for (auto &c : dir) if (c == '\\') c = '/';
+    const std::string tail = "/campaign.json";
+    if (dir.size() > tail.size() && dir.compare(dir.size() - tail.size(), tail.size(), tail) == 0) dir.resize(dir.size() - tail.size());
+    std::string err;
+    if (a.doc.hasMod && a.doc.modDirty) { a.say("mod: the open mod has unsaved changes (Mod tab > Save mod first)"); return; }
+    if (a.doc.openMod(dir, err)) {
+        snprintf(a.missionPath, sizeof a.missionPath, "%s", a.doc.missionPath.c_str());
+        modOpened(a);
+    } else a.say("mod: %s", err.c_str());
+}
+
+void doOpenModDialog(App &a)
+{
+    std::string path;
+    std::error_code ec;
+    std::string start = a.doc.modsRoot();
+    if (!std::filesystem::exists(start, ec)) start.clear();
+    if (fileDialogOpenMod(start, path)) guarded(a, [&a, path] { doOpenModPath(a, path); });
 }
 
 // Runs `fn` now, or after the answer of the "Unsaved changes" dialog when the open mission has unsaved edits.
@@ -426,10 +464,25 @@ void recentList(App &a, bool menu)
     for (size_t i = 0; i < a.recent.size(); i++) {
         ImGui::PushID((int)i);
         const std::string path = a.recent[i];
-        const App::MissionInfo &mi = missionInfo(a, path);
-        const std::string label = mi.ok ? mi.name + "  (" + mi.level + ")" : recentFallback(path);
+        const bool isMod = path.size() >= 13 && path.compare(path.size() - 13, 13, "campaign.json") == 0;
+        std::string label;
+        if (isMod) {                                       // a mod: its name, opened with its first mission
+            auto it = a.infoCache.find(path);
+            if (it == a.infoCache.end()) {
+                App::MissionInfo mi;
+                Campaign c; campaignInit(&c);
+                char e[200] = "";
+                if (campaignLoadFile(path.c_str(), &c, e, sizeof e)) { mi.name = c.name; mi.ok = true; }
+                campaignFree(&c);
+                it = a.infoCache.emplace(path, mi).first;
+            }
+            label = "Mod: " + (it->second.ok && !it->second.name.empty() ? it->second.name : recentFallback(path));
+        } else {
+            const App::MissionInfo &mi = missionInfo(a, path);
+            label = mi.ok ? mi.name + "  (" + mi.level + ")" : recentFallback(path);
+        }
         const bool hit = menu ? ImGui::MenuItem(label.c_str()) : ImGui::Selectable(label.c_str());
-        if (hit) guarded(a, [&a, path] { doOpenPath(a, path); });
+        if (hit) guarded(a, [&a, path, isMod] { if (isMod) doOpenModPath(a, path); else doOpenPath(a, path); });
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", path.c_str());
         ImGui::PopID();
     }

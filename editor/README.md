@@ -1,4 +1,4 @@
-# ge-editor: the GoldenEye co-op mission editor
+# project-dam-editor: the Project Dam co-op mission editor
 
 A native desktop tool (Windows, Linux) that edits **missions**: JSON deltas over one of the
 original solo levels (`port/mission/mission.h`). It shows the level as the game draws it, lets you
@@ -26,8 +26,8 @@ through the same table (`port/mission/mission_fields.c`) that the game's mission
 Like the rest of the PC port, in Docker (the editor is a target of the root CMake build):
 
 ```sh
-python tools/dev.py build windows      # build-win/ge-editor.exe (+ SDL2.dll next to it)
-python tools/dev.py build linux        # build-linux/ge-editor
+python tools/dev.py build windows      # build-win/project-dam-editor.exe (+ SDL2.dll next to it)
+python tools/dev.py build linux        # build-linux/project-dam-editor
 ```
 
 Only the editor and its test-export generator, faster:
@@ -35,17 +35,17 @@ Only the editor and its test-export generator, faster:
 ```sh
 docker compose run --rm windows sh -c 'export SDL2DIR=/usr/x86_64-w64-mingw32/sys-root/mingw; \
   cmake -S . -B build-win -G Ninja -DROMID=ntsc-final -DCMAKE_TOOLCHAIN_FILE=/usr/share/mingw/toolchain-mingw64.cmake \
-  && cmake --build build-win --target ge-editor make_test_rec'
+  && cmake --build build-win --target project-dam-editor make_test_rec'
 ```
 
-Targets (`editor/CMakeLists.txt`): `ge-editor`; `ge_editor_f3d` (fast3d's OpenGL backend and glad,
+Targets (`editor/CMakeLists.txt`): `project-dam-editor`; `ge_editor_f3d` (fast3d's OpenGL backend and glad,
 compiled as the game compiles them, plus `fast3d_stubs.cpp` for the few game symbols it expects);
 `make_test_rec`. Needs OpenGL 3.3 core.
 
 ## Run
 
 ```sh
-ge-editor --export <dir with level.rec and level.json> [--mission <mission.json>]
+project-dam-editor --export <dir with level.rec and level.json> [--mission <mission.json>]
 ```
 
 Produce a real export with the game: `ge007 -level_09 --export-level <dir>` (Bunker 1). Without an
@@ -56,12 +56,12 @@ To develop without the game or a ROM, generate a **synthetic** export (boxes, pr
 ```sh
 make_test_rec <empty dir>          # writes level.rec + level.json of a fake "bunker1" and its setup
                                    # (<dir>/data/pccg-ntsc-final/, in the format the game's converted data uses)
-GE_EDITOR_DATA=<that dir>/data ge-editor --export <that dir>
-python editor/tools/mcp_smoke.py <ge-editor> <that dir> <work dir>   # headless MCP smoke test
+GE_EDITOR_DATA=<that dir>/data project-dam-editor --export <that dir>
+python editor/tools/mcp_smoke.py <project-dam-editor> <that dir> <work dir>   # headless MCP smoke test
 ```
 
 Options: `--port N`, `--no-mcp`, `--game EXE`, `--mcp-stdio`, `--mcp-http`, `--screenshot F.png
-[--frames N]`, `--cam x,y,z,yaw,pitch`, `--click X,Y [--tool ...]` (see `ge-editor --help`).
+[--frames N]`, `--cam x,y,z,yaw,pitch`, `--click X,Y [--tool ...]` (see `project-dam-editor --help`).
 
 ### Using it
 
@@ -88,7 +88,7 @@ Options: `--port N`, `--no-mcp`, `--game EXE`, `--mcp-stdio`, `--mcp-http`, `--s
 * **Settings** (Tools > Settings...): the game executable (Browse... on Windows), the export cache folder (Open
   folder, Re-export all cached levels one after another in the background), offscreen rendering and the MCP
   server (enable + port; both apply at the next start), clearing the recent list. They are kept in
-  `ge-editor-prefs.txt` next to the editor (`key=value` lines: `coop`, `offscreen`, `mcp`, `mcpport`).
+  `project-dam-editor-prefs.txt` next to the editor (`key=value` lines: `coop`, `offscreen`, `mcp`, `mcpport`).
 * **Select.** Click a prop, a pad (blue diamond; mission pads are green) or the floor (selects the
   room), or a row of the Scene tree; double-click a row to frame it.
 * **Edit.** Tools in the toolbar: *Guard* / *Object* (click a pad, or the floor to create a
@@ -99,7 +99,7 @@ Options: `--port N`, `--no-mcp`, `--game EXE`, `--mcp-stdio`, `--mcp-http`, `--s
 * **Check and play.** The bottom panel validates the mission continuously (format, ids, and pads and
   props against the export). *Play* saves the mission and runs
   `<game> -level_NN --mission <file> --spawn <pad>` with `GE_COOP=1 GE_PADS=2`. The game is
-  `GE_EDITOR_GAME`, `--game`, or the `ge007` exe next to `ge-editor`. The spawn pad is the selected
+  `GE_EDITOR_GAME`, `--game`, or the `ge007` exe next to `project-dam-editor`. The spawn pad is the selected
   pad or prop (or *Set as spawn*), as a number or a mission pad id.
 
 Props are drawn with the model the exporter recorded for their owner, placed so the bottom centre
@@ -121,7 +121,7 @@ fast3d OpenGL backend, so textures and colours match the game (fog is off).
   folder next to the game, or `GE_EDITOR_DATA`), never to the export cache; a mission of an open mod keeps
   `mods/<mod>/<mission>/mission.json`. On Windows, *Open...* and *Save as...* open the standard file dialogs
   (`Ctrl+O`, `Ctrl+Shift+S`; `Ctrl+S` saves); the typed "mission file" field + *Open* works everywhere. The last
-  8 opened or saved missions are listed under *recent* (stored in `ge-editor-recent.txt` next to the editor,
+  8 opened or saved missions are listed under *recent* (stored in `project-dam-editor-recent.txt` next to the editor,
   missing files dropped). Closing the window, opening or creating another mission or mod while the mission has
   unsaved changes asks *Save / Discard / Cancel*; MCP `mission_open` refuses the same case unless `discard: true`.
 * **New mission** (File > New mission..., or the buttons of the Mission and Mod tabs). A dialog asks the name, the base
@@ -165,8 +165,8 @@ fast3d OpenGL backend, so textures and colours match the game (fog is off).
 The editor is its own MCP server; the tools run the same code as the buttons.
 
 ```sh
-claude mcp add --transport http ge-editor http://127.0.0.1:8765/mcp     # GUI running (port shown in the top bar)
-claude mcp add ge-editor -- ge-editor --mcp-stdio --export <dir>        # headless, no window
+claude mcp add --transport http project-dam-editor http://127.0.0.1:8765/mcp     # GUI running (port shown in the top bar)
+claude mcp add project-dam-editor -- project-dam-editor --mcp-stdio --export <dir>        # headless, no window
 ```
 
 Streamable HTTP on 127.0.0.1 only: `POST /mcp`, JSON-RPC 2.0, JSON responses; requests with a
@@ -189,7 +189,7 @@ creates a new mission pad there.
 Smoke test (headless stdio plus HTTP, against the synthetic export):
 
 ```sh
-python editor/tools/mcp_smoke.py <ge-editor exe> <export dir> <scratch dir> [--gui]   # --gui also runs capture_thumb (needs a display)
+python editor/tools/mcp_smoke.py <project-dam-editor exe> <export dir> <scratch dir> [--gui]   # --gui also runs capture_thumb (needs a display)
 ```
 
 ## Layout

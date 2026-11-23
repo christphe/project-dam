@@ -10,7 +10,8 @@
  * Progress and locks come from the mod's own save (<save dir>/mods/<id>.eep, the game's EEPROM format) read straight
  * from the file: the active save is not switched. Slot n of a mod is stage n in that save (missions_mods.c).
  *
- * Pictures: <mod>/<mission>/thumb.png (8-bit, not interlaced, grey / grey+alpha / RGB / RGBA), reduced to 96x72 RGBA.
+ * Pictures: <mod>/<mission>/thumb.png, and <mod>/cover.png for the mod itself (else its first mission's thumb.png);
+ * 8-bit, not interlaced, grey / grey+alpha / RGB / RGBA, reduced to 96x72 RGBA.
  */
 #include "platform.h"
 #include <stdlib.h>
@@ -214,7 +215,11 @@ static void fillEntry(ScrEntry *e, const Campaign *c, const char *dir)
     snprintf(e->author, sizeof e->author, "%s", c->author);
     snprintf(e->desc, sizeof e->desc, "%s", c->description);
     e->affects = c->affects;
-    e->thumb = -1;
+    {   /* the mod's own picture (the editor's Mod tab > Choose picture); without it the first mission's thumb.png */
+        char cover[760];
+        snprintf(cover, sizeof cover, "%s/cover.png", dir);
+        e->thumb = addThumb(cover);
+    }
     have = readSave(c->id, &sv);
     for (int i = 0; i < c->nmissions && e->nmissions < SCR_MISSIONS_MAX; i++) {
         char path[760], err[160] = "";

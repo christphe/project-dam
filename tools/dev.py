@@ -7,7 +7,7 @@
     python tools/dev.py n64
     python tools/dev.py win    [--build] [ARGS...]     # build-win/ge007.x86_64.exe
     python tools/dev.py linux  [--build] [ARGS...]     # build-linux/ge007.x86_64 (WSL if on Windows)
-    python tools/dev.py editor [--build] [--level N] [--mod DIR] [--mission FILE] [ARGS...]   # build-win/ge-editor.exe
+    python tools/dev.py editor [--build] [--level N] [--mod DIR] [--mission FILE] [ARGS...]   # build-win/project-dam-editor.exe
     python tools/dev.py config                         # show the resolved config
 
 Machine-specific paths are NOT in this file: they come from <repo>/.env, or the main checkout's when run from a worktree (gitignored):
@@ -234,7 +234,7 @@ def cmd_editor(a):
     """The mission editor of the Windows build, with Play and the level export on the game next to it."""
     if a.build:
         build("windows")
-    exe, game = REPO / "build-win" / "ge-editor.exe", REPO / "build-win" / "ge007.x86_64.exe"
+    exe, game = REPO / "build-win" / "project-dam-editor.exe", REPO / "build-win" / "ge007.x86_64.exe"
     for p in (exe, game):
         if not p.exists():
             sys.exit(f"{p} does not exist: run with --build")
@@ -313,7 +313,7 @@ def main():
                    help="open a solo level (exported by the game the first time). " + LEVELS_HELP)
     p.add_argument("--mod", help="mod folder (mods/<mod>) to open")
     p.add_argument("--mission", help="mission.json to open (its level comes with it)")
-    p.add_argument("args", nargs="*", help="extra editor args (see ge-editor --help)")
+    p.add_argument("args", nargs="*", help="extra editor args (see project-dam-editor --help)")
     p.set_defaults(fn=cmd_editor)
 
     p = sub.add_parser("config"); p.set_defaults(fn=cmd_config)

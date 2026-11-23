@@ -1,7 +1,7 @@
-// ge-editor: the GoldenEye co-op mission editor (issue #102).
+// project-dam-editor: the Project Dam co-op mission editor (issue #102).
 //
-//   ge-editor [--export DIR] [--mission FILE] [--port N | --no-mcp] [--game EXE]
-//   ge-editor --mcp-stdio [--export DIR] [--mission FILE]     headless MCP over stdin/stdout
+//   project-dam-editor [--export DIR] [--mission FILE] [--port N | --no-mcp] [--game EXE]
+//   project-dam-editor --mcp-stdio [--export DIR] [--mission FILE]     headless MCP over stdin/stdout
 //
 // GUI: SDL2 window, Dear ImGui panels around a 3D view of the level export replayed through
 // fast3d's OpenGL backend (scene.cpp). Every edit goes through Doc (doc.h), as the MCP tools do.
@@ -18,6 +18,8 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+
+#include "editor_icon.h"
 #include <map>
 #include <memory>
 #include <mutex>
@@ -71,6 +73,7 @@ struct Options {
     bool portGiven = false;               // --port was on the command line (else the saved setting is used)
     bool hasMouseFrom = false;       // --mouse-from X,Y: the --mouse-drag starts there instead of at the gizmo (test aid: drag a Props browser cell onto the view)
     float mouseFrom[2] = { 0, 0 };
+    std::string importPicture;       // --import-picture F.png: import it as the mission thumbnail on frame 10 (test aid)
     bool capture = false;            // --capture: Capture the view on frame 10 (test aid: the Thumbnail section needs an image)
     float thumbAdj[2] = { 1.0f, 0.0f };   // --thumb-adjust CONTRAST,BRIGHTNESS (test aid)
     bool hasThumbAdj = false;
@@ -121,8 +124,8 @@ void drainJobs()
 
 void usage()
 {
-    puts("ge-editor: GoldenEye co-op mission editor\n"
-         "  ge-editor [options]\n"
+    puts("project-dam-editor: Project Dam co-op mission editor\n"
+         "  project-dam-editor [options]\n"
          "    --level NAME      solo level to open (e.g. bunker1): from the export cache next to the game, exported first if missing\n"
          "    --export DIR      level export folder (level.rec + level.json from `ge007 -level_XX --export-level DIR`)\n"
          "    --mod DIR         mod folder (mods/<mod>) to open\n"
@@ -146,6 +149,7 @@ void usage()
          "    --place-model KIND:MODEL,TYPE,ITEM@X,Y  test aid: place a guard|object with that model where the view pixel X,Y points (as a drop does)\n"
          "    --mouse-from X,Y                  test aid: --mouse-drag DX,DY starts at this window pixel (e.g. a Props browser cell)\n"
          "    --capture                         test aid: Capture the view into the Thumbnail section on frame 10\n"
+         "    --import-picture F.png            test aid: Thumbnail > Import picture with that file on frame 10\n"
          "    --thumb-adjust CONTRAST,BRIGHTNESS  test aid: the Thumbnail sliders from frame 12\n"
          "    --open-tab NAME                   test aid: select the right panel tab (selection, mission, mod)\n"
          "  Camera: hold the right mouse button to fly: mouse = look, WASD/ZQSD/arrows = move, Space = up, Ctrl = down, Shift = fast.\n"
@@ -194,6 +198,7 @@ bool parseArgs(int argc, char **argv, Options &o)
         } else if (s == "--open-window") { next(o.openWindow);
         } else if (s == "--mouse-from" && i + 1 < argc) {
             o.hasMouseFrom = sscanf(argv[++i], "%f,%f", &o.mouseFrom[0], &o.mouseFrom[1]) == 2;
+        } else if (s == "--import-picture" && i + 1 < argc) { o.importPicture = argv[++i];
         } else if (s == "--capture") { o.capture = true;
         } else if (s == "--thumb-adjust" && i + 1 < argc) {
             o.hasThumbAdj = sscanf(argv[++i], "%f,%f", &o.thumbAdj[0], &o.thumbAdj[1]) == 2;
@@ -226,6 +231,7 @@ bool loadStartup(Doc &doc, const Options &o, std::string &err, bool blocking)
         if (f) {
             fclose(f);
             if (!doc.openMission(o.missionFile, err)) return false;
+            if (o.modDir.empty()) { std::string e2; doc.openModOfOpenMission(e2); }   // a mission of a mod opens its mod too
         } else {
             if (!doc.newMission("New mission", "", err)) return false;
             doc.missionPath = o.missionFile;
@@ -256,7 +262,7 @@ int main(int argc, char **argv)
         Doc doc;
         doc.gameExe = opt.game.empty() ? defaultGameExe(exeDir) : opt.game;
         std::string err;
-        if (!loadStartup(doc, opt, err, true)) { fprintf(stderr, "ge-editor: %s\n", err.c_str()); return 1; }
+        if (!loadStartup(doc, opt, err, true)) { fprintf(stderr, "project-dam-editor: %s\n", err.c_str()); return 1; }
         return mcpStdioLoop(doc);
     }
 
@@ -264,11 +270,11 @@ int main(int argc, char **argv)
         Doc doc;
         doc.gameExe = opt.game.empty() ? defaultGameExe(exeDir) : opt.game;
         std::string err;
-        if (!loadStartup(doc, opt, err, true)) { fprintf(stderr, "ge-editor: %s\n", err.c_str()); return 1; }
+        if (!loadStartup(doc, opt, err, true)) { fprintf(stderr, "project-dam-editor: %s\n", err.c_str()); return 1; }
         std::mutex docLock;
         McpHttp http;
         if (!http.start(opt.port, [&](std::function<void()> fn) { std::lock_guard<std::mutex> l(docLock); fn(); }, doc, err)) {
-            fprintf(stderr, "ge-editor: %s\n", err.c_str());
+            fprintf(stderr, "project-dam-editor: %s\n", err.c_str());
             return 1;
         }
         printf("MCP http://127.0.0.1:%d/mcp\n", http.port());
@@ -277,8 +283,13 @@ int main(int argc, char **argv)
     }
 
     App app;
-    app.prefsFile = exeDir + "ge-editor-prefs.txt";
-    app.recentFile = exeDir + "ge-editor-recent.txt";
+    app.prefsFile = exeDir + "project-dam-editor-prefs.txt";
+    app.recentFile = exeDir + "project-dam-editor-recent.txt";
+    for (const char *k : { "prefs", "recent" }) {   // the files of the editor's old name (ge-editor) carry over once
+        const std::string from = exeDir + "ge-editor-" + k + ".txt", to = exeDir + "project-dam-editor-" + k + ".txt";
+        std::error_code ec;
+        if (!std::filesystem::exists(to, ec) && std::filesystem::exists(from, ec)) std::filesystem::rename(from, to, ec);
+    }
     loadPrefs(app);
     recentLoad(app);
     app.doc.gameExe = opt.game.empty() ? defaultGameExe(exeDir) : opt.game;
@@ -292,9 +303,14 @@ int main(int argc, char **argv)
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
-    app.win = SDL_CreateWindow("GoldenEye mission editor", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1500, 920,
+    app.win = SDL_CreateWindow("Project Dam editor", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1500, 920,
                                SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!app.win) { fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return 1; }
+    {   // the window icon (tools_pc/make_icon.py), R,G,B,A bytes per pixel
+        SDL_Surface *icon = SDL_CreateRGBSurfaceWithFormatFrom((void *)editor_icon_rgba, EDITOR_ICON_SIZE, EDITOR_ICON_SIZE, 32,
+                                                               EDITOR_ICON_SIZE * 4, SDL_PIXELFORMAT_RGBA32);
+        if (icon) { SDL_SetWindowIcon(app.win, icon); SDL_FreeSurface(icon); }
+    }
     app.gl = SDL_GL_CreateContext(app.win);
     if (!app.gl) { fprintf(stderr, "no OpenGL 3.3 core context: %s\n", SDL_GetError()); return 1; }
     SDL_GL_SetSwapInterval(1);
@@ -347,7 +363,7 @@ int main(int argc, char **argv)
     if (!opt.noMcp && app.prefMcp) {
         if (app.http.start(opt.portGiven ? opt.port : app.prefMcpPort, runOnMain, app.doc, err)) {
             app.mcpPort = app.http.port();
-            app.say("MCP: claude mcp add --transport http ge-editor http://127.0.0.1:%d/mcp", app.mcpPort);
+            app.say("MCP: claude mcp add --transport http project-dam-editor http://127.0.0.1:%d/mcp", app.mcpPort);
         } else app.say("MCP HTTP server: %s", err.c_str());
     }
 
@@ -460,7 +476,7 @@ int main(int argc, char **argv)
         frameUi(app, ww, wh, quit);
         if (app.wantQuit) quit = true;
         {   // the window title: "<mission>[*] - <level> - GoldenEye mission editor", only when it changes
-            std::string title = "GoldenEye mission editor";
+            std::string title = "Project Dam editor";
             if (app.doc.hasMission) title = std::string(app.doc.mission.name) + (app.doc.dirty ? "*" : "") + " - " + app.doc.mission.level + " - " + title;
             if (title != app.lastTitle) { app.lastTitle = title; SDL_SetWindowTitle(app.win, title.c_str()); }
         }
@@ -498,6 +514,7 @@ int main(int argc, char **argv)
                     app.doc.mission.nguards, app.doc.mission.nobjects, app.doc.mission.npads);
         }
         if (opt.capture && frame == 10) doCapture(app);
+        if (!opt.importPicture.empty() && frame == 10) importThumbFrom(app, opt.importPicture);
         if (opt.hasThumbAdj && frame == 12) { app.thumbContrast = opt.thumbAdj[0]; app.thumbBright = opt.thumbAdj[1]; app.thumbDirty = true; }
         if (opt.hasPlace && frame == 8) {   // test aid: a drop from the Props browser
             Vec3 org, dir;

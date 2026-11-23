@@ -19,10 +19,12 @@
  * screens. There is no mission outside a campaign. On disk, next to data/
  * (sdmc:/switch/project-dam/mods/ on the Switch):
  *   mods/<mod>/campaign.json          the campaign (format below)
+ *   mods/<mod>/cover.png              optional: the mod's picture on the Mods screen, 4:3 (the editor's Mod tab >
+ *                                     Choose picture, 320x240); without it the first mission's thumb.png
  *   mods/<mod>/scripts/*.luau         the mod's own scripts, usable by all its missions
  *   mods/<mod>/<mission>/mission.json one mission
  *   mods/<mod>/<mission>/thumb.png    its image in the mission grid, 4:3
- *                                     (the editor's Capture button, 320x240)
+ *                                     (the editor's Capture or Import picture, 320x240)
  * Progress is the game's own save, per mod: while a mod is selected the port
  * points the game's EEPROM file at <save dir>/mods/<id>.eep instead of
  * ge007.eep, so the game's own save code, folders, unlocks and best times

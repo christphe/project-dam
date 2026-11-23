@@ -20,6 +20,7 @@ void drawMenuBar(App &a)
     if (title("File")) {
         if (ImGui::MenuItem("New mission...")) doNewMission(a);
         if (ImGui::MenuItem("Open...", "Ctrl+O", false, dlg)) guarded(a, [&a] { doOpenDialog(a); });
+        if (ImGui::MenuItem("Open mod...", nullptr, false, dlg)) doOpenModDialog(a);
         if (ImGui::BeginMenu("Recent")) { recentList(a, true); ImGui::EndMenu(); }
         ImGui::Separator();
         if (ImGui::MenuItem("Save", "Ctrl+S", false, hasM)) doSave(a);

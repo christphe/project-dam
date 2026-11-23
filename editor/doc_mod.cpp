@@ -51,7 +51,7 @@ bool uuidValid(const char *s)
 
 bool Doc::modIdOk() const { return uuidValid(camp.id); }
 
-bool Doc::openMod(const std::string &dirIn, std::string &err)
+bool Doc::openMod(const std::string &dirIn, std::string &err, bool openFirst)
 {
     std::string dir = dirIn;
     while (dir.size() > 1 && (dir.back() == '/' || dir.back() == '\\')) dir.pop_back();
@@ -77,11 +77,61 @@ bool Doc::openMod(const std::string &dirIn, std::string &err)
     modDir = dir;
     modDirty = false;
     // its first mission (and so its level), unless that would drop unsaved edits; startup's --mission wins after
-    if (camp.nmissions > 0 && !(hasMission && dirty)) {
+    if (openFirst && camp.nmissions > 0 && !(hasMission && dirty)) {
         std::string e2;
         if (!modOpenMission(0, e2)) modNotice += (modNotice.empty() ? "" : "; ") + ("first mission: " + e2);
     }
     return true;
+}
+
+static std::string slashes(std::string p)
+{
+    for (auto &c : p) if (c == '\\') c = '/';
+    return p;
+}
+
+std::string Doc::modOfMission(const std::string &missionPath)
+{
+    const std::string mp = slashes(missionPath);
+    const size_t s1 = mp.find_last_of('/');
+    if (s1 == std::string::npos || s1 == 0) return "";
+    const size_t s0 = mp.find_last_of('/', s1 - 1);
+    if (s0 == std::string::npos) return "";
+    const std::string mod = mp.substr(0, s0), folder = mp.substr(s0 + 1, s1 - s0 - 1);
+    if (!exists(mod + "/campaign.json")) return "";
+    Campaign c; campaignInit(&c);
+    char e[256] = "";
+    bool listed = false;
+    if (campaignLoadFile((mod + "/campaign.json").c_str(), &c, e, sizeof e))
+        for (int i = 0; i < c.nmissions; i++) if (folder == c.missions[i]) listed = true;
+    campaignFree(&c);
+    return listed ? mod : "";
+}
+
+int Doc::openModOfOpenMission(std::string &err)
+{
+    if (!hasMission || missionPath.empty()) return 0;
+    const std::string mod = modOfMission(missionPath);
+    if (mod.empty()) return 0;
+    if (hasMod) {
+        std::error_code ec;
+        if (slashes(modDir) == mod || fs::equivalent(fs::path(modDir), fs::path(mod), ec)) return 0;
+        if (modDirty) { err = "the open mod has unsaved changes: it stays open (save it, then open " + mod + ")"; return -1; }
+    }
+    return openMod(mod, err, false) ? 1 : -1;
+}
+
+std::string Doc::modsRoot() const
+{
+    std::string d = slashes(gameDataDir());
+    while (!d.empty() && d.back() == '/') d.pop_back();
+    const size_t s = d.find_last_of('/');
+    return (s == std::string::npos ? std::string(".") : d.substr(0, s)) + "/mods";
+}
+
+std::string Doc::modCoverPath() const
+{
+    return hasMod ? modDir + "/cover.png" : "";
 }
 
 bool Doc::saveMod(std::string &err)

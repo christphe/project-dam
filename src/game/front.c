@@ -3272,13 +3272,15 @@ Gfx* constructor_menu06_modesel(Gfx* DL)
     if (modsCount() > 0)
     {
         static char modrow[240];
+        const s32 rowy = is_cheat_menu_available ? 0x13C : MODE_Y_CHEAT;
 
         x = 0x96;
-        y = is_cheat_menu_available ? 0x13C : MODE_Y_CHEAT;
+        y = rowy;
         DL = frontPrintText(DL, &x, &y, is_cheat_menu_available ? "5.\n" : "4.\n", ptrFontZurichBoldChars, ptrFontZurichBold, 0xFF, viGetX(), viGetY(), 0, 0);
         snprintf(modrow, sizeof(modrow), "MODS: %s\n", modsRowText());
         textMeasure(&x2, &y2, modrow, ptrFontZurichBoldChars, ptrFontZurichBold, 0);
         x = 0xAA;
+        y = rowy;   /* the number's "\n" moved y a line down: the label sits on the number's line, like the rows above */
         if (mission_difficulty_highlighted == 4)
         {
             DL = microcode_constructor_related_to_menus(DL, 0x94, y - 2, y2 + 0xAF, y + 14, 0x32);

@@ -13,6 +13,9 @@ namespace {
 // Filters are lists of NUL-separated "name", "pattern" pairs, ended by a second NUL.
 const char kMissionFilter[] = "Mission (mission.json)\0mission.json\0JSON\0*.json\0All files\0*.*\0";
 const char kProgramFilter[] = "Programs (*.exe)\0*.exe\0All files\0*.*\0";
+const char kModFilter[] = "Mod (campaign.json)\0campaign.json\0All files\0*.*\0";
+const char kImageFilter[] = "PNG picture (*.png)\0*.png\0All files\0*.*\0";
+
 
 std::string toWindowsPath(std::string s)
 {
@@ -24,6 +27,25 @@ std::string toSlashes(std::string s)
 {
     for (char &c : s) if (c == '\\') c = '/';
     return s;
+}
+
+// A plain Open dialog with its filter and title.
+bool openWith(const char *filter, const char *title, const std::string &startDir, std::string &out)
+{
+    char file[1024] = "";
+    const std::string dir = toWindowsPath(startDir);
+    OPENFILENAMEA ofn;
+    memset(&ofn, 0, sizeof ofn);
+    ofn.lStructSize = sizeof ofn;
+    ofn.lpstrFilter = filter;
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = sizeof file;
+    ofn.lpstrInitialDir = dir.empty() ? nullptr : dir.c_str();
+    ofn.lpstrTitle = title;
+    ofn.Flags = OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_FILEMUSTEXIST;
+    if (!GetOpenFileNameA(&ofn)) return false;
+    out = toSlashes(file);
+    return true;
 }
 
 bool run(bool save, const std::string &startDir, std::string &out)
@@ -51,6 +73,8 @@ bool run(bool save, const std::string &startDir, std::string &out)
 bool fileDialogAvailable() { return true; }
 bool fileDialogOpenMission(const std::string &startDir, std::string &out) { return run(false, startDir, out); }
 bool fileDialogSaveMission(const std::string &startDir, std::string &out) { return run(true, startDir, out); }
+bool fileDialogOpenMod(const std::string &startDir, std::string &out) { return openWith(kModFilter, "Open mod (its campaign.json)", startDir, out); }
+bool fileDialogOpenImage(const std::string &startDir, std::string &out) { return openWith(kImageFilter, "Import picture", startDir, out); }
 
 bool fileDialogPickProgram(const std::string &startPath, std::string &out)
 {
@@ -82,6 +106,8 @@ bool openFolder(const std::string &dir)
 bool fileDialogAvailable() { return false; }
 bool fileDialogOpenMission(const std::string &, std::string &) { return false; }
 bool fileDialogSaveMission(const std::string &, std::string &) { return false; }
+bool fileDialogOpenMod(const std::string &, std::string &) { return false; }
+bool fileDialogOpenImage(const std::string &, std::string &) { return false; }
 bool fileDialogPickProgram(const std::string &, std::string &) { return false; }
 bool openFolder(const std::string &) { return false; }
 

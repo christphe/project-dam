@@ -71,7 +71,7 @@ struct App {
     std::string levelSwitchTo;
     std::vector<std::string> recent;   // last opened / saved missions, newest first
     std::string recentFile, lastRecorded, lastTitle;
-    std::string prefsFile;             // ge-editor-prefs.txt next to the exe: remembered settings (key=value lines)
+    std::string prefsFile;             // project-dam-editor-prefs.txt next to the exe: remembered settings (key=value lines)
     bool playCoop = false;             // Play: two players (GE_COOP=1 GE_PADS=2) or solo
     bool logCam = false;               // --log-cam: print camera moves and wheel-zoom pixels to stderr (test aid)
     float panDist = 0;                 // pan: distance of the grabbed point
@@ -107,7 +107,7 @@ struct App {
     bool showSettings = false, showHelp = false;
     int forceTab = -1;                 // right panel: select this tab next frame (0 Selection, 1 Mission, 2 Mod), -1 none
     char sceneFilter[64] = "";         // Scene panel filter
-    // persisted in ge-editor-prefs.txt (next to coop): applied at the next start
+    // persisted in project-dam-editor-prefs.txt (next to coop): applied at the next start
     bool prefOffscreen = true;         // draw through a whole offscreen frame (editor_gl.h)
     bool prefMcp = true;               // start the MCP HTTP server
     int prefMcpPort = 8765;
@@ -271,8 +271,14 @@ void doPlay(App &a);
 void doValidate(App &a);
 void doSave(App &a);
 void doSaveAs(App &a);
-void doOpenPath(App &a, const std::string &path);
+void doOpenPath(App &a, const std::string &path);              // also opens the mod the mission belongs to
 void doOpenDialog(App &a);
+void doOpenModPath(App &a, std::string dir);                  // a mod folder or its campaign.json, with its first mission
+void doOpenModDialog(App &a);                                 // File > Open mod...: pick a campaign.json
+void modOpened(App &a);                                       // the UI follows a newly opened mod (caches, field, recents)
+// Reads a PNG (any 8-bit colour type), centre-crops it to 4:3 and scales it to w x h RGBA, alpha flattened on black.
+bool importPicture(const std::string &path, int w, int h, std::vector<uint8_t> &out, std::string &err);
+void importThumbFrom(App &a, const std::string &src);          // that PNG becomes the open mission's thumb.png
 void doNewMission(App &a);                                    // File > New mission: asks about unsaved edits, opens the dialog
 void createNewMission(App &a);                                // the dialog's Create
 const App::MissionInfo &missionInfo(App &a, const std::string &path);   // name + level of a mission file (cached)

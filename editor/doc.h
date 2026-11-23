@@ -255,7 +255,15 @@ struct Doc {
     bool hasMod = false;
     bool modDirty = false;
     std::string modDir;
-    bool openMod(const std::string &dir, std::string &err);          // creates the folder and an empty campaign when new
+    // Creates the folder and an empty campaign when new. openFirst: also open its first mission (unless that drops unsaved edits).
+    bool openMod(const std::string &dir, std::string &err, bool openFirst = true);
+    // The mod a mission file belongs to: <mod>/<folder>/mission.json with <mod>/campaign.json listing <folder>; "" if none.
+    static std::string modOfMission(const std::string &missionPath);
+    // After a mission is opened: opens the mod it belongs to (not its first mission), unless that mod is already open or the
+    // open mod has unsaved changes. Returns 1 opened, 0 nothing to do, -1 kept the open mod (unsaved) or failed (err set).
+    int openModOfOpenMission(std::string &err);
+    std::string modsRoot() const;                                    // the game's mods folder: next to its data folder
+    std::string modCoverPath() const;                                // <mod>/cover.png (the mod's own picture, optional)
     std::string modNotice;                                           // set by saveMod when it had to make an id
     bool modIdOk() const;
     bool saveMod(std::string &err);                                  // campaign.json (not required to be valid yet)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke test of ge-editor's MCP server, headless (--mcp-stdio) and over HTTP.
+"""Smoke test of project-dam-editor's MCP server, headless (--mcp-stdio) and over HTTP.
 
   mcp_smoke.py EDITOR_EXE EXPORT_DIR WORK_DIR
 
@@ -474,7 +474,7 @@ def main():
     s = Stdio(exe, export)
     r = s.call("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                               "clientInfo": {"name": "smoke", "version": "0"}})
-    check(r["result"]["serverInfo"]["name"] == "ge-editor", "initialize names the server")
+    check(r["result"]["serverInfo"]["name"] == "project-dam-editor", "initialize names the server")
     check(r["result"]["protocolVersion"] == "2025-06-18", "initialize echoes the protocol version")
     s.notify("notifications/initialized")
 
@@ -548,7 +548,7 @@ def main():
                 return e.code, e.read().decode()
 
         st, body = post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}})
-        check(st == 200 and json.loads(body)["result"]["serverInfo"]["name"] == "ge-editor", "http initialize")
+        check(st == 200 and json.loads(body)["result"]["serverInfo"]["name"] == "project-dam-editor", "http initialize")
         st, body = post({"jsonrpc": "2.0", "method": "notifications/initialized"})
         check(st == 202 and body == "", "http notification is 202 with no body")
         st, body = post({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})

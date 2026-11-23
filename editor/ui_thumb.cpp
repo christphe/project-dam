@@ -46,6 +46,53 @@ bool thumbWriteBaked(App &a, const std::string &path, std::string &err)
     return true;
 }
 
+bool importPicture(const std::string &path, int ow, int oh, std::vector<uint8_t> &out, std::string &err)
+{
+    int w = 0, h = 0;
+    std::vector<uint8_t> px;
+    if (!readPng(path.c_str(), w, h, px) || w <= 0 || h <= 0) { err = "cannot read " + path + " (an 8-bit, non-interlaced PNG is needed)"; return false; }
+    // the centred crop with the output's aspect, then an area average onto the output (sharp downscale, no aliasing)
+    double cw = w, ch = (double)w * oh / ow;
+    if (ch > h) { ch = h; cw = (double)h * ow / oh; }
+    const double cx = (w - cw) * 0.5, cy = (h - ch) * 0.5, sx = cw / ow, sy = ch / oh;
+    out.assign((size_t)ow * oh * 4, 255);
+    for (int y = 0; y < oh; y++)
+        for (int x = 0; x < ow; x++) {
+            const int x0 = (int)(cx + x * sx), y0 = (int)(cy + y * sy);
+            const int x1 = std::max(x0 + 1, std::min(w, (int)(cx + (x + 1) * sx))), y1 = std::max(y0 + 1, std::min(h, (int)(cy + (y + 1) * sy)));
+            double acc[3] = { 0, 0, 0 };
+            int n = 0;
+            for (int yy = y0; yy < y1 && yy < h; yy++)
+                for (int xx = x0; xx < x1 && xx < w; xx++, n++) {
+                    const uint8_t *s = &px[((size_t)yy * w + xx) * 4];
+                    for (int c = 0; c < 3; c++) acc[c] += s[c] * (s[3] / 255.0);   // alpha flattened on black
+                }
+            uint8_t *o = &out[((size_t)y * ow + x) * 4];
+            for (int c = 0; c < 3; c++) o[c] = (uint8_t)std::min(255.0, acc[c] / std::max(n, 1) + 0.5);
+        }
+    return true;
+}
+
+// Mission tab > Thumbnail > Import picture...: a PNG becomes the mission's thumb.png like a capture (centred 4:3 crop, 320x240).
+void importThumbFrom(App &a, const std::string &src)
+{
+    std::string err;
+    std::vector<uint8_t> px;
+    if (!importPicture(src, MTHUMB_W, MTHUMB_H, px, err)) { a.say("import: %s", err.c_str()); return; }
+    a.thumbBase = px;
+    a.thumbBaseFor = a.thumbPath;
+    a.thumbContrast = 1.0f; a.thumbBright = 0.0f;
+    a.thumbGen++;
+    if (thumbWriteBaked(a, a.thumbPath, err)) a.say("thumbnail imported from %s: %s", src.c_str(), a.thumbPath);
+    else a.say("import: %s", err.c_str());
+}
+
+static void doImportThumb(App &a)
+{
+    std::string src;
+    if (fileDialogOpenImage("", src)) importThumbFrom(a, src);
+}
+
 static void freePreviews(App &a)
 {
     for (uint32_t *t : { &a.pvFull, &a.pvStrip, &a.pvPol })
@@ -101,6 +148,11 @@ void thumbSection(App &a)
     ImGui::BeginDisabled(!a.doc.captureFn);
     if (ImGui::Button("Capture the view")) doCapture(a);
     ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!fileDialogAvailable() || !a.thumbPath[0]);
+    if (ImGui::Button("Import picture...")) doImportThumb(a);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("A PNG of your own: its centre 4:3 part, scaled to 320x240");
     ImGui::SameLine();
     ImGui::TextDisabled("a plain 4:3 crop");
     ImGui::TextDisabled("%s", shortPath(a.thumbPath, 44).c_str());

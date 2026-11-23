@@ -97,7 +97,7 @@ bool readPng(const char *path, int &w, int &h, std::vector<uint8_t> &rgba)
     static const uint8_t sig[8] = { 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a };
     if (file.size() < 33 || memcmp(file.data(), sig, 8) != 0) return false;
     size_t pos = 8;
-    std::vector<uint8_t> idat;
+    std::vector<uint8_t> idat, plte, trns;
     int depth = 0, ctype = 0, inter = 0;
     w = h = 0;
     while (pos + 12 <= file.size()) {
@@ -109,11 +109,16 @@ bool readPng(const char *path, int &w, int &h, std::vector<uint8_t> &rgba)
             h = (int)((uint32_t)d[4] << 24 | (uint32_t)d[5] << 16 | (uint32_t)d[6] << 8 | d[7]);
             depth = d[8]; ctype = d[9]; inter = d[12];
         } else if (!memcmp(type, "IDAT", 4)) idat.insert(idat.end(), d, d + len);
+        else if (!memcmp(type, "PLTE", 4)) plte.assign(d, d + len);
+        else if (!memcmp(type, "tRNS", 4)) trns.assign(d, d + len);
         else if (!memcmp(type, "IEND", 4)) break;
         pos += 12 + len;
     }
-    if (w <= 0 || h <= 0 || w > 8192 || h > 8192 || depth != 8 || inter != 0 || (ctype != 2 && ctype != 6)) return false;
-    const int bpp = ctype == 6 ? 4 : 3;
+    // colour types: 0 grey, 2 RGB, 3 palette, 4 grey + alpha, 6 RGBA (8 bits per sample; an imported picture can be any of them)
+    static const int kBpp[7] = { 1, 0, 3, 1, 2, 0, 4 };
+    if (w <= 0 || h <= 0 || w > 8192 || h > 8192 || depth != 8 || inter != 0 || ctype < 0 || ctype > 6 || !kBpp[ctype]) return false;
+    if (ctype == 3 && (plte.size() < 3 || plte.size() % 3)) return false;
+    const int bpp = kBpp[ctype];
     const size_t stride = (size_t)w * bpp;
     std::vector<uint8_t> raw((stride + 1) * (size_t)h);
     uLongf outLen = (uLongf)raw.size();
@@ -142,7 +147,17 @@ bool readPng(const char *path, int &w, int &h, std::vector<uint8_t> &rgba)
         for (int x = 0; x < w; x++) {
             uint8_t *o = &rgba[((size_t)y * w + x) * 4];
             const uint8_t *s = &cur[(size_t)x * bpp];
-            o[0] = s[0]; o[1] = s[1]; o[2] = s[2]; o[3] = bpp == 4 ? s[3] : 255;
+            switch (ctype) {
+            case 0: o[0] = o[1] = o[2] = s[0]; break;
+            case 4: o[0] = o[1] = o[2] = s[0]; o[3] = s[1]; break;
+            case 3: {
+                const size_t k = (size_t)s[0] * 3 < plte.size() ? s[0] : 0;
+                o[0] = plte[k * 3]; o[1] = plte[k * 3 + 1]; o[2] = plte[k * 3 + 2];
+                o[3] = k < trns.size() ? trns[k] : 255;
+                break;
+            }
+            default: o[0] = s[0]; o[1] = s[1]; o[2] = s[2]; o[3] = ctype == 6 ? s[3] : 255; break;
+            }
         }
         prev = cur;
     }

@@ -1,5 +1,5 @@
 // Tools > Settings...: the game, the export cache, rendering and MCP options, recent missions. The remembered ones are
-// written to ge-editor-prefs.txt next to the editor (key=value lines, with the co-op toggle).
+// written to project-dam-editor-prefs.txt next to the editor (key=value lines, with the co-op toggle).
 #include "ui_app.h"
 
 namespace ed {
