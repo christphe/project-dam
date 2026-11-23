@@ -59,7 +59,7 @@
  *   "zones": [ { "id": "z1", "pos": [x, y, z], "radius": 150, "room": 12 } ],
  *   "guards": [
  *     { "op": "move",   "prop": 17, "pad": 0x2715 },
- *     { "op": "add",    "pad": "p1", "model": 3, "ai": 0x401, "weapon": 17 },
+ *     { "op": "add",    "pad": "p1", "model": 3, "ai": 0x401, "weapons": [ { "item": 17 } ] },
  *     { "op": "remove", "prop": 18 }
  *   ],
  *   "objects": [
@@ -82,6 +82,16 @@
  *   ]
  * }
  *
+ * - A guard's "weapons" is a list (at most two, one per hand) of { "item": 17, "model": 210, ... } and any field of the
+ *   weapon record ("flags": 16384, "collectable": { "timer": -1 }); "weapon": 17 (older files) is a one-item list.
+ * - An "add" op may also carry any field of the record it clones (all optional, absent
+ *   = the template record's value; the table, names and meaning: mission_fields.h).
+ *   A guard: { "op": "add", "pad": "p1", "model": 65535, "head": -1, "health": 80,
+ *   "reaction_time": 40, "bitflags": 0, "preset": 0, "chrpreset1": 0 } ("model" is the
+ *   body, 0xFFFF = random; "head" -1 = random). An object: header fields flat
+ *   ("flags", "flags2", "maxdamage", "damage", "extrascale", "state") and its type's own
+ *   fields in a sub-object named for the type, e.g. { "type": 1, "door": { "max_speed": 0.1 } }.
+ *   level.json (--export-level) lists the same names for every original prop.
  * - "pad": an integer is an original setup pad number; a string is the id of
  *   one of this mission's "pads".
  * - "prop": the index of a prop in the level's original setup propDefs list,
@@ -100,6 +110,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "mission_fields.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -130,11 +141,23 @@ typedef struct MissionZone {
 
 typedef enum MissionOpKind { MISSION_OP_MOVE, MISSION_OP_ADD, MISSION_OP_REMOVE } MissionOpKind;
 
+/* A weapon an added guard carries: one more record (PROPDEF_COLLECTABLE, assigned to the chr), written by
+ * mission_apply with the guard's new chrnum in its pad field. */
+#define MISSION_MAX_WEAPONS 2       /* one per hand */
+typedef struct MissionWeapon {
+    int item;                       /* ITEM_IDS value (-1 = the template's) */
+    int model;                      /* guard weapon model (-1 = by item) */
+    MissionFieldVals f;             /* the record's own fields (mission_fields.h, type 8): flags (hand), timer, ... */
+} MissionWeapon;
+
 typedef struct MissionGuardOp {
     MissionOpKind op;
     int prop;                       /* MOVE/REMOVE: original setup prop index */
     MissionPadRef pad;              /* MOVE/ADD */
-    int model, ai, weapon;          /* ADD (-1 = level default) */
+    int model, ai;                  /* ADD (-1 = level default) */
+    int nweapons;                   /* ADD: the carried weapons */
+    MissionWeapon weapons[MISSION_MAX_WEAPONS];
+    MissionFieldVals f;             /* ADD: the other record fields (mission_fields.h, type 9) */
 } MissionGuardOp;
 
 typedef struct MissionObjectOp {
@@ -142,6 +165,7 @@ typedef struct MissionObjectOp {
     int prop;                       /* MOVE/REMOVE */
     MissionPadRef pad;              /* MOVE/ADD */
     int type, model, item;          /* ADD (-1 = none) */
+    MissionFieldVals f;             /* ADD: the other record fields (mission_fields.h, type = `type`) */
 } MissionObjectOp;
 
 typedef struct MissionObjective {

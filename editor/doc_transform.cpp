@@ -61,7 +61,7 @@ TransformInfo Doc::getTransform(const Selection &s) const
     } else if (s.kind == Selection::ITEM) {
         for (const Item &it : items()) {
             if (it.added != s.item.added || it.guard != s.item.guard || it.idx != s.item.idx || !it.hasPos) continue;
-            t.valid = true; t.movable = !it.removed; t.pos = it.pos;
+            t.valid = true; t.movable = !it.removed && !it.assigned; t.pos = it.pos;
             if (it.pad.is_new) {
                 for (int i = 0; i < mission.npads; i++)
                     if (strcmp(mission.pads[i].id, it.pad.id) == 0) t.yawDeg = yawOfLook(mission.pads[i].look);

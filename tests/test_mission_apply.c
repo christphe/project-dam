@@ -3,6 +3,7 @@
 #include "mission.h"
 #include "mission_apply.h"
 #include "mission_dir.h"
+#include "mission_setup.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -80,6 +81,124 @@ static const char *kJson =
     "               { \"op\": \"move\", \"prop\": 2, \"pad\": 0 },\n"
     "               { \"op\": \"remove\", \"prop\": 4 },\n"
     "               { \"op\": \"add\", \"type\": 4, \"pad\": 0 } ] }\n";
+
+
+/* An add op's fields land in the cloned record; chrnum is new; absent fields keep the template's bytes. */
+static void test_fields(void)
+{
+    static const char *json =
+        "{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\",\n"
+        "  \"guards\": [ { \"op\": \"add\", \"pad\": 1, \"model\": 65535, \"head\": -1, \"health\": 300, \"bitflags\": 513 },\n"
+        "              { \"op\": \"add\", \"pad\": 2 } ],\n"
+        "  \"objects\": [ { \"op\": \"add\", \"type\": 3, \"pad\": 2, \"flags\": 1193046, \"maxdamage\": 2.5, \"extrascale\": 512 },\n"
+        "               { \"op\": \"add\", \"type\": 8, \"pad\": 2, \"item\": 61, \"collectable\": { \"timer\": -3 } } ] }\n";
+    MissionApplyResult r;
+    char err[128] = "";
+    const Mission *m;
+    uint32_t q;
+    const uint8_t *tg;
+    build();
+    tg = g_file + STREAM;                                   /* the template guard (chr 0) */
+    wr16(g_file + STREAM + 12, 77); wr16(g_file + STREAM + 16, 90); wr16(g_file + STREAM + 18, 33);
+    wr16(g_file + STREAM + 22, 5);                          /* a fixed head */
+    m = load(json);
+    GE_CHECK(m != NULL);
+    if (!m) return;
+    GE_CHECK_EQ_INT(missionApplySetup(m, g_file, g_size, -1, 1.0f, &r, err, sizeof err), 1);
+    GE_CHECK_EQ_INT(r.skipped, 0);
+    q = rd32(r.data + 8 * 3) + 32 + 32 + 144 + 160 + 160;   /* first appended record: guard 1 */
+    GE_CHECK_EQ_INT(r.data[q + 3], 9);
+    GE_CHECK_EQ_INT(rd16(r.data + q + 4), 2);               /* a new chrnum, not the template's 0 */
+    GE_CHECK_EQ_INT(rd16(r.data + q + 6), 1);
+    GE_CHECK_EQ_INT(rd16(r.data + q + 8), 0xFFFF);          /* random body */
+    GE_CHECK_EQ_INT((int16_t)rd16(r.data + q + 22), -1);    /* random head */
+    GE_CHECK_EQ_INT(rd16(r.data + q + 16), 300);
+    GE_CHECK_EQ_INT(rd16(r.data + q + 20), 513);
+    GE_CHECK_EQ_INT(rd16(r.data + q + 12), 77);             /* not given: the template's */
+    GE_CHECK_EQ_INT(rd16(r.data + q + 18), 33);
+    q += 32;                                                /* guard 2: nothing given, a pure clone but for chrnum and pad */
+    GE_CHECK_EQ_INT(rd16(r.data + q + 4), 3);
+    GE_CHECK_EQ_INT(rd16(r.data + q + 6), 2);
+    GE_CHECK(!memcmp(r.data + q + 8, tg + 8, 24));
+    q += 32;                                                /* the prop: flags, maxdamage, extrascale from the op */
+    GE_CHECK_EQ_INT(r.data[q + 3], 3);
+    GE_CHECK_EQ_INT(rd32(r.data + q + 8), 1193046);
+    GE_CHECK_EQ_INT(rd32(r.data + q + 128), 163840);
+    GE_CHECK_EQ_INT(rd16(r.data + q), 512);
+    GE_CHECK_EQ_INT(rd16(r.data + q + 4), 38);              /* template model kept */
+    GE_CHECK_EQ_INT(rd32(r.data + q + 12), 0);
+    q += 144;                                               /* the pickup: the type's own field, and "item" */
+    GE_CHECK_EQ_INT(r.data[q + 144], 61);
+    GE_CHECK_EQ_INT((int16_t)rd16(r.data + q + 146), -3);
+    missionApplyFree(&r);
+}
+
+/* The editor's reader sees the same setup the apply code edits: pads (scaled), props with their fields, AI lists. */
+static void test_setup_decode(void)
+{
+    SetupData sd;
+    char err[128] = "";
+    build();
+    wr16(g_file + STREAM + 16, 90);                            /* guard 0 health */
+    GE_CHECK_EQ_INT(missionSetupDecode(g_file, g_size, 2.0f, &sd, err, sizeof err), 1);
+    GE_CHECK_EQ_INT(sd.npads, NPADS);
+    GE_CHECK(fabsf(sd.pads[1].pos[0] - 400.0f) < 1e-3f);       /* stored 200 * scale 2 */
+    GE_CHECK_EQ_INT(sd.nprops, 5);
+    GE_CHECK_EQ_INT(sd.props[0].type, 9);
+    GE_CHECK_EQ_INT(sd.props[0].model, 2);
+    GE_CHECK_EQ_INT(sd.props[2].type, 3);
+    GE_CHECK_EQ_INT(sd.props[2].model, 38);
+    GE_CHECK_EQ_INT(sd.props[3].item, 8);
+    GE_CHECK_EQ_INT(sd.props[4].item, 26);
+    {
+        const MissionField *f;
+        const int n = missionRecFields(9, &f);
+        int found = 0;
+        for (int i = 0; i < n; i++)
+            if (!strcmp(f[i].name, "health")) { found = 1; GE_CHECK((sd.props[0].f.set >> i) & 1); GE_CHECK(sd.props[0].f.v[i] == 90.0); }
+        GE_CHECK(found);
+    }
+    missionSetupFree(&sd);
+    GE_CHECK_EQ_INT(missionSetupDecode(g_file, 16, 1.0f, &sd, err, sizeof err), 0);
+}
+
+/* An added guard with two weapons gets two assigned records carrying its new chrnum. */
+static void test_weapons(void)
+{
+    static const char *json =
+        "{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\",\n"
+        "  \"guards\": [ { \"op\": \"add\", \"pad\": 1, \"model\": 5, \"weapons\": [ { \"item\": 17, \"flags\": 16385 }, { \"item\": 8, \"model\": 191, \"collectable\": { \"timer\": 7 } } ] } ] }\n";
+    MissionApplyResult r;
+    char err[128] = "";
+    const Mission *m;
+    uint32_t q;
+    build();
+    m = load(json);
+    GE_CHECK(m != NULL);
+    if (!m) return;
+    GE_CHECK_EQ_INT(missionApplySetup(m, g_file, g_size, -1, 1.0f, &r, err, sizeof err), 1);
+    GE_CHECK_EQ_INT(r.skipped, 0);
+    GE_CHECK_EQ_INT(r.guards_added, 1);
+    q = rd32(r.data + 8 * 3) + 32 + 32 + 144 + 160 + 160;   /* the added guard (chr 2) */
+    GE_CHECK_EQ_INT(r.data[q + 3], 9);
+    GE_CHECK_EQ_INT(rd16(r.data + q + 4), 2);
+    q += 32;                                                /* weapon 1: item 17, the sniper model, the op's flags */
+    GE_CHECK_EQ_INT(r.data[q + 3], 8);
+    GE_CHECK_EQ_INT(rd16(r.data + q + 6), 2);               /* the carrier's chr number */
+    GE_CHECK_EQ_INT(r.data[q + 144], 17);
+    GE_CHECK_EQ_INT(rd16(r.data + q + 4), 210);
+    GE_CHECK_EQ_INT(rd32(r.data + q + 8), 16385);           /* 0x4001: assigned (always set) + the op's bit */
+    q += 160;                                               /* weapon 2: item 8, model 191, timer 7 */
+    GE_CHECK_EQ_INT(r.data[q + 3], 8);
+    GE_CHECK_EQ_INT(rd16(r.data + q + 6), 2);
+    GE_CHECK_EQ_INT(r.data[q + 144], 8);
+    GE_CHECK_EQ_INT(rd16(r.data + q + 4), 191);
+    GE_CHECK_EQ_INT((int16_t)rd16(r.data + q + 146), 7);
+    GE_CHECK(rd32(r.data + q + 8) & 0x4000);
+    q += 160;
+    GE_CHECK_EQ_INT(r.data[q + 3], 48);                     /* nothing else was added */
+    missionApplyFree(&r);
+}
 
 int main(void)
 {
@@ -187,6 +306,10 @@ int main(void)
         GE_CHECK_EQ_INT(missionEepPath("abc", eep, sizeof eep), 0);
         GE_CHECK_EQ_INT(missionEepPath("3f0c9a52/7d41", eep, sizeof eep), 0);
     }
+
+    test_fields();
+    test_weapons();
+    test_setup_decode();
 
     /* a file that is not a setup */
     ok = missionApplySetup(m, g_file, 16, -1, 1.0f, &r, err, sizeof err);

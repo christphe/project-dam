@@ -10,6 +10,7 @@
 
 int gfx_rdp_affine = 0;               // set by gfx_opengl_init
 int gfx_fog_vertex = 0;               // set by gfx_opengl_init (from portPerPixelFog)
+bool gfx_fxaa_on = false;           // Video.FXAA: off in the editor
 bool gfx_framebuffers_enabled = true; // framebuffer 0 is the window; the editor draws nothing off-screen
 extern "C" {
 int portPerPixelFog = 0;   // Video.PerPixelFog: off = the N64's per-vertex fog

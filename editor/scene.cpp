@@ -131,8 +131,7 @@ void Scene::render(const Doc &doc, const Camera &cam, int winW, int winH, int vx
     if (showProps)
         for (const Item &it : doc.items()) {
             if (it.removed || !it.hasPos || it.owner < 0 || (size_t)it.owner >= m_runsOfOwner.size()) continue;
-            Vec3 off = itemOffset(doc, it);
-            Mat4 place = mat4Translate(off[0], off[1], off[2]);
+            const Mat4 place = itemPlacement(doc, it);
             for (int run : m_runsOfOwner[(size_t)it.owner]) drawRun(run, vp, place);
         }
     a->end_frame();

@@ -52,7 +52,7 @@ static std::string absPath(const std::string &p)
 }
 
 bool launchGame(const std::string &exeIn, int levelNumber, const std::string &missionIn, const std::string &spawn,
-                std::string &cmdline, std::string &err)
+                bool coop, std::string &cmdline, std::string &err)
 {
     // The game starts in its own directory: paths must not depend on ours.
     const std::string exe = exeIn.empty() ? exeIn : absPath(exeIn);
@@ -62,13 +62,13 @@ bool launchGame(const std::string &exeIn, int levelNumber, const std::string &mi
     char lvl[32];
     snprintf(lvl, sizeof lvl, "-level_%02d", levelNumber);
 
-    // Co-op tests always run with two pads (the game opens only connected pads otherwise).
+    // A co-op test runs with two pads (the game opens only connected pads otherwise); a solo one with neither.
 #ifdef _WIN32
-    _putenv_s("GE_COOP", "1");
-    _putenv_s("GE_PADS", "2");
+    _putenv_s("GE_COOP", coop ? "1" : "");
+    _putenv_s("GE_PADS", coop ? "2" : "");
 #else
-    setenv("GE_COOP", "1", 1);
-    setenv("GE_PADS", "2", 1);
+    if (coop) { setenv("GE_COOP", "1", 1); setenv("GE_PADS", "2", 1); }
+    else { unsetenv("GE_COOP"); unsetenv("GE_PADS"); }
 #endif
 
     cmdline = "\"" + exe + "\" " + lvl + " --mission \"" + missionPath + "\"";

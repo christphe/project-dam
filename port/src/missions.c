@@ -18,9 +18,9 @@
 #include "fs.h"
 #include "mission.h"
 #include "mission_apply.h"
+#include "mission_setup.h"
 #include "missions.h"
 #include "missions_priv.h"
-#include "realzlib.h"   /* host zlib, as rzdecomp.c */
 
 extern char *setup_text_pointers[];   /* src/game/chraidata.c: stage number -> "Usetup<name>Z" */
 int  pccgRowData(const char *name, const uint8_t **data, uint32_t *size);
@@ -31,6 +31,7 @@ static Mission s_m;
 static int  s_active = 0;
 static int  s_stage = -1;
 static int  s_spawn = -1;
+static char s_spawnId[MISSION_ID_LEN];   /* --spawn <mission pad id>, resolved when the mission is loaded */
 static int  s_argsDone = 0;
 static int  s_patched = 0;
 static char s_dir[512] = "";           /* the active mission's folder */
@@ -68,36 +69,6 @@ static uint8_t *rzStore(const uint8_t *raw, uint32_t n, uint32_t *outn)
         o += len; pos += len;
     } while (pos < n);
     *outn = o;
-    return out;
-}
-
-static uint8_t *rzInflate(const uint8_t *rz, uint32_t n, uint32_t *outn)
-{
-    z_stream z;
-    uint32_t cap = n * 6u + 4096u, got = 0;
-    uint8_t *out;
-    int r;
-    if (n < 4 || rz[0] != 0x11 || rz[1] != 0x72) return NULL;
-    out = (uint8_t *)malloc(cap);
-    if (!out) return NULL;
-    memset(&z, 0, sizeof z);
-    if (inflateInit2(&z, -15) != Z_OK) { free(out); return NULL; }
-    z.next_in = (Bytef *)(rz + 2);
-    z.avail_in = n - 2;
-    do {
-        if (got == cap) {
-            uint8_t *bigger = (uint8_t *)realloc(out, cap * 2u);
-            if (!bigger) { inflateEnd(&z); free(out); return NULL; }
-            out = bigger; cap *= 2u;
-        }
-        z.next_out = out + got;
-        z.avail_out = cap - got;
-        r = inflate(&z, Z_NO_FLUSH);
-        got = cap - z.avail_out;
-        if (r != Z_OK && r != Z_STREAM_END) { inflateEnd(&z); free(out); return NULL; }
-    } while (r != Z_STREAM_END);
-    inflateEnd(&z);
-    *outn = got;
     return out;
 }
 
@@ -147,7 +118,7 @@ static void buildOverride(void)
         sysLogPrintf(LOG_WARNING, "missions: setup row %s is not in the pccg sidecar", name);
         return;
     }
-    raw = rzInflate(rz, rzn, &rawn);
+    raw = missionRzInflate(rz, rzn, &rawn);
     if (!raw) { sysLogPrintf(LOG_WARNING, "missions: cannot inflate %s", name); return; }
     if (!missionApplySetup(&s_m, raw, rawn, s_spawn, levelPosScale(s_stage), &res, err, sizeof err)) {
         sysLogPrintf(LOG_WARNING, "missions: cannot apply the mission to %s: %s", name, err);
@@ -222,6 +193,13 @@ int missionsActivateFile(const char *path, int spawn_pad, const char *mod_dir, i
     missionsDeactivate();
     s_m = m;
     s_spawn = spawn_pad;
+    if (s_spawnId[0]) {   /* one of the mission's own pads: mission_apply gets -2 - its index */
+        s_spawn = -1;
+        for (int k = 0; k < s_m.npads; k++)
+            if (strcmp(s_m.pads[k].id, s_spawnId) == 0) { s_spawn = -2 - k; break; }
+        if (s_spawn == -1) sysLogPrintf(LOG_WARNING, "missions: --spawn %s: no such pad in the mission, the level's start is kept", s_spawnId);
+        s_spawnId[0] = 0;
+    }
     s_stage = missionLevelNumber(m.level);
     dirOf(path, s_dir, sizeof s_dir);
     snprintf(s_modDir, sizeof s_modDir, "%s", mod_dir ? mod_dir : "");
@@ -248,7 +226,16 @@ void missionsEnsureArgs(void)
     sp = sysArgGetString("--spawn");
     f = sysArgGetString("--mission");
     if (!f) return;
-    if (!missionsActivateFile(f, sp ? atoi(sp) : -1, NULL, -1)) return;
+    {   /* --spawn: a pad number, or the id of one of the mission's own pads ("p1") */
+        int spawn = -1;
+        if (sp && *sp) {
+            char *end = NULL;
+            long n = strtol(sp, &end, 0);
+            if (end && *end == 0 && n >= 0) spawn = (int)n;
+            else snprintf(s_spawnId, sizeof s_spawnId, "%s", sp);
+        }
+        if (!missionsActivateFile(f, spawn, NULL, -1)) return;
+    }
     {
         int boot = bootLevel();
         if (boot < 0)

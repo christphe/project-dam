@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cmath>
+#include <set>
 #include <string>
 
 #include "doc.h"
@@ -12,6 +13,7 @@ struct Mat4 { float m[16]; };   // column-major, column vectors: the same memory
 Mat4 mat4Identity();
 Mat4 mat4Mul(const Mat4 &a, const Mat4 &b);          // a * b
 Mat4 mat4Translate(float x, float y, float z);
+Mat4 mat4RotY(float yawDeg);                         // turns +z toward (sin yaw, 0, cos yaw): a pad's look
 Mat4 mat4Perspective(float fovyRad, float aspect, float zn, float zf);
 Mat4 mat4LookAt(const Vec3 &eye, const Vec3 &fwd);   // y up
 // World point to window pixels inside the viewport rect (y down); false when behind the camera.
@@ -46,8 +48,20 @@ struct Hit {
     int room = -1;
 };
 
-// World box of an item standing at its pad (owner model bounds, or a default box).
+// The item's box in its own frame: relative to its pad position, before the pad's rotation (owner model bounds, or a
+// default box). Drawn and picked rotated by Item::yawDeg, like the model.
+bool itemLocalBox(const Doc &d, const Item &it, Vec3 &mn, Vec3 &mx);
+Vec3 rotYaw(const Vec3 &v, float yawDeg);             // the same rotation applied to a vector
+// World AABB of that box once rotated and placed at the pad.
 bool itemBounds(const Doc &d, const Item &it, Vec3 &mn, Vec3 &mx);
-// The translation that puts the owner's recorded model at the item's pad.
-Vec3 itemOffset(const Doc &d, const Item &it);
+// Puts the owner's recorded model (facing +z, anchored at its bottom centre) on the pad, turned to the pad's look.
+Mat4 itemPlacement(const Doc &d, const Item &it);
 Hit pickScene(const Doc &d, const Vec3 &org, const Vec3 &dir);
+
+// The pads a guard or object stands on (not removed ones): drawn and picked as the item, never on their own.
+struct OccupiedPads {
+    std::set<int> level;            // original pad numbers
+    std::set<std::string> mission;  // mission pad ids
+    bool has(const MissionPadRef &r) const { return r.is_new ? mission.count(r.id) != 0 : level.count(r.num) != 0; }
+};
+OccupiedPads occupiedPads(const std::vector<Item> &items);

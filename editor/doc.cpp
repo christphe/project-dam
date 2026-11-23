@@ -1,5 +1,6 @@
 #include "doc.h"
 #include "launch.h"
+#include "mission_setup.h"
 #include "exportcache.h"
 
 #include <algorithm>
@@ -7,6 +8,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <system_error>
+#include <utility>
 
 #include "cJSON.h"
 
@@ -78,6 +82,29 @@ static void xform(const float *m, const float *p, Vec3 &o)
     o[2] = p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14];
 }
 
+// The room of a point: the stan (walkable floor) tile under it whose height is nearest, -1 when none.
+static int roomOfPoint(const Level &l, const Vec3 &p)
+{
+    int best = -1;
+    float bestD = 1e30f;
+    for (const LPoly &poly : l.stan) {
+        const size_t n = poly.v.size();
+        if (n < 3) continue;
+        bool in = false;
+        for (size_t i = 0, j = n - 1; i < n; j = i++) {
+            const Vec3 &a = poly.v[i], &b = poly.v[j];
+            if (((a[2] > p[2]) != (b[2] > p[2])) && (p[0] < (b[0] - a[0]) * (p[2] - a[2]) / (b[2] - a[2]) + a[0])) in = !in;
+        }
+        if (!in) continue;
+        const Vec3 &v0 = poly.v[0], &v1 = poly.v[1], &v2 = poly.v[2];
+        const Vec3 e1 = { v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2] }, e2 = { v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2] };
+        const float nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
+        const float y = fabsf(ny) > 1e-6f ? v0[1] - (nx * (p[0] - v0[0]) + nz * (p[2] - v0[2])) / ny : v0[1];
+        if (fabsf(y - p[1]) < bestD) { bestD = fabsf(y - p[1]); best = poly.room; }
+    }
+    return best;
+}
+
 bool Level::load(const std::string &exportDir, std::string &err)
 {
     std::string text;
@@ -110,20 +137,45 @@ bool Level::load(const std::string &exportDir, std::string &err)
         jpoly(e, p.v);
         portals.push_back(std::move(p));
     }
-    cJSON_ArrayForEach(e, cJSON_GetObjectItemCaseSensitive(root, "pads")) {
-        LPad p; p.num = (int)jnum(e, "num", 0); jvec3(e, "pos", p.pos); jvec3(e, "look", p.look); jvec3(e, "up", p.up);
-        p.room = (int)jnum(e, "room", -1);
+    // which recorded model owner draws a model (only the renderer knows): guard models and object models are separate ids
+    std::map<std::pair<bool, int>, int> &ownerOf = modelOwners;
+    ownerOf.clear();
+    cJSON_ArrayForEach(e, cJSON_GetObjectItemCaseSensitive(root, "models"))
+        ownerOf[{ cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(e, "guard")), (int)jnum(e, "model", -1) }] = (int)jnum(e, "owner", -1);
+    const double scale = jnum(root, "scale", 1.0);
+    const cJSON *setupName = cJSON_GetObjectItemCaseSensitive(root, "setup");
+    const std::string setup = cJSON_IsString(setupName) ? setupName->valuestring : "";
+    cJSON_Delete(root);
+
+    // pads, props (with every record field) and AI lists come from the stage setup file the game itself loads
+    // (the converted data next to the game, port/mission/mission_setup.h), not from the export
+    if (setup.empty()) { err = "level.json has no \"setup\" name: export the level again with this build"; return false; }
+    uint8_t *raw = nullptr; uint32_t rawn = 0;
+    char em[300] = "";
+    if (!missionSetupLoadFile(dataDir.empty() ? "data" : dataDir.c_str(), setup.c_str(), &raw, &rawn, em, sizeof em)) { err = em; return false; }
+    SetupData sd;
+    const bool dec = missionSetupDecode(raw, rawn, (float)scale, &sd, em, sizeof em);
+    free(raw);
+    if (!dec) { err = em; return false; }
+    for (int i = 0; i < sd.npads; i++) {
+        const SetupPad &sp = sd.pads[i];
+        LPad p; p.num = sp.num;
+        for (int a = 0; a < 3; a++) { p.pos[a] = sp.pos[a]; p.look[a] = sp.look[a]; p.up[a] = sp.up[a]; }
+        p.room = roomOfPoint(*this, p.pos);
         padIndex[p.num] = (int)pads.size();
         pads.push_back(p);
     }
-    cJSON_ArrayForEach(e, cJSON_GetObjectItemCaseSensitive(root, "props")) {
-        LProp p; p.index = (int)jnum(e, "index", 0); p.type = (int)jnum(e, "type", 0); p.pad = (int)jnum(e, "pad", 0);
-        p.model = (int)jnum(e, "model", -1); p.item = (int)jnum(e, "item", -1); p.ai = (int)jnum(e, "ai", -1);
-        p.owner = (int)jnum(e, "owner", -1);
+    for (int i = 0; i < sd.nprops; i++) {
+        const SetupProp &sp = sd.props[i];
+        LProp p; p.index = sp.index; p.type = sp.type; p.pad = sp.pad; p.model = sp.model; p.item = sp.item; p.ai = sp.ai; p.f = sp.f; p.chr = sp.chr; p.carrier = sp.carrier;
+        if (sp.model >= 0) {
+            auto it = ownerOf.find({ sp.type == 9, sp.model });
+            if (it != ownerOf.end()) p.owner = it->second;
+        }
         props.push_back(p);
     }
-    cJSON_ArrayForEach(e, cJSON_GetObjectItemCaseSensitive(root, "ailists")) ailists.push_back((int)e->valuedouble);
-    cJSON_Delete(root);
+    for (int i = 0; i < sd.nailists; i++) ailists.push_back(sd.ailists[i]);
+    missionSetupFree(&sd);
 
     // level.rec is optional for the editor: without it the level is drawn as markers only.
     std::string recPath = exportDir + "/level.rec";
@@ -200,16 +252,25 @@ const LProp *Level::prop(int index) const
     return nullptr;
 }
 
-int Level::ownerForModel(int model) const
+int Level::ownerForModel(bool guard, int model) const
 {
     if (!hasRec) return -1;
-    for (uint32_t i = 0; i < rec.hdr->nowners; i++)
-        if (rec.owners[i].kind == LEVELREC_OWNER_MODEL && rec.owners[i].id == model) return (int)i;
-    return -1;
+    auto it = modelOwners.find({ guard, model });
+    return it == modelOwners.end() ? -1 : it->second;
 }
 
 // ---------------------------------------------------------------------------------------------
 // files
+
+// The game's data folder (the converted level data lives in data/pccg-<region>/): next to the game executable.
+std::string Doc::gameDataDir() const
+{
+    const char *env = getenv("GE_EDITOR_DATA");
+    if (env && *env) return env;
+    if (gameExe.empty()) return "data";
+    const size_t s = gameExe.find_last_of("/\\");
+    return (s == std::string::npos ? std::string(".") : gameExe.substr(0, s)) + "/data";
+}
 
 bool Doc::openLevel(const std::string &dir, std::string &err)
 {
@@ -217,11 +278,36 @@ bool Doc::openLevel(const std::string &dir, std::string &err)
     level.~Level();
     new (&level) Level();
     hasLevel = false;
+    level.dataDir = gameDataDir();
     if (!level.load(dir, err)) return false;
     hasLevel = true;
     levelGen++;
     sel = Selection();
     return true;
+}
+
+static std::string missionSlug(const std::string &name)
+{
+    std::string s;
+    for (char c : name) {
+        if (isalnum((unsigned char)c)) s += (char)tolower((unsigned char)c);
+        else if (!s.empty() && s.back() != '_') s += '_';
+    }
+    while (!s.empty() && s.back() == '_') s.pop_back();
+    return s.empty() ? "mission" : s;
+}
+
+std::string Doc::defaultMissionPath(const std::string &name) const
+{
+    const std::string root = gameDataDir() + "/missions/";
+    const std::string base = missionSlug(name);
+    std::string folder = base;
+    for (int n = 2; n < 1000; n++) {
+        std::error_code ec;
+        if (!std::filesystem::exists(root + folder, ec)) break;
+        folder = base + "_" + std::to_string(n);
+    }
+    return root + folder + "/mission.json";
 }
 
 bool Doc::newMission(const std::string &name, const std::string &levelName, std::string &err)
@@ -235,7 +321,7 @@ bool Doc::newMission(const std::string &name, const std::string &levelName, std:
     fillStr(mission.level, sizeof mission.level, lvl);
     hasMission = true;
     missionPath.clear();
-    if (hasLevel) missionPath = level.dir + "/mission.json";
+    missionPath = defaultMissionPath(mission.name);
     undoStack.clear();
     dirty = true;
     sel = Selection();
@@ -279,6 +365,11 @@ bool Doc::saveMission(const std::string &pathIn, std::string &err)
     if (!hasMission) { err = "no mission is open"; return false; }
     std::string path = pathIn.empty() ? missionPath : pathIn;
     if (path.empty()) { err = "no path to save to"; return false; }
+    {   // the folders of a new mission's default path
+        std::error_code ec;
+        const std::filesystem::path parent = std::filesystem::path(path).parent_path();
+        if (!parent.empty()) std::filesystem::create_directories(parent, ec);
+    }
     char e[256] = "";
     if (!missionSaveFile(path.c_str(), &mission, e, sizeof e)) { err = e[0] ? e : "cannot write " + path; return false; }
     missionPath = path;
@@ -319,6 +410,33 @@ int Doc::roomAt(const Vec3 &p) const
     return best;
 }
 
+// An added item's effective fields: the op's own, the rest from the template record the game clones
+// (the level's first one of the type; mission_apply.c).
+static void fillAddedFields(const Doc &d, Item &it, const MissionFieldVals &own)
+{
+    it.given = own.set;
+    it.f = own;
+    if (!d.hasLevel) return;
+    for (const LProp &p : d.level.props)
+        if (p.type == it.type) {
+            for (int i = 0; i < MISSION_MAX_FIELDS; i++)
+                if (!(own.set & ((uint64_t)1 << i)) && (p.f.set & ((uint64_t)1 << i))) { it.f.v[i] = p.f.v[i]; it.f.set |= (uint64_t)1 << i; }
+            break;
+        }
+}
+
+// The facing of a pad reference: level pad look for original pads, mission pad look for new ones.
+static float padYaw(const Doc &d, const MissionPadRef &r)
+{
+    const float *look = nullptr;
+    if (r.is_new) {
+        for (int i = 0; i < d.mission.npads; i++) if (strcmp(d.mission.pads[i].id, r.id) == 0) look = d.mission.pads[i].look;
+    } else if (d.hasLevel) {
+        if (const LPad *p = d.level.pad(r.num)) look = p->look.data();
+    }
+    return look ? atan2f(look[0], look[2]) * 57.29578f : 0.0f;
+}
+
 std::vector<Item> Doc::items() const
 {
     std::vector<Item> out;
@@ -330,6 +448,7 @@ std::vector<Item> Doc::items() const
             it.origPad = p.pad;
             it.pad.is_new = 0; it.pad.num = p.pad;
             it.type = p.type; it.model = p.model; it.item = p.item; it.ai = p.ai; it.owner = p.owner;
+            it.f = p.f; it.chr = p.chr;
             if (hasMission) {
                 const MissionGuardOp *ops = it.guard ? mission.guards : nullptr;
                 int n = it.guard ? mission.nguards : 0;
@@ -347,7 +466,27 @@ std::vector<Item> Doc::items() const
                     }
             }
             it.hasPos = padPos(it.pad, it.pos);
+            it.yawDeg = padYaw(*this, it.pad);
             out.push_back(it);
+        }
+        // weapons carried by guards: the record's "pad" field is the carrier's chr number, not a pad. They are
+        // drawn with the guard and listed in its properties, and are nothing on their own.
+        std::map<int, size_t> guardOfChr;
+        for (size_t i = 0; i < out.size(); i++) if (out[i].guard && out[i].chr >= 0) guardOfChr[out[i].chr] = i;
+        for (Item &w : out) {
+            const LProp *p = w.guard ? nullptr : level.prop(w.idx);
+            if (!p || p->carrier < 0) continue;
+            w.assigned = true;
+            w.hasPos = false;
+            w.moved = false;
+            auto g = guardOfChr.find(p->carrier);
+            if (g == guardOfChr.end()) continue;
+            Item &c = out[g->second];
+            w.carrierProp = c.idx; w.removed = c.removed; w.pad = c.pad;
+            w.hasPos = c.hasPos; w.pos = { c.pos[0], c.pos[1] + 85.0f, c.pos[2] }; w.yawDeg = c.yawDeg;
+            MissionWeapon mw; memset(&mw, 0, sizeof mw);
+            mw.item = w.item; mw.model = w.model; mw.f = w.f;
+            c.weapons.push_back(mw);
         }
     }
     if (hasMission) {
@@ -355,12 +494,15 @@ std::vector<Item> Doc::items() const
             const MissionGuardOp &g = mission.guards[i];
             if (g.op != MISSION_OP_ADD) continue;
             Item it; it.added = true; it.guard = true; it.idx = i; it.pad = g.pad; it.type = 9;
-            it.model = g.model; it.ai = g.ai; it.weapon = g.weapon;
-            it.owner = hasLevel ? level.ownerForModel(g.model) : -1;
+            it.model = g.model; it.ai = g.ai;
+            for (int k = 0; k < g.nweapons && k < MISSION_MAX_WEAPONS; k++) it.weapons.push_back(g.weapons[k]);
+            fillAddedFields(*this, it, g.f);
+            it.owner = hasLevel ? level.ownerForModel(true, g.model) : -1;
             if (it.owner < 0 && hasLevel) {   // fall back on any guard model the level recorded
                 for (auto &p : level.props) if (p.type == 9 && p.owner >= 0) { it.owner = p.owner; break; }
             }
             it.hasPos = padPos(it.pad, it.pos);
+            it.yawDeg = padYaw(*this, it.pad);
             out.push_back(it);
         }
         for (int i = 0; i < mission.nobjects; i++) {
@@ -368,8 +510,10 @@ std::vector<Item> Doc::items() const
             if (o.op != MISSION_OP_ADD) continue;
             Item it; it.added = true; it.guard = false; it.idx = i; it.pad = o.pad;
             it.type = o.type; it.model = o.model; it.item = o.item;
-            it.owner = hasLevel ? level.ownerForModel(o.model) : -1;
+            fillAddedFields(*this, it, o.f);
+            it.owner = hasLevel ? level.ownerForModel(false, o.model) : -1;
             it.hasPos = padPos(it.pad, it.pos);
+            it.yawDeg = padYaw(*this, it.pad);
             out.push_back(it);
         }
     }
@@ -458,6 +602,7 @@ std::string Doc::describe(const std::string &detail) const
                 cJSON *o = cJSON_CreateObject();
                 cJSON_AddNumberToObject(o, "num", p.num);
                 jaddVec(o, "pos", p.pos);
+                jaddVec(o, "look", p.look);
                 cJSON_AddNumberToObject(o, "room", p.room);
                 cJSON_AddItemToArray(ps, o);
             }
@@ -477,6 +622,29 @@ std::string Doc::describe(const std::string &detail) const
             cJSON_AddNumberToObject(o, "model", it.model);
             cJSON_AddNumberToObject(o, "item", it.item);
             cJSON_AddNumberToObject(o, "ai", it.ai);
+            if (it.assigned) cJSON_AddNumberToObject(o, "carried_by", it.carrierProp);
+            if (!it.weapons.empty()) {
+                cJSON *ws = cJSON_AddArrayToObject(o, "weapons");
+                for (const MissionWeapon &w : it.weapons) {
+                    cJSON *wo = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(wo, "item", w.item); cJSON_AddNumberToObject(wo, "model", w.model);
+                    cJSON_AddItemToArray(ws, wo);
+                }
+            }
+            {   // every record field (mission_fields.h), grouped like mission.json: header flat, the type's own in a sub-object
+                const MissionField *f;
+                const int type = it.guard ? MISSION_REC_GUARD : it.type;
+                const int nf = missionRecFields(type, &f);
+                cJSON *fo = nullptr, *sub = nullptr;
+                for (int i = 0; i < nf && i < MISSION_MAX_FIELDS; i++) {
+                    if (!((it.f.set >> i) & 1)) continue;
+                    if (!fo) fo = cJSON_AddObjectToObject(o, "fields");
+                    if (f[i].grouped) {
+                        if (!sub) sub = cJSON_AddObjectToObject(fo, missionRecGroup(type));
+                        cJSON_AddNumberToObject(sub, f[i].name, it.f.v[i]);
+                    } else cJSON_AddNumberToObject(fo, f[i].name, it.f.v[i]);
+                }
+            }
             cJSON_AddItemToArray(ps, o);
         }
     }
@@ -509,23 +677,7 @@ std::string Doc::describe(const std::string &detail) const
 // ---------------------------------------------------------------------------------------------
 // play
 
-std::string Doc::defaultSpawn() const
-{
-    switch (sel.kind) {
-    case Selection::PAD: return std::to_string(sel.num);
-    case Selection::MPAD: return sel.id;
-    case Selection::ITEM:
-        for (auto &it : items())
-            if (it.added == sel.item.added && it.guard == sel.item.guard && it.idx == sel.item.idx)
-                return it.pad.is_new ? std::string(it.pad.id) : std::to_string(it.pad.num);
-        break;
-    default: break;
-    }
-    if (hasLevel && !level.pads.empty()) return std::to_string(level.pads[0].num);
-    return "";
-}
-
-bool Doc::testRun(const std::string &spawnIn, std::string &err)
+bool Doc::testRun(const std::string &spawnIn, bool coop, std::string &err)
 {
     if (!hasMission) { err = "no mission is open"; return false; }
     std::vector<std::string> issues = validate();
@@ -534,8 +686,9 @@ bool Doc::testRun(const std::string &spawnIn, std::string &err)
     if (!saveMission("", err)) return false;
     int lvl = missionLevelNumber(mission.level);
     if (lvl < 0) { err = "unknown level"; return false; }
-    std::string spawn = spawnIn.empty() ? defaultSpawn() : spawnIn;
-    return launchGame(gameExe, lvl, missionPath, spawn, lastPlay, err);
+    // no spawn chosen (Spawn here / MCP spawn): no --spawn, the mission starts at the level's own start
+    const std::string spawn = spawnIn;
+    return launchGame(gameExe, lvl, missionPath, spawn, coop, lastPlay, err);
 }
 
 bool padSpecFromJson(const cJSON *args, PadSpec &out, std::string &err)

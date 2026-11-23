@@ -61,6 +61,7 @@ static int s_exportDone = 0;
 static int s_firstRoomFrame = -1;
 static char s_dir[1024];
 static char s_levelName[32];
+static int s_stage = -1;
 
 static const struct { const char *name; int num; } kLevels[] = {
     {"dam", 33}, {"facility", 34}, {"runway", 35}, {"surface1", 36},
@@ -85,6 +86,7 @@ int levelExportWanted(void)
         snprintf(tok, sizeof(tok), "-level_%02d", n);
         if (sysArgCheck(tok)) {
             snprintf(s_levelName, sizeof(s_levelName), "level%02d", n);
+            s_stage = n;
             for (size_t k = 0; k < sizeof(kLevels) / sizeof(kLevels[0]); k++) {
                 if (kLevels[k].num == n) snprintf(s_levelName, sizeof(s_levelName), "%s", kLevels[k].name);
             }
@@ -271,45 +273,6 @@ static void writePortals(FILE *f)
     fprintf(f, "\n  ],\n");
 }
 
-static int padRoom(const PadRecord *p)
-{
-    return p->stan != NULL ? (int)p->stan->room : -1;
-}
-
-static void writePads(FILE *f)
-{
-    fprintf(f, "  \"pads\": [");
-    int first = 1;
-    if (g_CurrentSetup.pads != NULL) {
-        for (int i = 0; g_CurrentSetup.pads[i].plink != NULL; i++) {
-            const PadRecord *p = &g_CurrentSetup.pads[i];
-            fprintf(f, "%s\n    {\"num\":%d,\"pos\":", first ? "" : ",", i);
-            jv(f, p->pos.f[0], p->pos.f[1], p->pos.f[2]);
-            fprintf(f, ",\"look\":");
-            jv(f, p->look.f[0], p->look.f[1], p->look.f[2]);
-            fprintf(f, ",\"up\":");
-            jv(f, p->up.f[0], p->up.f[1], p->up.f[2]);
-            fprintf(f, ",\"room\":%d}", padRoom(p));
-            first = 0;
-        }
-    }
-    if (g_CurrentSetup.boundpads != NULL) {
-        for (int i = 0; g_CurrentSetup.boundpads[i].plink != NULL; i++) {
-            const BoundPadRecord *p = &g_CurrentSetup.boundpads[i];
-            fprintf(f, "%s\n    {\"num\":%d,\"bound\":true,\"pos\":", first ? "" : ",", 10000 + i);
-            jv(f, p->pos.f[0], p->pos.f[1], p->pos.f[2]);
-            fprintf(f, ",\"look\":");
-            jv(f, p->look.f[0], p->look.f[1], p->look.f[2]);
-            fprintf(f, ",\"up\":");
-            jv(f, p->up.f[0], p->up.f[1], p->up.f[2]);
-            fprintf(f, ",\"room\":%d,\"bbox\":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}", p->stan != NULL ? (int)p->stan->room : -1,
-                    p->bbox.xmin, p->bbox.ymin, p->bbox.zmin, p->bbox.xmax, p->bbox.ymax, p->bbox.zmax);
-            first = 0;
-        }
-    }
-    fprintf(f, "\n  ],\n");
-}
-
 /* Object-like setup records: ObjectRecord (pad, model = obj). */
 static int isObjectType(int t)
 {
@@ -383,6 +346,49 @@ static int modelNeedsAnim(Model *m)
     return 0;
 }
 
+/* src/game/propobj.c, not in a header */
+Gfx *process_monitor_animation_microcode(Model *model, ModelNode *node, MonitorRecord *screen, Gfx *gdl, s32 arg4, s32 arg5);
+
+#define LE_MON_DL 192
+static Gfx s_monDl[4][LE_MON_DL] __attribute__((aligned(16)));
+typedef struct { union ModelRwData *rw; Gfx *gdl; Vertex *vtx; } MonSave;
+
+/* A monitor's screen images are not drawn by the model renderer: the object render (propobj.c,
+ * sub_GAME_7F04AC20) builds them every frame into the screen node's rw data, with
+ * gSPMatrix(model->render_pos) of that frame, the live camera-relative matrix. Replayed as is, the
+ * images land thousands of units from the model (Frigate's multi-monitors). Rebuild them here, while
+ * render_pos is the export's own list, into our buffers; monitorImagesRestore puts the live ones back.
+ * The rebuild steps the screen's TV command script once, harmless on the way out (the game quits). */
+static int monitorImagesBuild(Model *m, PropDefHeaderRecord *p, MonSave save[4])
+{
+    MonitorRecord *screens;
+    int count, n = 0;
+    if (p->type == PROPDEF_MONITOR) { screens = &((MonitorObjRecord *)p)->Monitor; count = 1; }
+    else if (p->type == PROPDEF_MULTI_MONITOR) { screens = ((MultiMonitorObjRecord *)p)->Monitor; count = 4; }
+    else return 0;
+    for (int k = 0; k < count; k++) {
+        ModelNode *node = m->obj->Switches[k];
+        if (node == NULL || (node->Opcode & 0xff) != MODELNODE_OPCODE_DLCOLLISION) continue;
+        union ModelRwData *rw = modelGetNodeRwData(m, node);
+        if (rw == NULL) continue;
+        save[n].rw = rw;
+        save[n].gdl = rw->DisplayListCollisions.gdl;
+        save[n].vtx = rw->DisplayListCollisions.Vertices;
+        Gfx *end = process_monitor_animation_microcode(m, node, &screens[k], s_monDl[k], 1, 1);
+        if (end - s_monDl[k] > LE_MON_DL) sysLogPrintf(LOG_ERROR, "level export: monitor image list overflow (%d)", (int)(end - s_monDl[k]));
+        n++;
+    }
+    return n;
+}
+
+static void monitorImagesRestore(MonSave save[4], int n)
+{
+    for (int k = 0; k < n; k++) {
+        save[k].rw->DisplayListCollisions.gdl = save[k].gdl;
+        save[k].rw->DisplayListCollisions.Vertices = save[k].vtx;
+    }
+}
+
 /* One recording per model type the setup props use: the game's model renderer
  * (subcalcpos / subcalcmatrices / subdraw, the sequence of sub_GAME_7F074790)
  * at the identity matrix, so the joint matrices are model -> model space. The
@@ -449,9 +455,11 @@ static void exportModels(void)
                 rw->Header.unk18 = savedBlend;
             }
         }
+        MonSave monSave[4];
+        const int nMon = rigid ? monitorImagesBuild(m, p, monSave) : 0;   /* render_pos is the export's list now */
         subdraw(&rd, m);
         Gfx *end = rd.gdl;
-        if (end - s_modelDl > 65000) { bad++; m->render_pos = savedPos; continue; }
+        if (end - s_modelDl > 65000) { bad++; monitorImagesRestore(monSave, nMon); m->render_pos = savedPos; continue; }
         gSPEndDisplayList(end++);
         matrix_4x4_7F058C64();   /* no visibility scale in the conversion (see roomWorldMatrix) */
         bondviewTransformManyPosToViewMatrix(m->render_pos, m->obj->numMatrices);   /* Mtxf -> the Mtx the DL reads */
@@ -464,49 +472,122 @@ static void exportModels(void)
         s_modelOwner[s_nModelOwners].owner = owner;
         s_nModelOwners++;
         levelcapRunDl(s_modelDl, owner);
+        monitorImagesRestore(monSave, nMon);
         m->render_pos = savedPos;
         done++;
     }
     sysLogPrintf(LOG_NOTE, "level export: %d model types recorded (%d too large, %d chrs without animation)", done, bad, noanim);
 }
 
-static void writeProps(FILE *f)
+
+/* the field tables' offsets (port/mission/mission_fields.c) must be the structs' */
+#define FA(T, m, off) _Static_assert(__builtin_offsetof(T, m) == (off), #T "." #m)
+FA(GuardRecord, extrascale, 0);
+FA(GuardRecord, state, 2);
+FA(GuardRecord, Preset, 12);
+FA(GuardRecord, chrpreset1, 14);
+FA(GuardRecord, health, 16);
+FA(GuardRecord, ReactionTime, 18);
+FA(GuardRecord, bitflags, 20);
+FA(GuardRecord, HeadID, 22);
+FA(ObjectRecord, extrascale, 0);
+FA(ObjectRecord, state, 2);
+FA(ObjectRecord, flags, 8);
+FA(ObjectRecord, flags2, 12);
+FA(ObjectRecord, maxdamage, 128);
+FA(ObjectRecord, damage, 132);
+FA(DoorRecord, linkedDoorOffset, 144);
+FA(DoorRecord, maxFrac, 148);
+FA(DoorRecord, perimFrac, 152);
+FA(DoorRecord, accel, 156);
+FA(DoorRecord, decel, 160);
+FA(DoorRecord, maxSpeed, 164);
+FA(DoorRecord, doorFlags, 168);
+FA(DoorRecord, doorType, 170);
+FA(DoorRecord, keyflags, 172);
+FA(DoorRecord, autoCloseFrames, 176);
+FA(DoorRecord, doorOpenSound, 180);
+FA(KeyRecord, keyflags, 144);
+FA(CCTVRecord, lookpad, 144);
+FA(AmmoCrateRecord, ammoType, 144);
+FA(WeaponObjRecord, weaponnum, 144);
+FA(WeaponObjRecord, LinkedWeaponType, 145);
+FA(WeaponObjRecord, timer, 146);
+FA(MonitorObjRecord, OwnerOffset, 272);
+FA(MonitorObjRecord, OwnerPart, 276);
+FA(MonitorObjRecord, ImageNum, 280);
+FA(MultiMonitorObjRecord, ImageNums[0], 656);
+FA(MultiMonitorObjRecord, ImageNums[1], 657);
+FA(MultiMonitorObjRecord, ImageNums[2], 658);
+FA(MultiMonitorObjRecord, ImageNums[3], 659);
+FA(AutogunRecord, padID, 144);
+FA(AutogunRecord, rot_related, 148);
+FA(AutogunRecord, unk88, 152);
+FA(AutogunRecord, unk8C, 156);
+FA(AutogunRecord, speed, 180);
+FA(AutogunRecord, aimdist, 184);
+FA(AutogunRecord, unkAC, 188);
+FA(AutogunRecord, unkB8, 200);
+FA(AutogunRecord, unkBC, 204);
+FA(AutogunRecord, unkC0, 208);
+FA(AutogunRecord, is_active, 240);
+FA(MultiAmmoCrateRecord, slots[0].modelnum, 144);
+FA(MultiAmmoCrateRecord, slots[0].quantity, 146);
+FA(MultiAmmoCrateRecord, slots[1].modelnum, 148);
+FA(MultiAmmoCrateRecord, slots[1].quantity, 150);
+FA(MultiAmmoCrateRecord, slots[2].modelnum, 152);
+FA(MultiAmmoCrateRecord, slots[2].quantity, 154);
+FA(MultiAmmoCrateRecord, slots[3].modelnum, 156);
+FA(MultiAmmoCrateRecord, slots[3].quantity, 158);
+FA(MultiAmmoCrateRecord, slots[4].modelnum, 160);
+FA(MultiAmmoCrateRecord, slots[4].quantity, 162);
+FA(MultiAmmoCrateRecord, slots[5].modelnum, 164);
+FA(MultiAmmoCrateRecord, slots[5].quantity, 166);
+FA(MultiAmmoCrateRecord, slots[6].modelnum, 168);
+FA(MultiAmmoCrateRecord, slots[6].quantity, 170);
+FA(MultiAmmoCrateRecord, slots[7].modelnum, 172);
+FA(MultiAmmoCrateRecord, slots[7].quantity, 174);
+FA(MultiAmmoCrateRecord, slots[8].modelnum, 176);
+FA(MultiAmmoCrateRecord, slots[8].quantity, 178);
+FA(MultiAmmoCrateRecord, slots[9].modelnum, 180);
+FA(MultiAmmoCrateRecord, slots[9].quantity, 182);
+FA(MultiAmmoCrateRecord, slots[10].modelnum, 184);
+FA(MultiAmmoCrateRecord, slots[10].quantity, 186);
+FA(MultiAmmoCrateRecord, slots[11].modelnum, 188);
+FA(MultiAmmoCrateRecord, slots[11].quantity, 190);
+FA(MultiAmmoCrateRecord, slots[12].modelnum, 192);
+FA(MultiAmmoCrateRecord, slots[12].quantity, 194);
+FA(BodyArmourRecord, initialamount, 144);
+FA(VehichleRecord, aioffset, 152);
+FA(VehichleRecord, aireturnlist, 154);
+FA(AircraftRecord, aioffset, 152);
+FA(AircraftRecord, aireturnlist, 154);
+FA(TankRecord, unkA4, 184);
+FA(TankRecord, unkA8, 188);
+FA(TankRecord, unkAC, 192);
+FA(TankRecord, unkB0, 196);
+FA(TankRecord, unkB4, 200);
+FA(TankRecord, unkB8, 204);
+FA(TankRecord, unkBC, 208);
+FA(TankRecord, unkC0, 212);
+FA(TintedGlassRecord, TintDist, 144);
+FA(TintedGlassRecord, CullDist, 148);
+FA(TintedGlassRecord, unk90, 160);
+#undef FA
+
+/* Which recorded model owner draws which model id (the editor reads the setup itself, from the pccg sidecar:
+ * pads, props, fields, AI lists; see port/mission/mission_setup.h). Only the renderer knows the owners. */
+static void writeModels(FILE *f)
 {
-    fprintf(f, "  \"props\": [");
-    int first = 1;
-    PropDefHeaderRecord *p = g_CurrentSetup.propDefs;
-    for (int i = 0; p != NULL && p->type != PROPDEF_END && i < 100000; i++, p = p + sizepropdef(p)) {
-        int pad = -1, model = -1, ai = -1;
-        if (isObjectType(p->type)) {
-            const ObjectRecord *o = (const ObjectRecord *)p;
-            pad = o->pad;
-            model = o->obj;
-        } else if (p->type == PROPDEF_GUARD) {
-            const GuardRecord *g = (const GuardRecord *)p;
-            pad = g->PadID;
-            model = g->BodyID;
-            ai = g->AIListID;
-        }
-        fprintf(f, "%s\n    {\"index\":%d,\"type\":%d,\"pad\":%d,\"model\":%d,\"item\":-1,\"ai\":%d,\"owner\":%d}",
-                first ? "" : ",", i, (int)p->type, pad, model, ai,
-                model < 0 ? -1 : modelOwnerOf(p->type == PROPDEF_GUARD, model));
-        first = 0;
+    fprintf(f, "  \"models\": [");
+    for (int i = 0; i < s_nModelOwners; i++) {
+        fprintf(f, "%s\n    {\"guard\":%s,\"model\":%d,\"owner\":%d}", i ? "," : "", s_modelOwner[i].guard ? "true" : "false",
+                s_modelOwner[i].model, s_modelOwner[i].owner);
     }
-    fprintf(f, "\n  ],\n");
+    fprintf(f, "\n  ]\n");
 }
 
-static void writeAilists(FILE *f)
-{
-    fprintf(f, "  \"ailists\": [");
-    int first = 1;
-    if (g_CurrentSetup.ailists != NULL) {
-        for (int i = 0; g_CurrentSetup.ailists[i].ailist != NULL; i++) {
-            fprintf(f, "%s%d", first ? "" : ",", g_CurrentSetup.ailists[i].ID);
-            first = 0;
-        }
-    }
-    fprintf(f, "]\n");
-}
+extern char *setup_text_pointers[];   /* src/game/chraidata.c: stage number -> "Usetup<name>Z" */
 
 static int writeJson(void)
 {
@@ -515,12 +596,12 @@ static int writeJson(void)
     FILE *f = fopen(path, "wb");
     if (f == NULL) return 1;
     fprintf(f, "{\n  \"version\": 1,\n  \"level\": \"%s\",\n  \"build\": \"%s\",\n", s_levelName, GE007_VERSION_HASH);
+    /* the setup row the editor reads from the pccg sidecar */
+    fprintf(f, "  \"setup\": \"%s\",\n", (s_stage >= 0 && s_stage <= 90 && setup_text_pointers[s_stage]) ? setup_text_pointers[s_stage] : "");
     writeRooms(f);
     writeStan(f);
     writePortals(f);
-    writePads(f);
-    writeProps(f);
-    writeAilists(f);
+    writeModels(f);
     fprintf(f, "}\n");
     return fclose(f) != 0;
 }

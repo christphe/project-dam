@@ -32,6 +32,7 @@
 #include "imgui_impl_sdl2.h"
 
 #include "doc.h"
+#include "filedialog.h"
 #include "editor_gl.h"
 #include "launch.h"
 #include "exportcache.h"
@@ -59,6 +60,11 @@ struct Options {
     float cam[5] = { 0, 0, 0, 0, 0 };
     float click[2] = { 0, 0 };
     std::string tool;
+    struct KeyAid { int frame, len; std::string spec; };
+    std::vector<KeyAid> keys;       // --key FRAME[xLEN]:SPEC, e.g. 8:ctrl+c or 10x30:rmb+ctrl (test aid)
+    bool hasMouseAt = false, logCam = false;
+    float mouseAt[2] = { 0, 0 };    // --mouse-at X,Y: the cursor rests there from frame 4
+    float mouseThen[3] = { -1, 0, 0 };   // --mouse-then FRAME,X,Y: from that frame it rests there instead
 };
 
 std::string dirOfExe(const char *argv0)
@@ -126,6 +132,16 @@ struct App {
     McpHttp http;
     int mcpPort = 0;
     bool looking = false, lmbDown = false, panning = false;
+    // opening / saving: the unsaved-changes guard, recent missions
+    std::function<void()> pending;     // what waits for the answer of the "Unsaved changes" dialog
+    bool askUnsaved = false, modalOpen = false, wantQuit = false;
+    bool askLevelSwitch = false;       // File > level Open while the mission is for another level
+    std::string levelSwitchTo;
+    std::vector<std::string> recent;   // last opened / saved missions, newest first
+    std::string recentFile, lastRecorded, lastTitle;
+    std::string prefsFile;             // ge-editor-prefs.txt next to the exe: remembered toggles
+    bool playCoop = false;             // Play: two players (GE_COOP=1 GE_PADS=2) or solo
+    bool logCam = false;               // --log-cam: print camera moves and wheel-zoom pixels to stderr (test aid)
     float panDist = 0;                 // pan: distance of the grabbed point
     float lmbX = 0, lmbY = 0;
     float vx = 0, vy = 0, vw = 1, vh = 1;     // the 3D view rectangle (window pixels, y down)
@@ -274,6 +290,48 @@ void applyClick(App &a, const Hit &h)
     }
 }
 
+void dragBegin(App &a, int hit, const Vec3 &org, const Vec3 &dir);
+
+void selectNewItem(App &a, const ItemRef &ref)
+{
+    a.doc.sel = Selection(); a.doc.sel.kind = Selection::ITEM; a.doc.sel.item = ref;
+}
+
+void copySelected(App &a)
+{
+    std::string err;
+    if (a.doc.sel.kind != Selection::ITEM) { a.say("copy: select a guard or object first"); return; }
+    if (a.doc.copyItem(a.doc.sel.item, a.doc.clip, err)) a.say("copied (Ctrl+V pastes it under the cursor)");
+    else a.say("copy: %s", err.c_str());
+}
+
+void pasteAtMouse(App &a, const Vec3 &org, const Vec3 &dir)
+{
+    std::string err;
+    if (!a.doc.clip.valid) { a.say("paste: nothing copied (Ctrl+C on a guard or object)"); return; }
+    if (!ensureMission(a)) return;
+    PadSpec ps;
+    if (!padFromHit(a, pickScene(a.doc, org, dir), ps)) { a.say("paste: point at a pad or the floor"); return; }
+    ItemRef ref;
+    if (a.doc.pasteItem(a.doc.clip, ps, ref, err)) { selectNewItem(a, ref); a.say("pasted"); }
+    else a.say("paste: %s", err.c_str());
+}
+
+void duplicateSelected(App &a, const Vec3 &org, const Vec3 &dir)
+{
+    std::string err;
+    if (a.doc.sel.kind != Selection::ITEM) { a.say("duplicate: select a guard or object first"); return; }
+    if (!ensureMission(a)) return;
+    ItemRef ref;
+    if (!a.doc.duplicateItem(a.doc.sel.item, nullptr, ref, err)) { a.say("duplicate: %s", err.c_str()); return; }
+    selectNewItem(a, ref);
+    if (a.doc.getTransform(a.doc.sel).movable) {
+        dragBegin(a, 4, org, dir);      // follows the mouse until the next click, like G
+        a.drag.keymove = true;
+    }
+    a.say("duplicated");
+}
+
 void reloadLevelGpu(App &a)
 {
     a.scene.setLevel(a.doc.hasLevel ? &a.doc.level : nullptr);
@@ -283,6 +341,8 @@ void reloadLevelGpu(App &a)
         a.cam.zfar = std::max(50000.0f, 4.0f * (a.doc.level.mx[0] - a.doc.level.mn[0] + a.doc.level.mx[2] - a.doc.level.mn[2]));
         snprintf(a.levelDir, sizeof a.levelDir, "%s", a.doc.level.dir.c_str());
         if (missionLevelNumber(a.doc.level.name.c_str()) >= 0) snprintf(a.pickLevel, sizeof a.pickLevel, "%s", a.doc.level.name.c_str());
+        // the mod panel's "Add" creates its mission for the loaded level unless told otherwise
+        if (missionLevelNumber(a.doc.level.name.c_str()) >= 0) snprintf(a.modNewLevel, sizeof a.modNewLevel, "%s", a.doc.level.name.c_str());
         a.say("level '%s': %zu rooms, %zu pads, %zu props, %d draw runs", a.doc.level.name.c_str(), a.doc.level.rooms.size(),
               a.doc.level.pads.size(), a.doc.level.props.size(), a.scene.runCount());
     }
@@ -349,6 +409,22 @@ struct Overlay {
         static const int e[12][2] = { { 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
         for (auto &k : e) line(c[k[0]], c[k[1]], col, th);
     }
+    // a box in an item's own frame, turned by the pad's yaw and put at pos
+    void boxYaw(const Vec3 &pos, const Vec3 &mn, const Vec3 &mx, float yawDeg, ImU32 col, float th = 1.0f) const
+    {
+        Vec3 c[8];
+        for (int i = 0; i < 8; i++) {
+            const Vec3 l = { (i & 1) ? mx[0] : mn[0], (i & 2) ? mx[1] : mn[1], (i & 4) ? mx[2] : mn[2] };
+            const Vec3 r = rotYaw(l, yawDeg);
+            c[i] = { pos[0] + r[0], pos[1] + r[1], pos[2] + r[2] };
+        }
+        static const int e[12][2] = { { 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
+        for (auto &k : e) line(c[k[0]], c[k[1]], col, th);
+        // the front (+z of the item) is the facing: a line from the middle of the front face outwards
+        const Vec3 f0 = rotYaw({ (mn[0] + mx[0]) * 0.5f, (mn[1] + mx[1]) * 0.5f, mx[2] }, yawDeg);
+        const Vec3 f1 = rotYaw({ (mn[0] + mx[0]) * 0.5f, (mn[1] + mx[1]) * 0.5f, mx[2] + 40.0f }, yawDeg);
+        line({ pos[0] + f0[0], pos[1] + f0[1], pos[2] + f0[2] }, { pos[0] + f1[0], pos[1] + f1[1], pos[2] + f1[2] }, col, th);
+    }
     void diamond(const Vec3 &p, float r, ImU32 col, bool fill) const
     {
         ImVec2 s;
@@ -372,6 +448,7 @@ float dist3(const Vec3 &a, const Vec3 &b)
 void drawOverlay(App &a, const Overlay &o)
 {
     const Doc &d = a.doc;
+    const OccupiedPads occ = occupiedPads(a.items);   // pads under a guard / object: drawn as the item
     const ImU32 white = IM_COL32(235, 235, 240, 255), yellow = IM_COL32(255, 220, 40, 255), red = IM_COL32(235, 70, 60, 255),
                 orange = IM_COL32(240, 160, 50, 255), green = IM_COL32(80, 220, 110, 255), grey = IM_COL32(130, 130, 140, 150),
                 cyan = IM_COL32(70, 200, 230, 160), faint = IM_COL32(90, 200, 120, 90), blue = IM_COL32(120, 170, 255, 255);
@@ -388,6 +465,7 @@ void drawOverlay(App &a, const Overlay &o)
         if (a.showPads)
             for (auto &p : d.level.pads) {
                 bool sel = d.sel.kind == Selection::PAD && d.sel.num == p.num;
+                if (!sel && occ.level.count(p.num)) continue;   // a guard's / object's pad: shown as the item
                 if (!sel && dist3(p.pos, a.cam.pos) > 12000) continue;
                 o.diamond({ p.pos[0], p.pos[1] + 8, p.pos[2] }, sel ? 8.0f : 4.5f, sel ? yellow : blue, true);
                 if (sel) {
@@ -401,17 +479,19 @@ void drawOverlay(App &a, const Overlay &o)
             const MissionPad &p = d.mission.pads[i];
             Vec3 pos = { p.pos[0], p.pos[1], p.pos[2] };
             bool sel = d.sel.kind == Selection::MPAD && d.sel.id == p.id;
+            if (!sel && occ.mission.count(p.id)) continue;
             o.diamond({ pos[0], pos[1] + 8, pos[2] }, sel ? 9.0f : 6.0f, sel ? yellow : green, true);
             o.text(pos, p.id, sel ? yellow : green);
         }
     for (const Item &it : a.items) {
         Vec3 mn, mx;
-        if (!itemBounds(d, it, mn, mx)) continue;
+        if (it.assigned || !itemBounds(d, it, mn, mx)) continue;     // a carried weapon is drawn with its guard only
         bool sel = itemIsSel(a, it);
         ImU32 col = it.removed ? grey : it.added ? green : it.moved ? yellow : it.guard ? red : orange;
         if (sel) col = IM_COL32(255, 255, 255, 255);
-        if (it.removed && !sel) { o.box(mn, mx, col, 1.0f); }
-        else o.box(mn, mx, col, sel ? 2.5f : 1.2f);
+        Vec3 lmn, lmx;
+        itemLocalBox(d, it, lmn, lmx);
+        o.boxYaw(it.pos, lmn, lmx, it.yawDeg, col, it.removed && !sel ? 1.0f : sel ? 2.5f : 1.2f);
         if (it.moved && d.hasLevel) {
             const LPad *op = d.level.pad(it.origPad);
             if (op) o.line(op->pos, it.pos, yellow, 1.0f);
@@ -434,15 +514,180 @@ void doPlay(App &a)
 {
     std::string err;
     a.doc.gameExe = a.gameExe;
-    if (a.doc.testRun(a.spawn, err)) a.say("started: %s", a.doc.lastPlay.c_str());
+    if (a.doc.testRun(a.spawn, a.playCoop, err)) a.say("started%s: %s", a.playCoop ? " (co-op)" : "", a.doc.lastPlay.c_str());
     else a.say("play: %s", err.c_str());
 }
 
 void doSave(App &a)
 {
     std::string err;
-    if (a.doc.saveMission(a.missionPath, err)) a.say("saved %s", a.doc.missionPath.c_str());
-    else a.say("save: %s", err.c_str());
+    if (a.doc.saveMission(a.missionPath, err)) {
+        snprintf(a.missionPath, sizeof a.missionPath, "%s", a.doc.missionPath.c_str());
+        a.say("saved %s", a.doc.missionPath.c_str());
+    } else a.say("save: %s", err.c_str());
+}
+
+// ---- opening and saving missions ----
+
+std::string missionStartDir(const App &a)
+{
+    std::string dir;
+    if (a.doc.hasMission && !a.doc.missionPath.empty()) {
+        const size_t s = a.doc.missionPath.find_last_of("/\\");
+        if (s != std::string::npos) dir = a.doc.missionPath.substr(0, s);
+    }
+    if (dir.empty() || !std::filesystem::exists(dir)) {
+        dir = a.doc.gameDataDir() + "/missions";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+    }
+    return dir;
+}
+
+void doSaveAs(App &a)
+{
+    std::string path, err;
+    if (!a.doc.hasMission) { a.say("no mission to save"); return; }
+    if (!fileDialogSaveMission(missionStartDir(a), path)) return;
+    if (a.doc.saveMission(path, err)) {
+        snprintf(a.missionPath, sizeof a.missionPath, "%s", a.doc.missionPath.c_str());
+        a.say("saved %s", a.doc.missionPath.c_str());
+    } else a.say("save as: %s", err.c_str());
+}
+
+void doOpenPath(App &a, const std::string &path)
+{
+    std::string err;
+    if (a.doc.openMission(path, err)) {
+        snprintf(a.missionPath, sizeof a.missionPath, "%s", path.c_str());
+        a.say("opened %s", path.c_str());
+    } else a.say("open mission: %s", err.c_str());
+}
+
+// Runs `fn` now, or after the answer of the "Unsaved changes" dialog when the open mission has unsaved edits.
+void guarded(App &a, std::function<void()> fn)
+{
+    if (a.doc.hasMission && a.doc.dirty) { a.pending = std::move(fn); a.askUnsaved = true; }
+    else fn();
+}
+
+void doOpenDialog(App &a)
+{
+    std::string path;
+    if (fileDialogOpenMission(missionStartDir(a), path)) doOpenPath(a, path);
+}
+
+// File > level Open with a mission made for another level: move the mission to the new level (its pads
+// and items keep their positions, now read against that level), or cancel. Loading the level under the
+// mission without changing it is what used to happen silently, and Play then refused the mission.
+void levelSwitchModal(App &a)
+{
+    if (a.askLevelSwitch) { ImGui::OpenPopup("Mission level"); a.askLevelSwitch = false; }
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.4f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal("Mission level", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    a.modalOpen = true;
+    ImGui::Text("The open mission \"%s\" is for %s.", a.doc.mission.name, a.doc.mission.level);
+    ImGui::Text("Open %s:", a.levelSwitchTo.c_str());
+    ImGui::Separator();
+    char move[96];
+    snprintf(move, sizeof move, "Move the mission to %s", a.levelSwitchTo.c_str());
+    if (ImGui::Button(move)) {
+        std::string err;
+        if (a.doc.setMissionLevel(a.levelSwitchTo, err)) {
+            a.say("the mission is now for %s (not saved yet)", a.levelSwitchTo.c_str());
+            requestLevel(a, a.levelSwitchTo, false);
+        } else a.say("mission level: %s", err.c_str());
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(100, 0))) {
+        snprintf(a.pickLevel, sizeof a.pickLevel, "%s", a.doc.hasLevel ? a.doc.level.name.c_str() : a.doc.mission.level);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void unsavedModal(App &a)
+{
+    if (a.askUnsaved) { ImGui::OpenPopup("Unsaved changes"); a.askUnsaved = false; }
+    a.modalOpen = false;
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.4f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal("Unsaved changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    a.modalOpen = true;
+    ImGui::Text("Unsaved changes in %s.", a.doc.mission.name);
+    ImGui::TextDisabled("%s", a.doc.missionPath.c_str());
+    ImGui::Separator();
+    auto finish = [&](bool run) {
+        std::function<void()> fn = std::move(a.pending);
+        a.pending = nullptr;
+        ImGui::CloseCurrentPopup();
+        if (run && fn) fn();
+    };
+    if (ImGui::Button("Save", ImVec2(100, 0))) {
+        doSave(a);
+        if (!a.doc.dirty) finish(true);      // a failed save keeps the dialog (and the mission) open
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Discard", ImVec2(100, 0))) { a.doc.dirty = false; finish(true); }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(100, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) finish(false);
+    ImGui::EndPopup();
+}
+
+// ---- remembered toggles: a small text file next to the editor, "key=value" lines ----
+
+void loadPrefs(App &a)
+{
+    std::string text;
+    if (a.prefsFile.empty() || !readFile(a.prefsFile, text)) return;
+    a.playCoop = text.find("coop=1") != std::string::npos;
+}
+
+void savePrefs(App &a)
+{
+    if (a.prefsFile.empty()) return;
+    FILE *f = fopen(a.prefsFile.c_str(), "wb");
+    if (!f) return;
+    fprintf(f, "coop=%d\n", a.playCoop ? 1 : 0);
+    fclose(f);
+}
+
+// ---- recent missions: a small text file next to the editor, one path per line ----
+
+void recentLoad(App &a)
+{
+    a.recent.clear();
+    std::string text;
+    if (a.recentFile.empty() || !readFile(a.recentFile, text)) return;
+    size_t p = 0;
+    while (p < text.size() && a.recent.size() < 8) {
+        size_t e = text.find_first_of("\r\n", p);
+        if (e == std::string::npos) e = text.size();
+        std::string line = text.substr(p, e - p);
+        p = e + 1;
+        std::error_code ec;
+        if (!line.empty() && std::filesystem::exists(line, ec)) a.recent.push_back(line);
+    }
+}
+
+void recentNote(App &a, const std::string &path)
+{
+    std::error_code ec;
+    if (path.empty() || !std::filesystem::exists(path, ec)) return;
+    for (size_t i = 0; i < a.recent.size();) { if (a.recent[i] == path) a.recent.erase(a.recent.begin() + (long)i); else i++; }
+    a.recent.insert(a.recent.begin(), path);
+    while (a.recent.size() > 8) a.recent.pop_back();
+    if (a.recentFile.empty()) return;
+    FILE *f = fopen(a.recentFile.c_str(), "wb");
+    if (!f) return;
+    for (const std::string &r : a.recent) fprintf(f, "%s\n", r.c_str());
+    fclose(f);
+}
+
+std::string shortPath(const std::string &p, size_t n)
+{
+    if (p.size() <= n) return p;
+    return "..." + p.substr(p.size() - (n - 3));
 }
 
 // Renders the 3D view (no panels, no markers: those are ImGui) and saves a centred 4:3 crop of it,
@@ -521,7 +766,23 @@ void toolbar(App &a, float W, float topH)
     ImGui::SameLine();
     if (ImGui::Button("Play")) doPlay(a);
     ImGui::SameLine();
-    ImGui::Text("spawn: %s", a.spawn.empty() ? a.doc.defaultSpawn().c_str() : a.spawn.c_str());
+    if (ImGui::Checkbox("Co-op", &a.playCoop)) savePrefs(a);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Play with two players (two pads), else solo");
+    ImGui::SameLine();
+    {   // what Play will use: the level's own start unless a pad was chosen with "Set as spawn"
+        char label[96];
+        char *end = nullptr;
+        const long n = a.spawn.empty() ? -1 : strtol(a.spawn.c_str(), &end, 0);
+        if (a.spawn.empty()) snprintf(label, sizeof label, "spawn: level start");
+        else if (end && !*end) snprintf(label, sizeof label, "spawn: pad 0x%lx", n);
+        else snprintf(label, sizeof label, "spawn: %s", a.spawn.c_str());
+        ImGui::TextUnformatted(label);
+        if (!a.spawn.empty()) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x##spawn")) a.spawn.clear();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back to the level's own start");
+        }
+    }
     ImGui::SameLine();
     ImGui::TextUnformatted("|"); ImGui::SameLine();
     ImGui::Checkbox("Rooms", &a.showRooms); ImGui::SameLine();
@@ -573,14 +834,16 @@ void modPanel(App &a)
     ImGui::SetNextItemWidth(-90);
     ImGui::InputText("##moddir", a.modDirBuf, sizeof a.modDirBuf);
     ImGui::SameLine();
-    if (ImGui::Button("Open/new##mod")) {
-        if (d.openMod(a.modDirBuf, err)) {
+    if (ImGui::Button("Open/new##mod")) guarded(a, [&a] {
+        std::string e2;
+        Doc &d2 = a.doc;
+        if (d2.openMod(a.modDirBuf, e2)) {
             invalidateThumbs(a);
-            a.say("mod '%s' (%d missions)", d.camp.name, d.camp.nmissions);
-            if (!d.modNotice.empty()) a.say("%s", d.modNotice.c_str());
+            a.say("mod '%s' (%d missions)", d2.camp.name, d2.camp.nmissions);
+            if (!d2.modNotice.empty()) a.say("%s", d2.modNotice.c_str());
         }
-        else a.say("mod: %s", err.c_str());
-    }
+        else a.say("mod: %s", e2.c_str());
+    });
     if (!d.hasMod) { ImGui::TextDisabled("A mod is a campaign: mods/<mod>/campaign.json + one folder per mission."); return; }
     Campaign &c = d.camp;
     {   // the id keys the mod's save: made once, read-only
@@ -634,10 +897,11 @@ void modPanel(App &a)
         ImGui::EndGroup();
         ImGui::PopID();
     }
-    if (act >= 0) {
-        if (d.modOpenMission(act, err)) { snprintf(a.missionPath, sizeof a.missionPath, "%s", d.missionPath.c_str()); a.say("opened %s", d.missionPath.c_str()); }
-        else a.say("open: %s", err.c_str());
-    }
+    if (act >= 0) guarded(a, [&a, act] {
+        std::string e2;
+        if (a.doc.modOpenMission(act, e2)) { snprintf(a.missionPath, sizeof a.missionPath, "%s", a.doc.missionPath.c_str()); a.say("opened %s", a.doc.missionPath.c_str()); }
+        else a.say("open: %s", e2.c_str());
+    });
     if (from >= 0) d.modMoveMission(from, to, err);
     ImGui::Separator();
     ImGui::SetNextItemWidth(130);
@@ -646,13 +910,13 @@ void modPanel(App &a)
     ImGui::SetNextItemWidth(80);
     ImGui::InputText("##mlv", a.modNewLevel, sizeof a.modNewLevel);
     ImGui::SameLine();
-    if (ImGui::Button("Add")) {
-        std::string folder;
-        if (d.modAddMission(a.modNewName, a.modNewLevel, "", folder, err)) {
-            snprintf(a.missionPath, sizeof a.missionPath, "%s", d.missionPath.c_str());
+    if (ImGui::Button("Add")) guarded(a, [&a] {
+        std::string folder, e2;
+        if (a.doc.modAddMission(a.modNewName, a.modNewLevel, "", folder, e2)) {
+            snprintf(a.missionPath, sizeof a.missionPath, "%s", a.doc.missionPath.c_str());
             a.say("added mission '%s'", folder.c_str());
-        } else a.say("add mission: %s", err.c_str());
-    }
+        } else a.say("add mission: %s", e2.c_str());
+    });
     ImGui::TextDisabled("Capture (toolbar) writes thumb.png into the open mission's folder.");
 }
 
@@ -663,6 +927,17 @@ void leftPanel(App &a, float x, float y, float w, float h)
     ImGui::Begin("Hierarchy", nullptr, kPanel);
     std::string err;
     if (ImGui::CollapsingHeader("File", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (a.doc.hasMission) {
+            ImGui::TextColored(ImVec4(0.95f, 0.95f, 0.6f, 1), "%s%s", a.doc.mission.name, a.doc.dirty ? " *" : "");
+            // the mission's own level, in red when the loaded level is another one (Play refuses it then)
+            const bool other = a.doc.hasLevel && a.doc.level.name != a.doc.mission.level;
+            ImGui::SameLine();
+            if (other) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1), "(%s, loaded: %s)", a.doc.mission.level, a.doc.level.name.c_str());
+            else ImGui::TextDisabled("(%s)", a.doc.mission.level);
+            ImGui::TextDisabled("%s", shortPath(a.doc.missionPath, 33).c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", a.doc.missionPath.c_str());
+        } else ImGui::TextDisabled("no mission open");
+        ImGui::Separator();
         // the level: a solo level, exported by the game the first time and then kept next to it
         ImGui::SetNextItemWidth(-160);
         if (ImGui::BeginCombo("##lvl", a.pickLevel)) {
@@ -674,7 +949,13 @@ void leftPanel(App &a, float x, float y, float w, float h)
         }
         ImGui::SameLine();
         ImGui::BeginDisabled(a.job.running);
-        if (ImGui::Button("Open##lvl")) requestLevel(a, a.pickLevel, false);
+        if (ImGui::Button("Open##lvl")) {
+            // a mission made for another level: ask before loading this one under it
+            if (a.doc.hasMission && a.doc.mission.level[0] && strcmp(a.doc.mission.level, a.pickLevel) != 0) {
+                a.levelSwitchTo = a.pickLevel;
+                a.askLevelSwitch = true;
+            } else requestLevel(a, a.pickLevel, false);
+        }
         ImGui::SameLine();
         if (ImGui::Button("Re-export")) requestLevel(a, a.pickLevel, true);
         ImGui::EndDisabled();
@@ -689,20 +970,45 @@ void leftPanel(App &a, float x, float y, float w, float h)
             }
             ImGui::TreePop();
         }
+        ImGui::TextUnformatted("mission file");
         ImGui::SetNextItemWidth(-60);
         ImGui::InputText("##mpath", a.missionPath, sizeof a.missionPath);
         ImGui::SameLine();
-        if (ImGui::Button("Open")) {
-            if (a.doc.openMission(a.missionPath, err)) a.say("opened %s", a.missionPath); else a.say("open mission: %s", err.c_str());
+        if (ImGui::Button("Open")) guarded(a, [&a] { doOpenPath(a, a.missionPath); });
+        if (fileDialogAvailable()) {
+            if (ImGui::Button("Open...")) guarded(a, [&a] { doOpenDialog(a); });
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!a.doc.hasMission);
+            if (ImGui::Button("Save as...")) doSaveAs(a);
+            ImGui::EndDisabled();
+        }
+        if (!a.recent.empty()) {
+            ImGui::TextDisabled("recent");
+            for (size_t i = 0; i < a.recent.size(); i++) {
+                ImGui::PushID((int)i);
+                const std::string path = a.recent[i];
+                std::string label = path;
+                const size_t s1 = label.find_last_of("/\\");
+                if (s1 != std::string::npos) {   // <folder>/mission.json: the folder says more than the file
+                    const size_t s0 = label.find_last_of("/\\", s1 - 1);
+                    label = label.substr(s0 == std::string::npos ? 0 : s0 + 1);
+                }
+                if (ImGui::Selectable(shortPath(label, 42).c_str())) guarded(a, [&a, path] { doOpenPath(a, path); });
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", path.c_str());
+                ImGui::PopID();
+            }
         }
         ImGui::SetNextItemWidth(-110);
         ImGui::InputText("##nname", a.newName, sizeof a.newName);
         ImGui::SameLine();
         if (ImGui::Button("New mission")) {   // on the level above (loaded, or picked: it is exported then)
-            if (a.doc.newMission(a.newName, a.doc.hasLevel ? "" : a.pickLevel, err)) {
-                snprintf(a.missionPath, sizeof a.missionPath, "%s", a.doc.missionPath.c_str());
-                a.say("new mission for %s", a.doc.mission.level);
-            } else a.say("new mission: %s", err.c_str());
+            guarded(a, [&a] {
+                std::string e2;
+                if (a.doc.newMission(a.newName, a.doc.hasLevel ? "" : a.pickLevel, e2)) {
+                    snprintf(a.missionPath, sizeof a.missionPath, "%s", a.doc.missionPath.c_str());
+                    a.say("new mission for %s (saved to %s)", a.doc.mission.level, a.doc.missionPath.c_str());
+                } else a.say("new mission: %s", e2.c_str());
+            });
         }
         ImGui::SetNextItemWidth(-60);
         ImGui::InputText("##game", a.gameExe, sizeof a.gameExe);
@@ -714,9 +1020,6 @@ void leftPanel(App &a, float x, float y, float w, float h)
         ImGui::TextUnformatted("thumb");
         ImGui::SetNextItemWidth(-90);
         ImGui::SliderFloat("old photo", &a.thumbIntensity, 0.0f, 1.5f, "%.2f");
-        if (a.doc.hasMission) {
-            ImGui::Text("%s%s", a.doc.mission.name, a.doc.dirty ? " *" : "");
-        }
     }
     if (ImGui::CollapsingHeader("Mod (campaign)", ImGuiTreeNodeFlags_DefaultOpen)) modPanel(a);
     if (a.doc.hasLevel && ImGui::CollapsingHeader("Rooms")) {
@@ -771,7 +1074,7 @@ void leftPanel(App &a, float x, float y, float w, float h)
         ImGui::PushID(pass);
         ImGui::BeginChild("items", ImVec2(0, 220), ImGuiChildFlags_Borders);
         std::vector<const Item *> shown;
-        for (const Item &it : a.items) if (it.guard == guards) shown.push_back(&it);
+        for (const Item &it : a.items) if (it.guard == guards && !it.assigned) shown.push_back(&it);
         ImGuiListClipper clip;
         clip.Begin((int)shown.size());
         while (clip.Step())
@@ -878,6 +1181,46 @@ void envPanel(App &a)
     }
 }
 
+// All the record fields of the selected guard / object (mission_fields.h). Editable for an item the mission
+// added (grey = still the template's value; editing it makes it the item's own); read-only for original props:
+// copy one (Ctrl+C, Ctrl+V / Ctrl+D) to change it.
+void fieldsPanel(App &a, const Item &it)
+{
+    const MissionField *f;
+    const int type = it.guard ? MISSION_REC_GUARD : it.type;
+    const int n = missionRecFields(type, &f);
+    if (n <= 0) return;
+    ImGui::Separator();
+    ImGui::TextWrapped("%s", it.added ? "Fields (grey: the template's value, edit to set)" : "Fields (original, read-only: copy to edit)");
+    if (it.guard) ImGui::TextWrapped("body = model (65535 = random); head -1 = random");
+    const char *group = missionRecGroup(type);
+    bool inGroup = false;
+    for (int i = 0; i < n; i++) {
+        if (f[i].grouped && !inGroup && group) { ImGui::TextColored(ImVec4(0.7f, 0.8f, 1, 1), "%s", group); inGroup = true; }
+        const bool have = (it.f.set >> i) & 1;
+        double v = have ? it.f.v[i] : 0;
+        const bool own = !it.added || ((it.given >> i) & 1);
+        ImGui::PushID(i);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(f[i].name);
+        ImGui::SameLine(150);
+        ImGui::SetNextItemWidth(120);
+        const char *fmt = (f[i].kind == MF_FLOAT || f[i].kind == MF_FIXED) ? "%.10g" : "%.0f";
+        if (!it.added) {
+            ImGui::TextDisabled((f[i].kind == MF_FLOAT || f[i].kind == MF_FIXED) ? "%.10g" : "%.0f", v);
+        } else {
+            if (!own) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1));
+            ImGui::InputScalar("##v", ImGuiDataType_Double, &v, nullptr, nullptr, fmt);
+            if (!own) ImGui::PopStyleColor();
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                std::string err;
+                if (!a.doc.setItemField(a.doc.sel.item, i, v, err)) a.say("field: %s", err.c_str());
+            }
+        }
+        ImGui::PopID();
+    }
+}
+
 void rightPanel(App &a, float x, float y, float w, float h)
 {
     ImGui::SetNextWindowPos(ImVec2(x, y));
@@ -944,18 +1287,22 @@ void rightPanel(App &a, float x, float y, float w, float h)
         if (it->hasPos) ImGui::Text("pos   %.0f %.0f %.0f", it->pos[0], it->pos[1], it->pos[2]);
         ImGui::Text("type  %d", it->type);
         ImGui::Text("model %d", it->model);
-        if (it->guard) { ImGui::Text("ai    0x%x", it->ai); if (it->added) ImGui::Text("weapon %d", it->weapon); }
+        if (it->guard) {
+            ImGui::Text("ai    0x%x", it->ai);
+            if (it->weapons.empty()) ImGui::TextDisabled("weapons: none");
+            for (size_t k = 0; k < it->weapons.size(); k++) ImGui::Text("weapon %zu: item %d  model %d", k + 1, it->weapons[k].item, it->weapons[k].model);
+        }
         else ImGui::Text("item  %d", it->item);
         if (it->owner >= 0) ImGui::Text("recorded model: owner %d", it->owner); else ImGui::TextDisabled("no recorded model (marker)");
         ImGui::Separator();
         if (it->added) {
             if (!(a.editFor == sel.item)) {
                 a.editFor = sel.item;
-                a.editA = it->guard ? it->ai : it->type; a.editB = it->guard ? it->weapon : it->item; a.editC = it->model;
+                a.editA = it->guard ? it->ai : it->type; a.editB = it->guard ? (it->weapons.empty() ? -1 : it->weapons[0].item) : it->item; a.editC = it->model;
             }
             ImGui::InputInt("model", &a.editC);
             ImGui::InputInt(it->guard ? "ai list" : "type", &a.editA);
-            ImGui::InputInt(it->guard ? "weapon" : "item", &a.editB);
+            ImGui::InputInt(it->guard ? "weapon 1" : "item", &a.editB);
             if (ImGui::Button("Apply")) {
                 if (!a.doc.setAddedFields(sel.item, a.editC, a.editA, a.editB, err)) a.say("edit: %s", err.c_str());
             }
@@ -971,10 +1318,9 @@ void rightPanel(App &a, float x, float y, float w, float h)
             if (!a.doc.moveItem(sel.item, ps, err)) a.say("move: %s", err.c_str());
         }
         if (ImGui::Button("Remove")) { if (!a.doc.removeItem(sel.item, err)) a.say("remove: %s", err.c_str()); }
-        ImGui::SameLine();
-        if (ImGui::Button("Spawn here")) a.spawn = padLabel(it->pad);
         ImGui::TextWrapped("Tool Move: click a pad or the floor to move it there.");
         transformFields(a);
+        fieldsPanel(a, *it);
         break;
     }
     }
@@ -1255,12 +1601,28 @@ void cameraInput(App &a, bool viewHovered)
         a.panning = true;
     }
     if (viewHovered && io.MouseWheel != 0) {
-        Vec3 f = a.cam.forward();
-        float s = a.cam.speed * 0.25f * io.MouseWheel;
-        for (int i = 0; i < 3; i++) a.cam.pos[i] += f[i] * s;
+        // zoom toward the cursor: along the cursor ray, 15% of the distance to the scene point under it per notch
+        // (wheel up = toward, down = away), so the point stays under the cursor and is never reached or passed
+        Vec3 o, d;
+        a.cam.ray(io.MousePos.x - a.vx, io.MousePos.y - a.vy, a.vw, a.vh, o, d);
+        const Hit h = pickScene(a.doc, o, d);
+        float step;
+        if (h.kind != Hit::NONE && h.t > 1.0f) step = h.t * (1.0f - powf(0.85f, io.MouseWheel));
+        else step = a.cam.speed * 0.25f * io.MouseWheel;     // nothing under the cursor: the current step, still along the cursor ray
+        const Mat4 vpBefore = mat4Mul(a.cam.proj(a.vw / a.vh), a.cam.view());
+        for (int i = 0; i < 3; i++) a.cam.pos[i] += d[i] * step;
+        if (a.logCam && h.kind != Hit::NONE) {
+            const Vec3 pt = { o[0] + d[0] * h.t, o[1] + d[1] * h.t, o[2] + d[2] * h.t };
+            float b[2] = { 0, 0 }, n[2] = { 0, 0 };
+            const Mat4 vpAfter = mat4Mul(a.cam.proj(a.vw / a.vh), a.cam.view());
+            projectPoint(vpBefore, pt, 0, 0, a.vw, a.vh, b);
+            projectPoint(vpAfter, pt, 0, 0, a.vw, a.vh, n);
+            fprintf(stderr, "zoom: wheel %.1f, point %.1f %.1f %.1f at distance %.1f -> %.1f; its pixel before %.2f,%.2f after %.2f,%.2f (cursor %.1f,%.1f)\n",
+                    io.MouseWheel, pt[0], pt[1], pt[2], h.t, h.t - step, b[0], b[1], n[0], n[1], io.MousePos.x - a.vx, io.MousePos.y - a.vy);
+        }
     }
     if (io.WantTextInput) return;
-    if (!a.looking && !viewHovered) return;
+    if (!a.looking) return;     // the movement keys fly only while the right button is held: Ctrl+C / G / X never move the camera
     float s = a.cam.speed * io.DeltaTime * (io.KeyShift ? 4.0f : 1.0f);
     Vec3 f = a.cam.forward(), r = a.cam.right();
     float fw = 0, rt = 0, up = 0;
@@ -1292,6 +1654,8 @@ void frameUi(App &a, int winW, int winH, bool &quit)
     leftPanel(a, 0, topH, leftW, H - topH);
     rightPanel(a, W - rightW, topH, rightW, H - topH - botH);
     bottomPanel(a, leftW, H - botH, W - leftW, botH);
+    unsavedModal(a);
+    levelSwitchModal(a);
 
     const ImVec2 mp = io.MousePos;
     const bool inView = mp.x >= a.vx && mp.x < a.vx + a.vw && mp.y >= a.vy && mp.y < a.vy + a.vh;
@@ -1358,8 +1722,19 @@ void frameUi(App &a, int winW, int winH, bool &quit)
 
     // shortcuts
     if (!io.WantTextInput) {
+        if (viewHovered && io.KeyCtrl && !io.KeyShift && !a.looking && a.drag.mode == App::Drag::NONE) {
+            // Ctrl+C copies the selected guard / object, Ctrl+V pastes a new one under the cursor, Ctrl+D duplicates
+            // it in place and starts a move that follows the mouse until the next click
+            if (ImGui::IsKeyPressed(ImGuiKey_C, false)) copySelected(a);
+            if (ImGui::IsKeyPressed(ImGuiKey_V, false)) pasteAtMouse(a, mOrg, mDir);
+            if (ImGui::IsKeyPressed(ImGuiKey_D, false)) duplicateSelected(a, mOrg, mDir);
+        }
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) { std::string e; a.doc.undo(e); }
-        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) doSave(a);
+        if (!a.modalOpen) {
+            if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_S, false)) doSave(a);
+            if (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_S, false) && fileDialogAvailable()) doSaveAs(a);
+            if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_O, false) && fileDialogAvailable()) guarded(a, [&a] { doOpenDialog(a); });
+        }
         if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && a.doc.sel.kind == Selection::ITEM) { std::string e; a.doc.removeItem(a.doc.sel.item, e); }
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) a.tool = App::T_SELECT;
         if (ImGui::IsKeyPressed(ImGuiKey_F, false) && !io.KeyCtrl) {
@@ -1397,7 +1772,15 @@ void usage()
          "    --screenshot F.png [--frames N]   render N frames, save the window to a PNG and exit\n"
          "    --cam x,y,z,yaw,pitch             start camera (radians)\n"
          "    --click X,Y [--tool select|guard|object|move]   test aid: click the view at window pixel X,Y on frame 3\n"
-         "  Camera: right mouse = look, WASD/ZQSD = move, Shift = fast, Space/Ctrl = up/down, wheel = dolly.");
+         "    --key FRAME[xLEN]:SPEC            test aid: key / button / wheel events, SPEC = ctrl+c, ctrl+d, rmb+ctrl, w, wheel1, wheel-2, quit ...\n"
+         "    --mouse-at X,Y                    test aid: the cursor rests at window pixel X,Y from frame 4\n"
+         "    --mouse-then FRAME,X,Y            test aid: from that frame the cursor rests at X,Y instead\n"
+         "    --log-cam                         test aid: print camera moves and the wheel-zoom pixel check to stderr\n"
+         "  Camera: hold the right mouse button to fly: mouse = look, WASD/ZQSD/arrows = move, Space = up, Ctrl = down, Shift = fast.\n"
+         "          The movement keys do nothing without the right button, so shortcuts (Ctrl+C/V/D, G, X/Y/Z) never move the camera.\n"
+         "          Middle button = pan, mouse wheel = zoom toward the cursor (15% of the distance to the point under it per notch).\n"
+         "  Edit: Ctrl+C copies the selected guard or object, Ctrl+V pastes it under the cursor, Ctrl+D duplicates it and moves the copy\n"
+         "        with the mouse until the next click; G grabs, X/Y/Z lock an axis, Ctrl+Z undoes (the view must be hovered).");
 }
 
 bool parseArgs(int argc, char **argv, Options &o)
@@ -1423,6 +1806,18 @@ bool parseArgs(int argc, char **argv, Options &o)
             o.hasClick = sscanf(argv[++i], "%f,%f", &o.click[0], &o.click[1]) == 2;
         } else if (s == "--drag" && i + 1 < argc) {
             o.hasDrag = sscanf(argv[++i], "%f,%f,%f,%f", &o.drag[0], &o.drag[1], &o.drag[2], &o.drag[3]) == 4;
+        } else if (s == "--key" && i + 1 < argc) {
+            int fr = 0, len = 2, used = 0;
+            const char *v = argv[++i];
+            if (sscanf(v, "%d%n", &fr, &used) >= 1) {
+                if (v[used] == 'x') { int l = 0, u2 = 0; if (sscanf(v + used + 1, "%d%n", &l, &u2) >= 1) { len = l; used += 1 + u2; } }
+                if (v[used] == ':') o.keys.push_back({ fr, len, std::string(v + used + 1) });
+            }
+        } else if (s == "--log-cam") { o.logCam = true;
+        } else if (s == "--mouse-then" && i + 1 < argc) {
+            sscanf(argv[++i], "%f,%f,%f", &o.mouseThen[0], &o.mouseThen[1], &o.mouseThen[2]);
+        } else if (s == "--mouse-at" && i + 1 < argc) {
+            o.hasMouseAt = sscanf(argv[++i], "%f,%f", &o.mouseAt[0], &o.mouseAt[1]) == 2;
         } else if (s == "--mouse-click") { o.mouseClickMode = true;
         } else if (s == "--mouse-middle") { o.mouseMiddle = true;
         } else if (s == "--mouse-drag" && i + 1 < argc) {
@@ -1569,6 +1964,12 @@ int main(int argc, char **argv)
 
     bool quit = false;
     int frame = 0;
+    app.logCam = opt.logCam;
+    app.recentFile = exeDir + "ge-editor-recent.txt";
+    app.prefsFile = exeDir + "ge-editor-prefs.txt";
+    loadPrefs(app);
+    recentLoad(app);
+    Vec3 lastCam = app.cam.pos;
     while (!quit) {
         SDL_Event e;
         static ImVec2 mdStart;
@@ -1608,10 +2009,42 @@ int main(int argc, char **argv)
                 fprintf(stderr, "mouse-drag: after release item at %.0f %.0f %.0f, undo steps %zu\n", t1.pos[0], t1.pos[1], t1.pos[2], app.doc.undoStack.size());
             }
         }
+        if (opt.hasMouseAt && frame >= 4 && !opt.hasMouseDrag) {   // test aid: the cursor rests at --mouse-at
+            if (frame == 4) {
+                SDL_Event en; memset(&en, 0, sizeof en);
+                en.type = SDL_WINDOWEVENT; en.window.windowID = SDL_GetWindowID(app.win); en.window.event = SDL_WINDOWEVENT_ENTER;
+                SDL_PushEvent(&en);
+            }
+            SDL_Event ev; memset(&ev, 0, sizeof ev);
+            ev.type = SDL_MOUSEMOTION; ev.motion.windowID = SDL_GetWindowID(app.win); ev.motion.x = (int)opt.mouseAt[0]; ev.motion.y = (int)opt.mouseAt[1];  // (the ImGui event below wins)
+            SDL_PushEvent(&ev);
+        }
+        for (const Options::KeyAid &k : opt.keys) {   // test aid: key / button / wheel events through ImGui's input queue
+            const bool on = frame >= k.frame && frame < k.frame + k.len;
+            const bool edge = frame == k.frame + k.len;      // release one frame after
+            if (!on && !edge) continue;
+            ImGuiIO &kio = ImGui::GetIO();
+            std::string t = k.spec;
+            for (size_t p0 = 0; p0 <= t.size();) {
+                size_t p1 = t.find('+', p0);
+                if (p1 == std::string::npos) p1 = t.size();
+                const std::string tok = t.substr(p0, p1 - p0);
+                p0 = p1 + 1;
+                if (tok == "ctrl") kio.AddKeyEvent(ImGuiMod_Ctrl, on);
+                else if (tok == "shift") kio.AddKeyEvent(ImGuiMod_Shift, on);
+                else if (tok == "rmb") kio.AddMouseButtonEvent(1, on);
+                else if (tok == "space") kio.AddKeyEvent(ImGuiKey_Space, on);
+                else if (tok == "quit") { if (frame == k.frame) { SDL_Event q; memset(&q, 0, sizeof q); q.type = SDL_QUIT; SDL_PushEvent(&q); } }
+                else if (tok.compare(0, 5, "wheel") == 0) { if (frame == k.frame) kio.AddMouseWheelEvent(0, (float)atof(tok.c_str() + 5)); }
+                else if (tok.size() == 1 && tok[0] >= 'a' && tok[0] <= 'z') kio.AddKeyEvent((ImGuiKey)(ImGuiKey_A + (tok[0] - 'a')), on);
+            }
+        }
         while (SDL_PollEvent(&e)) {
             ImGui_ImplSDL2_ProcessEvent(&e);
-            if (e.type == SDL_QUIT) quit = true;
-            if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_CLOSE) quit = true;
+            if (e.type == SDL_QUIT || (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_CLOSE)) {
+                if (app.doc.hasMission && app.doc.dirty && !app.modalOpen) guarded(app, [&app] { app.wantQuit = true; });   // waits for the answer
+                else if (!(app.doc.hasMission && app.doc.dirty)) quit = true;
+            }
         }
         drainJobs();
         pollLevel(app);
@@ -1624,8 +2057,20 @@ int main(int argc, char **argv)
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL2_NewFrame();
+        if (opt.hasMouseAt && frame >= 4 && !opt.hasMouseDrag) { const bool then = opt.mouseThen[0] >= 0 && frame >= (int)opt.mouseThen[0]; ImGui::GetIO().AddMousePosEvent(then ? opt.mouseThen[1] : opt.mouseAt[0], then ? opt.mouseThen[2] : opt.mouseAt[1]); }   // over the real cursor
         ImGui::NewFrame();
         frameUi(app, ww, wh, quit);
+        if (app.wantQuit) quit = true;
+        {   // the window title: "<mission>[*] - <level> - GoldenEye mission editor", only when it changes
+            std::string title = "GoldenEye mission editor";
+            if (app.doc.hasMission) title = std::string(app.doc.mission.name) + (app.doc.dirty ? "*" : "") + " - " + app.doc.mission.level + " - " + title;
+            if (title != app.lastTitle) { app.lastTitle = title; SDL_SetWindowTitle(app.win, title.c_str()); }
+        }
+        // a mission that is saved (or was just opened) goes to the recent list
+        if (app.doc.hasMission && !app.doc.dirty && app.doc.missionPath != app.lastRecorded) {
+            app.lastRecorded = app.doc.missionPath;
+            recentNote(app, app.doc.missionPath);
+        }
         ImGui::Render();
 
         // 3D view in drawable pixels
@@ -1637,6 +2082,10 @@ int main(int argc, char **argv)
         if (app.scene.offscreen()) editorOffscreenPresent(dw, dh);
 
         frame++;
+        if (opt.logCam && (app.cam.pos[0] != lastCam[0] || app.cam.pos[1] != lastCam[1] || app.cam.pos[2] != lastCam[2])) {
+            fprintf(stderr, "cam: frame %d pos %.1f %.1f %.1f\n", frame, app.cam.pos[0], app.cam.pos[1], app.cam.pos[2]);
+            lastCam = app.cam.pos;
+        }
         if (opt.hasClick && frame == 3) {
             if (opt.tool == "guard") app.tool = App::T_GUARD;
             else if (opt.tool == "object") app.tool = App::T_OBJECT;

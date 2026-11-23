@@ -112,7 +112,8 @@ bool Doc::addGuard(const PadSpec &pad, int model, int ai, int weapon, ItemRef &o
     if (!hasMission) { err = "no mission is open"; return false; }
     std::string snap = snapshot();
     MissionGuardOp g; memset(&g, 0, sizeof g);
-    g.op = MISSION_OP_ADD; g.prop = -1; g.model = model; g.ai = ai; g.weapon = weapon;
+    g.op = MISSION_OP_ADD; g.prop = -1; g.model = model; g.ai = ai;
+    if (weapon >= 0) { g.nweapons = 1; g.weapons[0].item = weapon; g.weapons[0].model = -1; }
     if (!resolvePad(pad, g.pad, err)) return false;
     arrPush(mission.guards, mission.nguards, g);
     commit(snap);
@@ -156,6 +157,13 @@ bool Doc::itemFromProp(int prop, ItemRef &out, std::string &err) const
     return true;
 }
 
+bool Doc::isAssignedWeapon(const ItemRef &it) const
+{
+    if (!it.valid || it.added || it.guard || !hasLevel) return false;
+    const LProp *p = level.prop(it.idx);
+    return p && p->carrier >= 0;
+}
+
 bool Doc::itemInRange(const ItemRef &it) const
 {
     if (!it.valid || it.idx < 0) return false;
@@ -167,6 +175,7 @@ bool Doc::moveItem(const ItemRef &it, const PadSpec &padSpec, std::string &err)
 {
     if (!hasMission) { err = "no mission is open"; return false; }
     if (!itemInRange(it)) { err = "no such item"; return false; }
+    if (isAssignedWeapon(it)) { err = "a weapon a guard carries goes with its guard"; return false; }
     std::string snap = snapshot();
     MissionPadRef ref;
     if (!resolvePad(padSpec, ref, err)) return false;
@@ -188,7 +197,7 @@ bool Doc::applyMove(const ItemRef &it, const MissionPadRef &ref)
         if (findOp(true, it.idx, op)) { mission.guards[op].op = MISSION_OP_MOVE; mission.guards[op].pad = ref; }
         else {
             MissionGuardOp g; memset(&g, 0, sizeof g);
-            g.op = MISSION_OP_MOVE; g.prop = it.idx; g.pad = ref; g.model = g.ai = g.weapon = -1;
+            g.op = MISSION_OP_MOVE; g.prop = it.idx; g.pad = ref; g.model = g.ai = -1;
             arrPush(mission.guards, mission.nguards, g);
         }
     } else {
@@ -206,6 +215,7 @@ bool Doc::removeItem(const ItemRef &it, std::string &err)
 {
     if (!hasMission) { err = "no mission is open"; return false; }
     if (!itemInRange(it)) { err = "no such item"; return false; }
+    if (isAssignedWeapon(it)) { err = "a weapon a guard carries goes with its guard: remove the guard"; return false; }
     std::string snap = snapshot();
     if (it.added) {
         if (it.guard) arrErase(mission.guards, mission.nguards, it.idx);
@@ -219,7 +229,7 @@ bool Doc::removeItem(const ItemRef &it, std::string &err)
         if (findOp(true, it.idx, op)) mission.guards[op].op = MISSION_OP_REMOVE;
         else {
             MissionGuardOp g; memset(&g, 0, sizeof g);
-            g.op = MISSION_OP_REMOVE; g.prop = it.idx; g.model = g.ai = g.weapon = -1;
+            g.op = MISSION_OP_REMOVE; g.prop = it.idx; g.model = g.ai = -1;
             arrPush(mission.guards, mission.nguards, g);
         }
     } else {
@@ -239,8 +249,100 @@ bool Doc::setAddedFields(const ItemRef &it, int model, int a, int b, std::string
     if (!hasMission) { err = "no mission is open"; return false; }
     if (!it.added || !itemInRange(it)) { err = "only items the mission added have fields to edit"; return false; }
     std::string snap = snapshot();
-    if (it.guard) { MissionGuardOp &g = mission.guards[it.idx]; g.model = model; g.ai = a; g.weapon = b; }
+    if (it.guard) {
+        MissionGuardOp &g = mission.guards[it.idx];
+        g.model = model; g.ai = a;
+        if (b >= 0) { if (g.nweapons == 0) { g.nweapons = 1; g.weapons[0].model = -1; memset(&g.weapons[0].f, 0, sizeof g.weapons[0].f); } g.weapons[0].item = b; }
+        else if (g.nweapons == 1) g.nweapons = 0;
+    }
     else { MissionObjectOp &o = mission.objects[it.idx]; o.model = model; o.type = a; o.item = b; }
+    commit(snap);
+    return true;
+}
+
+static bool findItem(const Doc &d, const ItemRef &r, Item &out)
+{
+    for (const Item &it : d.items())
+        if (it.added == r.added && it.guard == r.guard && it.idx == r.idx) { out = it; return true; }
+    return false;
+}
+
+bool Doc::setItemField(const ItemRef &it, int field, double value, std::string &err)
+{
+    if (!hasMission) { err = "no mission is open"; return false; }
+    if (!it.added || !itemInRange(it)) { err = "only items the mission added can be edited; copy an original prop to change it"; return false; }
+    MissionFieldVals &fv = it.guard ? mission.guards[it.idx].f : mission.objects[it.idx].f;
+    const int n = missionRecFields(it.guard ? MISSION_REC_GUARD : mission.objects[it.idx].type, nullptr);
+    if (field < 0 || field >= n || field >= MISSION_MAX_FIELDS) { err = "no such field"; return false; }
+    std::string snap = snapshot();
+    fv.set |= (uint64_t)1 << field;
+    fv.v[field] = value;
+    commit(snap);
+    return true;
+}
+
+bool Doc::copyItem(const ItemRef &r, ClipItem &out, std::string &err) const
+{
+    Item it;
+    if (!itemInRange(r) || !findItem(*this, r, it)) { err = "no such item"; return false; }
+    if (isAssignedWeapon(r)) { err = "a weapon a guard carries is copied with its guard"; return false; }
+    ClipItem c;
+    c.valid = true; c.guard = it.guard; c.type = it.type; c.model = it.model; c.item = it.item; c.ai = it.ai;
+    c.weapons = it.weapons;                     // a guard's carried weapons, with their record fields
+    c.f = it.f;
+    c.yawDeg = getTransform([&] { Selection s; s.kind = Selection::ITEM; s.item = r; return s; }()).yawDeg;
+    out = c;
+    return true;
+}
+
+bool Doc::pasteItem(const ClipItem &c, const PadSpec &pad, ItemRef &out, std::string &err)
+{
+    if (!hasMission) { err = "no mission is open"; return false; }
+    if (!c.valid) { err = "nothing copied"; return false; }
+    std::string snap = snapshot();
+    MissionPadRef ref;
+    if (!resolvePad(pad, ref, err)) return false;
+    if (c.guard) {
+        MissionGuardOp g; memset(&g, 0, sizeof g);
+        g.op = MISSION_OP_ADD; g.prop = -1; g.pad = ref; g.model = c.model; g.ai = c.ai; g.f = c.f;
+        for (size_t k = 0; k < c.weapons.size() && k < MISSION_MAX_WEAPONS; k++) g.weapons[g.nweapons++] = c.weapons[k];
+        arrPush(mission.guards, mission.nguards, g);
+        out.guard = true; out.idx = mission.nguards - 1;
+    } else {
+        MissionObjectOp o; memset(&o, 0, sizeof o);
+        o.op = MISSION_OP_ADD; o.prop = -1; o.pad = ref; o.type = c.type; o.model = c.model; o.item = c.item; o.f = c.f;
+        arrPush(mission.objects, mission.nobjects, o);
+        out.guard = false; out.idx = mission.nobjects - 1;
+    }
+    out.valid = true; out.added = true;
+    if (pad.atPoint) {      // the new pad is the copy's alone: it gets the copied facing
+        Selection s; s.kind = Selection::ITEM; s.item = out;
+        std::string e;
+        setTransform(s, nullptr, &c.yawDeg, false, e);
+    }
+    commit(snap);
+    return true;
+}
+
+bool Doc::duplicateItem(const ItemRef &r, const PadSpec *pad, ItemRef &out, std::string &err)
+{
+    Item it;
+    ClipItem c;
+    if (!copyItem(r, c, err) || !findItem(*this, r, it)) return false;
+    PadSpec ps;
+    if (pad) ps = *pad;
+    else if (it.pad.is_new) { ps.isNew = true; ps.id = it.pad.id; }
+    else { ps.isNew = false; ps.num = it.pad.num; }
+    return pasteItem(c, ps, out, err);
+}
+
+bool Doc::setMissionLevel(const std::string &lvl, std::string &err)
+{
+    if (!hasMission) { err = "no mission is open"; return false; }
+    if (missionLevelNumber(lvl.c_str()) < 0) { err = "unknown level '" + lvl + "'"; return false; }
+    if (lvl == mission.level) return true;
+    const std::string snap = snapshot();
+    snprintf(mission.level, sizeof mission.level, "%s", lvl.c_str());
     commit(snap);
     return true;
 }

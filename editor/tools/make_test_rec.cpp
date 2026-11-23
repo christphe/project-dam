@@ -3,11 +3,17 @@
 // Nothing here is ROM-derived: three box rooms with procedural textures, some pads, a few guard
 // and object props, one model owner per type.
 //
+// The level setup (pads, props, AI lists) is not in level.json any more: the editor reads it from the
+// converted data next to the game (port/mission/mission_setup.h). So this also writes a synthetic setup
+// file in the same sidecar format into OUTDIR/data/pccg-ntsc-final/ (manifest.csv + pccg.bin); point the
+// editor at it with GE_EDITOR_DATA=OUTDIR/data.
+//
 //   make_test_rec OUTDIR            (OUTDIR is created by the caller)
 
 #include "levelrec.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -190,7 +196,7 @@ int main(int argc, char **argv)
     std::string jsonPath = dir + "/level.json";
     f = fopen(jsonPath.c_str(), "wb");
     if (!f) { fprintf(stderr, "cannot write %s\n", jsonPath.c_str()); return 1; }
-    fprintf(f, "{ \"version\": 1, \"level\": \"bunker1\", \"build\": \"synthetic-test\",\n  \"rooms\": [\n");
+    fprintf(f, "{ \"version\": 1, \"level\": \"bunker1\", \"build\": \"synthetic-test\", \"setup\": \"UsetupsynthZ\", \"scale\": 1.0,\n  \"rooms\": [\n");
     for (int i = 0; i < 3; i++)
         fprintf(f, "    { \"index\": %d, \"min\": [%g,%g,%g], \"max\": [%g,%g,%g] }%s\n", rooms[i].index,
                 rooms[i].lo[0], rooms[i].lo[1], rooms[i].lo[2], rooms[i].hi[0], rooms[i].hi[1], rooms[i].hi[2], i < 2 ? "," : "");
@@ -201,27 +207,64 @@ int main(int argc, char **argv)
     fprintf(f, "  ],\n  \"portals\": [\n"
                "    { \"rooms\": [1, 2], \"v\": [[1000,0,300],[1000,0,500],[1000,220,500],[1000,220,300]] },\n"
                "    { \"rooms\": [2, 3], \"v\": [[1400,0,800],[1600,0,800],[1600,220,800],[1400,220,800]] }\n  ],\n");
-    struct PadDef { int num; float p[3]; int room; } pads[] = {
-        { 0x2700, { 200, 0, 200 }, 1 }, { 0x2701, { 700, 0, 600 }, 1 }, { 0x2702, { 500, 0, 400 }, 1 },
-        { 0x2710, { 1300, 0, 200 }, 2 }, { 0x2711, { 1800, 0, 600 }, 2 },
-        { 0x2720, { 1200, 0, 1200 }, 3 }, { 0x2721, { 1750, 0, 1500 }, 3 },
+    struct PadDef { float p[3]; } pads[] = {     // pad numbers are the indices 0..6
+        { { 200, 0, 200 } }, { { 700, 0, 600 } }, { { 500, 0, 400 } },
+        { { 1300, 0, 200 } }, { { 1800, 0, 600 } },
+        { { 1200, 0, 1200 } }, { { 1750, 0, 1500 } },
     };
     const int npads = (int)(sizeof pads / sizeof pads[0]);
-    fprintf(f, "  \"pads\": [\n");
-    for (int i = 0; i < npads; i++)
-        fprintf(f, "    { \"num\": %d, \"pos\": [%g,%g,%g], \"look\": [0,0,1], \"up\": [0,1,0], \"room\": %d }%s\n",
-                pads[i].num, pads[i].p[0], pads[i].p[1], pads[i].p[2], pads[i].room, i + 1 < npads ? "," : "");
-    fprintf(f, "  ],\n  \"props\": [\n"
-               "    { \"index\": 0, \"type\": 9, \"pad\": %d, \"model\": 3, \"item\": -1, \"ai\": 1025, \"owner\": %u },\n"
-               "    { \"index\": 1, \"type\": 9, \"pad\": %d, \"model\": 3, \"item\": -1, \"ai\": 1026, \"owner\": %u },\n"
-               "    { \"index\": 2, \"type\": 9, \"pad\": %d, \"model\": 3, \"item\": -1, \"ai\": 1027, \"owner\": %u },\n"
-               "    { \"index\": 3, \"type\": 3, \"pad\": %d, \"model\": 120, \"item\": -1, \"ai\": -1, \"owner\": %u },\n"
-               "    { \"index\": 4, \"type\": 3, \"pad\": %d, \"model\": 120, \"item\": -1, \"ai\": -1, \"owner\": %u },\n"
-               "    { \"index\": 5, \"type\": 4, \"pad\": %d, \"model\": 999, \"item\": 33, \"ai\": -1, \"owner\": -1 }\n  ],\n",
-            pads[1].num, ownerGuard, pads[3].num, ownerGuard, pads[5].num, ownerGuard,
-            pads[2].num, ownerCrate, pads[4].num, ownerCrate, pads[6].num);
-    fprintf(f, "  \"ailists\": [1025, 1026, 1027]\n}\n");
+    // which recorded model draws which model id: guard model 3, crate model 120
+    fprintf(f, "  \"models\": [\n    { \"guard\": true, \"model\": 3, \"owner\": %u },\n    { \"guard\": false, \"model\": 120, \"owner\": %u }\n  ]\n}\n",
+            ownerGuard, ownerCrate);
     fclose(f);
+
+    // ---- the synthetic setup row (PC layout, see port/mission/mission_apply.h) ----
+    {
+        std::vector<uint8_t> in(0x50, 0);
+        auto w32 = [&](size_t o, uint32_t v) { for (int i = 0; i < 4; i++) in[o + i] = (uint8_t)(v >> (8 * i)); };
+        auto wf = [&](size_t o, float v) { uint32_t u; memcpy(&u, &v, 4); w32(o, u); };
+        auto w16 = [&](size_t o, unsigned v) { in[o] = (uint8_t)v; in[o + 1] = (uint8_t)(v >> 8); };
+        auto grow = [&](size_t n) { size_t o = in.size(); in.resize(o + n, 0); return o; };
+        const size_t ailOff = grow(4 * 16);                       // 3 lists + terminator
+        const uint32_t ail[3] = { 1025, 1026, 1027 };
+        for (int i = 0; i < 3; i++) { w32(ailOff + 16 * i, 1); w32(ailOff + 16 * i + 8, ail[i]); }
+        const size_t padOff = grow((size_t)(npads + 1) * 56);
+        for (int i = 0; i < npads; i++) {
+            const size_t o = padOff + (size_t)i * 56;
+            for (int a = 0; a < 3; a++) wf(o + 4 * a, pads[i].p[a]);
+            wf(o + 16, 1.0f); wf(o + 24 + 8, 1.0f);              // up +y, look +z
+            w32(o + 0x28, 1);                                      // a non-null tile name slot
+        }
+        const size_t propOff = in.size();
+        struct P { int type; int pad; int model; int ai; int item; } props[] = {
+            { 9, 1, 3, 1025, -1 }, { 9, 3, 3, 1026, -1 }, { 9, 5, 3, 1027, -1 },
+            { 3, 2, 120, -1, -1 }, { 3, 4, 120, -1, -1 }, { 4, 6, 999, -1, 33 },
+        };
+        for (const P &p : props) {
+            const size_t sz = p.type == 9 ? 32 : p.type == 4 ? 152 : 144;
+            const size_t o = grow(sz);
+            in[o + 3] = (uint8_t)p.type;
+            if (p.type == 9) { w16(o + 6, (unsigned)p.pad); w16(o + 8, (unsigned)p.model); w16(o + 10, (unsigned)p.ai); w16(o + 16, 100); }
+            else { w16(o, 0x100); w16(o + 4, (unsigned)p.model); w16(o + 6, (unsigned)p.pad); w32(o + 8, 1); wf(o + 132, 0); w32(o + 132, 1000u << 16); }
+            if (p.type == 4) w32(o + 144, (uint32_t)p.item);
+        }
+        const size_t endOff = grow(4);
+        in[endOff + 3] = 48;
+        grow(8);
+        w32(8 * 3, (uint32_t)propOff); w32(8 * 5, (uint32_t)ailOff); w32(8 * 6, (uint32_t)padOff);
+        // RZ: 0x11 0x72 + a stored deflate block
+        std::vector<uint8_t> rz = { 0x11, 0x72, 1, (uint8_t)in.size(), (uint8_t)(in.size() >> 8), (uint8_t)~in.size(), (uint8_t)(~in.size() >> 8) };
+        rz.insert(rz.end(), in.begin(), in.end());
+        const std::string sdir = dir + "/data/pccg-ntsc-final";
+        std::filesystem::create_directories(sdir);
+        FILE *b = fopen((sdir + "/pccg.bin").c_str(), "wb");
+        FILE *m = fopen((sdir + "/manifest.csv").c_str(), "wb");
+        if (!b || !m) { fprintf(stderr, "cannot write %s\n", sdir.c_str()); return 1; }
+        fwrite(rz.data(), 1, rz.size(), b);
+        fprintf(m, "name,offset,size\nUsetupsynthZ,0,%zu\n", rz.size());
+        fclose(b); fclose(m);
+        printf("wrote the synthetic setup %s (set GE_EDITOR_DATA=%s/data)\n", sdir.c_str(), dir.c_str());
+    }
     printf("wrote %s and %s (%zu runs, %zu textures)\n", recPath.c_str(), jsonPath.c_str(), runs.size(), texs.size());
     return 0;
 }

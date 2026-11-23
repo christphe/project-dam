@@ -1,5 +1,6 @@
 /* Applying a mission to a PC-layout stage setup: see mission_apply.h. */
 #include "mission_apply.h"
+#include "mission_fields.h"
 
 #include <math.h>
 #include <stdarg.h>
@@ -79,6 +80,15 @@ static int resolve_pad(const Mission *m, const MissionPadRef *p, int orig_pads)
     for (int i = 0; i < m->npads; i++)
         if (!strcmp(m->pads[i].id, p->id)) return orig_pads + i;
     return -1;
+}
+
+/* The fields an add op names, written over the clone (absent ones keep the template's bytes). */
+static void apply_fields(uint8_t *rec, int type, const MissionFieldVals *fv)
+{
+    const MissionField *f;
+    int n = missionRecFields(type, &f);
+    for (int i = 0; i < n && i < MISSION_MAX_FIELDS; i++)
+        if (fv->set & ((uint64_t)1 << i)) missionFieldSet(&f[i], rec, fv->v[i]);
 }
 
 /* A copy of a record kept to be cloned from. */
@@ -221,31 +231,39 @@ int missionApplySetup(const Mission *m, const uint8_t *in, uint32_t insize, int 
             if (pad >= 10000) { logf_(out, "guard add: skipped, pad %d is a bound pad", pad); out->skipped++; continue; }
             c = clone_rec(in, guard_tpl);
             if (!c) { out->skipped++; continue; }
-            chrnum = ++max_chr;
+            apply_fields(c, PD_GUARD, &g->f);
+            chrnum = ++max_chr;                 /* never copied: every added chr is new */
             wr16(c + 4, (unsigned)chrnum);
             wr16(c + 6, (unsigned)pad);
             if (g->model >= 0) wr16(c + 8, (unsigned)g->model);
             if (g->ai >= 0) wr16(c + 10, (unsigned)g->ai);
             extra = realloc(extra, (size_t)(nextra + 2) * sizeof *extra);
             extra[nextra++] = c;
-            if (g->weapon >= 0) {
+            for (int wi = 0; wi < g->nweapons && wi < MISSION_MAX_WEAPONS; wi++) {
+                const MissionWeapon *wp = &g->weapons[wi];
                 if (!assigned_tpl) {
                     logf_(out, "guard add: chr %d has no weapon, the level has no weapon to clone", chrnum);
+                    break;
                 } else {
                     uint8_t *w = clone_rec(in, assigned_tpl);
                     const Rec *best = NULL;
-                    int model = missionGuardWeaponModel(g->weapon);
-                    for (int k = 0; k < nrec && !best; k++)         /* a record of the same weapon wins */
-                        if (recs[k].type == PD_COLLECT && (rd32(in + recs[k].off + 8) & PROPFLAG_ASSIGNEDTOCHR) && in[recs[k].off + OBJ_PREFIX] == (uint8_t)g->weapon) best = &recs[k];
+                    int model = wp->model >= 0 ? wp->model : missionGuardWeaponModel(wp->item);
+                    for (int k = 0; k < nrec && !best && wp->item >= 0; k++)         /* a record of the same weapon wins */
+                        if (recs[k].type == PD_COLLECT && (rd32(in + recs[k].off + 8) & PROPFLAG_ASSIGNEDTOCHR) && in[recs[k].off + OBJ_PREFIX] == (uint8_t)wp->item) best = &recs[k];
                     if (best) { free(w); w = clone_rec(in, best); }
-                    wr16(w + 6, (unsigned)chrnum);
-                    w[OBJ_PREFIX] = (uint8_t)g->weapon;
                     if (!best && model >= 0) wr16(w + 4, (unsigned)model);
+                    if (wp->model >= 0) wr16(w + 4, (unsigned)wp->model);
+                    if (wp->item >= 0) w[OBJ_PREFIX] = (uint8_t)wp->item;
+                    apply_fields(w, PD_COLLECT, &wp->f);
+                    wr16(w + 6, (unsigned)chrnum);                          /* the carrier's chr number, not a pad */
+                    wr32(w + 8, rd32(w + 8) | PROPFLAG_ASSIGNEDTOCHR);
+                    extra = realloc(extra, (size_t)(nextra + 2) * sizeof *extra);
                     extra[nextra++] = w;
-                    if (!best && model < 0) logf_(out, "guard add: weapon %d has no known model, shows as the template's", g->weapon);
+                    logf_(out, "guard add: chr %d carries weapon %d (model %d)", chrnum, wp->item, rd16(w + 4));
+                    if (!best && model < 0 && wp->item >= 0) logf_(out, "guard add: weapon %d has no known model, shows as the template's", wp->item);
                 }
             }
-            logf_(out, "guard add: chr %d at pad %d, body %d, ai %#x, weapon %d", chrnum, pad, g->model, g->ai, g->weapon);
+            logf_(out, "guard add: chr %d at pad %d, body %d, ai %#x, weapon %d", chrnum, pad, g->model, g->ai, g->nweapons ? g->weapons[0].item : -1);
             out->guards_added++;
         } else {
             uint8_t *p;
@@ -289,6 +307,7 @@ int missionApplySetup(const Mission *m, const uint8_t *in, uint32_t insize, int 
             if (o->model >= 0) wr16(c + 4, (unsigned)o->model);
             if (o->type == PD_COLLECT && o->item >= 0) c[OBJ_PREFIX] = (uint8_t)o->item;
             if (o->type == PD_KEY && o->item >= 0) wr32(c + OBJ_PREFIX, (uint32_t)o->item);
+            apply_fields(c, o->type, &o->f);        /* after the op's own keys: an explicit field wins */
             wr32(c + 8, rd32(c + 8) & ~PROPFLAG_ASSIGNEDTOCHR);
             extra = realloc(extra, (size_t)(nextra + 2) * sizeof *extra);
             extra[nextra++] = c;
@@ -340,6 +359,11 @@ int missionApplySetup(const Mission *m, const uint8_t *in, uint32_t insize, int 
     wr32(buf + 8 * 6, new_pads_off);
     wr32(buf + 8 * 3, new_stream_off);
 
+    if (spawn_pad <= -2) {   /* a mission pad: it was appended after the level's own pads */
+        const int k = -2 - spawn_pad;
+        spawn_pad = k < m->npads ? (int)padn + k : -1;
+        if (spawn_pad < 0) logf_(out, "spawn: mission pad #%d does not exist, the level's start is kept", k);
+    }
     if (spawn_pad >= 0 && H[2]) {
         uint32_t o = H[2];
         int done_ = 0;

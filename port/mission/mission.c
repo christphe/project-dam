@@ -112,6 +112,43 @@ static int getop(const cJSON *o, MissionOpKind *op)
     return 1;
 }
 
+/* The record fields of an add op (mission_fields.h): flat keys, and the type's own ones in its sub-object. */
+void missionFieldsFromJson(const void *obj, int rectype, MissionFieldVals *fv)
+{
+    const cJSON *e = (const cJSON *)obj;
+    const MissionField *f;
+    int n = missionRecFields(rectype, &f);
+    const char *group = missionRecGroup(rectype);
+    const cJSON *sub = group ? cJSON_GetObjectItemCaseSensitive(e, group) : NULL;
+    memset(fv, 0, sizeof(*fv));
+    for (int i = 0; i < n && i < MISSION_MAX_FIELDS; i++) {
+        const cJSON *v = cJSON_GetObjectItemCaseSensitive(f[i].grouped ? sub : e, f[i].name);
+        if (!cJSON_IsNumber(v)) continue;
+        fv->set |= (uint64_t)1 << i;
+        fv->v[i] = v->valuedouble;
+    }
+}
+
+static void addfields(cJSON *o, int rectype, const MissionFieldVals *fv)
+{
+    const MissionField *f;
+    int n = missionRecFields(rectype, &f);
+    const char *group = missionRecGroup(rectype);
+    cJSON *sub = NULL;
+    for (int i = 0; i < n && i < MISSION_MAX_FIELDS; i++) {
+        double d;
+        if (!(fv->set & ((uint64_t)1 << i))) continue;
+        d = fv->v[i];
+        if (f[i].kind == MF_FLOAT) { char t[40]; missionFloatText(t, sizeof t, (float)d); d = strtod(t, NULL); }
+        if (f[i].grouped) {
+            if (!sub) sub = cJSON_AddObjectToObject(o, group);
+            cJSON_AddNumberToObject(sub, f[i].name, d);
+        } else {
+            cJSON_AddNumberToObject(o, f[i].name, d);
+        }
+    }
+}
+
 /* Allocates n zeroed items for an array key; returns NULL and 0 if absent. */
 static void *allocarr(const cJSON *root, const char *k, size_t sz, int *n, const cJSON **arr)
 {
@@ -215,7 +252,23 @@ int missionParse(const char *json, Mission *m, char *err, size_t errlen)
         if (!getop(e, &g->op)) { seterr(err, errlen, "guard without a valid op", NULL); goto fail; }
         g->prop = getnum(e, "prop", -1);
         getpad(e, "pad", &g->pad);
-        g->model = getnum(e, "model", -1); g->ai = getnum(e, "ai", -1); g->weapon = getnum(e, "weapon", -1);
+        g->model = getnum(e, "model", -1); g->ai = getnum(e, "ai", -1);
+        if (g->op == MISSION_OP_ADD) {
+            const cJSON *ws = cJSON_GetObjectItemCaseSensitive(e, "weapons"), *we;
+            if (cJSON_IsArray(ws)) {
+                cJSON_ArrayForEach(we, ws) {
+                    MissionWeapon *w;
+                    if (g->nweapons >= MISSION_MAX_WEAPONS || !cJSON_IsObject(we)) continue;
+                    w = &g->weapons[g->nweapons++];
+                    w->item = getnum(we, "item", -1); w->model = getnum(we, "model", -1);
+                    missionFieldsFromJson(we, 8, &w->f);
+                }
+            } else if (getnum(e, "weapon", -1) >= 0) {      /* the older single-weapon key */
+                g->nweapons = 1;
+                g->weapons[0].item = getnum(e, "weapon", -1); g->weapons[0].model = -1;
+            }
+        }
+        if (g->op == MISSION_OP_ADD) missionFieldsFromJson(e, MISSION_REC_GUARD, &g->f);
     }
     m->objects = allocarr(root, "objects", sizeof(MissionObjectOp), &m->nobjects, &arr);
     i = 0; cJSON_ArrayForEach(e, arr) {
@@ -224,6 +277,7 @@ int missionParse(const char *json, Mission *m, char *err, size_t errlen)
         o->prop = getnum(e, "prop", -1);
         getpad(e, "pad", &o->pad);
         o->type = getnum(e, "type", -1); o->model = getnum(e, "model", -1); o->item = getnum(e, "item", -1);
+        if (o->op == MISSION_OP_ADD) missionFieldsFromJson(e, o->type, &o->f);
     }
     m->objectives = allocarr(root, "objectives", sizeof(MissionObjective), &m->nobjectives, &arr);
     i = 0; cJSON_ArrayForEach(e, arr) {
@@ -361,7 +415,17 @@ char *missionToJson(const Mission *m)
         cJSON_AddStringToObject(o, "op", opname(g->op));
         if (g->op != MISSION_OP_ADD) addopt(o, "prop", g->prop);
         if (g->op != MISSION_OP_REMOVE) addpad(o, "pad", &g->pad);
-        if (g->op == MISSION_OP_ADD) { addopt(o, "model", g->model); addopt(o, "ai", g->ai); addopt(o, "weapon", g->weapon); }
+        if (g->op == MISSION_OP_ADD) { addopt(o, "model", g->model); addopt(o, "ai", g->ai); addfields(o, MISSION_REC_GUARD, &g->f);
+            if (g->nweapons > 0) {
+                cJSON *ws = cJSON_AddArrayToObject(o, "weapons");
+                for (int k = 0; k < g->nweapons && k < MISSION_MAX_WEAPONS; k++) {
+                    cJSON *w = cJSON_CreateObject();
+                    addopt(w, "item", g->weapons[k].item); addopt(w, "model", g->weapons[k].model);
+                    addfields(w, 8, &g->weapons[k].f);
+                    cJSON_AddItemToArray(ws, w);
+                }
+            }
+        }
         cJSON_AddItemToArray(a, o);
     }
     a = cJSON_AddArrayToObject(root, "objects");
@@ -371,7 +435,7 @@ char *missionToJson(const Mission *m)
         cJSON_AddStringToObject(o, "op", opname(ob->op));
         if (ob->op != MISSION_OP_ADD) addopt(o, "prop", ob->prop);
         if (ob->op != MISSION_OP_REMOVE) addpad(o, "pad", &ob->pad);
-        if (ob->op == MISSION_OP_ADD) { addopt(o, "type", ob->type); addopt(o, "model", ob->model); addopt(o, "item", ob->item); }
+        if (ob->op == MISSION_OP_ADD) { addopt(o, "type", ob->type); addopt(o, "model", ob->model); addopt(o, "item", ob->item); addfields(o, ob->type, &ob->f); }
         cJSON_AddItemToArray(a, o);
     }
     a = cJSON_AddArrayToObject(root, "objectives");

@@ -34,6 +34,8 @@ execute_process(COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${GE_MISSION_LI
 
 add_library(ge_mission STATIC
   "${CMAKE_SOURCE_DIR}/port/mission/mission.c"
+  "${CMAKE_SOURCE_DIR}/port/mission/mission_fields.c"
+  "${CMAKE_SOURCE_DIR}/port/mission/mission_setup.c"
   "${CMAKE_SOURCE_DIR}/port/mission/mission_apply.c"
   "${CMAKE_SOURCE_DIR}/port/mission/mission_dir.c"
   "${CMAKE_SOURCE_DIR}/port/mission/mission_lua.cpp"
@@ -49,6 +51,11 @@ set_property(TARGET ge_mission PROPERTY INCLUDE_DIRECTORIES
   "${GE_LUAU}/Compiler/include" "${GE_LUAU}/Compiler/src"
   "${GE_LUAU}/Ast/include" "${GE_LUAU}/Bytecode/include" "${GE_LUAU}/Common/include")
 set_property(TARGET ge_mission PROPERTY COMPILE_OPTIONS "")
+# mission_setup.c inflates the setup row (zlib; the game's own src/game/zlib.h is not on this target's include path)
+if(ZLIB_INCLUDE_DIR)
+  target_include_directories(ge_mission SYSTEM PRIVATE "${ZLIB_INCLUDE_DIR}")
+endif()
+target_link_libraries(ge_mission PUBLIC ${ZLIB_LIBRARY})
 set_property(TARGET ge_mission PROPERTY CXX_STANDARD 17)
 set_property(TARGET ge_mission PROPERTY CXX_STANDARD_REQUIRED ON)
 set(SRC_MISSION "")

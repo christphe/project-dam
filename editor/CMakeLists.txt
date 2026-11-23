@@ -18,6 +18,7 @@ add_library(ge_editor_f3d OBJECT
   "${F3D_DIR}/gfx_cc.cpp"
   "${F3D_DIR}/glad/glad.c"
   "${ED_DIR}/fast3d_stubs.cpp"
+  "${CMAKE_SOURCE_DIR}/port/src/gpuprobe.c"   # the first-launch GPU benchmark's pure decision, called by gfx_opengl.cpp
 )
 target_link_libraries(ge_editor_f3d PRIVATE ${LIBS})   # SDL2 / GL usage requirements only (an object library is not linked)
 
@@ -53,6 +54,9 @@ if(WIN32)
   target_link_libraries(ge-editor PRIVATE ws2_32)
 endif()
 target_link_libraries(ge-editor PRIVATE ge_mission ${LIBS})
+if(WIN32)
+  target_link_libraries(ge-editor PRIVATE comdlg32)   # the Open / Save file dialogs (filedialog.cpp)
+endif()
 # Next to the other binaries; the Windows bundler leaves SDL2.dll in the same directory.
 set_target_properties(ge-editor PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set_target_properties(ge-editor PROPERTIES OUTPUT_NAME "ge-editor")

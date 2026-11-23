@@ -141,6 +141,9 @@ ToolResult toolLevelOpen(Doc &d, const cJSON *a)
 ToolResult toolMissionOpen(Doc &d, const cJSON *a)
 {
     std::string err;
+    if (d.hasMission && d.dirty && (argHas(a, "path") || argHas(a, "new") || argHas(a, "name") || argHas(a, "level")) &&
+        !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(a, "discard")))
+        return fail("the open mission has unsaved changes: mission_save first, or pass \"discard\": true to replace it");
     if (argHas(a, "export")) {
         if (!d.openLevel(argStr(a, "export"), err)) return fail(err);
     }
@@ -313,6 +316,21 @@ ToolResult toolRemove(Doc &d, const cJSON *a)
     return okJson(o);
 }
 
+ToolResult toolDuplicate(Doc &d, const cJSON *a)
+{
+    ItemRef ref, out; PadSpec pad; std::string err;
+    if (!itemFromArgs(d, a, ref, err)) return fail(err);
+    const bool hasPad = argHas(a, "pad") || argHas(a, "pos");
+    if (hasPad && !padSpecFromJson(a, pad, err)) return fail(err);
+    if (!d.duplicateItem(ref, hasPad ? &pad : nullptr, out, err)) return fail(err);
+    d.sel = Selection(); d.sel.kind = Selection::ITEM; d.sel.item = out;
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, "copied", refJson(ref));
+    cJSON_AddItemToObject(o, "added", refJson(out));
+    if (hasPad && pad.atPoint) cJSON_AddStringToObject(o, "new_pad", d.mission.pads[d.mission.npads - 1].id);
+    return okJson(o);
+}
+
 ToolResult toolUndo(Doc &d, const cJSON *)
 {
     std::string err;
@@ -336,7 +354,7 @@ ToolResult toolTestRun(Doc &d, const cJSON *a)
     std::string err;
     std::string spawn = argStr(a, "spawn");
     if (spawn.empty() && cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(a, "spawn"))) spawn = std::to_string(argInt(a, "spawn", 0));
-    if (!d.testRun(spawn, err)) return fail(err);
+    if (!d.testRun(spawn, cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(a, "coop")), err)) return fail(err);
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "started", d.lastPlay.c_str());
     cJSON_AddStringToObject(o, "mission", d.missionPath.c_str());
@@ -365,9 +383,9 @@ const Tool kTools[] = {
       "{\"type\":\"object\",\"properties\":{\"level\":{\"type\":\"string\",\"description\":\"solo level name, e.g. bunker1\"},"
       "\"reexport\":{\"type\":\"boolean\"},\"dir\":{\"type\":\"string\"}}}",
       toolLevelOpen },
-    { "mission_open", "Open a mission.json (path), or start a new mission for a level (new: true, level, name). The mission's level is loaded too (exported by the game when missing); export loads a given export directory instead.",
+    { "mission_open", "Open a mission.json (path), or start a new mission for a level (new: true, level, name). The mission's level is loaded too (exported by the game when missing); export loads a given export directory instead. Fails while the open mission has unsaved changes unless discard: true is given (mission_save first to keep them).",
       "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"new\":{\"type\":\"boolean\"},\"name\":{\"type\":\"string\"},"
-      "\"level\":{\"type\":\"string\",\"description\":\"solo level name, e.g. bunker1\"},\"export\":{\"type\":\"string\"}}}",
+      "\"level\":{\"type\":\"string\",\"description\":\"solo level name, e.g. bunker1\"},\"export\":{\"type\":\"string\"},\"discard\":{\"type\":\"boolean\",\"description\":\"replace an open mission that has unsaved changes\"}}}",
       toolMissionOpen },
     { "mission_save", "Save the open mission to its file (or to path).",
       "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}", toolMissionSave },
@@ -412,11 +430,15 @@ const Tool kTools[] = {
       "{\"type\":\"object\",\"properties\":{\"prop\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"enum\":[\"guard\",\"object\"]},"
       "\"op\":{\"type\":\"integer\"}}}",
       toolRemove },
+    { "duplicate", "Duplicate a guard or object (prop for an original setup prop, or kind + op for an added one) as a NEW item the mission adds, with all its record fields and its facing. Without pad/pos it stands on the original's pad (move it afterwards); with pad or pos [x,y,z] (a new mission pad there, same facing) it is placed there. The original is untouched.",
+      "{\"type\":\"object\",\"properties\":{\"prop\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"enum\":[\"guard\",\"object\"]},"
+      "\"op\":{\"type\":\"integer\"}, KPAD }}",
+      toolDuplicate },
     { "undo", "Undo the last mission edit.", "{\"type\":\"object\",\"properties\":{}}", toolUndo },
     { "validate", "Check the mission (format, ids, pads and props against the level export).",
       "{\"type\":\"object\",\"properties\":{}}", toolValidate },
-    { "test_run", "Save the mission and start the game on it (co-op, two pads) at a spawn pad.",
-      "{\"type\":\"object\",\"properties\":{\"spawn\":{\"type\":[\"integer\",\"string\"],\"description\":\"pad to start at (default: the selected pad)\"}}}",
+    { "test_run", "Save the mission and start the game on it: solo by default, co-op (two players, two pads) with coop: true; at the level's own start unless spawn is given.",
+      "{\"type\":\"object\",\"properties\":{\"spawn\":{\"type\":[\"integer\",\"string\"],\"description\":\"pad to start at: a pad number or a mission pad id (default: the level's own start)\"},\"coop\":{\"type\":\"boolean\",\"description\":\"two players (default false: solo)\"}}}",
       toolTestRun },
 };
 

@@ -29,6 +29,15 @@ Mat4 mat4Translate(float x, float y, float z)
     return r;
 }
 
+Mat4 mat4RotY(float yawDeg)
+{
+    const float r = yawDeg * 0.017453292f, c = cosf(r), s = sinf(r);
+    Mat4 m = mat4Identity();
+    m.m[0] = c; m.m[2] = -s;     // column 0 (the image of +x)
+    m.m[8] = s; m.m[10] = c;     // column 2 (the image of +z)
+    return m;
+}
+
 Mat4 mat4Perspective(float fovy, float aspect, float zn, float zf)
 {
     Mat4 r; memset(&r, 0, sizeof r);
@@ -163,29 +172,61 @@ static bool rayTri(const Vec3 &o, const Vec3 &d, const Vec3 &a, const Vec3 &b, c
     return true;
 }
 
-Vec3 itemOffset(const Doc &d, const Item &it)
+Vec3 rotYaw(const Vec3 &v, float yawDeg)
 {
-    if (!it.hasPos) return { 0, 0, 0 };
-    if (d.hasLevel && it.owner >= 0 && (size_t)it.owner < d.level.owners.size() && d.level.owners[(size_t)it.owner].valid) {
-        const Vec3 &a = d.level.owners[(size_t)it.owner].anchor;
-        return { it.pos[0] - a[0], it.pos[1] - a[1], it.pos[2] - a[2] };
+    const float r = yawDeg * 0.017453292f, c = cosf(r), s = sinf(r);
+    return { v[0] * c + v[2] * s, v[1], -v[0] * s + v[2] * c };
+}
+
+static const OwnerInfo *ownerOf(const Doc &d, const Item &it)
+{
+    if (d.hasLevel && it.owner >= 0 && (size_t)it.owner < d.level.owners.size() && d.level.owners[(size_t)it.owner].valid)
+        return &d.level.owners[(size_t)it.owner];
+    return nullptr;
+}
+
+Mat4 itemPlacement(const Doc &d, const Item &it)
+{
+    const OwnerInfo *o = ownerOf(d, it);
+    if (!it.hasPos || !o) return mat4Identity();
+    return mat4Mul(mat4Mul(mat4Translate(it.pos[0], it.pos[1], it.pos[2]), mat4RotY(it.yawDeg)),
+                   mat4Translate(-o->anchor[0], -o->anchor[1], -o->anchor[2]));
+}
+
+bool itemLocalBox(const Doc &d, const Item &it, Vec3 &mn, Vec3 &mx)
+{
+    if (!it.hasPos) return false;
+    if (const OwnerInfo *o = ownerOf(d, it)) {
+        for (int i = 0; i < 3; i++) { mn[i] = o->mn[i] - o->anchor[i]; mx[i] = o->mx[i] - o->anchor[i]; }
+        return true;
     }
-    return { 0, 0, 0 };
+    float r = it.guard ? 25.0f : 20.0f, h = it.guard ? 160.0f : 60.0f;
+    mn = { -r, 0, -r };
+    mx = { r, h, r };
+    return true;
 }
 
 bool itemBounds(const Doc &d, const Item &it, Vec3 &mn, Vec3 &mx)
 {
-    if (!it.hasPos) return false;
-    if (d.hasLevel && it.owner >= 0 && (size_t)it.owner < d.level.owners.size() && d.level.owners[(size_t)it.owner].valid) {
-        const OwnerInfo &o = d.level.owners[(size_t)it.owner];
-        Vec3 off = itemOffset(d, it);
-        for (int i = 0; i < 3; i++) { mn[i] = o.mn[i] + off[i]; mx[i] = o.mx[i] + off[i]; }
-        return true;
+    Vec3 lmn, lmx;
+    if (!itemLocalBox(d, it, lmn, lmx)) return false;
+    mn = { 1e30f, 1e30f, 1e30f }; mx = { -1e30f, -1e30f, -1e30f };
+    for (int i = 0; i < 8; i++) {
+        const Vec3 c = { (i & 1) ? lmx[0] : lmn[0], (i & 2) ? lmx[1] : lmn[1], (i & 4) ? lmx[2] : lmn[2] };
+        const Vec3 w = add(rotYaw(c, it.yawDeg), it.pos);
+        for (int k = 0; k < 3; k++) { mn[k] = std::min(mn[k], w[k]); mx[k] = std::max(mx[k], w[k]); }
     }
-    float r = it.guard ? 25.0f : 20.0f, h = it.guard ? 160.0f : 60.0f;
-    mn = { it.pos[0] - r, it.pos[1], it.pos[2] - r };
-    mx = { it.pos[0] + r, it.pos[1] + h, it.pos[2] + r };
     return true;
+}
+
+OccupiedPads occupiedPads(const std::vector<Item> &items)
+{
+    OccupiedPads o;
+    for (const Item &it : items) {
+        if (it.removed || it.assigned) continue;     // a carried weapon is not on a pad
+        if (it.pad.is_new) o.mission.insert(it.pad.id); else o.level.insert(it.pad.num);
+    }
+    return o;
 }
 
 Hit pickScene(const Doc &d, const Vec3 &org, const Vec3 &dir)
@@ -215,17 +256,24 @@ Hit pickScene(const Doc &d, const Vec3 &org, const Vec3 &dir)
             cand = Hit(); cand.kind = k; cand.num = num; cand.id = id; cand.t = t; cand.point = pos;
         }
     };
-    if (d.hasLevel) for (auto &p : d.level.pads) tryPad(p.pos, Hit::PAD, p.num, "");
+    // a pad under a guard or object is the item's, not something to select on its own
+    const std::vector<Item> all = d.items();
+    const OccupiedPads occ = occupiedPads(all);
+    if (d.hasLevel)
+        for (auto &p : d.level.pads)
+            if (!occ.level.count(p.num)) tryPad(p.pos, Hit::PAD, p.num, "");
     if (d.hasMission)
         for (int i = 0; i < d.mission.npads; i++) {
             const MissionPad &p = d.mission.pads[i];
-            tryPad({ p.pos[0], p.pos[1], p.pos[2] }, Hit::MPAD, -1, p.id);
+            if (!occ.mission.count(p.id)) tryPad({ p.pos[0], p.pos[1], p.pos[2] }, Hit::MPAD, -1, p.id);
         }
     // items win over a pad at the same spot (they are drawn on it)
     for (const Item &it : d.items()) {
         Vec3 mn, mx; float t;
-        if (it.removed || !itemBounds(d, it, mn, mx)) continue;
-        if (rayAabb(org, dir, mn, mx, t) && t <= limit && (cand.kind == Hit::NONE || t <= cand.t + 30.0f)) {
+        if (it.removed || it.assigned || !itemLocalBox(d, it, mn, mx)) continue;
+        // the box is turned with the model: test the ray in the item's own frame (a rotation keeps t)
+        const Vec3 lo = rotYaw(sub(org, it.pos), -it.yawDeg), ld = rotYaw(dir, -it.yawDeg);
+        if (rayAabb(lo, ld, mn, mx, t) && t <= limit && (cand.kind == Hit::NONE || t <= cand.t + 30.0f)) {
             Hit h; h.kind = Hit::ITEM; h.item.valid = true; h.item.added = it.added; h.item.guard = it.guard; h.item.idx = it.idx;
             h.t = t; h.point = it.pos;
             cand = h;

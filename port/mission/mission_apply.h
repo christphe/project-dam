@@ -27,7 +27,9 @@
  *    refuses to spawn it. remove object: its flags2 "do not load" bits.
  *  Prop numbers keep their meaning: records are appended, never inserted.
  *
- * `spawn_pad` >= 0 re-points the first INTROTYPE_SPAWN record at that pad.
+ * `spawn_pad` >= 0 re-points the first INTROTYPE_SPAWN record at that pad; <= -2 means the
+ * mission's own pad number (-2 - spawn_pad) in m->pads (its index in the file is only known here);
+ * -1 keeps the level's start.
  * Pad positions in the mission are world units; the file holds them divided
  * by `room_scale` (the game's room_data_float2 = 1 / levelscale, ~1.85 in Bunker 1: the loader multiplies stored pads by it). */
 

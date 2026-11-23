@@ -3,7 +3,8 @@
 
   mcp_smoke.py EDITOR_EXE EXPORT_DIR WORK_DIR
 
-EXPORT_DIR holds level.rec + level.json (the synthetic one from make_test_rec is enough);
+EXPORT_DIR holds level.rec + level.json (the synthetic one from make_test_rec is enough; its data/ folder
+holds the synthetic setup and is picked up through GE_EDITOR_DATA);
 WORK_DIR receives the saved mission. Exits 0 when every check passes.
 """
 import json
@@ -16,6 +17,16 @@ import urllib.request
 failures = []
 
 
+def editor_env(export):
+    """The editor reads the level setup from the converted game data: the synthetic one from make_test_rec sits in
+    <export>/data (a real export uses the data folder next to the game, so leave the variable alone there)."""
+    env = dict(os.environ)
+    data = os.path.join(export, "data")
+    if os.path.isdir(data):
+        env["GE_EDITOR_DATA"] = data
+    return env
+
+
 def check(cond, what):
     print(("ok   " if cond else "FAIL ") + what)
     if not cond:
@@ -25,7 +36,7 @@ def check(cond, what):
 class Stdio:
     def __init__(self, exe, export):
         self.p = subprocess.Popen([exe, "--mcp-stdio", "--export", export], stdin=subprocess.PIPE,
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=editor_env(export))
         self.n = 0
 
     def call(self, method, params=None):
@@ -79,7 +90,7 @@ def transform_checks(exe, export, work):
     err, d = s.tool("set_transform", mission_pad="p1", pos=[60, 0, 60], snap={"grid": 25})
     check(not err and near(d["pos"], [50, 0, 50]), "set_transform on a mission pad: " + json.dumps(d))
     err, d = s.tool("set_transform", prop=1, pos=[1305, 0, 205], snap={"pads": True, "grid": 10})
-    check(not err and near(d["pos"], [1300, 0, 200]), "set_transform snaps to the existing pad 0x2710: " + json.dumps(d))
+    check(not err and near(d["pos"], [1300, 0, 200]), "set_transform snaps to the existing pad 3: " + json.dumps(d))
     err, d = s.tool("set_transform", prop=99, pos=[0, 0, 0])
     check(err, "set_transform of a missing prop is an error")
     err, d = s.tool("undo")
@@ -94,6 +105,33 @@ def transform_checks(exe, export, work):
         check(near(p["pos"], [50, 0, 50]), "saved pad position is the snapped one: " + json.dumps(p["pos"]))
         check(abs(p["look"][0] - 1) < 0.01 and abs(p["look"][2]) < 0.01, "saved pad look follows the 90 degree yaw")
     check(not any(g["op"] == "move" and g["prop"] == 1 for g in saved["guards"]), "undone move of prop 1 is gone")
+    s.close()
+
+
+def duplicate_checks(exe, export, work):
+    """duplicate: a copy of an original guard / object is a new add op with all its fields and its facing."""
+    mpath = os.path.join(work, "smoke_duplicate.json")
+    if os.path.exists(mpath):
+        os.remove(mpath)
+    s = Stdio(exe, export)
+    s.call("initialize", {"protocolVersion": "2025-06-18"})
+    s.tool("mission_open", new=True, level="bunker1", name="Duplicate test")
+    err, d = s.tool("duplicate", prop=0)
+    check(not err and d["added"] == {"kind": "guard", "op": 0}, "duplicate an original guard: " + json.dumps(d))
+    err, d = s.tool("duplicate", prop=3, pos=[600, 0, 300])
+    check(not err and d["added"]["kind"] == "object" and "new_pad" in d, "duplicate an original object to a point: " + json.dumps(d))
+    err, d = s.tool("duplicate", kind="guard", op=0, pad=4)
+    check(not err and d["added"]["op"] == 1, "duplicate an added guard onto a pad")
+    err, d = s.tool("duplicate", prop=999)
+    check(err, "duplicate of a missing prop is an error")
+    err, d = s.tool("mission_save", path=mpath)
+    saved = json.load(open(mpath))
+    g = [x for x in saved["guards"] if x["op"] == "add"]
+    check(len(g) == 2 and g[0]["model"] == 3 and g[0]["ai"] == 1025 and g[0]["health"] == 100 and g[0]["head"] == 0,
+          "the copied guard carries the original's fields: " + json.dumps(g[0] if g else {}))
+    o = [x for x in saved["objects"] if x["op"] == "add"]
+    check(len(o) == 1 and o[0]["type"] == 3 and o[0]["model"] == 120 and o[0]["damage"] == 1000, "the copied object carries the original's fields")
+    err, d = s.tool("undo")
     s.close()
 
 
@@ -185,7 +223,7 @@ def gui_capture_check(exe, export, work):
     out = os.path.join(work, "mod", "mission1", "thumb.png")
     if os.path.exists(out):
         os.remove(out)
-    p = subprocess.Popen([exe, "--export", export, "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    p = subprocess.Popen([exe, "--export", export, "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=editor_env(export))
 
     def post(body):
         req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST")
@@ -270,13 +308,13 @@ def main():
     err, d = s.tool("mission_open", new=True, level="bunker1", name="Smoke test")
     check(not err and d["mission"]["open"], "mission_open new bunker1 mission")
 
-    err, d = s.tool("place_guard", pad=0x2711, model=3, ai=0x401, weapon=17)
+    err, d = s.tool("place_guard", pad=4, model=3, ai=0x401, weapon=17)
     check(not err and d["added"]["kind"] == "guard", "place_guard at an original pad")
     err, d = s.tool("place_guard", pos=[300, 0, 300])
     check(not err and d.get("new_pad") == "p1", "place_guard at a point creates pad p1")
     err, d = s.tool("place_object", type=3, model=120, pad="p1")
     check(not err, "place_object on the new pad")
-    err, d = s.tool("move", prop=0, pad=0x2702)
+    err, d = s.tool("move", prop=0, pad=2)
     check(not err, "move original guard prop 0")
     err, d = s.tool("remove", prop=4)
     check(not err, "remove original object prop 4")
@@ -292,7 +330,7 @@ def main():
     saved = json.load(open(mpath))
     check(saved["format"] == 1 and saved["level"] == "bunker1" and saved["name"] == "Smoke test", "saved mission header")
     adds = [g for g in saved["guards"] if g["op"] == "add"]
-    check(len(adds) == 2 and adds[0]["pad"] == 0x2711 and adds[0]["ai"] == 0x401 and adds[0]["weapon"] == 17,
+    check(len(adds) == 2 and adds[0]["pad"] == 4 and adds[0]["ai"] == 0x401 and adds[0]["weapons"][0]["item"] == 17,
           "saved guard add op with pad/ai/weapon")
     check(adds[1]["pad"] == "p1" and saved["pads"][0]["id"] == "p1", "saved guard on the new pad p1")
     check(any(g["op"] == "move" and g["prop"] == 0 for g in saved["guards"]), "saved guard move op")
@@ -311,7 +349,7 @@ def main():
 
     # HTTP transport (headless --mcp-http)
     p = subprocess.Popen([exe, "--mcp-http", "--port", "18765", "--export", export], stdout=subprocess.PIPE,
-                         stderr=subprocess.DEVNULL, text=True)
+                         stderr=subprocess.DEVNULL, text=True, env=editor_env(export))
     try:
         line = p.stdout.readline().strip()
         check(line.startswith("MCP http://127.0.0.1:"), "http server announces its url: " + line)
@@ -344,6 +382,7 @@ def main():
         p.wait(timeout=10)
 
     transform_checks(exe, export, work)
+    duplicate_checks(exe, export, work)
     mod_checks(exe, export, work)
     if "--gui" in sys.argv:
         gui_capture_check(exe, export, work)
