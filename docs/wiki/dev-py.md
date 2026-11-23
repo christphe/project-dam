@@ -61,9 +61,11 @@ Every run command takes:
 - `--level L`: boot straight into a solo level, by number or by name (`dam`, `facility`,
   `runway`, … `cuba`; `-h` lists them). Becomes `-level_NN`.
 - `--hard N`: difficulty 0..3 (`-hardN`).
-- `ARGS...`: any other game argument, and `NAME=value` tokens that the Switch builds turn into
-  environment variables (`GE_COOP=1 GE_PADS=2`, `GE_MENUGOTO=1,2`…). Only the `args` and
-  `link` builds read them: the plain `switch` build ignores them.
+- `ARGS...`: any other game argument, and `NAME=value` tokens that become environment
+  variables (`GE_COOP=1 GE_PADS=2`, `GE_MENUGOTO=1,2`, `GE_QUITFRAME=300`…). On the Switch the
+  game turns them into variables itself, and only the `args` and `link` builds do (the plain
+  `switch` build ignores them). `win` and `linux` set them in the game's environment (through
+  `WSLENV` for `linux` on Windows); the PC game never reads them from its command line.
 
 ## Commands
 
