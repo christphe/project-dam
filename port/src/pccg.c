@@ -28,6 +28,7 @@ extern int   snprintf(char *str, size_t maxsize, const char *format, ...);
 #include "system.h"
 #include "fs.h"
 #include "pccg.h"
+#include "missions.h"
 
 /* Order matters: <ultra64.h> must finish before bondtypes.h (see
  * pcmodels.c's comment -- same PR/ucode.h anchor requirement). */
@@ -47,6 +48,11 @@ struct pccgRow {
     uint32_t size;
 };
 
+/* Custom missions (#101): room after the image for ONE rebuilt stage setup (pccgServeRow).
+ * s_fileSize is the pccg.bin size; s_total (what romdata reserves and validates) adds the slack. */
+#define PCCG_SLACK         (768u * 1024u)
+
+static uint32_t s_fileSize = 0;
 static uint32_t s_total = 0;
 static int      s_loaded = 0;
 static int      s_patched = 0;
@@ -112,8 +118,9 @@ uint32_t pccgReserveSize(const uint8_t *romImg)
     }
     uint32_t size = (uint32_t)fsSize(f);
     fsClose(f);
-    s_total = size;
-    return size;
+    s_fileSize = size;
+    s_total = size + PCCG_SLACK;
+    return s_total;
 }
 
 int pccgLoadSidecars(uintptr_t base)
@@ -130,8 +137,8 @@ int pccgLoadSidecars(uintptr_t base)
     s_base = base;
     /* The region was reserved from the size seen at sizing time; refuse a
      * file whose size has since changed. */
-    ok = (uint32_t)fsSize(f) == s_total &&
-         fsRead(f, (void *)s_base, (int32_t)s_total) == (int32_t)s_total;
+    ok = (uint32_t)fsSize(f) == s_fileSize &&
+         fsRead(f, (void *)s_base, (int32_t)s_fileSize) == (int32_t)s_fileSize;
     fsClose(f);
     if (!ok) {
         sysLogPrintf(LOG_ERROR, "pccg: short read of %s", s_binPath);
@@ -222,6 +229,66 @@ void pccgPatchTable(void)
     else
         sysLogPrintf(LOG_INFO, "pccg: table patched (%d bg/stan entries)",
                      hit);
+    missionsOnPatchTable();   /* a mission chosen on the command line rebuilds its setup row now */
+}
+
+/* ---- custom missions: read a sidecar row, serve a replacement for it ---- */
+
+static int pccgFindRow(const char *name)
+{
+    int i;
+    for (i = 0; i < s_rowCount; i++)
+        if (strcmp(s_rows[i].name, name) == 0)
+            return i;
+    return -1;
+}
+
+static int pccgFindEntry(const char *name)
+{
+    int t;
+    for (t = 1; t < file_entry_max; t++)
+        if (file_resource_table[t].filename &&
+            strcmp(file_resource_table[t].filename, name) == 0)
+            return t;
+    return -1;
+}
+
+/* The sidecar bytes of row `name` (still RZ-compressed for stage setups). 0 if there is none. */
+int pccgRowData(const char *name, const uint8_t **data, uint32_t *size)
+{
+    int r = s_loaded ? pccgFindRow(name) : -1;
+    if (r < 0)
+        return 0;
+    *data = (const uint8_t *)(s_base + s_rows[r].offset);
+    *size = s_rows[r].size;
+    return 1;
+}
+
+/* Serves `data` (`size` bytes, what the loader expects: an RZ stream) in place of row `name`.
+ * The bytes go to the slack after the image; the file table entry is pointed at them. 0 on failure. */
+int pccgServeRow(const char *name, const uint8_t *data, uint32_t size)
+{
+    int t;
+    if (!s_loaded || size == 0 || size > PCCG_SLACK)
+        return 0;
+    t = pccgFindEntry(name);
+    if (t < 0)
+        return 0;
+    memcpy((void *)(s_base + s_fileSize), data, size);
+    file_resource_table[t].hw_address = (u8 *)(s_base + s_fileSize);
+    resource_lookup_data_array[t].rom_size = size;
+    return 1;
+}
+
+/* Back to the original row. */
+void pccgRestoreRow(const char *name)
+{
+    int r = s_loaded ? pccgFindRow(name) : -1;
+    int t = r >= 0 ? pccgFindEntry(name) : -1;
+    if (t < 0)
+        return;
+    file_resource_table[t].hw_address = (u8 *)(s_base + s_rows[r].offset);
+    resource_lookup_data_array[t].rom_size = s_rows[r].size;
 }
 
 uint32_t pccgTotalSize(void)

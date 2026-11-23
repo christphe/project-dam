@@ -4087,6 +4087,24 @@ const char D_800577C0[] = "\n";
 #endif
 
 
+#ifdef PORT
+/* Custom missions (#103): while a mod mission runs, the pause menu's objectives page and background page show the
+ * mission's own objectives, their status and its briefing (port/src/missions_ui.c). Elsewhere these are the
+ * original calls, so the N64 path is unchanged. */
+#include "missions.h"
+#define WATCH_OBJ_COUNT()      (missionsPauseActive() ? missionsPauseObjCount() : objectiveGetCount())
+#define WATCH_OBJ_DIFF(i)      (missionsPauseActive() ? missionsPauseObjDifficulty(i) : get_difficulty_for_objective(i))
+#define WATCH_OBJ_TEXT(i)      (missionsPauseActive() ? missionsPauseObjText(i) : get_text_for_objective(i))
+#define WATCH_OBJ_STATUS(i)    (missionsPauseActive() ? missionsPauseObjStatus(i) : get_status_of_objective(i))
+#define WATCH_PAGE_TEXT(page)  ((missionsPauseActive() && missionsPausePageText(page)) ? (u8 *)missionsPausePageText(page) : get_ptr_text_for_watch_breifing_page(page))
+#else
+#define WATCH_OBJ_COUNT()      objectiveGetCount()
+#define WATCH_OBJ_DIFF(i)      get_difficulty_for_objective(i)
+#define WATCH_OBJ_TEXT(i)      get_text_for_objective(i)
+#define WATCH_OBJ_STATUS(i)    get_status_of_objective(i)
+#define WATCH_PAGE_TEXT(page)  get_ptr_text_for_watch_breifing_page(page)
+#endif
+
 Gfx *draw_watch_mission_briefing_page(Gfx *gdl, Mtx *param_2)
 {
     gdl = draw_background_health_and_armor(gdl, param_2, 0);
@@ -4154,25 +4172,25 @@ Gfx *draw_watch_mission_briefing_page(Gfx *gdl, Mtx *param_2)
         {
             case BRIEF_INDEX_BACKGROUND:
                 sprintf(pageTitle, langGet(0xac38));
-                textWrap(0xd2, get_ptr_text_for_watch_breifing_page(BRIEFING_OVERVIEW), wrappedText, chars, font);
+                textWrap(0xd2, WATCH_PAGE_TEXT(BRIEFING_OVERVIEW), wrappedText, chars, font);
                 mission_brief_background_navigation();
                 break;
 
             case BRIEF_INDEX_M:
                 sprintf(pageTitle, langGet(0xac39));
-                textWrap(0xd2, get_ptr_text_for_watch_breifing_page(BRIEFING_M), wrappedText, chars, font);
+                textWrap(0xd2, WATCH_PAGE_TEXT(BRIEFING_M), wrappedText, chars, font);
                 mission_brief_m_briefing_navigation();
                 break;
 
             case BRIEF_INDEX_Q:
                 sprintf(pageTitle, langGet(0xac3a));
-                textWrap(0xd2, get_ptr_text_for_watch_breifing_page(BRIEFING_Q), wrappedText, chars, font);
+                textWrap(0xd2, WATCH_PAGE_TEXT(BRIEFING_Q), wrappedText, chars, font);
                 mission_brief_q_branch_navigation();
                 break;
 
             case BRIEF_INDEX_MONEYPENNY:
                 sprintf(pageTitle, langGet(0xac3b));
-                textWrap(0xd2, get_ptr_text_for_watch_breifing_page(BRIEFING_MONEYPENNY), wrappedText, chars, font);
+                textWrap(0xd2, WATCH_PAGE_TEXT(BRIEFING_MONEYPENNY), wrappedText, chars, font);
                 mission_brief_moneypenny_navigation();
                 break;
 
@@ -4198,11 +4216,11 @@ Gfx *draw_watch_mission_briefing_page(Gfx *gdl, Mtx *param_2)
                 setTextOverlapCorrection((j_text_trigger) ? (1) : (5));
                 sprintf(pageTitle, langGet(0xac3c));
 
-                for (i = 0; i < objectiveGetCount(); i++)
+                for (i = 0; i < WATCH_OBJ_COUNT(); i++)
                 {
-                    if (get_difficulty_for_objective(i) <= lvlGetSelectedDifficulty())
+                    if (WATCH_OBJ_DIFF(i) <= lvlGetSelectedDifficulty())
                     {
-                        objectiveText = get_text_for_objective(i);
+                        objectiveText = WATCH_OBJ_TEXT(i);
                         objectiveBuffer[0] = '\0';
 
                         for (j = 0; j < lineCount; j++)
@@ -4243,7 +4261,7 @@ Gfx *draw_watch_mission_briefing_page(Gfx *gdl, Mtx *param_2)
                             strcat(objectiveBuffer, D_80058454);
                         }
 
-                        switch (get_status_of_objective(i))
+                        switch (WATCH_OBJ_STATUS(i))
                         {
                             case OBJECTIVESTATUS_INCOMPLETE:
                                 strcat(objectiveBuffer, incompleteText);

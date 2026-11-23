@@ -1794,7 +1794,7 @@ static McEntry* mc_capture(Gfx* dl) {
 /* gfx_run_dl, pushed G_DL: true when the list was drawn here (replayed, or
  * walked while capturing), false = walk it classically. */
 static bool mc_try(Gfx* dl) {
-    if (!mc_on() || s_mc_cap != nullptr) return false;
+    if (!mc_on() || s_mc_cap != nullptr || s_lr_on) return false;   /* s_lr_on: level export records the classic path */
     s_mc_cnt_try++;
     if (s_interp_mode != INTERP_OFF) {
         s_mc_cnt_reason[MCR_INTERP]++;

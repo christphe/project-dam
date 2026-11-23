@@ -1367,4 +1367,187 @@ void drawCoopCount(float W, float H, int sel, int* hover, bool* click) {
     ImGui::End();
 }
 
+/* ---- the Mods screen ---- */
+namespace {
+float g_thumbUv[256][4];
+bool g_thumbOk[256];
+int g_modsFirst = 0;   /* the first card shown in the list */
+
+void modsPicture(ImDrawList* dl, int id, ImVec2 a, ImVec2 b, ImU32 tint, const char* alt, float u) {
+    if (id >= 0 && id < 256 && g_thumbOk[id]) {
+        dl->AddImage((ImTextureID)(intptr_t)1, a, b, ImVec2(g_thumbUv[id][0], g_thumbUv[id][1]), ImVec2(g_thumbUv[id][2], g_thumbUv[id][3]), tint);
+        dl->AddRect(a, b, kRule, 0.0f, 0, 1.0f);
+    } else {
+        box(dl, a, b, IM_COL32(24, 25, 20, 255), kRule);
+        textCenter(dl, g_head, 1.7f * u, a, b, kGoldDim, alt);
+    }
+}
+}  // namespace
+
+void setThumbImage(int id, float u0, float v0, float u1, float v1) {
+    if (id < 0) { for (bool& b : g_thumbOk) b = false; return; }
+    if (id >= 256) return;
+    g_thumbUv[id][0] = u0; g_thumbUv[id][1] = v0; g_thumbUv[id][2] = u1; g_thumbUv[id][3] = v1;
+    g_thumbOk[id] = true;
+}
+
+void drawModsScreen(float W, float H, const ModsView& v, int* hover, bool* click) {
+    *hover = -1;
+    *click = false;
+    if (!g_head || v.entries.empty()) return;
+    const float u = minf(W / 100.0f, H / 56.25f), ox = (W - 100.0f * u) * 0.5f;
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool moved = io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f;
+    auto over = [&](ImVec2 a, ImVec2 b) { return io.MousePos.x >= a.x && io.MousePos.x < b.x && io.MousePos.y >= a.y && io.MousePos.y < b.y; };
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(W, H));
+    ImGui::Begin("##mods", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBackground |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoInputs);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(W, H), IM_COL32(40, 43, 34, 252), IM_COL32(26, 28, 22, 252),
+                                IM_COL32(16, 17, 14, 252), IM_COL32(26, 28, 22, 252));
+    const float hh = 4.6f * u, footH = 4.0f * u;
+    dl->AddRectFilled(ImVec2(0, 0), ImVec2(W, hh), IM_COL32(13, 14, 12, 208));
+    dl->AddLine(ImVec2(0, hh), ImVec2(W, hh), kGoldDim, 1.0f);
+    text(dl, g_head, 2.4f * u, ImVec2(ox + 2.4f * u, (hh - 2.4f * u) * 0.5f), kInk, upper(tr("Mods")).c_str());
+    if (g_ownerSeat >= 0) {   /* whose pad drives it */
+        const std::string who = upper(tr("Player")) + " " + std::to_string(g_ownerSeat + 1);
+        const float bw = textSize(g_head, 1.5f * u, who.c_str()).x + 2.4f * u, bx = ox + 97.6f * u - bw;
+        box(dl, ImVec2(bx, (hh - 2.6f * u) * 0.5f), ImVec2(bx + bw, (hh + 2.6f * u) * 0.5f), kGoldFill, kGold);
+        textCenter(dl, g_head, 1.5f * u, ImVec2(bx, (hh - 2.6f * u) * 0.5f), ImVec2(bx + bw, (hh + 2.6f * u) * 0.5f), kInk, who.c_str());
+    }
+    const float top = hh + 2.0f * u, bottom = H - footH - 1.6f * u;
+    const int n = (int)v.entries.size();
+    const int sel = v.sel < 0 ? 0 : (v.sel >= n ? n - 1 : v.sel);
+
+    /* ---- the list of cards ---- */
+    {
+        const float lx = ox + 2.4f * u, lw = 33.0f * u, ch = 7.2f * u, gap = 0.8f * u;
+        int visible = (int)((bottom - top + gap) / (ch + gap));
+        if (visible < 1) visible = 1;
+        if (sel < g_modsFirst) g_modsFirst = sel;
+        if (sel >= g_modsFirst + visible) g_modsFirst = sel - visible + 1;
+        if (g_modsFirst + visible > n) g_modsFirst = n - visible;
+        if (g_modsFirst < 0) g_modsFirst = 0;
+        for (int k = 0; k < visible && g_modsFirst + k < n; k++) {
+            const int i = g_modsFirst + k;
+            const ModsView::Entry& e = v.entries[i];
+            const ImVec2 a(lx, top + k * (ch + gap)), b(lx + lw, a.y + ch);
+            if (over(a, b) && moved) *hover = i;
+            if (over(a, b) && ImGui::IsMouseClicked(0)) { *hover = i; *click = true; }
+            const bool on = i == sel;
+            box(dl, a, b, on ? (v.focus ? kGoldSoft : kGoldFill) : kRow, on ? kGold : kRule);
+            const float th = ch - 1.2f * u, tw = th * 4.0f / 3.0f;
+            modsPicture(dl, e.thumb, ImVec2(a.x + 0.6f * u, a.y + 0.6f * u), ImVec2(a.x + 0.6f * u + tw, a.y + 0.6f * u + th), IM_COL32(255, 255, 255, 255), i == 0 ? "007" : "MOD", u);
+            const float tx = a.x + 0.6f * u + tw + 1.0f * u;
+            dl->PushClipRect(a, b, true);
+            text(dl, g_head, 1.9f * u, ImVec2(tx, a.y + 0.7f * u), kInk, upper(e.name).c_str());
+            std::string sub;
+            if (i == 0) sub = tr("The original game, no mod");
+            else {
+                sub = e.author;
+                if (!e.progress.empty()) sub += std::string(sub.empty() ? "" : "  \xC2\xB7  ") + tr(e.progress);
+            }
+            text(dl, g_body, 1.45f * u, ImVec2(tx, a.y + 3.0f * u), kMut, sub.c_str());
+            float cx = tx;
+            const char* chip[2] = { "Story", "Multiplayer" };
+            for (int c = 0; c < 2; c++) {
+                if (!(e.affects & (1 << c)) || i == 0) continue;
+                const std::string t = upper(tr(chip[c]));
+                const float cw = textSize(g_head, 1.15f * u, t.c_str()).x + 1.2f * u;
+                box(dl, ImVec2(cx, a.y + 4.9f * u), ImVec2(cx + cw, a.y + 6.5f * u), kGoldSoft, kGoldDim);
+                textCenter(dl, g_head, 1.15f * u, ImVec2(cx, a.y + 4.9f * u), ImVec2(cx + cw, a.y + 6.5f * u), kGold, t.c_str());
+                cx += cw + 0.6f * u;
+            }
+            if (i == v.chosen) {
+                const std::string t = upper(tr("In use"));
+                const ImVec2 ts = textSize(g_head, 1.1f * u, t.c_str());
+                text(dl, g_head, 1.1f * u, ImVec2(b.x - 0.8f * u - ts.x, a.y + 0.8f * u), kGold, t.c_str());
+            }
+            dl->PopClipRect();
+        }
+        if (n > visible) {   /* more cards than fit: a thin scroll bar */
+            const float bx = lx + lw + 0.6f * u, bh = bottom - top;
+            dl->AddRectFilled(ImVec2(bx, top), ImVec2(bx + 0.3f * u, top + bh), kLine);
+            dl->AddRectFilled(ImVec2(bx, top + bh * g_modsFirst / n), ImVec2(bx + 0.3f * u, top + bh * (g_modsFirst + visible) / n), kGoldDim);
+        }
+    }
+
+    /* ---- the highlighted mod ---- */
+    {
+        const ModsView::Entry& e = v.entries[sel];
+        const float px = ox + 38.0f * u, pw = 59.6f * u, pad = 2.0f * u;
+        const ImVec2 pa(px, top), pb(px + pw, bottom);
+        box(dl, pa, pb, IM_COL32(21, 22, 15, 255), kRule);
+        float y = top + 1.8f * u;
+        dl->PushClipRect(pa, pb, true);
+        text(dl, g_head, 3.0f * u, ImVec2(px + pad, y), kInk, upper(e.name).c_str());
+        y += 4.0f * u;
+        if (!e.author.empty()) {
+            text(dl, g_body, 1.7f * u, ImVec2(px + pad, y), kMut, (tr("by") + " " + e.author).c_str());
+            y += 2.6f * u;
+        }
+        if (!e.desc.empty()) {
+            const float dh = minf(textSizeWrapped(g_body, 1.55f * u, pw - 2 * pad, e.desc.c_str()).y, 6.4f * u);
+            dl->PushClipRect(ImVec2(px, y), ImVec2(px + pw, y + dh + 0.2f * u), true);
+            text(dl, g_body, 1.55f * u, ImVec2(px + pad, y), kInk, e.desc.c_str(), pw - 2 * pad);
+            dl->PopClipRect();
+            y += dh + 0.8f * u;
+        }
+        const float btnH = 3.4f * u, btnY = bottom - 1.6f * u - btnH;
+        if (!e.missions.empty()) {
+            dl->AddLine(ImVec2(px + pad, y + 0.4f * u), ImVec2(px + pw - pad, y + 0.4f * u), kLine, 1.0f);
+            y += 1.4f * u;
+            text(dl, g_head, 1.7f * u, ImVec2(px + pad, y), kGold, upper(tr("Missions")).c_str());
+            y += 2.8f * u;
+            const float tgap = 0.9f * u, tileW = (pw - 2 * pad - tgap) * 0.5f, tileH = 5.6f * u, limit = btnY - 1.0f * u;
+            int rows = (int)((limit - y + tgap) / (tileH + tgap));
+            if (rows < 1) rows = 1;
+            const int m = (int)e.missions.size(), shown = rows * 2 < m ? rows * 2 : m;
+            for (int k = 0; k < shown; k++) {
+                const ModsView::Mission& ms = e.missions[k];
+                const ImVec2 a(px + pad + (k % 2) * (tileW + tgap), y + (k / 2) * (tileH + tgap)), b(a.x + tileW, a.y + tileH);
+                const bool lock = ms.state == 0;
+                box(dl, a, b, kRow, kLine);
+                const float th = tileH - 0.8f * u, tw = th * 4.0f / 3.0f;
+                modsPicture(dl, ms.thumb, ImVec2(a.x + 0.4f * u, a.y + 0.4f * u), ImVec2(a.x + 0.4f * u + tw, a.y + 0.4f * u + th),
+                            lock ? IM_COL32(48, 48, 46, 255) : IM_COL32(255, 255, 255, 255), std::to_string(k + 1).c_str(), u);
+                const float tx = a.x + 0.4f * u + tw + 0.9f * u;
+                dl->PushClipRect(a, b, true);
+                text(dl, g_head, 1.55f * u, ImVec2(tx, a.y + 0.8f * u), lock ? kDisabled : kInk, (std::to_string(k + 1) + ". " + ms.name).c_str());
+                const std::string st = ms.state == 2 ? tr("Completed") + (ms.done.empty() ? std::string() : "  \xC2\xB7  " + ms.done)
+                                                     : tr(ms.state == 1 ? "Available" : "Locked");
+                text(dl, g_body, 1.3f * u, ImVec2(tx, a.y + 3.1f * u), lock ? kDisabled : (ms.state == 2 ? kGold : kMut), st.c_str());
+                dl->PopClipRect();
+            }
+            if (shown < m)
+                text(dl, g_body, 1.3f * u, ImVec2(px + pad, limit - 0.2f * u), kMut, ("+ " + std::to_string(m - shown) + " " + tr("more")).c_str());
+        }
+        /* the buttons: Back, Play this mod */
+        const std::string lab[2] = { upper(tr("Back")), upper(tr(sel == 0 ? "Play GoldenEye" : "Play this mod")) };
+        const float bw[2] = { 9.0f * u, maxf(16.0f * u, textSize(g_head, 1.8f * u, lab[1].c_str()).x + 3.0f * u) };
+        const float bx[2] = { px + pw - pad - bw[1] - 1.0f * u - bw[0], px + pw - pad - bw[1] };
+        for (int bi = 0; bi < 2; bi++) {
+            const ImVec2 a(bx[bi], btnY), b(bx[bi] + bw[bi], btnY + btnH);
+            const int id = bi ? 1001 : 1000;
+            if (over(a, b) && moved) *hover = id;
+            if (over(a, b) && ImGui::IsMouseClicked(0)) { *hover = id; *click = true; }
+            const bool f = v.focus == 1 && v.btn == bi;
+            box(dl, a, b, f ? kGoldFill : IM_COL32(21, 22, 15, 255), f ? kGold : kRule);
+            if (f) focusFrame(dl, a, b, u);
+            textCenter(dl, g_head, 1.8f * u, a, b, kInk, lab[bi].c_str());
+        }
+        dl->PopClipRect();
+    }
+    if (v.focus == 0) {
+        static const char* hints[3][2] = { { "Up / Down", "Choose a mod" }, { "A", "Open" }, { "B", "Back" } };
+        drawFooter(dl, W, H, footH, u, hints, 3);
+    } else {
+        static const char* hints[3][2] = { { "<  >", "Choose" }, { "A", "Confirm" }, { "B", "Back" } };
+        drawFooter(dl, W, H, footH, u, hints, 3);
+    }
+    ImGui::End();
+}
+
 }  // namespace menu

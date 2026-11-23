@@ -547,6 +547,9 @@ include_directories(
   "${CMAKE_SOURCE_DIR}/src/libultra/gu"
   "${CMAKE_SOURCE_DIR}/port/include"
   "${CMAKE_BINARY_DIR}/port/include"
+  "${CMAKE_SOURCE_DIR}/port/mission"
+  "${CMAKE_SOURCE_DIR}/port/levelrec"
+  "${CMAKE_SOURCE_DIR}/port/third_party/cjson"
 )
 
 # ----------------------------------------------------------------------------
@@ -929,8 +932,14 @@ if(GE_SWITCH)
   set(SRC_DRAM_SYMS "")
 endif()
 
+# Custom missions and the level export (issues #100-#105).
+include("${CMAKE_SOURCE_DIR}/port/mission/mission.cmake")
+include("${CMAKE_SOURCE_DIR}/port/levelrec/levelrec.cmake")
+
 set(SRC
   ${SRC_GAME}
+  ${SRC_MISSION}
+  ${SRC_LEVELREC}
   ${SWITCH_CACERT_SRC}
   ${SRC_PORT}
   ${SRC_ROMASSETS}
@@ -992,6 +1001,8 @@ if(GE_VULKAN)
   vulkan_shaders(ge007)   # SPIR-V shader pack (dkshgen + glslangValidator)
   list(APPEND GE_CORE_LIBS ge_volk ${CMAKE_DL_LIBS} ge_vkpack)
 endif()
+target_link_libraries(ge007 ge_mission)   # port/mission/mission.cmake
+list(APPEND GE_CORE_LIBS ge_mission)
 set_target_properties(ge007 PROPERTIES OUTPUT_NAME "${BIN_NAME}")
 switch_package(ge007)   # goldeneye-nx hook: .nro (no-op off Switch)
 switch_deko3d_shaders(ge007)   # project-dam hook (D973): deko3d shader pack (no-op off Switch)
@@ -1013,4 +1024,8 @@ option(GE007_ROM_TESTS "Also build the tests that need a ROM (run with GE007_ROM
 if(GE007_BUILD_TESTS AND NOT GE_SWITCH)
   enable_testing()
   add_subdirectory(tests)
+endif()
+# The mission editor (editor/): its own executable, never on the Switch.
+if(NOT GE_SWITCH)
+  add_subdirectory(editor)
 endif()

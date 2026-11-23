@@ -30,6 +30,9 @@
 #include "stan.h"
 #include "model.h"
 #include "token.h"
+#ifdef PORT
+#include "missions.h" /* custom missions: missionsBeforeSetupLoad */
+#endif
 
 /**
  * EU .bss 0x80068480
@@ -1273,6 +1276,9 @@ void proplvreset2(enum LEVELID stageId)
 
     withchrs = (((void *) tokenFind(1, "-nochr")) == NULL) && (((void *) tokenFind(1, "-noprop")) == NULL);
     withobjs = (((void *) tokenFind(1, "-noobj")) == NULL) && (((void *) tokenFind(1, "-noprop")) == NULL);
+#ifdef PORT
+    missionsBeforeSetupLoad(stageId);   /* a custom mission: its setup row rebuilt for the chosen difficulty */
+#endif
 
     g_DoorScale = 1.0f;
 

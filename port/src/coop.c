@@ -37,6 +37,7 @@
 #include "config.h"
 #include "system.h"
 #include "coop.h"
+#include "missions.h"
 #include "bondaicommands.h"   /* if_bond_y_pos_less_than_ID */
 
 extern struct player *g_playerPointers[4];
@@ -1340,6 +1341,9 @@ static void coopMirrorFade(void)
 void coopFrameTick(void)
 {
     static const f32 kBonus[3] = { 0.0f, 0.5f, 1.0f };   /* enemy health bonus per partner */
+    /* Custom missions (issue #104): lv.c's per-frame co-op hook also drives the
+     * mission runtime (Luau, events), solo or co-op; no-op without a mission. */
+    missionsFrameTick();
     if (!s_active) {
         return;
     }
