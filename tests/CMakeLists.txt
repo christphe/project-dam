@@ -49,6 +49,9 @@ ge_add_pure_test(test_gpuprobe test_gpuprobe.c ${CMAKE_SOURCE_DIR}/port/src/gpup
 # CONSOLE mode precedence (port/include/console.h, header-only): pure, no core.
 ge_add_pure_test(test_console test_console.c)
 
+# Character-model subdivision (port/convert/conv_subdiv.c): pure, no core.
+ge_add_pure_test(test_subdiv test_subdiv.c ${CMAKE_SOURCE_DIR}/port/convert/conv_subdiv.c)
+
 # Input strategies (port/src/input/): pure, no core.
 set(GE_INPUT_DIR "${CMAKE_SOURCE_DIR}/port/src/input")
 ge_add_pure_test(test_input_modern test_input_modern.c
