@@ -43,8 +43,8 @@
  *   "unlock": "ordered",          "ordered" (as the game: mission n+1 opens when n is completed) | "open"
  *   "missions": [ "bunker_remix", "dam_night" ]   mission folder names, in campaign order
  * }
- * thumb.png is the editor's Capture with its "old photo" look baked in; the
- * game shows it as the mission's image in the mission select.
+ * thumb.png is the editor's Capture, a plain crop of the view; the game shows
+ * it as the mission's image in the mission select.
  *
  * mission.json, format 1:
  * {

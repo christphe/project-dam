@@ -259,19 +259,17 @@ def gui_capture_check(exe, export, work):
             def call(i, n, a):
                 return post({"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": n, "arguments": a}})["result"]
 
-            # the old-photo look: intensity 1 differs from plain, both 320x240, and is deterministic
+            # two captures of the same view: both 320x240 and identical (a plain crop, deterministic)
             def dims(path):
                 b = open(path, "rb").read()
                 return int.from_bytes(b[16:20], "big"), int.from_bytes(b[20:24], "big"), b
-            p0, p1, p1b = [os.path.join(work, n) for n in ("plain.png", "photo.png", "photo2.png")]
-            r0 = call(6, "capture_thumb", {"path": p0, "intensity": 0})
+            p1, p1b = [os.path.join(work, n) for n in ("cap1.png", "cap2.png")]
             r1 = call(7, "capture_thumb", {"path": p1})
-            r2 = call(8, "capture_thumb", {"path": p1b, "style": "old_photo", "intensity": 1})
-            check(not (r0["isError"] or r1["isError"] or r2["isError"]), "capture_thumb with intensity 0 / default / 1")
-            w0, h0, b0 = dims(p0); w1, h1, b1 = dims(p1); _, _, b2 = dims(p1b)
-            check((w0, h0) == (320, 240) and (w1, h1) == (320, 240), "both captures are 320x240")
-            check(b0 != b1, "intensity 1 differs from intensity 0")
-            check(b1 == b2, "the old-photo capture is deterministic (same view, same file)")
+            r2 = call(8, "capture_thumb", {"path": p1b})
+            check(not (r1["isError"] or r2["isError"]), "capture_thumb twice")
+            w1, h1, b1 = dims(p1); _, _, b2 = dims(p1b)
+            check((w1, h1) == (320, 240), "the capture is 320x240")
+            check(b1 == b2, "the capture is deterministic (same view, same file)")
             call(3, "mod_open", {"dir": moddir, "name": "GUI mod"})
             call(4, "mod_add_mission", {"name": "Thumbed", "level": "bunker1"})
             r = call(5, "capture_thumb", {})

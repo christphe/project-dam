@@ -215,9 +215,8 @@ struct Doc {
     void commit(const std::string &snap);          // push a snapshot taken before an edit as one undo step
     bool restoreSnapshot(const std::string &snap, std::string &err);   // cancel a drag
 
-    // Set by the GUI: renders the view to a 320x240 PNG without overlay, in the old-photo look at the
-    // given intensity (0 = plain). Empty when headless.
-    std::function<bool(const std::string &path, float intensity, std::string &err)> captureFn;
+    // Set by the GUI: renders the view to a 320x240 PNG (a plain crop, no overlay). Empty when headless.
+    std::function<bool(const std::string &path, std::string &err)> captureFn;
 
     // ---- mod (campaign): mods/<mod>/campaign.json + <mission>/mission.json + thumb.png ----
     Campaign camp;

@@ -9,3 +9,6 @@ bool fileDialogAvailable();
 bool fileDialogOpenMission(const std::string &startDir, std::string &out);
 // Mission save dialog (filter mission.json / *.json, default name mission.json).
 bool fileDialogSaveMission(const std::string &startDir, std::string &out);
+// Settings: pick the game executable (filter *.exe on Windows), and open a folder in the system file manager.
+bool fileDialogPickProgram(const std::string &startPath, std::string &out);
+bool openFolder(const std::string &dir);

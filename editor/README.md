@@ -78,12 +78,23 @@ Options: `--port N`, `--no-mcp`, `--game EXE`, `--mcp-stdio`, `--mcp-http`, `--s
   record field (`port/mission/mission_fields.h`): editable for added items, read-only for original props.
 * **Facing.** Models and their selection boxes are drawn turned by the yaw of the pad they stand on (a line out of
   the front of the box shows it); picking uses the same turned box.
+* **Window layout.** A menu bar (File, Edit, View, Mission, Mod, Tools, Help), a short toolbar (tools Select /
+  Move / Guard / Object, Play + Co-op + the spawn label, snapping; Zone and Geometry are greyed out for #105), the
+  *Scene* tree on the left (filter box; Guards, Objects, Zones, Scripts, Mission pads, Free pads, Rooms, each with
+  its count), the 3D view, and on the right three tabs: *Selection*, *Mission* (the mission, its level, files,
+  environment, thumbnail) and *Mod* (the campaign). The bottom is one status line (the last message, red for a
+  failure); click it, or View > Show log, for the full log. Help > Controls lists the mouse and keys. The code is
+  split by panel (`ui_*.cpp`, see below).
+* **Settings** (Tools > Settings...): the game executable (Browse... on Windows), the export cache folder (Open
+  folder, Re-export all cached levels one after another in the background), offscreen rendering and the MCP
+  server (enable + port; both apply at the next start), clearing the recent list. They are kept in
+  `ge-editor-prefs.txt` next to the editor (`key=value` lines: `coop`, `offscreen`, `mcp`, `mcpport`).
 * **Select.** Click a prop, a pad (blue diamond; mission pads are green) or the floor (selects the
-  room). The panels list rooms, pads, mission pads, guards and objects; double-click frames one.
-* **Edit.** Tools in the top bar: *Add guard* / *Add object* (click a pad, or the floor to create a
-  new mission pad there), *Move* (select a prop first, then click its destination). *Delete* removes
+  room), or a row of the Scene tree; double-click a row to frame it.
+* **Edit.** Tools in the toolbar: *Guard* / *Object* (click a pad, or the floor to create a
+  new mission pad there), *Move* (select a prop first, then click its destination). Edit > Delete removes
   the selected prop (an original one is marked removed; one the mission added is deleted). Defaults
-  for new items are in the right panel. `Ctrl+Z` undoes, `Ctrl+S` saves. Moved props are yellow
+  for new items are at the top of the Selection tab. `Ctrl+Z` undoes, `Ctrl+S` saves. Moved props are yellow
   with a line to their original pad, added ones green, removed ones grey.
 * **Check and play.** The bottom panel validates the mission continuously (format, ids, and pads and
   props against the export). *Play* saves the mission and runs
@@ -104,7 +115,7 @@ fast3d OpenGL backend, so textures and colours match the game (fog is off).
   an original prop gives it a mission pad of its own at the new spot (an existing one is reused);
   original pads are level data and cannot be moved. Toolbar snaps: *Grid* (step), *Floor* (stan tile
   under the point), *Pads*. One drag is one undo step.
-* **Opening and saving.** The top of the File panel shows the open mission's name, its path (shortened, the full
+* **Opening and saving.** The top of the Mission tab shows the open mission's name, its path (shortened, the full
   path in a tooltip) and a `*` while it has unsaved changes; the window title reads `<mission>[*] - <level> -
   GoldenEye mission editor`. A new mission is saved to `<game data dir>/missions/<name>/mission.json` (the data
   folder next to the game, or `GE_EDITOR_DATA`), never to the export cache; a mission of an open mod keeps
@@ -115,9 +126,9 @@ fast3d OpenGL backend, so textures and colours match the game (fog is off).
   unsaved changes asks *Save / Discard / Cancel*; MCP `mission_open` refuses the same case unless `discard: true`.
 * **Mod (campaign) panel.** A mod is `mods/<mod>/campaign.json` + `<mission>/mission.json` +
   `thumb.png`. Open or create a folder, edit name, author, description, affects, unlock; add,
-  reorder, remove and open missions. *Capture* (toolbar) renders the view, 4:3 cropped and without
-  markers, to 320x240: `thumb.png` of the open mission when it is in the open mod, else the path in
-  the File section.
+  reorder, remove and open missions. *Mission > Capture thumbnail* (or the button in the Mission tab) renders
+  the view, 4:3 cropped, without markers or any effect, to 320x240: `thumb.png` of the open mission when it
+  is in the open mod, else the path in the Mission tab.
 * **Environment panel.** Per-field overrides (checkbox = the key is present; unchecked = the level's
   own): mood, sun, sky, clouds, sea. Save only: the editor draws no sky or sea, preview in the game.
   The sun marker in the view is draggable (azimuth 0 = +z).
@@ -158,7 +169,12 @@ python editor/tools/mcp_smoke.py <ge-editor exe> <export dir> <scratch dir> [--g
 | `doc.h/.cpp`, `doc_actions.cpp` | the document: level export, mission, selection, every action, undo |
 | `scene.cpp`, `view.cpp` | replay through `gfx_opengl_api`; camera, projection, picking |
 | `mcp.cpp`, `mcp_http.cpp` | JSON-RPC tools; the HTTP transport (cpp-httplib) |
-| `main.cpp` | window, panels, input |
+| `main.cpp` | `main()`, the loop, the command line and the test aids |
+| `ui_app.h` | the GUI state (`App`) and the helpers shared by the panel files |
+| `ui_menubar.cpp`, `ui_toolbar.cpp`, `ui_scene.cpp` | menu bar, toolbar, the left Scene tree |
+| `ui_selection.cpp`, `ui_mission.cpp`, `ui_mod.cpp` | the right panel's tabs (its tab bar is in `ui_frame.cpp`) |
+| `ui_settings.cpp`, `ui_modals.cpp`, `ui_log.cpp` | Settings window, popups (unsaved changes, mission level, Controls), status line + log |
+| `ui_overlay.cpp`, `ui_frame.cpp`, `ui_actions.cpp` | 3D overlay + gizmo + sun marker; one frame (layout, camera, shortcuts); actions shared by menus, buttons and keys |
 | `launch.cpp` | starting the game |
 | `third_party/` | cpp-httplib, the ImGui SDL2 and OpenGL3 backends (see `NOTICE`) |
 | `tools/` | `make_test_rec.cpp`, `mcp_smoke.py` |
