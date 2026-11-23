@@ -19,6 +19,7 @@ Two classes:
 
 | Env var | File:line | What it does | Status |
 |---|---|---|---|
+| `GE_EXPORT_NOMODELS=1` | `port/src/levelexport.c:398` | `--export-level`: skip the per-model recordings (rooms, pads and setup only), for a faster export while testing. | live tooling |
 | `GE_INPUTRECORD` | `port/src/input_script.c:296` | Records pad input to a file (D583 Deck harness; `levelbench.sh --record`). | live tooling |
 | `GE_INPUTREPLAY` | `port/src/input_script.c:297` | Replays a `GE_INPUTRECORD` file (`levelbench.sh --replay`; pin `GE_RSEED`). | live tooling |
 | `GE_INTERPLOG` | `port/src/libultra.c:2032` | D578 IPLOG pacing trace (`=<n>` caps the lines). | live diag |
