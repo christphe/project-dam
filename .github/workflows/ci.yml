@@ -66,10 +66,10 @@ jobs:
 
   # Generated sources and indexes are committed: each generator's --check fails
   # when its output is stale (e.g. menu.json edited without regenerating
-  # menu_data.cpp). Python only, no build.
+  # menu_data.cpp, or a new GE_* getenv missing from docs/dev/GE-ENV-PROBES.md).
+  # Python only, no build. Runs on every change, docs-only included (the docs it
+  # checks live under docs/), and is a required check for merging into main.
   validate:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
