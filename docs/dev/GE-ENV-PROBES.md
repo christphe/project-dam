@@ -32,6 +32,8 @@ Two classes:
 | `GE_INTERPPROPCAM_OFF` | `port/fast3d/gfx_pc.cpp:2805` | D954: in-between presents draw props at the exact camera again (no room-camera blend on the plain perspective). | live switch |
 | `GE_PCDUMP_PRESENTS` | `port/src/video.c:1870` | With `GE_PCDUMP`: one capture per present instead of per game frame. | live tooling |
 | `GE_NOTICKLOCK` | `port/src/libultra.c:1577` | D600: disable the display-locked retrace tick. | live switch |
+| `GE_RELIGHT` | `port/src/dynlights.c:247` | Prototype (#111): `=1` strips GE's painted light from the level's vertex colours (`relight.c`) and relights them from the GE+ sky's sun direction. Default off. | live switch |
+| `GE_NOBLOB` | `port/src/dynlights.c:313` | Prototype (#111): `=1` hides GE's soft round shadow under characters and objects (`model.c` doshadow). Default off. | live switch |
 | `GE_ADDRSTRICT_SELFTEST` | `port/src/port_addr.c:132` | D607 (macOS): address-window self-test at startup. | live diag |
 | `GE_PCDUMP` | `port/fast3d/gfx_opengl.cpp:2042` (`is_pcdump`), `port/src/config.c:47` (`configGetFrameDump`) | Per-frame framebuffer PPM dump to `$PCDUMP` dir (verification-ritual golden captures, `tools_pc/framediff.py`/`pixcount.py`). Also settable via `[Debug] FrameDump` ini (env wins). **M-33/D168: the writer now emits rows top-to-bottom — captures before that fix are vertically flipped.** | **live** |
 | `GE_INPUTSCRIPT` | `port/src/input_script.c:68` | Headless scripted controller-0 input: `"<frame>:<tok>,…;…"` (`SUP/SDOWN/SLEFT/SRIGHT/SNONE` sustain, buttons pulse; `ZHOLD`/`ZREL` sustain fire, D207 M-201). Sole input source when set. | **live** |
