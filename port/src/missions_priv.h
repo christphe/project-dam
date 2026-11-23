@@ -10,6 +10,8 @@ const Mission *missionsCurrent(void);
 const char *missionsDir(void);
 int  missionsSpawnPad(void);
 void modsThumbsLoad(const char *modDir, const char (*folders)[MISSION_ID_LEN], int count);   /* missions_thumb.c */
+const Campaign *modsCampaign(int i);   /* missions_mods.c: installed mod i */
+const char *modsDirOf(int i);
 void missionsHostReset(void);          /* missions_host.c: drop the running scripts */
 
 #endif

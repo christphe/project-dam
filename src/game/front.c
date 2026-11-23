@@ -2934,6 +2934,15 @@ void interface_menu06_modesel(void)
     u32 i;
 
 #ifdef COOP_MODEMENU
+    if (modsScreenActive())
+    {
+        /* the Mods screen owns the input and the drawing (player 1's pad, the new menu's look) */
+        if (modsScreenTick())
+        {
+            sndPlaySfx(g_musicSfxBufferPtr, DOOR_METAL_CLOSE2_SFX, 0);
+        }
+        return;
+    }
     if (coopModalActive())
     {
         /* the modal owns the input: the rows underneath (and B, and the cursor) do not see this frame */
@@ -3016,11 +3025,11 @@ void interface_menu06_modesel(void)
 #ifdef COOP_MODEMENU
     else if (modsCount() > 0 && cursor_v_pos >= (is_cheat_menu_available ? MODE_V_CHEAT : MODE_V_MULTI) + 24.0f)
     {
-        /* the mods row (#103): A cycles GoldenEye / the installed mods; Select Mission then shows the mod's missions */
+        /* the mods row (#103): A opens the Mods screen (port/src/missions_screen.c); Select Mission then shows the chosen mod's missions */
         mission_difficulty_highlighted = 4;
         if (joyGetButtonsPressedThisFrame(PLAYER_1, START_BUTTON|Z_TRIG|A_BUTTON))
         {
-            modsCycle();
+            modsScreenOpen();
             sndPlaySfx(g_musicSfxBufferPtr, DOOR_METAL_CLOSE_SFX, 0);
         }
     }
@@ -3279,7 +3288,7 @@ Gfx* constructor_menu06_modesel(Gfx* DL)
 #endif
     DL = frontAddPreviousTabText(DL);
 #ifdef COOP_MODEMENU
-    if (coopModalActive())
+    if (coopModalActive() || modsScreenActive())
     {
         return DL;   /* no cursor while the modal is up: the new menu draws it (menu::drawCoopCount) */
     }

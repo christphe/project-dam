@@ -28,8 +28,36 @@ int         missionsStage(void);                  /* the level's stage number, -
 void        missionsFrameTick(void);
 /* ---- mods (front.c): the chooser on the mode select, then the game's own mission select ---- */
 int         modsCount(void);                      /* installed mods (mods/<mod>/campaign.json) */
-void        modsCycle(void);                      /* GoldenEye -> mod 1 -> ... -> GoldenEye */
-const char *modsRowText(void);                    /* "GoldenEye" or "<name> (Story, Multiplayer)" */
+const char *modsRowText(void);                    /* "GoldenEye" or the chosen mod's name */
+void        modsSelect(int idx);                  /* choose installed mod idx, -1 = the original game */
+int         modsCurrent(void);                    /* the chosen mod's index, -1 = the original game */
+
+/* ---- the Mods screen (missions_screen.c): A on the MODS row opens it; front.c ticks it, menu_game.cpp draws it ---- */
+void        modsScreenOpen(void);
+int         modsScreenActive(void);
+int         modsScreenTick(void);                 /* once per frame while active (player 1's pad): 1 = it was just closed */
+void        modsScreenPointer(int hover, int click);   /* the mouse over a card (0..n) / button (MODS_HIT_*); click: pressed */
+#define MODS_HIT_BACK 1000
+#define MODS_HIT_PLAY 1001
+/* What it shows. Entry 0 is GoldenEye, entry i the installed mod i - 1. */
+int         modsScreenCount(void);
+int         modsScreenSel(void);                  /* the highlighted entry */
+int         modsScreenFocus(void);                /* 0 the list, 1 the buttons */
+int         modsScreenButton(void);               /* the focused button: 0 Back, 1 Play this mod */
+int         modsScreenChosen(void);               /* the entry in use now */
+const char *modsScreenName(int e);
+const char *modsScreenAuthor(int e);
+const char *modsScreenDescription(int e);
+const char *modsScreenProgress(int e);            /* "1 / 3 missions", "completed", "" */
+int         modsScreenAffects(int e);             /* CAMPAIGN_AFFECTS_* bits */
+int         modsScreenMissions(int e);
+const char *modsScreenMissionName(int e, int m);
+int         modsScreenMissionState(int e, int m); /* 0 locked, 1 available, 2 completed */
+const char *modsScreenMissionDone(int e, int m);  /* the difficulties completed: "Agent, 00 Agent" */
+int         modsScreenThumbId(int e, int m);      /* m = -1: the entry's card picture; -1 = none */
+int         modsScreenThumbCount(void);
+int         modsScreenThumbRev(void);             /* changes when the set of pictures does */
+const unsigned char *modsScreenThumbPixels(int id, int *w, int *h);   /* RGBA, w x h */
 int         modsStoryActive(void);                /* the chosen mod replaces the solo / co-op mission select */
 int         modsSlotGate(int slot);               /* mission select slot: -1 hidden (no such mission), 2 open campaign, -2 ask the game's save */
 void        modsUnbind(void);                     /* give the folder entry its original mission_num back (mission select) */

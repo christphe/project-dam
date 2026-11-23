@@ -23,6 +23,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -55,6 +56,27 @@ void portCrosshairTint(int* r, int* g, int* b);
 int portCrosshairPicture(int style, const unsigned char** px);
 int inputCrosshairCursorOn(void);
 int optionsMenuProfileAvailable(void);
+/* port/src/missions_screen.c: the Mods screen (the mode select's MODS row) */
+int modsScreenActive(void);
+void modsScreenPointer(int hover, int click);
+int modsScreenCount(void);
+int modsScreenSel(void);
+int modsScreenFocus(void);
+int modsScreenButton(void);
+int modsScreenChosen(void);
+const char* modsScreenName(int e);
+const char* modsScreenAuthor(int e);
+const char* modsScreenDescription(int e);
+const char* modsScreenProgress(int e);
+int modsScreenAffects(int e);
+int modsScreenMissions(int e);
+const char* modsScreenMissionName(int e, int m);
+int modsScreenMissionState(int e, int m);
+const char* modsScreenMissionDone(int e, int m);
+int modsScreenThumbId(int e, int m);
+int modsScreenThumbCount(void);
+int modsScreenThumbRev(void);
+const unsigned char* modsScreenThumbPixels(int id, int* w, int* h);
 }
 
 namespace {
@@ -70,9 +92,18 @@ extern "C" void menuBindGame(void);
 
 /* The texture: the fonts at the sizes the menu draws (menu::fontsBuild) plus the gamepad drawing. Rebuilt before a
  * frame when the menu asks for a size it hasn't baked, or the window changed size. */
+static int s_thumbRev = -1;   /* the Mods screen's picture set the atlas was built with */
+
 static void buildAtlas() {
     ImGuiIO& io = ImGui::GetIO();
     menu::fontsBuild();
+    s_thumbRev = modsScreenThumbRev();
+    const int nThumb = modsScreenThumbCount() < 256 ? modsScreenThumbCount() : 256;   /* the mods' pictures, likewise */
+    std::vector<int> thumbRect;
+    for (int k = 0; k < nThumb; k++) {
+        int tw = 0, th = 0;
+        thumbRect.push_back(modsScreenThumbPixels(k, &tw, &th) ? io.Fonts->AddCustomRectRegular(tw, th) : -1);
+    }
     const int padRect = io.Fonts->AddCustomRectRegular(kMenuPadW, kMenuPadH);   /* the gamepad drawing, in the same texture */
     int iconRect[kMenuIconCount];   /* the PlayStation face-button icons, likewise */
     for (int k = 0; k < kMenuIconCount; k++) iconRect[k] = io.Fonts->AddCustomRectRegular(kMenuIconSize, kMenuIconSize);
@@ -100,6 +131,16 @@ static void buildAtlas() {
             }
         menu::setIconImage(k, (float)r->X / (float)w, (float)r->Y / (float)h, (float)(r->X + kMenuIconSize) / (float)w,
                            (float)(r->Y + kMenuIconSize) / (float)h);
+    }
+    menu::setThumbImage(-1, 0, 0, 0, 0);
+    for (int k = 0; k < nThumb; k++) {
+        int tw = 0, th = 0;
+        const unsigned char* src = thumbRect[k] >= 0 ? modsScreenThumbPixels(k, &tw, &th) : nullptr;
+        const ImFontAtlasCustomRect* r = src ? io.Fonts->GetCustomRectByIndex(thumbRect[k]) : nullptr;
+        if (!r) continue;
+        for (int y = 0; y < th; y++)
+            memcpy(px + ((size_t)(r->Y + y) * (size_t)w + (size_t)r->X) * 4, src + (size_t)y * (size_t)tw * 4, (size_t)tw * 4);
+        menu::setThumbImage(k, (float)r->X / (float)w, (float)r->Y / (float)h, (float)(r->X + tw) / (float)w, (float)(r->Y + th) / (float)h);
     }
     io.Fonts->SetTexID((ImTextureID)(intptr_t)1);
     gfx_ui_set_atlas(px, w, h);
@@ -216,7 +257,36 @@ extern "C" int coopModalActive(void);
 extern "C" int coopModalSel(void);
 extern "C" void coopModalPointer(int row, int click);
 
-static void runFrame(int mode) {   /* 0 the menu, 1 the wheel, 2 the device assignment, 3 the co-op player count */
+/* The Mods screen's contents, from the game's side (missions_screen.c), once per frame. */
+static void modsView(menu::ModsView* v) {
+    const int n = modsScreenCount();
+    v->sel = modsScreenSel();
+    v->focus = modsScreenFocus();
+    v->btn = modsScreenButton();
+    v->chosen = modsScreenChosen();
+    for (int e = 0; e < n; e++) {
+        menu::ModsView::Entry en;
+        en.name = modsScreenName(e);
+        en.author = modsScreenAuthor(e);
+        en.desc = modsScreenDescription(e);
+        en.progress = modsScreenProgress(e);
+        en.affects = modsScreenAffects(e);
+        en.thumb = modsScreenThumbId(e, -1);
+        if (e == v->sel) {   /* the missions of the highlighted one only */
+            for (int m = 0; m < modsScreenMissions(e); m++) {
+                menu::ModsView::Mission ms;
+                ms.name = modsScreenMissionName(e, m);
+                ms.done = modsScreenMissionDone(e, m);
+                ms.state = modsScreenMissionState(e, m);
+                ms.thumb = modsScreenThumbId(e, m);
+                en.missions.push_back(ms);
+            }
+        }
+        v->entries.push_back(en);
+    }
+}
+
+static void runFrame(int mode) {   /* 0 the menu, 1 the wheel, 2 the device assignment, 3 the co-op player count, 4 the Mods screen */
     const bool wheel = mode == 1;
     if (!s_ctx) init();
     const float W = (float)gfx_current_dimensions.width, H = (float)gfx_current_dimensions.height;
@@ -226,7 +296,11 @@ static void runFrame(int mode) {   /* 0 the menu, 1 the wheel, 2 the device assi
     io.DeltaTime = s_lastTicks ? (float)(now - s_lastTicks) / 1000.0f : 1.0f / 60.0f;
     if (io.DeltaTime <= 0.0f || io.DeltaTime > 0.25f) io.DeltaTime = 1.0f / 60.0f;
     s_lastTicks = now;
-    if (mode == 3) feedMouse(io, W, H);
+    if (mode == 3 || mode == 4) feedMouse(io, W, H);
+    if (mode == 4) {
+        menu::setOwner(0);   /* player 1 drives */
+        menu::setPadFamily(inputPadFamily(0));
+    }
     if (mode == 0) {
         menu::setOwner(inputOverlayOwnerSeat());
         optionsMenuSetSeat(inputOverlayOwnerSeat());
@@ -236,13 +310,21 @@ static void runFrame(int mode) {   /* 0 the menu, 1 the wheel, 2 the device assi
         feedInput(io, W, H);
         io.AddMouseWheelEvent(0.0f, (float)optionsMenuWheel());   /* the mouse wheel: the lists and the release text scroll */
     }
-    if (menu::fontsFrame(W)) buildAtlas();   /* before NewFrame: the atlas is locked during a frame */
+    if (menu::fontsFrame(W) || modsScreenThumbRev() != s_thumbRev) buildAtlas();   /* before NewFrame: the atlas is locked during a frame */
     ImGui::NewFrame();
     if (mode == 3) {   /* the mouse picks a row too: hovering moves the selection, a click starts */
         int row = -1;
         bool click = false;
         menu::drawCoopCount(W, H, coopModalSel(), &row, &click);
         coopModalPointer(row, click ? 1 : 0);
+        menu::drawPointer(inputCrosshairCursorOn() != 0, W, H);
+    } else if (mode == 4) {   /* the Mods screen: the pad is read by the game (missions_screen.c), the mouse is passed on */
+        menu::ModsView view;
+        modsView(&view);
+        int hover = -1;
+        bool click = false;
+        menu::drawModsScreen(W, H, view, &hover, &click);
+        modsScreenPointer(hover, click ? 1 : 0);
         menu::drawPointer(inputCrosshairCursorOn() != 0, W, H);
     } else if (mode == 2) {   /* who plays with which device */
         char an[4][48];
@@ -352,6 +434,10 @@ extern "C" int menuTakeCloseRequest(void) {
 }
 
 extern "C" void menuUiClose(void) {
+    if (modsScreenActive()) {   /* the idle branch of the overlay's emit: the Mods screen is up over the mode select */
+        runFrame(4);
+        return;
+    }
     menu::showRoot();
     gfx_ui_submit(nullptr, 0, nullptr, 0, nullptr, 0);
 }

@@ -146,16 +146,26 @@ static void switchSave(void)
     if (changed) fileValidateSaves();   /* saves[] from the new file; a fresh file gets fresh folders */
 }
 
-void modsCycle(void)
+/* Choose a mod (index into the installed mods) or -1 for the original game: the save, the mission select and the
+ * thumbs follow. The Mods screen (missions_screen.c) calls it; the same index again changes nothing. */
+void modsSelect(int idx)
 {
     if (!s_scanned) scan();
+    if (idx < -1 || idx >= s_nmods) idx = -1;
+    if (idx == s_cur) return;
     missionsDeactivate();
-    s_cur = (s_cur + 1 >= s_nmods) ? -1 : s_cur + 1;
+    s_cur = idx;
     s_nslots = 0;
     if (s_cur >= 0) loadSlots();
     else modsThumbsLoad("", NULL, 0);
     switchSave();
 }
+
+int modsCurrent(void) { return s_cur; }
+
+/* The installed mods, for the Mods screen: campaign, folder (its mission folders live in <dir>/<mission>/). */
+const Campaign *modsCampaign(int i) { return (i >= 0 && i < s_nmods) ? &s_mods[i].c : NULL; }
+const char *modsDirOf(int i) { return (i >= 0 && i < s_nmods) ? s_mods[i].dir : ""; }
 
 void modsUnbind(void) { unbindEntry(); }
 
@@ -164,17 +174,10 @@ int modsStoryActive(void)
     return s_cur >= 0 && (s_mods[s_cur].c.affects & CAMPAIGN_AFFECTS_STORY);
 }
 
+/* The mode select's row: just the chosen mod's name (the Mods screen has the details). */
 const char *modsRowText(void)
 {
-    static char buf[200];
-    const ModEntry *me;
-    int st, mp;
-    if (s_cur < 0) return "GoldenEye";
-    me = &s_mods[s_cur];
-    st = (me->c.affects & CAMPAIGN_AFFECTS_STORY) != 0;
-    mp = (me->c.affects & CAMPAIGN_AFFECTS_MULTIPLAYER) != 0;
-    snprintf(buf, sizeof buf, "%s (%s%s%s)", me->c.name, st ? "Story" : "", st && mp ? ", " : "", mp ? "Multiplayer" : "");
-    return buf;
+    return s_cur >= 0 ? s_mods[s_cur].c.name : "GoldenEye";
 }
 
 /* Slot n of the mission select's grid, before the game's own save is asked: -1 = no such mission (hidden); an open

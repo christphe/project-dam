@@ -47,6 +47,16 @@ void drawWheel(float W, float H, int seat, float x0, float y0, float x1, float y
 void drawAssign(float W, float H, const std::vector<std::string>& names, int step, int count);
 /* The co-op player count (2, 3 or 4) asked from the mode menu: `sel` 0..2 is the highlighted row. */
 void drawCoopCount(float W, float H, int sel, int* hover, bool* click);   /* hover: the row the mouse moved onto (-1 none) */
+/* The Mods screen (the mode select's MODS row): what it shows, filled by the game each frame. Entry 0 is GoldenEye. */
+struct ModsView {
+    struct Mission { std::string name, done; int state = 0, thumb = -1; };   /* state: 0 locked, 1 available, 2 completed */
+    struct Entry { std::string name, author, desc, progress; int affects = 0, thumb = -1; std::vector<Mission> missions; };   /* affects: 1 story, 2 multiplayer */
+    std::vector<Entry> entries;
+    int sel = 0, focus = 0, btn = 1, chosen = 0;   /* the highlighted entry, 0 list / 1 buttons, the focused button (0 Back, 1 Play), the entry in use */
+};
+void setThumbImage(int id, float u0, float v0, float u1, float v1);   /* a mod picture in the atlas (uv of its corners); id < 0 clears all */
+/* hover: the card (0..n-1) or button (1000 Back, 1001 Play this mod) the mouse moved onto, -1 none; click: pressed on it */
+void drawModsScreen(float W, float H, const ModsView& v, int* hover, bool* click);
 void showRoot();   /* the next frame shows the first menu (Resume / Options / Restart / Quit) */
 void debugGoto(int tab, int entry, int focus);   /* tests: open on this tab and entry (focus -1 = the list) */
 void setUpdate(int state, const char* tag, const char* notes, const char* version, bool installable, bool busy, const char* status);   /* the update check: its state, the release found, its text, this build's version */
