@@ -119,7 +119,7 @@ static float g_yaw = 25, g_pitch = 12, g_dist = 3.2f, g_tgt[3] = { 0, 1.0f, 0 };
 static bool g_dirtyMesh = true, g_dirtyGpu = true;   // subdivide again / rebuild the GPU buffers
 static int g_cw = 1280, g_ch = 720;                   // client size
 static bool g_shotReq = false;
-static int g_menuH = 19;                              // the ImGui menu bar (set from the font in main)
+static int g_menuH = 19;                              // the ImGui menu bar (measured in menuBar(); main sets a first guess)
 static const int g_panelW = 330;                      // the ImGui panel on the left; the scene uses the rest
 
 static MvMesh g_orig, g_sub;
@@ -398,6 +398,7 @@ static void loadIni(const char* path) {
 // ---------------------------------------------------------------- the ImGui panel
 static void menuBar() {
     if (!ImGui::BeginMainMenuBar()) return;
+    g_menuH = (int)ceilf(ImGui::GetWindowHeight());   // the real bar height (1.92 rounds the font size, so a hand-made sum is 1 px off)
     if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("Save ini")) saveIni("modelview.ini");
         if (ImGui::MenuItem("Load ini")) loadIni("modelview.ini");
@@ -617,7 +618,7 @@ int main(int argc, char** argv) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     }
-    mvui_init(); g_menuH = (int)ceilf(ImGui::GetIO().Fonts->Fonts[0]->FontSize * ImGui::GetIO().FontGlobalScale + ImGui::GetStyle().FramePadding.y * 2);
+    mvui_init(); g_menuH = (int)ceilf(ImGui::GetIO().Fonts->Fonts[0]->LegacySize * ImGui::GetStyle().FontScaleMain + ImGui::GetStyle().FramePadding.y * 2);
     rebuild();
 
     if (!shot.empty()) {

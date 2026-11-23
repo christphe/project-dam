@@ -30,7 +30,7 @@ void mvui_init() {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr; io.LogFilename = nullptr;
-    io.FontGlobalScale = 1.0f;
+    ImGui::GetStyle().FontScaleMain = 1.0f;
     ImGui::StyleColorsDark();
     unsigned char* px; int tw, th; io.Fonts->GetTexDataAsRGBA32(&px, &tw, &th);
     glGenTextures(1, &g_font); glBindTexture(GL_TEXTURE_2D, g_font);

@@ -96,23 +96,32 @@ int main(int argc, char** argv) {
     ImGui_ImplWin32_InitForOpenGL(hwnd);
     ImGui_ImplOpenGL3_Init("#version 130");
     menu::init(body.data(), body.size(), head.data(), head.size());
-    {   /* the gamepad drawing, packed in the font atlas like the game does */
-        ImGuiIO& fio = ImGui::GetIO();
-        const int padRect = fio.Fonts->AddCustomRectRegular(kMenuPadW, kMenuPadH);
-        unsigned char* apx = nullptr;
-        int aw = 0, ah = 0;
-        fio.Fonts->GetTexDataAsRGBA32(&apx, &aw, &ah);
-        if (const ImFontAtlasCustomRect* r = fio.Fonts->GetCustomRectByIndex(padRect)) {
+    /* The gamepad drawing, packed in the font atlas like the game does. With 1.92's texture-owning backend the atlas
+     * can be rebuilt or grown at any time: ImGui copies every packed rectangle (custom ones too) into the new texture,
+     * but the UVs move, so they are read again each frame (padUv). The pixels are written once, right after
+     * AddCustomRect and before the backend first creates the texture, so no upload has to be queued by hand. */
+    ImFontAtlas* atlas = ImGui::GetIO().Fonts;
+    ImFontAtlasRectId padRect = ImFontAtlasRectId_Invalid;
+    {
+        atlas->TexPixelsUseColors = true;   /* RGBA pixels: keeps the backend's texture RGBA32 */
+        ImFontAtlasRect rr;
+        padRect = atlas->AddCustomRect(kMenuPadW, kMenuPadH, &rr);
+        ImTextureData* tex = atlas->TexData;
+        if (padRect == ImFontAtlasRectId_Invalid || !tex || !tex->Pixels || tex->Format != ImTextureFormat_RGBA32)
+            fprintf(stderr, "menuview: cannot place the gamepad drawing in the atlas\n");
+        else
             for (int y = 0; y < kMenuPadH; y++)
                 for (int x = 0; x < kMenuPadW; x++) {
-                    unsigned char* d = apx + ((size_t)(r->Y + y) * (size_t)aw + (size_t)(r->X + x)) * 4;
+                    unsigned char* d = (unsigned char*)tex->GetPixelsAt(rr.x + x, rr.y + y);
                     d[0] = d[1] = d[2] = 255;
                     d[3] = kMenuPad[y * kMenuPadW + x];
                 }
-            menu::setPadImage((float)r->X / (float)aw, (float)r->Y / (float)ah, (float)(r->X + kMenuPadW) / (float)aw,
-                              (float)(r->Y + kMenuPadH) / (float)ah, (float)kMenuPadW / (float)kMenuPadH);
-        }
     }
+    auto padUv = [&]() {
+        ImFontAtlasRect r;
+        if (padRect != ImFontAtlasRectId_Invalid && atlas->GetCustomRect(padRect, &r))
+            menu::setPadImage(r.uv0.x, r.uv0.y, r.uv1.x, r.uv1.y, (float)kMenuPadW / (float)kMenuPadH);
+    };
     auto loadContent = [&]() {
         std::vector<char> js = readFile(menuFile);
         std::string err;
@@ -173,6 +182,7 @@ int main(int argc, char** argv) {
         }
         frame++;
         ImGui::NewFrame();
+        padUv();
         if (ImGui::IsKeyPressed(ImGuiKey_GamepadBack, false)) { menu::setPlatform(!menu::isPc()); title(); }   // Back (Select): Switch <-> PC
         menu::draw((float)g_w, (float)g_h);
         {   // the mode we are previewing, drawn over everything like an FPS counter (not part of the menu)
