@@ -204,14 +204,25 @@ def cmd_native(a, kind):
     if not exe.exists():
         sys.exit(f"{exe} does not exist: run with --build")
     data = ensure_native_data(exe)
-    args = game_args(a)
+    # Only the Switch NX_ARGS build turns NAME=value tokens into environment variables; the PC game would take
+    # them as plain arguments and ignore them (GE_QUITFRAME=300 never quit). Set them in its environment here.
+    args, env = [], dict(os.environ)
+    for t in game_args(a):
+        k, eq, v = t.partition("=")
+        if eq and k and not t.startswith("-"):
+            env[k] = v
+        else:
+            args.append(t)
     if kind == "linux" and os.name == "nt":
         wsl = subprocess.run(["wsl", "wslpath", "-a", exe.as_posix()], capture_output=True, text=True).stdout.strip()
         if not wsl:                                         # backslashes would be eaten by the WSL shell
             sys.exit("WSL could not translate " + str(exe))
-        p = subprocess.Popen(["wsl", wsl] + args, cwd=str(exe.parent))
+        names = [k for k in env if k not in os.environ or env[k] != os.environ[k]]
+        if names:                                           # WSLENV carries Windows variables into the Linux side
+            env["WSLENV"] = ":".join(filter(None, [os.environ.get("WSLENV", "")] + names))
+        p = subprocess.Popen(["wsl", wsl] + args, cwd=str(exe.parent), env=env)
     else:
-        p = subprocess.Popen([str(exe)] + args, cwd=str(exe.parent))
+        p = subprocess.Popen([str(exe)] + args, cwd=str(exe.parent), env=env)
     time.sleep(3)
     if p.poll() is not None:                               # a game that dies at once would otherwise be silent
         sys.exit(f"the game exited right away (code {p.returncode}); see {data / 'ge007.log'}")
