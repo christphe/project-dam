@@ -1,5 +1,5 @@
 // seaview-nx: the GE+ sky and sea alone on the console, through deko3d and the game's own shaders
-// (port/switch/shaders, compiled by uam with VIEWER defined), from one captured frame of the game
+// (port/shaders, compiled by uam with VIEWER defined), from one captured frame of the game
 // (tools_pc/seaview/data/sea_dump.bin, in the romfs). The passes mirror gfx_deko3d.cpp's sky draw:
 // reflection panorama, far-sea bake, the sea at half width, the final pass.
 //

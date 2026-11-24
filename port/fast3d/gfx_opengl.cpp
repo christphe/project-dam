@@ -2660,7 +2660,7 @@ void main() {
 }
 
 /* GE+ sky and sea on GL (the passes of gfx_deko3d_skyplus_pass / gfx_vulkan_skyplus_pass). The shaders are the Switch's own
- * (port/switch/shaders/skyplus.frag.glsl, skylut.frag.glsl, skycommon.glsl pasted in; embedded by CMake as gl_sky_src.inc), which
+ * (port/shaders/skyplus.frag.glsl, skylut.frag.glsl, skycommon.glsl pasted in; embedded by CMake as gl_sky_src.inc), which
  * need GLSL 4.60: on an older or ES context this path stays off and the older single-pass shader above draws the sky (no sea).
  * The Sky block is a uniform buffer at binding 0; the five textures sit on units 3..7 (the game's tile sampling uses 0 and 1).
  * Off-screen targets are drawn y-flipped (uFlipY) so that they are stored top row first, as the shaders read them. */

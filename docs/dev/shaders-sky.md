@@ -1,6 +1,6 @@
 # The GE+ sky
 
-Read [shaders-general.md](shaders-general.md) first. Code: `port/switch/shaders/skycommon.glsl` (`skyColor`, `horizonColor`, `skyReflect`, `skyRay`), `skyplus.frag.glsl` (the pass), `skylut.frag.glsl` (the reflection panorama), `port/src/skyplus.c` and `port/include/skyplus.h` (what the game hands the shader), `port/fast3d/gfx_deko3d.cpp` (the pass driver).
+Read [shaders-general.md](shaders-general.md) first. Code: `port/shaders/skycommon.glsl` (`skyColor`, `horizonColor`, `skyReflect`, `skyRay`), `skyplus.frag.glsl` (the pass), `skylut.frag.glsl` (the reflection panorama), `port/src/skyplus.c` and `port/include/skyplus.h` (what the game hands the shader), `port/fast3d/gfx_deko3d.cpp` (the pass driver).
 
 Status: this note records how the sky works today and what was measured while working on the sea. The sky itself was **not** the subject of issue #38 and was not reworked; items marked *not investigated* are open.
 

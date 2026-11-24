@@ -69,7 +69,7 @@ Renderer and shader switches useful in test runs (D973):
   the frame's commands every n draws (default 64, 0 = once per frame).
 - `GE_CCLOG=1` logs each combiner id once (`CCID <id0> <id1>`); the deko3d backend logs the ids missing
   from its shader pack as `DKSH miss <id0> <id1>`. Merge both into the pack's list with
-  `python -I tools_pc/cc_census_merge.py port/switch/shaders/combiners.txt run.log ...` and rebuild.
+  `python -I tools_pc/cc_census_merge.py port/shaders/combiners.txt run.log ...` and rebuild.
 
 Example, a 40 s performance run of the Jungle in co-op with a 150% draw distance:
 

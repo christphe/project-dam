@@ -39,7 +39,7 @@ typedef HGLRC (WINAPI *PFNWGLCREATECONTEXTATTRIBSARB)(HDC, HGLRC, const int*);
 typedef BOOL (WINAPI *PFNWGLSWAPINTERVAL)(int);
 
 static std::string readfile(const std::string& p) { FILE* f = fopen(p.c_str(), "rb"); if (!f) return ""; std::string s; char b[4096]; size_t n; while ((n = fread(b, 1, sizeof b, f))) s.append(b, n); fclose(f); return s; }
-static std::string gShDir = "port/switch/shaders/";   /* --shaders <repo>/port/switch/shaders/ (seaview.py passes it) */
+static std::string gShDir = "port/shaders/";   /* --shaders <repo>/port/shaders/ (seaview.py passes it) */
 static GLuint compile(GLenum t, const std::string& src, const char* name) {
     GLuint s = glCreateShader(t); const char* c = src.c_str(); glShaderSource(s, 1, &c, 0); glCompileShader(s);
     GLint ok = 0; glGetShaderiv(s, GL_COMPILE_STATUS, &ok);

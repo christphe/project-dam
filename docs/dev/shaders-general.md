@@ -1,6 +1,6 @@
 # GE+ shaders on the Switch backend: general lessons
 
-Read this before touching `port/switch/shaders/*.glsl` or the sky pass in `port/fast3d/gfx_deko3d.cpp`.
+Read this before touching `port/shaders/*.glsl` or the sky pass in `port/fast3d/gfx_deko3d.cpp`.
 The sea and the sky have their own notes: [shaders-sea.md](shaders-sea.md), [shaders-sky.md](shaders-sky.md).
 Everything here was learned the hard way on issue #38 (Scenery (Enhanced) on water levels); each item cost at least one wasted build/run cycle.
 

@@ -279,7 +279,7 @@ struct ShaderProgram* r_create_and_load_new_shader(uint64_t id0, uint32_t id1) {
         r->used_textures[1] = cc.used_textures[1];
         r->real = nullptr;
         /* D973 (GE_CCLOG=1): combiner census for the deko3d shader pack
-         * (port/switch/shaders/combiners.txt, tools_pc/cc_census_merge.py);
+         * (port/shaders/combiners.txt, tools_pc/cc_census_merge.py);
          * once per distinct pair per run. Cached getenv (D250). */
         static int s_cclog = -1;
         if (s_cclog < 0) {

@@ -263,15 +263,15 @@ endif()
 
 # GE+ sky and sea for the GL backend: the Switch's own shaders (skyplus, skylut, with skycommon pasted at their
 # `#pragma skycommon` line, as cmake/SwitchPort.cmake and cmake/VulkanShaders.cmake do), embedded as C++ raw strings.
-file(READ "${CMAKE_SOURCE_DIR}/port/switch/shaders/skycommon.glsl" _gl_skycommon)
+file(READ "${CMAKE_SOURCE_DIR}/port/shaders/skycommon.glsl" _gl_skycommon)
 set(_gl_sky_inc "")
 foreach(_sc skyplus skylut water)
-  file(READ "${CMAKE_SOURCE_DIR}/port/switch/shaders/${_sc}.frag.glsl" _gl_scsrc)
+  file(READ "${CMAKE_SOURCE_DIR}/port/shaders/${_sc}.frag.glsl" _gl_scsrc)
   string(REPLACE "#pragma skycommon" "${_gl_skycommon}" _gl_scsrc "${_gl_scsrc}")
   string(APPEND _gl_sky_inc "static const char gl_${_sc}_glsl[] = R\"GLSLX(${_gl_scsrc})GLSLX\";\n")
-  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/switch/shaders/${_sc}.frag.glsl")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/${_sc}.frag.glsl")
 endforeach()
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/switch/shaders/skycommon.glsl")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/skycommon.glsl")
 # Written through a .tmp + configure_file COPYONLY: file(WRITE) touches the file on every configure, which
 # made gfx_opengl.cpp recompile on every build.
 file(WRITE "${CMAKE_BINARY_DIR}/port/include/gl_sky_src.inc.tmp" "${_gl_sky_inc}")

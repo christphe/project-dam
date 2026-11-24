@@ -1,7 +1,7 @@
 # seaview: the GE+ sky and sea, outside the game
 
 Tune the sky and the sea on the PC, then check the look and the GPU time on the console, without
-playing the game each time. Both viewers draw with the game's own shaders (`port/switch/shaders/`)
+playing the game each time. Both viewers draw with the game's own shaders (`port/shaders/`)
 from one captured frame of Frigate. Background: [docs/dev/shaders-sea.md](../../docs/dev/shaders-sea.md),
 [shaders-sky.md](../../docs/dev/shaders-sky.md), [shaders-general.md](../../docs/dev/shaders-general.md).
 
@@ -37,7 +37,7 @@ and so does the console NRO that embeds it.
 ## Water surface mode (PC viewer, issue #79)
 
 Draws the level's own water (Dam, Caverns, Complex) the way the game does: a large horizontal plane under the sky, shaded by
-`port/switch/shaders/water.frag.glsl` (the viewer has its own small vertex shader that provides the locations `water.frag` reads:
+`port/shaders/water.frag.glsl` (the viewer has its own small vertex shader that provides the locations `water.frag` reads:
 `vTexCoord0/1`, `vFog`, `vFogW`, `vInput1` = PRIM_LOD_FRAC, `vInput2` = SHADE, `vClip`). The sky and its reflection come from the same
 passes as the Sea mode (the capture's sky, the sky LUT at binding 2); the Frigate sea is off. Block `Sky` is bound at 2 with the four
 level-water vec4s (`uWX0..uWX2`: deep colour + patch size, light colour + reflectLit, map ready + water-only), `Draw` at 0, `Comb` at 1
