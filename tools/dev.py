@@ -9,13 +9,20 @@
     python tools/dev.py linux  [--build] [ARGS...]     # build-linux/ge007.x86_64 (WSL if on Windows)
     python tools/dev.py editor [--build] [--level N] [--mod DIR] [--mission FILE] [ARGS...]   # build-win/project-dam-editor.exe
     python tools/dev.py config                         # show the resolved config
+    python tools/dev.py tools                          # the dev tools, and what each still needs (g++, ROM)
+    python tools/dev.py tools modelview [ARGS...]      # build if a source changed, then run (also fxview, menuview,
+                                                       # seaview, verify, or any tools_pc/<name>.py|.sh)
 
 Machine-specific paths are NOT in this file: they come from <repo>/.env, or the main checkout's when run from a worktree (gitignored):
 SWITCH_IP, SWITCH_EMU_EXE, SWITCH_EMU_SD (default %APPDATA%/Ryujinx/sdcard),
-N64_EMU_EXE, N64_ROM (the .z64 to open), DOCKER_IMAGE (optional).
+N64_EMU_EXE, N64_ROM (the .z64 to open), DOCKER_IMAGE (optional). The same lookup serves the tools_pc viewers and
+scripts (tools/devenv.py): they find the ROM through N64_ROM, else a game data/ folder.
 """
 import argparse, json, os, shutil, subprocess, sys, time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import devenv   # .env (the main checkout's from a worktree), ROM and g++ lookup, shared with tools_pc
 
 REPO = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).resolve().parent
@@ -55,19 +62,7 @@ def level_arg(text):
 
 def cfg():
     """Config from <repo>/.env, or the main checkout's when run from a worktree (gitignored) overridden by the real environment."""
-    env = {}
-    # a worktree has no .env of its own: fall back to the main checkout's (the git common dir's parent)
-    common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=REPO,
-                            capture_output=True, text=True).stdout.strip()
-    f = next((p for p in (REPO / ".env", Path(common).parent / ".env" if common else REPO / ".env") if p.exists()),
-             REPO / ".env")
-    if f.exists():
-        for line in f.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                env[k.strip()] = v.strip().strip("'\"")
-    env.update({k: v for k, v in os.environ.items() if k in KEYS})
+    env = devenv.load_env()
     c = {name: env[var] for name, var in KEYS.items() if env.get(var)}
     if "ryujinx_sd" not in c and os.environ.get("APPDATA"):
         c["ryujinx_sd"] = str(Path(os.environ["APPDATA"]) / "Ryujinx" / "sdcard")
@@ -186,12 +181,13 @@ def ensure_native_data(exe):
     data.mkdir(exist_ok=True)
     names = ("ge007.ntsc-final.z64", "baserom.u.z64")
     if not any((data / n).exists() or (Path(exe).parent / n).exists() for n in names):
-        c = cfg()
-        src = Path(c["ares_rom"]) if c.get("ares_rom") else None
-        if src is None and c.get("ryujinx_sd"):             # same ROM the Switch emulator already has
-            src = Path(c["ryujinx_sd"]) / SD_DIR / "data" / names[0]
-        if src is None or not src.exists():
+        env = devenv.load_env()
+        if not env.get("SWITCH_EMU_SD") and cfg().get("ryujinx_sd"):   # same ROM the Switch emulator already has
+            env["SWITCH_EMU_SD"] = cfg()["ryujinx_sd"]
+        src = devenv.find_rom(env)                         # N64_ROM, another game data/ folder, the emulator's SD card
+        if src is None:
             sys.exit(f"no ROM for the native build: set N64_ROM in .env (or put {names[0]} in {data})")
+        src = Path(src)
         print(f"copying the ROM into {data / names[0]}")
         shutil.copyfile(src, data / names[0])
     return data
@@ -258,6 +254,81 @@ def cmd_editor(a):
     print("running; level exports go to", game.parent / "data" / "exports")
 
 
+# name -> (script, what it is, its subcommands; the first one is the default when none is given)
+TOOLS = {
+    "modelview": ("tools_pc/modelview/modelview.py", "models from your ROM: subdivision, textures, guard animations",
+                  ["pc", "selftest", "shots"]),
+    "fxview":    ("tools_pc/fxview/fxview.py", "combat effects: tracers, puffs, bullet-hole decals",
+                  ["pc", "selftest", "shots", "decalshots"]),
+    "menuview":  ("tools_pc/menuview/menuview.py", "the options menu on its own", []),
+    "seaview":   ("tools_pc/seaview/seaview.py", "GE+ sky and sea, PC viewer and console viewer",
+                  ["pc", "dump", "nx-build", "nx-send", "ini2args"]),
+    "verify":    ("tools_pc/verify.sh", "headless capture of a level vs the golden frames (build-pc)", []),
+}
+GXX_KEYS = {"modelview": ("MODELVIEW_GXX",), "fxview": ("FXVIEW_GXX", "MODELVIEW_GXX"), "menuview": (), "seaview": ()}
+ROM_KEYS = {"modelview": ("MODELVIEW_ROM",), "fxview": ("FXVIEW_ROM", "MODELVIEW_ROM")}
+
+
+def find_bash():
+    """Git's or MSYS2's bash on Windows (System32's bash.exe is WSL, which cannot run the Windows game)."""
+    if os.name != "nt":
+        return shutil.which("bash") or "bash"
+    for p in (r"C:\Program Files\Git\bin\bash.exe", r"C:\msys64\usr\bin\bash.exe"):
+        if os.path.isfile(p):
+            return p
+    b = shutil.which("bash")
+    if b and "system32" not in b.lower():
+        return b
+    sys.exit("no bash for the .sh tools: install Git for Windows or MSYS2")
+
+
+def tools_status():
+    env = devenv.load_env()
+    print("dev tools (python tools/dev.py tools <name> [args]):\n")
+    for name, (script, what, subs) in TOOLS.items():
+        print(f"  {name:10} {what}")
+        print(f"  {'':10} {script}" + (f"  [{' | '.join(subs)}]" if subs else ""))
+        if name in GXX_KEYS:
+            gxx = devenv.find_gxx(env, GXX_KEYS[name])
+            print(f"  {'':10} g++: {gxx or 'MISSING (set SEAVIEW_GXX in .env)'}")
+        if name in ROM_KEYS:
+            rom = devenv.find_rom(env, ROM_KEYS[name])
+            print(f"  {'':10} ROM: {rom or 'none (set N64_ROM in .env)'}")
+        if name == "verify":
+            d = devenv.find_data(env)
+            print(f"  {'':10} data: {d or 'none: run the game once so it converts the ROM (dev.py win)'}")
+        print()
+    print("  any other tools_pc/<name>.py or .sh runs the same way, from the repo root, the ROM found through .env.")
+    print("  ROM:", devenv.find_rom(env) or "none (set N64_ROM in .env)")
+    print("  .env:", ", ".join(p for p in devenv.env_files() if os.path.exists(p)) or "none (copy .env.example)")
+
+
+def cmd_tools(a):
+    if not a.name:
+        return tools_status()
+    args = list(a.args)
+    if a.name in TOOLS:
+        script, _, subs = TOOLS[a.name]
+        if subs and (not args or (args[0] not in subs and args[0] not in ("-h", "--help"))):
+            args = [subs[0]] + args                         # `tools modelview --model X` = `modelview.py pc --model X`
+    else:
+        hits = [f"tools_pc/{a.name}{ext}" for ext in ("", ".py", ".sh") if (REPO / f"tools_pc/{a.name}{ext}").is_file()]
+        if not hits:
+            sys.exit(f"no tool '{a.name}': run `python tools/dev.py tools` for the list, or name a tools_pc script")
+        script = hits[0]
+    env = dict(os.environ)
+    if script.endswith(".sh"):
+        if not os.environ.get("GE_DATA"):                    # verify.sh / capture_p7.sh copy a converted data/ per run
+            d = devenv.find_data(devenv.load_env())
+            if d:
+                env["GE_DATA"] = d
+        cmd = [find_bash(), script] + args
+    else:
+        cmd = [sys.executable, script] + args
+    print("+", " ".join(cmd), flush=True)
+    sys.exit(subprocess.run(cmd, cwd=REPO, env=env).returncode)
+
+
 def cmd_config(a):
     for k, v in cfg().items():
         print(f"{k} = {v}")
@@ -317,6 +388,12 @@ def main():
     p.set_defaults(fn=cmd_editor)
 
     p = sub.add_parser("config"); p.set_defaults(fn=cmd_config)
+
+    p = sub.add_parser("tools", help="the dev tools (modelview, fxview, menuview, seaview, verify, any tools_pc script): "
+                                     "no name lists them and what each still needs")
+    p.add_argument("name", nargs="?", help="modelview | fxview | menuview | seaview | verify | a tools_pc script name")
+    p.add_argument("args", nargs=argparse.REMAINDER, help="passed to the tool (its default subcommand when none is given)")
+    p.set_defaults(fn=cmd_tools)
     a = ap.parse_args()
     a.fn(a)
 

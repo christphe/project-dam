@@ -45,7 +45,9 @@ GBI_FMT_NAME = {0: "RGBA", 2: "CI", 3: "IA", 4: "I"}
 
 def load(region="ntsc-final"):
     """(rom bytes, [(offset, size), ...] indexed by texture number)."""
-    rom = open(os.path.join(ROOT, "data", "ge007.%s.z64" % region), "rb").read()
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import devenv   # the ROM from N64_ROM in .env, or a game data/ folder
+    rom = open(devenv.rom_path(region), "rb").read()
     rows = []
     csv = os.path.join(ROOT, "imagelist.%s.csv" % ("u" if region.startswith("ntsc") else region[0]))
     for line in open(csv):

@@ -18,16 +18,17 @@
 fxShade is read from uber.frag.glsl (between "// FXSHADE BEGIN" and "// FXSHADE END") and hot-reloaded when the file
 changes: tuning = editing that file with the viewer open. The Windows g++ comes from FXVIEW_GXX, MODELVIEW_GXX or
 SEAVIEW_GXX (environment or <repo>/.env). The sprites are decoded from your own ROM at run time: --rom, else FXVIEW_ROM,
-else MODELVIEW_ROM, else the main checkout's build-win/data/*.z64. Settings: tools_pc/fxview/data/fxview.ini (git
+else MODELVIEW_ROM, else N64_ROM, else a game data/ folder (build-win/data/...). Settings: tools_pc/fxview/data/fxview.ini (git
 ignores data/ and build/). Nothing from the ROM is written into the repo: shots refuse an output dir inside it.
 """
-import argparse, glob, html, os, subprocess, sys
+import argparse, html, os, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 DATA = os.path.join(HERE, "data")
 MV = os.path.join(REPO, "tools_pc", "modelview", "pc")   # the texture decoder, inflate, ImGui renderer and PNG writer are modelview's
-KEYS = ("FXVIEW_GXX", "MODELVIEW_GXX", "SEAVIEW_GXX", "FXVIEW_ROM", "MODELVIEW_ROM")
+sys.path.insert(0, os.path.join(REPO, "tools"))
+import devenv   # tools/devenv.py: .env (the main checkout's from a worktree), ROM and g++ lookup
 
 # (file stem, viewer args, caption) for `shots`
 SHOTS = [
@@ -52,58 +53,19 @@ DECAL_SHOTS = [(f"decal_{m}_sun_flash", ["--mat", m] + SUN_UL + FLASH, f"{cap}: 
        ("decal_wood_type7_overlap", ["--mat", "wood", "--dtype", "7", "--holes", "6"] + SUN_UL + FLASH, "wood, impact type 7, six overlapping holes")]
 
 
-def main_checkout():
-    try:
-        common = subprocess.run(["git", "-C", REPO, "rev-parse", "--git-common-dir"], capture_output=True, text=True).stdout.strip()
-        if common:
-            return os.path.dirname(os.path.abspath(os.path.join(REPO, common)))
-    except OSError:
-        pass
-    return None
-
-
-def env_files():
-    """<repo>/.env, and the main checkout's when this is a git worktree (.env is not tracked, so a worktree has none)"""
-    yield os.path.join(REPO, ".env")
-    m = main_checkout()
-    if m:
-        yield os.path.join(m, ".env")
-
-
 def load_env():
-    env = {}
-    for p in env_files():
-        if not os.path.exists(p):
-            continue
-        for line in open(p, encoding="utf-8"):
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            env.setdefault(k.strip(), v.strip().strip('"'))
-    for k in KEYS:
-        if os.environ.get(k):
-            env[k] = os.environ[k]
-    return env
+    return devenv.load_env()
 
 
 def find_gxx(env):
-    for k in ("FXVIEW_GXX", "MODELVIEW_GXX", "SEAVIEW_GXX"):
-        if env.get(k):
-            return env[k]
-    sys.exit(f"fxview: set FXVIEW_GXX (or MODELVIEW_GXX / SEAVIEW_GXX) in {os.path.join(REPO, '.env')}: a Windows g++ (MinGW-w64)")
+    gxx = devenv.find_gxx(env, ("FXVIEW_GXX", "MODELVIEW_GXX"))
+    if not gxx:
+        sys.exit(f"fxview: set FXVIEW_GXX (or MODELVIEW_GXX / SEAVIEW_GXX) in {devenv.env_files()[-1]}: a Windows g++ (MinGW-w64)")
+    return gxx
 
 
 def find_rom(env):
-    for k in ("FXVIEW_ROM", "MODELVIEW_ROM"):
-        if env.get(k) and os.path.exists(env[k]):
-            return env[k]
-    for root in (main_checkout(), REPO):
-        if root:
-            roms = sorted(glob.glob(os.path.join(root, "build-win", "data", "*.z64")))
-            if roms:
-                return roms[0]
-    return None
+    return devenv.find_rom(env, ("FXVIEW_ROM", "MODELVIEW_ROM"))
 
 
 def build(env):
@@ -150,7 +112,7 @@ def cmd_pc(env, a):
         if rom:
             extra += ["--rom", rom]
         else:
-            print("fxview: no ROM (pass --rom or set FXVIEW_ROM): the sprites show as untextured quads")
+            print("fxview: no ROM (pass --rom or set N64_ROM in .env): the sprites show as untextured quads")
     extra += ["--repo", REPO]
     for i, x in enumerate(extra[:-1]):   # the viewer runs in data/: a path given relative to here must be made absolute
         if x in ("--shot", "--rom", "--shader"):
@@ -183,7 +145,7 @@ def cmd_shots(env, a):
     exe = build(env)
     rom = a.rom or find_rom(env)
     if not rom:
-        sys.exit("fxview: no ROM: pass --rom, or set FXVIEW_ROM")
+        sys.exit("fxview: no ROM: pass --rom, or set N64_ROM in .env")
     common = ["--rom", os.path.abspath(rom), "--repo", REPO, "--view", "side", "--backdrop", a.backdrop, "--fc", str(a.fc),
               "--w", str(a.w), "--h", str(a.h)] + (["--bgtex", str(a.bgtex)] if a.bgtex is not None else [])
     ok = {}
@@ -213,7 +175,7 @@ def cmd_decalshots(env, a):
     exe = build(env)
     rom = a.rom or find_rom(env)
     if not rom:
-        sys.exit("fxview: no ROM: pass --rom, or set FXVIEW_ROM")
+        sys.exit("fxview: no ROM: pass --rom, or set N64_ROM in .env")
     common = ["--rom", os.path.abspath(rom), "--repo", REPO, "--mode", "decal", "--view", "side", "--holes", str(a.holes),
               "--yaw", str(a.yaw), "--pitch", str(a.pitch), "--w", str(a.w), "--h", str(a.h)]
     ok = {}

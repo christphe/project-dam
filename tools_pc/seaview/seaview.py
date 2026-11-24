@@ -19,29 +19,22 @@ REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 DATA = os.path.join(HERE, "data")
 NXDIR = os.path.join(HERE, "nx")
 DUMP = os.path.join(DATA, "sea_dump.bin")
+sys.path.insert(0, os.path.join(REPO, "tools"))
+import devenv   # tools/devenv.py: .env (the main checkout's from a worktree), ROM and g++ lookup
 FRIGATE = ["-level_26", "-hard0", "NX_TEST_SECS=3600", "GE_TELEPORT=595.3,521.9,690.4,296"]
 
 
 def load_env():
-    env = {}
-    p = os.path.join(REPO, ".env")
-    if os.path.exists(p):
-        for line in open(p, encoding="utf-8"):
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            env[k.strip()] = v.strip().strip('"')
-    for k in ("SWITCH_IP", "SWITCH_EMU_EXE", "SWITCH_EMU_SD", "DOCKER_IMAGE", "SEAVIEW_GXX"):
-        if os.environ.get(k):
-            env[k] = os.environ[k]
+    env = devenv.load_env()
     env.setdefault("DOCKER_IMAGE", "local/project-dam-build:latest")
+    if not env.get("SEAVIEW_GXX") and devenv.find_gxx(env):
+        env["SEAVIEW_GXX"] = devenv.find_gxx(env)
     return env
 
 
 def need(env, key):
     if not env.get(key):
-        sys.exit(f"seaview: set {key} in {os.path.join(REPO, '.env')} (see .env.example)")
+        sys.exit(f"seaview: set {key} in {devenv.env_files()[-1]} (see .env.example)")
     return env[key]
 
 

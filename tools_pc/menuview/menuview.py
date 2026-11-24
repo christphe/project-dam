@@ -16,21 +16,8 @@ REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 EXE = os.path.join(HERE, "menuview.exe")
 IMGUI = os.path.join(REPO, "port", "third_party", "imgui")
 MENU = os.path.join(REPO, "port", "src", "menu")
-
-
-def load_env():
-    env = {}
-    for root in (REPO, os.path.abspath(os.path.join(REPO, "..", "..", ".."))):   # a worktree reads the main checkout's .env
-        p = os.path.join(root, ".env")
-        if os.path.exists(p):
-            for line in open(p, encoding="utf-8"):
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    env.setdefault(k.strip(), v.strip().strip('"'))
-    if os.environ.get("SEAVIEW_GXX"):
-        env["SEAVIEW_GXX"] = os.environ["SEAVIEW_GXX"]
-    return env
+sys.path.insert(0, os.path.join(REPO, "tools"))
+import devenv   # tools/devenv.py: .env (the main checkout's from a worktree), ROM and g++ lookup
 
 
 def sources():
@@ -43,8 +30,8 @@ def sources():
 
 
 def build():
-    gxx = load_env().get("SEAVIEW_GXX")
-    if not gxx or not os.path.exists(gxx):
+    gxx = devenv.find_gxx(devenv.load_env())
+    if not gxx:
         sys.exit("set SEAVIEW_GXX in <repo>/.env to a Windows g++ (see .env.example)")
     srcs = sources()
     deps = srcs + [os.path.join(MENU, f) for f in ("menu_ui.h", "menu_model.h", "menu_json.h")]

@@ -4,7 +4,8 @@ sources:
   - tools/dev.py
   - .env.example
   - tools/switch/nxlink.py
-verified: 7d15f029
+  - tools/devenv.py
+verified: 409b3d28
 ---
 
 # `tools/dev.py`: build and run
@@ -20,7 +21,9 @@ python tools/dev.py switch [--build args|switch|none] [--level L] [--hard N] [AR
 python tools/dev.py n64
 python tools/dev.py win    [--build] [--level L] [--hard N] [ARGS...]
 python tools/dev.py linux  [--build] [--level L] [--hard N] [ARGS...]
+python tools/dev.py editor [--build] [--level L] [--mod DIR] [--mission FILE] [ARGS...]
 python tools/dev.py config
+python tools/dev.py tools [NAME [ARGS...]]
 ```
 
 `-h` works on every command.
@@ -36,7 +39,8 @@ environment variables override the file.
 | `SWITCH_IP` | `nx`: the console's address on the local network |
 | `SWITCH_EMU_EXE` | `switch`: the Switch emulator |
 | `SWITCH_EMU_SD` | `switch`: its virtual SD card (default `%APPDATA%/Ryujinx/sdcard`) |
-| `N64_EMU_EXE`, `N64_ROM` | `n64`; `N64_ROM` also seeds the native builds' `data/` |
+| `N64_EMU_EXE`, `N64_ROM` | `n64`; `N64_ROM` also seeds the native builds' `data/` and is the ROM every tool reads |
+| `SEAVIEW_GXX` | `tools`: the Windows g++ the viewers build with (default: MSYS2's `C:\msys64\mingw64in\g++.exe`) |
 | `DOCKER_IMAGE` | builds (default `local/project-dam-build:latest`, from `docker compose build`) |
 
 `python tools/dev.py config` prints what it resolved.
@@ -93,7 +97,32 @@ worktree creates `data/` next to the executable and copies the ROM into it (from
 the one the Switch emulator already has). It reports a game that exits within three seconds
 instead of failing silently. `linux` on Windows runs through WSL.
 
+**`editor`** runs the mission editor of the Windows build (`build-win/project-dam-editor.exe`)
+with the game next to it for Play and the level exports (`--build` rebuilds the `windows`
+target first). `--level` opens a solo level, `--mod` a `mods/<mod>` folder, `--mission` a
+`mission.json`; other arguments go to the editor.
+
 **`n64`** opens the ROM in the N64 emulator, for reference captures.
+
+**`tools`** runs the dev tools from the repo root. With no name it lists them and what each still
+needs (g++, ROM, a converted `data/`). `tools NAME [ARGS...]` runs one:
+
+| Name | What | Default subcommand |
+|---|---|---|
+| `modelview` | models from the ROM: subdivision, textures, guard animations | `pc` (also `selftest`, `shots`) |
+| `fxview` | combat effects | `pc` (also `selftest`, `shots`, `decalshots`) |
+| `menuview` | the options menu on its own | none (`--build` builds only) |
+| `seaview` | GE+ sky and sea | `pc` (also `dump`, `nx-build`, `nx-send`, `ini2args`) |
+| `verify` | `tools_pc/verify.sh`: headless capture vs the golden frames | none |
+| any other | `tools_pc/<name>.py` or `.sh` (`disasm`, `d88_propdef_scan`, …) | none |
+
+The viewers rebuild themselves when a source changed. Arguments that are not a subcommand go to
+the default one: `tools modelview --model CtrevelyanZ` is `modelview.py pc --model CtrevelyanZ`.
+Every tool finds the ROM the same way (`tools/devenv.py`): its own key if it has one
+(`MODELVIEW_ROM`, `FXVIEW_ROM`), then `N64_ROM`, then a game `data/` folder (`build-win`,
+`build-pc`, `build-linux`, `data`, in this checkout then the main one), then the Switch emulator's
+SD card. The `.sh` tools run under Git's or MSYS2's bash and get `GE_DATA`, a `data/` the game has
+already converted, to copy into their per-run work dir.
 
 ## Examples
 
@@ -103,4 +132,7 @@ python tools/dev.py nx --name coop GE_COOP=1 GE_PADS=2     # co-op test build, n
 python tools/dev.py switch --level dam --hard 3            # emulator, Dam on 00 Agent
 python tools/dev.py switch --build none GE_MENUGOTO=2,0    # emulator, last build, menu open on Input
 python tools/dev.py win --build                            # rebuild and run the Windows build
+python tools/dev.py tools                                  # list the dev tools and what they need
+python tools/dev.py tools modelview                        # build if needed and open the model viewer
+python tools/dev.py tools disasm 7F000000 20               # any tools_pc script, ROM from .env
 ```

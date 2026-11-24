@@ -4,6 +4,10 @@ Index for the ~60 scripts here (speed-ups plan Step 4 / N2). None of these are
 part of the build; they are converters, verification tooling, and
 investigation artifacts.
 
+Run them through `python tools/dev.py tools [NAME [ARGS...]]` (lists them with no name; wiki
+`dev-py.md`). It runs from the repo root, and every tool finds the ROM through `N64_ROM` in `.env`
+(`tools/devenv.py`), so nothing needs a ROM copied into `data/` by hand.
+
 **Marker:**
 - **`living`** — kept and re-run; part of the verification ritual, the release
   flow, or a converter the build depends on (via the sidecars it emits).
