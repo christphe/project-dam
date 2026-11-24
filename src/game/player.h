@@ -205,6 +205,25 @@ extern int coopMenuPlayers(void);
 extern int portAimIsMouse(void);
 #define GE_AUTOAIM_ON()          (cur_player_get_autoaim() && !portAimIsMouse())   /* no auto-aim while the mouse aims */
 #define GE_COOP_WAIT()           (coopMenuIntent() && !portNeedPads(coopMenuPlayers()))   /* co-op chosen, fewer pads than players */
+/* Game event hooks (port/include/portevents.h, port/src/fxhooks.c; RULE-2-SIGNOFF 2026-11-23,
+ * docs/dev/findings/2026-11-23-rule-2-signoff-fx-markers.md): each raises an event on the port's bus.
+ * GE_FX_RENDER_REPLACED(kind, &gdl) is nonzero when a port subscriber drew that effect kind itself;
+ * the game then skips its own draw (rendering only). Empty / 0 without PORT. */
+struct coord3d;
+void portEvShot(void *beam, s32 item, struct coord3d *from, struct coord3d *to);
+void portEvPuff(struct coord3d *pos, s32 type, f32 size, s16 room);
+void portEvImpact(struct coord3d *pos, struct coord3d *normal, s16 type, s16 room, void *prop);
+void portEvHitChr(void *prop, s32 hitpart, struct coord3d *dirView, struct coord3d *pos);
+s32 portFxRenderReplaced(s32 kind, Gfx **gdl);
+#define GE_EV_SHOT(beam, item, from, to)              portEvShot((beam), (item), (from), (to))
+#define GE_EV_PUFF(pos, type, size, room)             portEvPuff((pos), (type), (size), (room))
+#define GE_EV_IMPACT(pos, normal, type, room, prop)   portEvImpact((pos), (normal), (type), (room), (prop))
+#define GE_EV_HIT_CHR(prop, part, dirview, pos)       portEvHitChr((prop), (part), (dirview), (pos))
+#define GE_FX_RENDER_REPLACED(kind, gdlp)             portFxRenderReplaced((kind), (gdlp))
+void portEvSurface(const void *hit);   /* a HitThing (bondtypes.h): its texture, triangle, display-list command */
+#define GE_EV_SURFACE(hit)                            portEvSurface(hit)
+s32 portFxPropImpact(Gfx **gdl, s32 slot);   /* port/src/fxclusters.c: nonzero when it drew bullet hole `slot` */
+#define GE_FX_PROP_IMPACT(gdlp, slot)                 portFxPropImpact((gdlp), (slot))
 #else
 #define GE_RULE_SOLO()           (getPlayerCount() == 1)
 #define GE_RULE_MULTI()          (getPlayerCount() >= 2)
@@ -250,6 +269,13 @@ extern int portAimIsMouse(void);
 #define GE_AI_PLAYERS()          getPlayerCount()
 #define GE_BOND_BODY()           (getPlayerCount() == 1)
 #define GE_PROJ_SIM_OWNER(own, op, view) (own)
+#define GE_EV_SHOT(beam, item, from, to)
+#define GE_EV_PUFF(pos, type, size, room)
+#define GE_EV_IMPACT(pos, normal, type, room, prop)
+#define GE_EV_HIT_CHR(prop, part, dirview, pos)
+#define GE_FX_RENDER_REPLACED(kind, gdlp)             0
+#define GE_EV_SURFACE(hit)
+#define GE_FX_PROP_IMPACT(gdlp, slot)                 0
 #endif
 
 #endif

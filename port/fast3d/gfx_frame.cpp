@@ -467,9 +467,9 @@ void r_set_scissor(int x, int y, int width, int height) {
     }
 }
 
-void r_set_use_alpha(bool use_alpha, bool modulate) {
+void r_set_use_alpha(bool use_alpha, int modulate) {
     s_cur.use_alpha = use_alpha;
-    s_cur.modulate = modulate;
+    s_cur.modulate = (uint8_t)modulate;
     s_cur.ver_blend++;
     s_cur_dirty = true;
     if (!s_rec) {

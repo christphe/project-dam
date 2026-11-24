@@ -27,6 +27,9 @@
 #include "math_ceil.h"
 #include "matrixmath.h"
 #include "player.h"
+#ifdef PORT
+#include "portfx.h"
+#endif
 #include "stan.h"
 #include "explosion.h"
 #ifdef PORT
@@ -776,6 +779,9 @@ Gfx *sub_GAME_7F0B3C8C(Gfx *gdl)
     if (sub_GAME_7F0BD8F0())
     {
         gdl = explosionRenderScorchBuffer(gdl);
+#ifdef PORT
+        if (!GE_FX_RENDER_REPLACED(PORTFX_IMPACT, &gdl))   /* the port may draw the level's bullet holes */
+#endif
         gdl = explosionCallRenderBulletImpactOnProp(gdl);
     }
  

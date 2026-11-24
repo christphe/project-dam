@@ -49,6 +49,12 @@ ge_add_pure_test(test_gpuprobe test_gpuprobe.c ${CMAKE_SOURCE_DIR}/port/src/gpup
 # CONSOLE mode precedence (port/include/console.h, header-only): pure, no core.
 ge_add_pure_test(test_console test_console.c)
 
+# The port's texture registry (port/src/porttex.c): pure, no core.
+ge_add_pure_test(test_porttex test_porttex.c ${CMAKE_SOURCE_DIR}/port/src/porttex.c)
+
+# The game event bus (port/src/portevents.c): pure, no core.
+ge_add_pure_test(test_portevents test_portevents.c ${CMAKE_SOURCE_DIR}/port/src/portevents.c)
+
 # Character-model subdivision (port/convert/conv_subdiv.c): pure, no core.
 ge_add_pure_test(test_subdiv test_subdiv.c ${CMAKE_SOURCE_DIR}/port/convert/conv_subdiv.c)
 

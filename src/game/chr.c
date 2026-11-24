@@ -3257,6 +3257,9 @@ void chrCreateHitPuffs(PropRecord *prop, s32 anim_id, coord3d *vec, coord3d *pos
     s32 index;
     struct ChrHitReaction *entry;
 
+    /* port event bus (portevents.h); empty without PORT */
+    GE_EV_HIT_CHR(prop, anim_id, vec, pos);
+
     index = 0;
     i = 0;
 
@@ -3784,6 +3787,7 @@ void chrHandleBulletHit(struct ShotData *shot, struct BulletHit *bhit)
                         }
 
                         temp = randomGetNext() % (s16)sound->thing2_len;
+                        GE_EV_SURFACE(&bhit->hit);   /* the surface of the next impact event (portevents.h) */
                         explosionCreateBulletImpact(&bhit->hit.hitpos, &bhit->hit.normal, sound->thing2[temp], 1, prop, bhit->room, 0);
                     }
                 }
@@ -3802,6 +3806,7 @@ void chrHandleBulletHit(struct ShotData *shot, struct BulletHit *bhit)
         }
 
         temp2 = randomGetNext() % (s16)sound2->thing2_len;
+        GE_EV_SURFACE(&bhit->hit);   /* the surface of the next impact event (portevents.h) */
         explosionCreateBulletImpact(&bhit->hit.hitpos, &bhit->hit.normal, sound2->thing2[temp2], 1, chr->handle_positiondata_hat, bhit->room, 0);
 
         return;

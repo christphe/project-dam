@@ -1254,14 +1254,18 @@ static void gfx_opengl_set_scissor(int x, int y, int width, int height) {
     glScissor(x, y, width, height);
 }
 
-static void gfx_opengl_set_use_alpha(bool use_alpha, bool modulate) {
+static void gfx_opengl_set_use_alpha(bool use_alpha, int modulate) {
     if (use_alpha) {
         glEnable(GL_BLEND);
     } else {
         glDisable(GL_BLEND);
     }
-    if (modulate) {
+    if (modulate == 1) {
         glBlendFunc(GL_DST_COLOR, GL_ZERO);
+    } else if (modulate == 2) {   /* additive: the port's sparks and tracers glow */
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    } else if (modulate == 3) {   /* 2x multiply: the port's bullet holes shade the wall under them */
+        glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR);
     } else {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     }

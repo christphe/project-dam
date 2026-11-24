@@ -398,7 +398,8 @@ float s_znear = 0.0f, s_zfar = 1.0f;
 
 bool s_depth_test = false, s_depth_mask = true, s_decal = false;
 DkCompareOp s_depth_func = DkCompareOp_Lequal;
-bool s_blend = false, s_modulate = false;
+bool s_blend = false;
+int s_modulate = 0;   /* blend mode: 0 alpha, 1 multiply, 2 additive */
 
 struct Unit { uint8_t kind; uint32_t id; };   /* kind: 0 none, 1 texture, 2 framebuffer */
 Unit s_unit[2] = {};
@@ -681,8 +682,12 @@ void bind_blend(void) {
     dkCmdBufBindColorState(s_cmd, &c);
     DkBlendState b;
     dkBlendStateDefaults(&b);
-    if (s_modulate) {
+    if (s_modulate == 1) {
         dkBlendStateSetFactors(&b, DkBlendFactor_DstColor, DkBlendFactor_Zero, DkBlendFactor_DstAlpha, DkBlendFactor_Zero);
+    } else if (s_modulate == 2) {   /* additive: the port's sparks and tracers glow */
+        dkBlendStateSetFactors(&b, DkBlendFactor_SrcAlpha, DkBlendFactor_One, DkBlendFactor_Zero, DkBlendFactor_One);
+    } else if (s_modulate == 3) {   /* 2x multiply: the port's bullet holes shade the wall under them */
+        dkBlendStateSetFactors(&b, DkBlendFactor_DstColor, DkBlendFactor_SrcColor, DkBlendFactor_Zero, DkBlendFactor_One);
     } else {
         dkBlendStateSetFactors(&b, DkBlendFactor_SrcAlpha, DkBlendFactor_InvSrcAlpha, DkBlendFactor_SrcAlpha,
                                DkBlendFactor_InvSrcAlpha);
@@ -1249,7 +1254,7 @@ void dk_set_scissor(int x, int y, int w, int h) {
     s_sc_dirty = true;
 }
 
-void dk_set_use_alpha(bool use_alpha, bool modulate) {
+void dk_set_use_alpha(bool use_alpha, int modulate) {
     s_blend = use_alpha;
     s_modulate = modulate;
     bind_blend();
@@ -1916,7 +1921,8 @@ void wfx_flush(void) {
         uint8_t* dst = ring_alloc(s_dataRing, s_dataBlocks, (uint32_t)(verts.size() * 4), 64, &vaddr);
         memcpy(dst, verts.data(), verts.size() * 4);
     }
-    const bool sv_blend = s_blend, sv_mod = s_modulate;
+    const bool sv_blend = s_blend;
+    const int sv_mod = s_modulate;
     auto raster = [&](bool decal) {
         DkRasterizerState rs;
         dkRasterizerStateDefaults(&rs);
@@ -1970,7 +1976,7 @@ void wfx_flush(void) {
     bind_target();   /* the barrier makes the half-size target readable */
     desc_barrier();
     s_blend = true;
-    s_modulate = false;
+    s_modulate = 0;
     bind_blend();
     const int H = (int)fb_height(fb);
     for (const WaterRec& r : recs) {

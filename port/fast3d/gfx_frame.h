@@ -81,7 +81,8 @@ struct GfxFrameState {
     struct GfxFrameDepth depth;
     int viewport[4];               /* x, y, w, h (GL bottom-up pixels of the target) */
     int scissor[4];
-    bool use_alpha, modulate;      /* blend on; multiply blend (DST_COLOR, ZERO) */
+    bool use_alpha;                /* blend on */
+    uint8_t modulate;              /* blend mode: 0 alpha, 1 multiply (DST_COLOR, ZERO), 2 additive */
     int target_fb;                 /* framebuffer the draw goes to (0 = window) */
     /* GL replay: bumped each time the decoder set the group, so the replay sets
      * exactly what the immediate path set (state a framebuffer command

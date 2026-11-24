@@ -1866,6 +1866,8 @@ void videoPumpEvents(void)
                 videoRequestQuit("Alt+F4");
             } else if (ev.key.keysym.sym == SDLK_F12 && !ev.key.repeat) {
                 screenshotReq = 1;
+            } else if (ev.key.keysym.sym == SDLK_F9 && !ev.key.repeat) {
+                portFxToggle();   /* the combat effects on / off (portfx.h) */
             } else if (ev.key.keysym.sym == SDLK_F10 && !ev.key.repeat) {
                 /* F10: the menu (the one PC options UI). */
                 optionsOverlayToggle();

@@ -31,6 +31,7 @@
 #ifdef PORT
 #include "envflag.h"   /* cached getenv for hot-path probes */
 #include "drawdistgameplay.h"   /* D980: portFoliageDraw */
+#include "portfx.h"
 #endif
 
 
@@ -5220,6 +5221,9 @@ void dogfnegx(ModelRenderData *renderdata, Model *model, ModelNode *node)
         vertices[3].coord.y = sp90.f[1] - spc4;
         vertices[3].coord.z = sp90.f[2] + negspc8 + -spbc;
 
+#ifdef PORT
+        gDPPortFxBegin(renderdata->gdl++, PORTFX_MUZZLE);   /* portfx.h: render-only marker */
+#endif
         gSPSegment(renderdata->gdl++, SPSEGMENT_MODEL_COL1, osVirtualToPhysical(rodata->BaseAddr));
 
         if (rodata->Image)
@@ -5258,6 +5262,9 @@ void dogfnegx(ModelRenderData *renderdata, Model *model, ModelNode *node)
         gSPVertex(renderdata->gdl++, osVirtualToPhysical(vertices), 4, 0);
         if (1);
         gSP2Triangles(renderdata->gdl++, 0, 1, 2, 0, 2, 3, 0, 0);
+#ifdef PORT
+        gDPPortFxEnd(renderdata->gdl++);
+#endif
     }
 }
 
@@ -5491,6 +5498,10 @@ void sub_GAME_7F074534(ModelRenderData* data, Model* model, ModelNode* node) {
 }
 
 
+#ifdef PORT
+void *g_PortFxMuzzleNode = NULL;   /* portfx.h */
+#endif
+
 void subdraw(ModelRenderData *mrData, Model *mdl)
 {
     ModelNode *root = mdl->obj->RootNode;
@@ -5515,6 +5526,13 @@ void subdraw(ModelRenderData *mrData, Model *mdl)
 
     while (root != NULL)
     {
+#ifdef PORT
+        /* portfx.h: open the muzzle span on the flash node ... */
+        if (g_PortFxMuzzleNode != NULL && root == (ModelNode *)g_PortFxMuzzleNode)
+        {
+            gDPPortFxBegin(mrData->gdl++, PORTFX_MUZZLE);
+        }
+#endif
         sub_GAME_7F074534(mrData, mdl, root);
 
         if (root->Child)
@@ -5525,6 +5543,13 @@ void subdraw(ModelRenderData *mrData, Model *mdl)
         {
             while (root)
             {
+#ifdef PORT
+                /* ... and close it when the walk leaves the node's subtree. */
+                if (g_PortFxMuzzleNode != NULL && root == (ModelNode *)g_PortFxMuzzleNode)
+                {
+                    gDPPortFxEnd(mrData->gdl++);
+                }
+#endif
                 if (root->Next)
                 {
                     root = root->Next;

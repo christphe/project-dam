@@ -51,6 +51,12 @@ enum {
 /* GE+ water (Switch, deko3d): GE's water combiner (unk_092E50.c), drawn by
  * water.frag.glsl instead of the combiner's own shader. */
 #define SHADER_OPT_WATER (1 << 15)
+/* Effect shaders (port/include/portfx.h): the PORTFX_* kind of the draw, from
+ * the game's tagged G_NOOP markers, Enhanced only. Bits 28..31: gfx_tri_state
+ * clears bits 16..27 of an opaque draw's options. No pack entry carries them,
+ * so these draws take the uber shader (uber.frag.glsl fxShade). */
+#define SHADER_OPT_FX_SHIFT 28
+#define SHADER_OPT_FX_MASK (15u << SHADER_OPT_FX_SHIFT)   /* bits 28..31 */
 
 struct ColorCombinerKey {
     uint64_t combine_mode;
@@ -74,6 +80,7 @@ struct CCFeatures {
     bool opt_blur;
     bool opt_a2c;
     bool opt_zcut;
+    uint8_t fx_kind;   /* PORTFX_* (SHADER_OPT_FX_MASK), 0 = none */
     bool used_textures[2];
     bool clamp[2][2];
     int num_inputs;
