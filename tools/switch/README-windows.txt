@@ -16,7 +16,7 @@ Requirements
 Install
 -------
 1. Unpack this folder anywhere (not inside the zip).
-2. Make a data folder next to ge007.x86_64.exe and copy your ROM into it as
+2. Copy your ROM into the data folder next to ge007.x86_64.exe as
        data\ge007.ntsc-final.z64
 3. Start ge007.x86_64.exe. The first launch converts the ROM and writes the
    converted model and level files into data\; later launches skip this.
