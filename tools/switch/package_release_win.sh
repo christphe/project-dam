@@ -5,7 +5,8 @@
 #   tools/switch/package_release_win.sh <version> [out_dir] [build_dir]
 #
 # Produces <out_dir>/project-dam-<version>-windows-x64.zip with the exe, the
-# runtime DLLs docker-build-win.sh copied next to it, README.txt and licenses/.
+# runtime DLLs docker-build-win.sh copied next to it, README.txt, licenses/ and
+# an empty data/ (where the ROM goes).
 # The "-windows" in the name is what the PC update check looks for
 # (port/include/updatecheck_parse.h hasPcAsset). No game content.
 set -eu
@@ -19,7 +20,7 @@ EXE="$BUILD/ge007.x86_64.exe"
 NAME="project-dam-$VERSION-windows-x64"
 STAGE="$OUT/$NAME"
 rm -rf "$STAGE"
-mkdir -p "$STAGE/licenses"
+mkdir -p "$STAGE/licenses" "$STAGE/data"
 
 cp "$EXE" "$STAGE/"
 for dll in "$BUILD"/*.dll; do
