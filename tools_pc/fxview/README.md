@@ -6,7 +6,7 @@ game draws it) next to **EFFECT** (the same, then `fxShade`), and writes before/
 usable for this: the runs are not reproducible and the sprites are a few pixels.
 
 - **Single source of truth.** `fxShade` and its helpers are read at run time from
-  `port/switch/shaders/uber.frag.glsl`, between the lines `// FXSHADE BEGIN` and `// FXSHADE END`, and **hot-reloaded**
+  `port/shaders/uber.frag.glsl`, between the lines `// FXSHADE BEGIN` and `// FXSHADE END`, and **hot-reloaded**
   when the file changes (polled every 0.3 s). Tuning = editing that block with the viewer open. A block that does not
   compile keeps the previous version on screen and shows the compiler log in the panel, with line numbers of
   `uber.frag.glsl` (a `#line` is inserted). The viewer provides `uniform int frame_count;` (the game's per-frame counter;

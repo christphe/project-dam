@@ -5,7 +5,7 @@
         viewer options go through: --shot FILE.png (renders one image, writes it, exits; waits for it) --w N --h N
         --rom FILE.z64 --kind tracer|laser|watchlaser|wallpuff|bloodpuff|scatter|impact --impact 0..19 --age TICKS
         --angle RAD --view side|split|orig|fx --backdrop grey|dark|checker|wall --bgtex N --zoom F --fc N --nearest 0|1
-        --tracerlen F --shader FILE (default: <repo>/port/switch/shaders/uber.frag.glsl)
+        --tracerlen F --shader FILE (default: <repo>/port/shaders/uber.frag.glsl)
   python tools_pc/fxview/fxview.py selftest              texture formats, the FXSHADE block, the puff frame stepping; no ROM
   python tools_pc/fxview/fxview.py shots --out DIR [--backdrop grey|dark|checker|wall] [--bgtex N] [--fc N]
         one side-by-side PNG per effect (puffs: several animation frames) plus DIR/index.html

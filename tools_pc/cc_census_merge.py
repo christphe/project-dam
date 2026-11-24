@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge combiner ids from game logs into port/switch/shaders/combiners.txt (D973).
+"""Merge combiner ids from game logs into port/shaders/combiners.txt (D973).
 
 Usage: python -I tools_pc/cc_census_merge.py <combiners.txt> <log> [<log> ...]
 

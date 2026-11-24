@@ -1,6 +1,6 @@
 // fxview: GoldenEye's combat-effect sprites up close, ORIGINAL (as the game draws them) vs EFFECT (+ fxShade).
 // The sprites are decoded from the user's ROM at run time (modelview's decoder, pc/mv_tex.cpp); fxShade is read from
-// port/switch/shaders/uber.frag.glsl (the "// FXSHADE BEGIN" .. "// FXSHADE END" block) and hot-reloaded on change.
+// port/shaders/uber.frag.glsl (the "// FXSHADE BEGIN" .. "// FXSHADE END" block) and hot-reloaded on change.
 // UI: Dear ImGui panel on the left. Wheel = zoom, Esc quit, F12 screenshot (data/shot_NNN.png).
 // args: --repo DIR --rom FILE.z64 --shader FILE --kind tracer|laser|watchlaser|wallpuff|bloodpuff|scatter|impact
 //       --impact N --age F --angle F --view side|split|orig|fx --backdrop grey|dark|checker|wall --bgtex N
@@ -1175,12 +1175,12 @@ static int selftest(const std::string& repo) {
     if (extractBlock("no markers", blk, err)) { fprintf(stderr, "selftest FAIL markers missing not detected\n"); fail++; }
     if (!repo.empty()) {
         std::string src;
-        if (!readFile(repo + "/port/switch/shaders/uber.frag.glsl", src) || !extractBlock(src, blk, err) || blk.find("vec4 fxShade(") == std::string::npos) { fprintf(stderr, "selftest FAIL uber.frag.glsl has no usable FXSHADE block\n"); fail++; }
+        if (!readFile(repo + "/port/shaders/uber.frag.glsl", src) || !extractBlock(src, blk, err) || blk.find("vec4 fxShade(") == std::string::npos) { fprintf(stderr, "selftest FAIL uber.frag.glsl has no usable FXSHADE block\n"); fail++; }
     }
     // decal mode: the FXDECAL block and dynLight are found in the real shader, images.def gives the hit types, the layout is stable
     if (!repo.empty()) {
         std::string src, d; std::vector<TexInfo> ti;
-        if (!readFile(repo + "/port/switch/shaders/uber.frag.glsl", src) || !extractDecalBlock(src, blk, err) || blk.find("vec4 fxDecalPom(") == std::string::npos) { fprintf(stderr, "selftest FAIL uber.frag.glsl has no usable FXDECAL block\n"); fail++; }
+        if (!readFile(repo + "/port/shaders/uber.frag.glsl", src) || !extractDecalBlock(src, blk, err) || blk.find("vec4 fxDecalPom(") == std::string::npos) { fprintf(stderr, "selftest FAIL uber.frag.glsl has no usable FXDECAL block\n"); fail++; }
         if (extractDynLight(src).find("return c;") == std::string::npos) { fprintf(stderr, "selftest FAIL dynLight not found in uber.frag.glsl\n"); fail++; }
         if (!readFile(repo + "/assets/images.def", d) || !parseImagesDef(d, ti)) { fprintf(stderr, "selftest FAIL assets/images.def not parsed\n"); fail++; }
         else {
@@ -1217,14 +1217,14 @@ int main(int argc, char** argv) {
                 if (cut == std::string::npos) break;
                 dir = dir.substr(0, cut);
                 std::string probe;
-                if (readFile(dir + "/port/switch/shaders/uber.frag.glsl", probe)) repo = dir;
+                if (readFile(dir + "/port/shaders/uber.frag.glsl", probe)) repo = dir;
             }
             if (!repo.empty()) break;
         }
     }
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--selftest")) return selftest(repo);
     g_repo = repo;
-    g_shaderPath = repo + "/port/switch/shaders/uber.frag.glsl";
+    g_shaderPath = repo + "/port/shaders/uber.frag.glsl";
     {   // the blood colour the port sets (Game.BloodOnHit)
         std::string s;
         if (readFile(repo + "/port/src/switch/nxgame.c", s)) {

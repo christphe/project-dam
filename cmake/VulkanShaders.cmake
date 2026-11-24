@@ -1,6 +1,6 @@
 # Issue #44: the Vulkan backend's SPIR-V shader pack, the PC twin of the
 # deko3d pack (cmake/SwitchPort.cmake, D973). Same generator (tools_pc/dkshgen),
-# same GLSL (the generated combiners and port/switch/shaders/), same pack
+# same GLSL (the generated combiners and port/shaders/), same pack
 # layout (port/fast3d/gfx_dk_layout.h, blobs = SPIR-V words); only the compiler
 # differs: glslangValidator -V instead of uam. --sub 4 moves every uniform block
 # up by 4 bindings so they share descriptor set 0 with the two samplers
@@ -35,20 +35,20 @@ ${_uo}${_ue}")
     _vk_spv_sub(4 ${stage} "${src}" "${out}")
   endmacro()
   set(_pack "")
-  _vk_spv(vert "${VK_SRC}/port/switch/shaders/uber.vert.glsl" "${VK_OUT}/glsl/uber.vert.spv")
-  _vk_spv(frag "${VK_SRC}/port/switch/shaders/uber.frag.glsl" "${VK_OUT}/glsl/uber.frag.spv")
+  _vk_spv(vert "${VK_SRC}/port/shaders/uber.vert.glsl" "${VK_OUT}/glsl/uber.vert.spv")
+  _vk_spv(frag "${VK_SRC}/port/shaders/uber.frag.glsl" "${VK_OUT}/glsl/uber.frag.spv")
   # Vulkan GLSL names the vertex index gl_VertexIndex (uam takes gl_VertexID)
-  file(READ "${VK_SRC}/port/switch/shaders/fullscreen.vert.glsl" _fs)
+  file(READ "${VK_SRC}/port/shaders/fullscreen.vert.glsl" _fs)
   string(REPLACE "gl_VertexID" "gl_VertexIndex" _fs "${_fs}")
   file(WRITE "${VK_OUT}/glsl/fullscreen.vk.vert.glsl" "${_fs}")
   _vk_spv(vert "${VK_OUT}/glsl/fullscreen.vk.vert.glsl" "${VK_OUT}/glsl/fullscreen.vert.spv")
-  _vk_spv(frag "${VK_SRC}/port/switch/shaders/fxaa.frag.glsl" "${VK_OUT}/glsl/fxaa.frag.spv")
+  _vk_spv(frag "${VK_SRC}/port/shaders/fxaa.frag.glsl" "${VK_OUT}/glsl/fxaa.frag.spv")
   # GE+ sky and sea (D997): skyplus and skylut share skycommon.glsl, pasted at their `#pragma skycommon` line (as
   # cmake/SwitchPort.cmake does for uam). They sample five textures (bindings 0..4), so their uniform block moves up by 5
   # (to binding 5) and they use the sky descriptor set layout of gfx_vulkan.cpp, not the draws' (whose binding 4 is a block).
-  file(READ "${VK_SRC}/port/switch/shaders/skycommon.glsl" _skycommon)
+  file(READ "${VK_SRC}/port/shaders/skycommon.glsl" _skycommon)
   foreach(_sc skyplus skylut)
-    file(READ "${VK_SRC}/port/switch/shaders/${_sc}.frag.glsl" _scsrc)
+    file(READ "${VK_SRC}/port/shaders/${_sc}.frag.glsl" _scsrc)
     string(REPLACE "#pragma skycommon" "${_skycommon}" _scsrc "${_scsrc}")
     file(WRITE "${VK_OUT}/glsl/${_sc}.vk.frag.glsl" "${_scsrc}")
     _vk_spv_sub(5 frag "${VK_OUT}/glsl/${_sc}.vk.frag.glsl" "${VK_OUT}/glsl/${_sc}.frag.spv")
@@ -57,7 +57,7 @@ ${_uo}${_ue}")
   # like the other draws' (Draw 4, Comb 5). Its descriptor set (gfx_vulkan.cpp s_water_set_layout) has samplers 0..3 and its
   # colour map at 9 (binding 4 is Draw there; 7 is the uber vertex shader's Lights block), and the Sky block at 8 (its binding
   # 2 + 4 would meet the Mesh block at 6).
-  file(READ "${VK_SRC}/port/switch/shaders/water.frag.glsl" _wsrc)
+  file(READ "${VK_SRC}/port/shaders/water.frag.glsl" _wsrc)
   string(REPLACE "#pragma skycommon" "${_skycommon}" _wsrc "${_wsrc}")
   string(REPLACE "binding = 4) uniform sampler2D uWMap" "binding = 9) uniform sampler2D uWMap" _wsrc "${_wsrc}")
   string(REPLACE "binding = 2) uniform Sky" "binding = 4) uniform Sky" _wsrc "${_wsrc}")
@@ -106,14 +106,14 @@ macro(vulkan_shaders target)
   find_program(VK_GLSLANG glslangValidator REQUIRED)
   find_program(VK_HOST_CXX NAMES c++ g++ HINTS /usr/bin REQUIRED NO_CMAKE_FIND_ROOT_PATH)
   set(_vk_pack "${CMAKE_BINARY_DIR}/ge007_spv.bin")
-  file(GLOB _vk_glsl "${CMAKE_SOURCE_DIR}/port/switch/shaders/*.glsl")
+  file(GLOB _vk_glsl "${CMAKE_SOURCE_DIR}/port/shaders/*.glsl")
   add_custom_command(OUTPUT "${_vk_pack}"
     COMMAND "${CMAKE_COMMAND}" -DVK_PACK_RUN=ON
             "-DVK_SRC=${CMAKE_SOURCE_DIR}" "-DVK_OUT=${CMAKE_BINARY_DIR}/spv"
-            "-DVK_LIST=${CMAKE_SOURCE_DIR}/port/switch/shaders/combiners.txt"
+            "-DVK_LIST=${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt"
             "-DVK_PACK=${_vk_pack}" "-DVK_GLSLANG=${VK_GLSLANG}" "-DVK_HOST_CXX=${VK_HOST_CXX}"
             -P "${CMAKE_SOURCE_DIR}/cmake/VulkanShaders.cmake"
-    DEPENDS "${CMAKE_SOURCE_DIR}/port/switch/shaders/combiners.txt" ${_vk_glsl}
+    DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt" ${_vk_glsl}
             "${CMAKE_SOURCE_DIR}/tools_pc/dkshgen/dkshgen.cpp"
             "${CMAKE_SOURCE_DIR}/port/fast3d/gfx_cc.cpp"
             "${CMAKE_SOURCE_DIR}/port/fast3d/gfx_cc.h"

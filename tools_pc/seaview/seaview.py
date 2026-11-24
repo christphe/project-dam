@@ -103,7 +103,7 @@ def cmd_pc(env, a):
     r = subprocess.run(cmd, env=e)
     if r.returncode != 0:
         sys.exit("seaview: the PC viewer did not build")
-    shaders = os.path.join(REPO, "port", "switch", "shaders") + os.sep
+    shaders = os.path.join(REPO, "port", "shaders") + os.sep
     detached = 0x00000008 | 0x00000200 if os.name == "nt" else 0   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: outlive this script
     extra = list(getattr(a, "extra", []))
     for i, x in enumerate(extra[:-1]):   # the viewer runs in data/: paths given relative to here must be made absolute
@@ -154,7 +154,7 @@ def cmd_nx_build(env, a):
     os.makedirs(romfs, exist_ok=True)
     os.makedirs(gen, exist_ok=True)
     shutil.copy(DUMP, os.path.join(romfs, "sea_dump.bin"))
-    sh = os.path.join(REPO, "port", "switch", "shaders")
+    sh = os.path.join(REPO, "port", "shaders")
     common = open(os.path.join(sh, "skycommon.glsl"), encoding="utf-8").read()
     for name in ("skyplus", "skylut"):
         src = open(os.path.join(sh, name + ".frag.glsl"), encoding="utf-8").read().replace("#pragma skycommon", common)
@@ -165,7 +165,7 @@ def cmd_nx_build(env, a):
     script = " && ".join([
         "set -e",
         "export PATH=$DEVKITPRO/devkitA64/bin:$DEVKITPRO/tools/bin:$PATH",
-        f"uam -s vert -o {rel}/romfs/fullscreen.vert.dksh port/switch/shaders/fullscreen.vert.glsl",
+        f"uam -s vert -o {rel}/romfs/fullscreen.vert.dksh port/shaders/fullscreen.vert.glsl",
         f"uam -s frag -o {rel}/romfs/skyplus.frag.dksh {rel}/build/glsl/skyplus.frag.glsl",
         f"uam -s frag -o {rel}/romfs/skylut.frag.dksh {rel}/build/glsl/skylut.frag.glsl",
         f"uam -s frag -o {rel}/romfs/overlay.frag.dksh {rel}/shaders/overlay.frag.glsl",
