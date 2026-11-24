@@ -1141,6 +1141,7 @@ void chraiDefaultWeaponFireHandler(s32 hand)
                 if ((impact_sounds->thing2_len > 0) && (shotdata.weapon != 23))
                 {
                     pad = randomGetNext() % impact_sounds->thing2_len;
+                    GE_EV_SURFACE(&bghit);   /* the surface of the next impact event (portevents.h) */
                     explosionCreateBulletImpact(&visiblehitpos, &bghit.normal, impact_sounds->thing2[pad], bestroom, 0, -1, 0);
                 }
 

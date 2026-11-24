@@ -253,6 +253,37 @@ static void relightFromSun(void)
     }
 }
 
+/* The relief light of the bullet holes (uber.frag.glsl fxClusterPom): a fixed light from above, 80 degrees
+ * over the horizon in the world, so a hole's relief keeps one shading however the camera turns (the old
+ * fallback was a direction in eye space, which followed the camera's pitch). Radius -2 marks it: fast3d puts
+ * it in the Lights block's sun_dir without lighting the scene (count[1] stays for the real sun). */
+#define RELIEF_ELEV 80.0f
+static int addReliefLight(PortDynLight *out, int n, Mtxf *worldToEye)
+{
+    const float e = RELIEF_ELEV * (3.14159265f / 180.0f);
+    const float w[3] = { 0.0f, __builtin_sinf(e), __builtin_cosf(e) };   /* towards the light; GE's world is y up */
+    float d[3];
+    int i;
+
+    if (n >= DYNL_CANDIDATES) {
+        return n;
+    }
+    for (i = 0; i < 3; i++) {   /* the rotation only: a direction */
+        d[i] = worldToEye->m[0][i] * w[0] + worldToEye->m[1][i] * w[1] + worldToEye->m[2][i] * w[2];
+    }
+    {
+        const float l = __builtin_sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (l < 1e-6f) {
+            return n;
+        }
+        for (i = 0; i < 3; i++) out[n].pos[i] = d[i] / l;
+    }
+    out[n].radius = -2.0f;
+    out[n].col[0] = out[n].col[1] = out[n].col[2] = 0.0f;
+    out[n].pad = 0.0f;
+    return n + 1;
+}
+
 Gfx *portDynLightsEmit(Gfx *gdl)
 {
     PortDynLight lights[DYNL_CANDIDATES];
@@ -275,6 +306,7 @@ Gfx *portDynLightsEmit(Gfx *gdl)
     n = addMuzzles(lights, n, worldToEye);
     n = keepStrongest(lights, n, PORT_DYNLIGHTS_MAX);
     relightFromSun();
+    n = addReliefLight(lights, n, worldToEye);
 
     /* always emitted (n = 0 too): the previous view's lights must not leak
      * into this one */

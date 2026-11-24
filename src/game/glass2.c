@@ -8,6 +8,10 @@
 #include "gbi_extension.h"
 #include "glass.h"
 #include "image_bank.h"
+#include "player.h"
+#ifdef PORT
+#include "portfx.h"
+#endif
 #include "lv.h"
 #include "objective_status.h"
 #include "random.h"
@@ -564,6 +568,9 @@ s_bullet_spark *bullet_spark_create(coord3d *arg0, s32 arg1, f32 arg2, s16 arg3)
 {
     s_bullet_spark *ptr;
 
+    /* port event bus (portevents.h); empty without PORT */
+    GE_EV_PUFF(arg0, arg1, arg2, arg3);
+
     for (ptr = &g_BulletSparkArray[0]; ptr < &g_BulletSparkArray[BULLET_SPARKS_MAX]; ptr++)
     {
         if (ptr->lifetime == 0)
@@ -654,6 +661,15 @@ void bullet_spark_render(s_bullet_spark *thing, Gfx *gdlarg, s32 zbufferMode)
 #endif
     mtx = currentPlayerGetViewToWorldMtxf();
     gdl = *((Gfx **) gdlarg);
+#ifdef PORT
+    /* portfx.h: render-only marker. A puff in the Game.BloodOnHit colour
+     * (g_BulletSparkColors[2], set by port/src/switch/nxgame.c) is blood,
+     * every other puff is an impact spark. */
+    gDPPortFxBegin(gdl++,
+                   (thing->unk28 == g_BulletSparkColors[2].r &&
+                    thing->unk29 == g_BulletSparkColors[2].g &&
+                    thing->unk2A == g_BulletSparkColors[2].b) ? PORTFX_BLOOD : PORTFX_SPARK);
+#endif
     vertices = dynAllocateVertices(4);
     room = thing->unk06;
     roompos = getRoomPositionByIndex(room);
@@ -735,6 +751,9 @@ void bullet_spark_render(s_bullet_spark *thing, Gfx *gdlarg, s32 zbufferMode)
     gSPVertex(gdl++, osVirtualToPhysical(vertices), 4, 0);
     gSP2Triangles(gdl++, 0, 1, 2, 0, 0, 2, 3, 0);
     gSPMatrix(gdl++, osVirtualToPhysical(currentPlayerGetProjectionMatrix()), G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH);
+#ifdef PORT
+    gDPPortFxEnd(gdl++);
+#endif
     *((Gfx **) gdlarg) = gdl;
 }
 

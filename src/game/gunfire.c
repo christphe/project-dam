@@ -1,6 +1,7 @@
 #include <ultra64.h>
 #if defined(PORT)
 #include "portaddr.h"
+#include "portfx.h"
 #else
 #define PORT_N64PTR(T, x) ((T *)(x))
 #endif
@@ -1108,6 +1109,9 @@ void CapBeamLengthAndDecideIfRendered(struct BeamRecord *arg0, ITEM_IDS item, co
 {
     f32 phi_f12_2;
 
+    /* port event bus (portevents.h); empty without PORT */
+    GE_EV_SHOT(arg0, item, arg2, arg3);
+
     //arg0->pos.x = arg2->x;
     //arg0->pos.y = arg2->y;
     //arg0->pos.z = arg2->z;
@@ -1626,7 +1630,14 @@ void gunRenderFirstPersonGunModels(Gfx **gdlptr)
  
         if (item != ITEM_WATCHLASER) 
         {
+#ifdef PORT
+            gDPPortFxBegin(gdl++, PORTFX_TRACER);   /* portfx.h: render-only marker */
+            if (!GE_FX_RENDER_REPLACED(PORTFX_TRACER_1P, &gdl))   /* the port may draw it in the world pass */
+#endif
             gdl = sub_GAME_7F061E18(gdl, &handptr->weapon_beam, 0);
+#ifdef PORT
+            gDPPortFxEnd(gdl++);
+#endif
         }
  
         if (item == ITEM_GOLDENGUN || item == ITEM_RUGER || item == ITEM_KNIFE || item == ITEM_THROWKNIFE || item == ITEM_SILVERWPPK || item == ITEM_GOLDWPPK) 
@@ -1701,9 +1712,15 @@ void gunRenderFirstPersonGunModels(Gfx **gdlptr)
          * weapon model's subdraw() actually emits. Pre-fix this was 1 (just the
          * gSPSegment); a healthy weapon DL is ~150. Rate-limited ~1/s/hand. */
         Gfx *dvm_before = renderdata.gdl;
+        /* portfx.h: subdraw() brackets the gun's flash switch node (the same
+         * Switches[1] gunfire uses for flashvisptr) with a muzzle marker. */
+        g_PortFxMuzzleNode = HAND_WEAPON_MODEL(handptr)->obj->Switches[1];
 #endif
         subdraw(&renderdata, HAND_WEAPON_MODEL(handptr));
         gdl = renderdata.gdl;
+#ifdef PORT
+        g_PortFxMuzzleNode = NULL;
+#endif
 #ifdef PORT
         {
             static int dvmr = -1;
@@ -1733,7 +1750,14 @@ void gunRenderFirstPersonGunModels(Gfx **gdlptr)
  
         if (item == ITEM_WATCHLASER) 
         {
+#ifdef PORT
+            gDPPortFxBegin(gdl++, PORTFX_TRACER);   /* portfx.h: render-only marker */
+            if (!GE_FX_RENDER_REPLACED(PORTFX_TRACER_1P, &gdl))   /* the port may draw it in the world pass */
+#endif
             gdl = sub_GAME_7F061E18(gdl, &handptr->weapon_beam, 0);
+#ifdef PORT
+            gDPPortFxEnd(gdl++);
+#endif
         }
     }
  

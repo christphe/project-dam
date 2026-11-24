@@ -1091,7 +1091,7 @@ VkPipeline build_pipeline(const VkGraphicsPipelineCreateInfo& ci) {
     return pipe;
 }
 
-enum { BLEND_OFF = 0, BLEND_ALPHA = 1, BLEND_MODULATE = 2 };
+enum { BLEND_OFF = 0, BLEND_ALPHA = 1, BLEND_MODULATE = 2, BLEND_ADD = 3, BLEND_MUL2X = 4 };
 
 struct PipeKey {
     const ShaderProgram* prg;
@@ -1242,6 +1242,16 @@ VkPipeline create_pipeline(const PipeKey& k) {
         ba.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
         ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_DST_ALPHA;
         ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    } else if (k.blend == BLEND_MUL2X) {   /* 2x multiply: the port's bullet holes shade the wall under them */
+        ba.srcColorBlendFactor = VK_BLEND_FACTOR_DST_COLOR;
+        ba.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_COLOR;
+        ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    } else if (k.blend == BLEND_ADD) {   /* additive: the port's sparks and tracers glow */
+        ba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     } else {
         ba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
         ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
@@ -1644,7 +1654,8 @@ float s_znear = 0.0f, s_zfar = 1.0f;
 
 bool s_depth_test = false, s_depth_mask = true, s_decal = false;
 VkCompareOp s_depth_func = VK_COMPARE_OP_LESS_OR_EQUAL;
-bool s_blend = false, s_modulate = false;
+bool s_blend = false;
+int s_modulate = 0;   /* blend mode: 0 alpha, 1 multiply, 2 additive */
 
 ShaderProgram* s_prg = nullptr;
 struct DkDrawUniforms s_uni = {};
@@ -1927,7 +1938,7 @@ void push_descriptors(void) {
 PipeKey current_key(bool cwrite) {
     PipeKey k;
     k.prg = s_prg;
-    k.blend = s_blend ? (s_modulate ? BLEND_MODULATE : BLEND_ALPHA) : BLEND_OFF;
+    k.blend = s_blend ? (s_modulate == 1 ? BLEND_MODULATE : s_modulate == 2 ? BLEND_ADD : s_modulate == 3 ? BLEND_MUL2X : BLEND_ALPHA) : BLEND_OFF;
     k.cwrite = cwrite ? 1 : 0;
     k.samples = target_samples();
     k.mesh = s_mesh_mode ? 1 : 0;
@@ -2207,7 +2218,7 @@ void vk_set_scissor(int x, int y, int w, int h) {
     s_sc_dirty_rect = true;
 }
 
-void vk_set_use_alpha(bool use_alpha, bool modulate) {
+void vk_set_use_alpha(bool use_alpha, int modulate) {
     s_blend = use_alpha;
     s_modulate = modulate;
 }

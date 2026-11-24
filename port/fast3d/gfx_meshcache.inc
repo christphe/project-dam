@@ -73,7 +73,8 @@ struct McOp {
 /* Resolved state of a run of triangles. POD, memset before fill (memcmp'd). */
 struct McSeg {
     uint8_t depth_mode;
-    bool use_alpha, use_modulate;
+    bool use_alpha;
+    uint8_t use_modulate;   /* blend mode (gfx_pc.cpp TriState) */
     bool unit_on[2];       /* the combiner uses the unit (gfx_tri_state touched it) */
     bool has_node[2];      /* a texture was bound on it */
     bool s_linear[2];

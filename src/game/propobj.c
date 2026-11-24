@@ -9735,6 +9735,7 @@ void objHit(ShotData *shotdata, BulletHit *hit)
 
             impact_type = (randomGetNext() % 3) + 0x11;
 
+            GE_EV_SURFACE(&hit->hit);   /* the surface of the next impact event (portevents.h) */
             explosionCreateBulletImpact(&hit->hit.hitpos, &hit->hit.normal, impact_type, 1, hitprop, hit->room, room_clear_flag);
         }
         else
@@ -9768,6 +9769,7 @@ void objHit(ShotData *shotdata, BulletHit *hit)
                 room_clear_flag = 1;
             }
 
+            GE_EV_SURFACE(&hit->hit);   /* the surface of the next impact event (portevents.h) */
             explosionCreateBulletImpact(&hit->hit.hitpos, &hit->hit.normal, impact_sounds->thing2[thing2_index], 1, hit->prop, hit->room, room_clear_flag);
         }
     }

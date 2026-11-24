@@ -131,6 +131,60 @@ vec4 hookTexture2D(in sampler2D t, in vec2 uv, in vec2 texSize, in int three_poi
     return vec4(cw.rgb / cw.a, 1.0);
 }
 
+// Effect shaders (port/include/portfx.h): the game tags its tracers, impact
+// puffs, blood puffs and bullet-hole decals; fast3d puts the PORTFX_* kind in
+// Comb.flags2 bits 8..10 (DK_CP_FX_SHIFT, gfx_dk_layout.h), Enhanced only.
+// Every effect keeps the game's quad and texture and reshapes its colour and
+// alpha. uv = the texture's own 0..1 coordinates.
+// FXSHADE BEGIN (tools_pc/fxview reads this block; it uses frame_count)
+#define FX_TRACER 2u
+#define FX_SPARK  3u
+#define FX_BLOOD  4u
+#define FX_IMPACT 5u
+
+float fxHash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float fxNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(fxHash(i), fxHash(i + vec2(1.0, 0.0)), f.x),
+               mix(fxHash(i + vec2(0.0, 1.0)), fxHash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+vec4 fxShade(vec4 c, uint kind, vec2 uv) {
+    // TRACER, SPARK, BLOOD: the port's particles (port/src/fxparticles.c), drawn untextured; the vertex
+    // alpha is 1 on a particle's core and 0 at its rim (times its remaining life), and the shape comes
+    // from that ramp here.
+    if (kind == FX_TRACER) {
+        // a thin white-hot core inside an orange glow
+        float core = smoothstep(0.55, 0.95, c.a);
+        c.rgb = mix(c.rgb, vec3(1.0, 0.97, 0.88), core);
+        c.a = clamp(pow(c.a, 1.6) * 1.3, 0.0, 1.0);
+    } else if (kind == FX_SPARK) {
+        // a hot streak: white core, the colour at the edge, a slight flicker per frame
+        float core = smoothstep(0.6, 1.0, c.a);
+        c.rgb = min(mix(c.rgb, vec3(1.0, 0.96, 0.86), core) * 1.15, vec3(1.0));
+        float flick = 0.8 + 0.2 * fxHash(gl_FragCoord.xy * 0.01 + vec2(float(frame_count), 3.0));
+        c.a = clamp(smoothstep(0.04, 0.5, c.a) * flick, 0.0, 1.0);
+    } else if (kind == FX_BLOOD) {
+        // a crisp droplet with a wet glint near its middle
+        float a = smoothstep(0.28, 0.42, c.a);
+        c.rgb = c.rgb + vec3(0.30, 0.10, 0.10) * smoothstep(0.82, 0.98, c.a);
+        c.a = a;
+    } else if (kind == FX_IMPACT) {
+        // a burnt, darker middle and a bit more contrast in the hole
+        float r = length(uv - vec2(0.5));
+        c.rgb = pow(c.rgb, vec3(1.25)) * mix(0.55, 1.0, smoothstep(0.05, 0.4, r));
+    }
+    return c;
+}
+// FXSHADE END
+
+
+
 vec4 cIn1, cIn2, cIn3, cIn4, cIn5, cIn6, cIn7;
 vec4 texVal0, texVal1;
 vec4 texel;
@@ -184,6 +238,124 @@ float formulaA(uint s) {
     return (srcA(s & 0xffu) - srcA((s >> 8) & 0xffu)) * srcA((s >> 16) & 0xffu) + srcA(s >> 24);
 }
 
+// FXDECAL BEGIN (tools_pc/fxview reads this block; it uses vEye, uTex0, vTexCoord0)
+// The port's bullet holes (port/src/fxparticles.c decalDraw): the game's own hole texture (its streaks
+// and painted shading), alpha-blended like the game draws it, read through parallax occlusion on a cone:
+// seen at an angle, the crater's inside shifts and its near rim hides part of it. The holes are never
+// turned (the game turns none: its painted light keeps one direction). No lighting of the relief.
+// Groups (PORTFX_DECAL_* = 8 + group): 0 stone/default, 1 wood, 2 metal, 3 dirt/mud, 4 snow, 5 glass, 6 tile.
+#define FXD_DEPTH 0.5   // the cone's depth, in quad radii
+
+// The cone: 0 at the rim (quad radius 1), -1 in the middle (with a small flat bottom).
+float fxConeH(vec2 p) { return -(1.0 - smoothstep(0.08, 1.0, length(p))); }
+
+// Kept for the core kind (PORTFX_DECAL_CORE, not drawn at the moment): no coverage.
+vec4 fxDecalCore(vec4 cc) { return vec4(0.0); }
+
+vec4 fxDecalPom(uint kind) {
+    uint g = kind - 8u;
+    // the game's vertex colour by impact type (explosion.c, g_ImpactTypes[].apptype): dark on dirt, light otherwise
+    float tint = (g == 3u) ? 0.08 : 0.92;
+    vec2 uv = vTexCoord0;
+    if (g != 5u) {   // glass is a flat pane: no parallax
+        vec2 p0 = uv * 2.0 - 1.0;
+        // the tangent frame from the screen derivatives: Tp, Bp = eye-space change per unit of p
+        vec3 sx = dFdx(vEye), sy = dFdy(vEye);
+        mat2 Ji = inverse(mat2(dFdx(p0), dFdy(p0)));
+        vec3 Tp = sx * Ji[0][0] + sy * Ji[0][1];
+        vec3 Bp = sx * Ji[1][0] + sy * Ji[1][1];
+        vec3 N = normalize(cross(Tp, Bp));
+        if (dot(N, vEye) > 0.0) N = -N;
+        float LT = length(Tp), LB = length(Bp);
+        vec3 V = normalize(-vEye);
+        vec3 Vp = vec3(dot(V, Tp) / (LT * LT), dot(V, Bp) / (LB * LB), max(dot(V, N), 0.2) / LT);
+        float depth = (g == 3u || g == 4u) ? FXD_DEPTH * 0.6 : FXD_DEPTH;
+        float tMax = depth / Vp.z;
+        const int STEPS = 12;
+        float tPrev = 0.0, tHit = tMax;
+        for (int i = 1; i <= STEPS; i++) {
+            float t = tMax * float(i) / float(STEPS);
+            if (-fxConeH(p0 - Vp.xy * t) * depth <= Vp.z * t) { tHit = t; break; }
+            tPrev = t;
+        }
+        for (int i = 0; i < 4; i++) {
+            float t = 0.5 * (tPrev + tHit);
+            if (-fxConeH(p0 - Vp.xy * t) * depth <= Vp.z * t) tHit = t; else tPrev = t;
+        }
+        uv = (p0 - Vp.xy * tHit) * 0.5 + 0.5;
+    }
+    vec4 t = texture(uTex0, clamp(uv, vec2(0.0), vec2(1.0)));
+    if (g == 5u) {   // glass: only the bright cracks; the hole itself is empty (see-through), cracks may overlap
+        float lum = dot(t.rgb, vec3(0.299, 0.587, 0.114));
+        float r = length(vTexCoord0 * 2.0 - 1.0);
+        return vec4(vec3(0.95, 0.97, 1.0), t.a * smoothstep(0.35, 0.65, lum) * smoothstep(0.1, 0.2, r));
+    }
+    return vec4(t.rgb * tint, t.a * texVal0.a);   // the outline stays the game's (alpha at the quad's own uv)
+}
+
+// ---- clusters (prototype): one quad over a group of holes; texture 0 = the fused colour (A = coverage),
+// texture 1 = the fused depth (r, 0..1 of the cluster's deepest). The vertex colour's r carries that depth in
+// the quad's uv units, x 4 (port/src/fxcluster.c, tools_pc/fxview fx_cluster.h). Parallax occlusion over the
+// fused depth (the deepest hole already won per texel), then the relief lit by the sun or a light from above
+// and the dynamic lights, as a ratio to the flat wall's light, with the rim's shadow.
+#define FXC_STEPS 24
+float fxcDepth(vec2 uv) { return textureLod(uTex1, uv, 0.0).r; }
+float fxcLight(vec3 n, vec3 L) {
+    float s = 0.45 + 0.8 * max(dot(n, L), 0.0);
+    for (int i = 0; i < lcount.x; i++) {
+        vec3 d = lpos[i].xyz - vEye;
+        float d2 = dot(d, d), r2 = lpos[i].w * lpos[i].w;
+        if (d2 >= r2) continue;
+        float fall = 1.0 - d2 / r2;
+        s += dot(lcol[i].rgb, vec3(0.333)) * fall * fall * max(dot(n, d) * inversesqrt(max(d2, 1e-4)), 0.0);
+    }
+    return s;
+}
+vec4 fxClusterPom(vec4 vc) {
+    vec2 uv0 = vTexCoord0;
+    float depthUV = vc.r * 0.25;
+    vec3 sx = dFdx(vEye), sy = dFdy(vEye);
+    mat2 Ji = inverse(mat2(dFdx(uv0), dFdy(uv0)));
+    vec3 Tp = sx * Ji[0][0] + sy * Ji[0][1];
+    vec3 Bp = sx * Ji[1][0] + sy * Ji[1][1];
+    vec3 N = normalize(cross(Tp, Bp));
+    if (dot(N, vEye) > 0.0) N = -N;
+    float LT = length(Tp), LB = length(Bp);
+    vec3 V = normalize(-vEye);
+    vec3 Vp = vec3(dot(V, Tp) / (LT * LT), dot(V, Bp) / (LB * LB), max(dot(V, N), 0.15) / LT);
+    float tMax = depthUV / Vp.z, tPrev = 0.0, tHit = tMax;
+    for (int i = 1; i <= FXC_STEPS; i++) {
+        float t = tMax * float(i) / float(FXC_STEPS);
+        if (fxcDepth(uv0 - Vp.xy * t) * depthUV <= Vp.z * t) { tHit = t; break; }
+        tPrev = t;
+    }
+    for (int i = 0; i < 5; i++) {
+        float t = 0.5 * (tPrev + tHit);
+        if (fxcDepth(uv0 - Vp.xy * t) * depthUV <= Vp.z * t) tHit = t; else tPrev = t;
+    }
+    vec2 uv = uv0 - Vp.xy * tHit;
+    vec4 col = textureLod(uTex0, uv, 0.0);
+    // the relief's normal from the depth's slope (uv units), then its light against the flat wall's
+    vec2 ts = 1.0 / vec2(textureSize(uTex1, 0));
+    float dx = (fxcDepth(uv + vec2(ts.x, 0.0)) - fxcDepth(uv - vec2(ts.x, 0.0))) * depthUV / (2.0 * ts.x);
+    float dy = (fxcDepth(uv + vec2(0.0, ts.y)) - fxcDepth(uv - vec2(0.0, ts.y))) * depthUV / (2.0 * ts.y);
+    vec3 nt = normalize(vec3(dx, dy, 1.0));
+    vec3 Np = normalize(nt.x * Tp / LT + nt.y * Bp / LB + nt.z * N);
+    // the sun, else the relief light (dynlights.c addReliefLight: a fixed light from above, 80 degrees up in
+    // the world), so a hole keeps one shading as the camera turns; the eye-space fallback only without either
+    vec3 L = dot(sun_dir.xyz, sun_dir.xyz) > 0.0 ? normalize(sun_dir.xyz) : normalize(vec3(0.3, 0.9, 0.3));
+    vec3 Lp = vec3(dot(L, Tp) / (LT * LT), dot(L, Bp) / (LB * LB), max(dot(L, N), 0.05) / LT);
+    float dHit = fxcDepth(uv) * depthUV, lit = 1.0;
+    for (int i = 1; i <= 8; i++) {
+        float t = (dHit / Lp.z) * float(i) / 8.0;
+        if (fxcDepth(uv + Lp.xy * t) * depthUV < dHit - Lp.z * t - depthUV * 0.03) { lit = mix(lit, 0.4, 0.5); }
+    }
+    float f = clamp(fxcLight(Np, L) * lit / max(fxcLight(N, L), 0.05), 0.3, 1.7);
+    f = mix(1.0, f, vc.g);   // the vertex colour's g: how much the relief is lit (0 on snow: it lights itself)
+    return vec4(col.rgb * f, col.a);
+}
+// FXDECAL END
+
 void main() {
     const bool A = (flags & CF_ALPHA) != 0u;
     cIn1 = clamp(vInput1, 0.0, 1.0);
@@ -222,6 +394,8 @@ void main() {
     }
     texel = WRAP(texel, -0.51, 1.51);
     texel = clamp(texel, 0.0, 1.0);
+    vec4 fxRaw = texel;   // a bullet hole's vertex colour: uv and code (fxDecalBlend)
+    if (((flags2 >> 8) & 15u) == 15u) texel = fxDecalCore(texel);   // a hole's core: before the lights and the fog
     texel.rgb = min(dynLight(texel.rgb, (flags & CF_TEX0) != 0u ? texVal0.rgb : vec3(0.6)), vec3(1.0));
     if ((flags & CF_FOG) != 0u) {
         float fogA = fog_pixel != 0 ? clamp(vFogW * gl_FragCoord.w, 0.0, 1.0) : clamp(vFog.a, 0.0, 1.0);
@@ -251,6 +425,31 @@ void main() {
         float intensity = (texel.r + texel.g + texel.b) / 3.0;
         vec3 new_texel = vGrayscaleColor.rgb * intensity;
         texel.rgb = mix(texel.rgb, new_texel, vGrayscaleColor.a);
+    }
+    {
+        uint fxk = (flags2 >> 8) & 15u;
+        if (fxk == 7u) {   // a bullet-hole cluster (port/src/fxclusters.c): parallax occlusion over its fused depth
+            vec4 d = fxClusterPom(cIn1);   // the combiner's first input is SHADE (fxclusters.c): the vertex colour
+            d.a *= cIn1.a;                 // the game's fade (a prop's oldest holes)
+            d.rgb = min(dynLight(d.rgb, d.rgb), vec3(1.0));
+            if ((flags & CF_FOG) != 0u) {
+                float fogA = fog_pixel != 0 ? clamp(vFogW * gl_FragCoord.w, 0.0, 1.0) : clamp(vFog.a, 0.0, 1.0);
+                d.rgb = mix(d.rgb, vFog.rgb, fogA);
+            }
+            outColor = d;
+            return;
+        }
+        if (fxk >= 8u && fxk != 15u) {   // the port's bullet holes: the game's texture through parallax occlusion
+            vec4 d = fxDecalPom(fxk);
+            d.rgb = min(dynLight(d.rgb, d.rgb), vec3(1.0));
+            if ((flags & CF_FOG) != 0u) {
+                float fogA = fog_pixel != 0 ? clamp(vFogW * gl_FragCoord.w, 0.0, 1.0) : clamp(vFog.a, 0.0, 1.0);
+                d.rgb = mix(d.rgb, vFog.rgb, fogA);
+            }
+            outColor = d;
+            return;
+        }
+        if (fxk != 0u) texel = fxShade(texel, fxk, vTexCoord0);
     }
     if (A) {
         if ((flags & CF_ATHRESH) != 0u && texel.a < 8.0 / 256.0) discard;

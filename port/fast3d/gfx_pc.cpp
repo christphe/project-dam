@@ -39,6 +39,19 @@
 #include "portaddr.h"   /* Stage B: arena windows + #95 address model */
 #include "envflag.h"
 #include "interpportal.h"   /* D578: portal-scissor replay */
+extern "C" {
+#include "portfx.h"   /* render-only effect markers (tagged G_NOOP) */
+#include "porttex.h"  /* the port's own textures by name (G_PORTTEX_EXT) */
+}
+
+/* portfx.h: the effect kind the game's tagged G_NOOP markers say the next
+ * triangles belong to (PORTFX_NONE outside a span). GE_FXLOG=1 prints, once
+ * a second, how many spans and triangles each kind saw. */
+static uint8_t s_fx_kind = PORTFX_NONE;
+/* G_PORTTEX_EXT (porttex.h): the port texture bound per tile, -1 = none (the tile's RDP texture) */
+static int s_porttex[2] = { -1, -1 };
+static uint32_t s_fx_spans[PORTFX_COUNT];
+static uint32_t s_fx_tris[PORTFX_COUNT];
 
 #include "gfx_pc.h"
 #include "gfx_cc.h"
@@ -243,7 +256,7 @@ static struct RDP {
 static struct RenderingState {
     uint8_t depth_mode;
     bool alpha_blend;
-    bool modulate;
+    uint8_t modulate;   /* blend mode: 0 alpha, 1 multiply, 2 additive */
     struct XYWidthHeight viewport, scissor;
     struct ShaderProgram* shader_program;
     TextureCacheNode* textures[SHADER_MAX_TEXTURES];
@@ -1188,9 +1201,35 @@ static void gfx_a2cdump_refused(const void* addr, int why) {
 static bool s_water_import = false;
 static uint8_t s_water_import_fmt = 0, s_water_import_siz = 0;
 
+/* The decoded game textures' average colour by source address (gfx_texture_average: the bullet-hole clusters take
+ * the hit wall's), and G_PORTTEX_CAPTURE_EXT's target (a cache hit is decoded again then). */
+static const void* s_avg_addr = nullptr;
+static std::unordered_map<const void*, uint32_t> s_tex_avg;
+static int s_capture_id = -1;
+
 static void gfx_upload_texture(uint32_t width, uint32_t height, bool gen_mipmaps) {
     gfx_rapi->upload_texture(tex_upload_buffer, width, height, gen_mipmaps);
     if (s_lr_on) lr_note_upload(tex_upload_buffer, width, height);   /* level export */
+    if (s_avg_addr != nullptr && width > 0 && height > 0) {   /* alpha-weighted average */
+        uint64_t s[3] = { 0, 0, 0 }, wsum = 0;
+        for (uint32_t p = 0; p < width * height; p++) {
+            const uint8_t* px = &tex_upload_buffer[p * 4];
+            for (int c = 0; c < 3; c++) s[c] += (uint64_t)px[c] * px[3];
+            wsum += px[3];
+        }
+        if (wsum > 0) {
+            s_tex_avg[s_avg_addr] = (uint32_t)(s[0] / wsum) | ((uint32_t)(s[1] / wsum) << 8) | ((uint32_t)(s[2] / wsum) << 16) | 0xFF000000u;
+        }
+        s_avg_addr = nullptr;
+    }
+    if (s_capture_id >= 0) {
+        if (const PortTex* t = portTexGet(s_capture_id)) {
+            char name[PORTTEX_NAME_MAX];
+            snprintf(name, sizeof name, "%s", t->name);
+            portTexRegister(name, (int)width, (int)height, tex_upload_buffer, PORTTEX_COPY);
+        }
+        s_capture_id = -1;
+    }
     if (s_water_import) {
         s_water_import = false;
         skyPlusWaterSource(tex_upload_buffer, (int)width, (int)height, (int)s_water_import_fmt, (int)s_water_import_siz);
@@ -1511,6 +1550,22 @@ static bool gfx_tex_pitch_fix(void) {
 
 extern "C" unsigned portThumbSalt(int fmt, int siz, int w, int h, const void* addr);   /* port/src/missions_thumb.c */
 extern "C" const uint8_t* portThumbTexture(const void* addr, const uint8_t* cur, int fmt, int siz, int w, int h, int line);
+/* G_PORTTEX_EXT: bind port texture s_porttex[i] to unit i from the cache, keyed on its pixels and version
+ * (a texture that changes gets a new version, so a new entry), or upload it. */
+static const PortTex* gfx_porttex(int i) {
+    return s_porttex[i] >= 0 ? portTexGet(s_porttex[i]) : NULL;
+}
+static void gfx_porttex_bind(int i) {
+    const PortTex* t = gfx_porttex(i);
+    if (t == NULL) return;
+    TextureCacheKey key = {};
+    key.texture_addr = t->rgba;
+    key.fmt = 0xFE;   /* not an RDP format: a port texture */
+    key.size_bytes = t->version;
+    if (!gfx_texture_cache_lookup(i, key)) {
+        gfx_rapi->upload_texture(t->rgba, (uint32_t)t->w, (uint32_t)t->h, false);
+    }
+}
 
 static void import_texture(int i, int tile, bool importReplacement) {
     s_tick_texloads++;   /* D583 SLOW line */
@@ -1712,7 +1767,8 @@ static void import_texture(int i, int tile, bool importReplacement) {
         }
     }
 
-    if (gfx_texture_cache_lookup(i, key) && !s_water_import) {
+    s_avg_addr = orig_addr;   /* gfx_upload_texture keeps its average colour */
+    if (gfx_texture_cache_lookup(i, key) && !s_water_import && s_capture_id < 0) {
         return;   /* (a cache hit is decoded again when the water capture wants the image) */
     }
     s_tick_texmiss++;
@@ -3455,9 +3511,14 @@ static void gfx_dynlights_sync(void) {
     memset(&l, 0, sizeof l);
     if (!gfx_mat4_invert(T, l.inv_proj)) return;
     int np = 0;
+    float relief[3] = { 0.0f, 0.0f, 0.0f };
+    bool haveRelief = false;
     for (int i = 0; i < s_dynl_n; i++) {
         const PortDynLight* d = &s_dynl[i];
-        if (d->radius < 0.0f) {
+        if (d->radius < -1.5f) {   /* the bullet holes' relief light (dynlights.c addReliefLight): sun_dir only */
+            memcpy(relief, d->pos, sizeof relief);
+            haveRelief = true;
+        } else if (d->radius < 0.0f) {
             l.count[1] = 1;
             memcpy(l.sun_dir, d->pos, sizeof d->pos);
             memcpy(l.sun_col, d->col, sizeof d->col);
@@ -3469,6 +3530,9 @@ static void gfx_dynlights_sync(void) {
         }
     }
     l.count[0] = np;
+    if (haveRelief && l.count[1] == 0) {   /* no sun: the relief light takes sun_dir (count[1] stays 0: the scene is unlit by it) */
+        memcpy(l.sun_dir, relief, sizeof relief);
+    }
     gfx_flush();
     gfx_rapi->set_lights(&l);
     memcpy(s_dynl_T, T, sizeof T);
@@ -4243,7 +4307,8 @@ static inline void gfx_apply_viewport_scissor(void) {
 struct TriState {
     struct ColorCombiner* comb;
     struct ShaderProgram* prg;
-    bool use_alpha, use_fog, use_grayscale, use_modulate;
+    bool use_alpha, use_fog, use_grayscale;
+    uint8_t use_modulate;   /* blend mode: 0 alpha, 1 multiply (G_MODULATE_EXT), 2 additive (portfx glow) */
     bool a2c;                       /* D984: alpha-to-coverage draw (no blend, depth written) */
     bool blend;                     /* use_alpha && !a2c: what set_use_alpha gets */
     uint32_t tm;
@@ -4373,6 +4438,21 @@ static inline bool gfx_tri_reject(struct LoadedVertex* v1, struct LoadedVertex* 
  * invisible blends, surfaces without a depth test, or alpha that does not
  * come from a texture. */
 extern "C" int portDisplayFixes;   /* port/src/video.c: Video.Visuals >= Fixed (D982) */
+extern "C" int portVisuals;        /* port/src/video.c: 2 = Enhanced */
+
+/* Effect shaders (portfx.h): Video.Visuals = Enhanced, and GE_FX=0 not set.
+ * GE_FX=alt shades every other rendered frame only: two consecutive frames of
+ * one run (GE_PCDUMP) are then a before/after pair of the same scene. */
+static unsigned s_fx_frame;   /* gfx_run count (gfx_fx_log_frame) */
+static bool gfx_fx_shading_on(void) {
+    static int env = -1;
+    if (env < 0) {
+        const char* e = getenv("GE_FX");
+        env = e == NULL ? 1 : e[0] == '0' ? 0 : (e[0] == 'a' || e[0] == 'A') ? 2 : 1;
+    }
+    if (env == 2 && (s_fx_frame & 1u) == 0) return false;
+    return env != 0 && portVisuals >= 2 && portFxUserOn;
+}
 
 extern "C" { int gfx_a2c_user = 1; }   /* Video.AlphaToCoverage (hidden key, port/src/video.c) */
 
@@ -4501,6 +4581,11 @@ static inline void gfx_tri_state(TriState& ts) {
     const bool invisible = (rdp.other_mode_l & (3 << 24)) == (G_BL_0 << 24) && (rdp.other_mode_l & (3 << 20)) == (G_BL_CLR_MEM << 20);
     ts.use_grayscale = rdp.grayscale;
     ts.use_modulate = ts.use_alpha && (rsp.extra_geometry_mode & G_MODULATE_EXT) != 0;
+    /* Effect shaders (portfx.h): the port's sparks and tracers add their light (glow) when the effects are on. */
+    if (!ts.use_modulate && ts.use_alpha && (s_fx_kind == PORTFX_SPARK || s_fx_kind == PORTFX_TRACER) && gfx_fx_shading_on()) {
+        ts.use_modulate = 2;
+    }
+    /* The port's bullet holes blend like the game's (alpha); blend mode 3 (2x multiply) is unused for now. */
     const bool use_blur = (rdp.other_mode_h & (3U << G_MDSFT_TEXTFILT)) == G_TF_BLUR_EXT;
 
     if ((rdp.other_mode_l & CVG_X_ALPHA) == CVG_X_ALPHA) {
@@ -4561,6 +4646,12 @@ static inline void gfx_tri_state(TriState& ts) {
         !invisible && !ts.use_modulate && !cld_surf && gfx_zcut_gate()) {
         cc_options |= (uint64_t)SHADER_OPT_ZCUT;
     }
+    /* Effect shaders (portfx.h, uber.frag.glsl fxShade): Enhanced only; GE_FX=0
+     * keeps the game's look (before/after captures). The muzzle quad keeps
+     * its own look: the flash's light is dynlights' (#111). */
+    if (s_fx_kind != PORTFX_NONE && s_fx_kind != PORTFX_MUZZLE && gfx_fx_shading_on()) {
+        cc_options |= (uint64_t)s_fx_kind << SHADER_OPT_FX_SHIFT;
+    }
 
     // If we are not using alpha, clear the alpha components of the combiner as they have no effect
     if (!ts.use_alpha) {
@@ -4601,7 +4692,8 @@ static inline void gfx_tri_state(TriState& ts) {
             }
             if (rdp.textures_changed[i] || water_cap) {
                 gfx_flush();
-                import_texture(i, tile, false);
+                if (gfx_porttex(i) != NULL) gfx_porttex_bind(i);   /* G_PORTTEX_EXT: a port texture */
+                else import_texture(i, tile, false);
                 rdp.textures_changed[i] = false;
             }
             s_water_import = false;
@@ -4632,6 +4724,10 @@ static inline void gfx_tri_state(TriState& ts) {
                     break;
             }
             ts.tex_width[i] = line_size;
+            if (const PortTex* pt = gfx_porttex(i)) {   /* G_PORTTEX_EXT: a port texture has its own size */
+                ts.tex_width[i] = (uint32_t)pt->w;
+                ts.tex_height[i] = (uint32_t)pt->h;
+            }
             /* D245 (M-201): D229 water (RGBA16 tile over a CI8 load) is
              * imported as CI8 -- one byte per texel, base level only -- so the
              * UV normalisation must use that geometry: width = line bytes
@@ -5161,7 +5257,40 @@ static inline void gfx_tri_emit(const TriState& ts, struct LoadedVertex* const* 
 #include "gfx_meshcache.inc"   /* issue #10: display-list mesh cache (GE_MESHCACHE=1) */
 #include "../levelrec/gfx_levelcap.inc"   /* issue #102: level export capture */
 
+static void gfx_fx_marker(uintptr_t w1) {
+    if (((uint32_t)w1 & PORTFX_TAG_MASK) != PORTFX_TAG_MAGIC) {
+        return;
+    }
+    const uint32_t kind = (uint32_t)w1 & 0xFFu;
+    if (kind >= PORTFX_COUNT) {
+        return;
+    }
+    s_fx_kind = (uint8_t)kind;
+    if (kind != PORTFX_NONE) {
+        s_fx_spans[kind]++;
+    }
+}
+
+static void gfx_fx_log_frame(void) {
+    static uint32_t frames;
+    s_fx_frame++;
+    if (!GE_ENVFLAG("GE_FXLOG") || ++frames % 60 != 0) {
+        return;
+    }
+    sysLogPrintf(LOG_NOTE, "[FX] spans/tris per 60 frames: muzzle %u/%u tracer %u/%u spark %u/%u blood %u/%u impact %u/%u",
+            s_fx_spans[PORTFX_MUZZLE], s_fx_tris[PORTFX_MUZZLE],
+            s_fx_spans[PORTFX_TRACER], s_fx_tris[PORTFX_TRACER],
+            s_fx_spans[PORTFX_SPARK], s_fx_tris[PORTFX_SPARK],
+            s_fx_spans[PORTFX_BLOOD], s_fx_tris[PORTFX_BLOOD],
+            s_fx_spans[PORTFX_IMPACT], s_fx_tris[PORTFX_IMPACT]);
+    memset(s_fx_spans, 0, sizeof(s_fx_spans));
+    memset(s_fx_tris, 0, sizeof(s_fx_tris));
+}
+
 static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
+    if (s_fx_kind != PORTFX_NONE) {
+        s_fx_tris[s_fx_kind]++;
+    }
     /* D75D: only real model triangles (all indices < MAX_VERTICES); the
      * fullscreen-quad helpers use indices MAX_VERTICES+0..3 and would skew maxtri. */
     if (vtx1_idx < MAX_VERTICES && vtx2_idx < MAX_VERTICES && vtx3_idx < MAX_VERTICES) {
@@ -6393,6 +6522,15 @@ static void gfx_sp_vertex_float(size_t n_vertices, size_t dest_index, const Port
     }
 }
 
+static inline void *seg_addr(uintptr_t w1);
+/* The average colour (0..1) of the game texture a G_SETTIMG word `w1` names, once fast3d decoded it: 1, else 0. */
+extern "C" int gfx_texture_average(uintptr_t w1, float out[3]) {
+    const auto it = s_tex_avg.find((const void*)seg_addr(w1));
+    if (it == s_tex_avg.end()) return 0;
+    for (int c = 0; c < 3; c++) out[c] = (float)((it->second >> (8 * c)) & 0xFF) / 255.0f;
+    return 1;
+}
+
 static inline void *seg_addr(uintptr_t w1) {
     // A full 64-bit host pointer (the gSP* macros pack full pointers into w1)
     // passes through untouched. Only 32-bit values are N64-space addresses.
@@ -6470,7 +6608,10 @@ static void gfx_run_dl(Gfx* cmd) {
                 // RSP commands:
             case G_NOOP: /* 0xc0. GE's gbi_extension.h also names this slot
                              G_SETTEX (gsSPUseTexture); the game never emits it
-                             (finding B1), so treating it as a no-op is safe. */
+                             (finding B1), so treating it as a no-op is safe.
+                             The port's own effect markers (portfx.h) ride on
+                             it as a tagged no-op. */
+                gfx_fx_marker((uintptr_t)cmd->words.w1);
                 break;
             case G_MTX: {
                 if (s_interp_mode != INTERP_OFF) {
@@ -6784,6 +6925,26 @@ static void gfx_run_dl(Gfx* cmd) {
                 memcpy(s_dynl_P, rsp.P_matrix, sizeof s_dynl_P);
                 break;
             }
+            case G_PORTTEX_CAPTURE_EXT: {   /* porttex.h: decode tile 0's game texture into port texture w1 - 1 */
+                const int id = (int)(uint32_t)cmd->words.w1 - 1;
+                if (portTexGet(id) != NULL) {
+                    gfx_flush();
+                    s_porttex[0] = -1;
+                    s_capture_id = id;
+                    import_texture(0, G_TX_RENDERTILE, false);
+                    s_capture_id = -1;
+                    rdp.textures_changed[0] = true;
+                }
+                break;
+            }
+            case G_PORTTEX_EXT: {   /* porttex.h: a port texture for a tile by id (w1 = id + 1), or none */
+                const int t = (int)C0(0, 1);
+                const int id = (int)(uint32_t)cmd->words.w1 - 1;
+                gfx_flush();
+                s_porttex[t] = portTexGet(id) != NULL ? id : -1;
+                rdp.textures_changed[t] = true;
+                break;
+            }
             case G_SHADOWCAST_EXT:   /* the prop draws' bracket (port/src/dynlights.c): nothing reads it yet */
                 break;
             case G_RDPPIPESYNC:
@@ -6826,6 +6987,8 @@ static void gfx_sp_reset() {
     s_dynl_n = 0;
     s_dynl_dirty = true;     /* the backend's block may hold the last frame's lights */
     s_dynl_sent_on = false;
+    s_fx_kind = PORTFX_NONE;   /* portfx.h: never carry a span across frames */
+    s_porttex[0] = s_porttex[1] = -1;   /* nor a port texture */
 }
 
 extern "C" void gfx_get_dimensions(uint32_t* width, uint32_t* height, int32_t* posX, int32_t* posY) {
@@ -7380,6 +7543,7 @@ extern "C" void gfx_run(Gfx* commands) {
     Gfx* overlay = nullptr;
     gfx_frame_body(commands, true, &overlay, perf_t0, &perf_tpre, &perf_t1);
     const uint64_t perf_tpost = perf_t0 ? gfx_perf_now_ns() : 0;
+    gfx_fx_log_frame();
     if (!gfx_frame_thread_active()) {
         gfx_wapi->swap_buffers_begin();   /* D969: pipelined, the GL thread swaps after its replay */
     }

@@ -56,6 +56,9 @@
 #include "bondview_r.h"
 #include "initBondDATAdefaults.h"
 #include "viewport.h"
+#ifdef PORT
+#include "portfx.h"
+#endif
 #include "stan.h"
 #include "gun.h"
 #include "debug_camera.h"
@@ -913,8 +916,20 @@ Gfx* lvlRender(Gfx* DL)
             }
 
             setanimationdebugflag(getDebugMode() == DEB_SELANIM);
+#ifdef PORT
+            gDPPortFxBegin(DL++, PORTFX_TRACER);   /* portfx.h: render-only marker */
+#endif
+#ifdef PORT
+            if (!GE_FX_RENDER_REPLACED(PORTFX_TRACER, &DL))   /* a port subscriber may draw them (portevents.h) */
+#endif
             DL = weaponRenderTracers(DL);
+#ifdef PORT
+            gDPPortFxEnd(DL++);
+#endif
 
+#ifdef PORT
+            if (!GE_FX_RENDER_REPLACED(PORTFX_SPARK, &DL))   /* impact and blood puffs; a port subscriber may draw them */
+#endif
 #if defined(VERSION_EU)
             bullet_moving_sparks_update(&DL, ZBUF_SURFACE);
 #else /* VERSION_US, VERSION_JP, unspecified */

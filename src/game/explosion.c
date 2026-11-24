@@ -4,6 +4,7 @@
 #include <ultra64.h>
 #if defined(PORT)
 #include "portaddr.h"
+#include "portfx.h"
 #else
 #define PORT_N64PTR(T, x) ((T *)(x))
 #endif
@@ -2055,6 +2056,9 @@ void explosionCreateBulletImpact(struct coord3d *pos, struct coord3d *arg1, s16 
     u8 sp62;
     u8 sp61;
 
+    /* port event bus (portevents.h); empty without PORT */
+    GE_EV_IMPACT(pos, arg1, impact_type, room, prop);
+
     spE0 = g_BulletImpactDefaultVertex;
 
     if (cheatIsActive(CHEAT_PAINTBALL))
@@ -2273,6 +2277,9 @@ Gfx *explosionRenderBulletImpactOnProp(Gfx *gdl, PropRecord *arg1, s32 arg2)
 
     gSPClearGeometryMode(gdl++, G_CULL_BOTH);
     gDPSetColorDither(gdl++, G_CD_NOISE);
+#ifdef PORT
+    gDPPortFxBegin(gdl++, PORTFX_IMPACT);   /* portfx.h: render-only marker */
+#endif
 
     for (i = 0; i < BULLET_IMPACT_BUFFER_LEN; i++)
     {
@@ -2315,6 +2322,15 @@ Gfx *explosionRenderBulletImpactOnProp(Gfx *gdl, PropRecord *arg1, s32 arg2)
                             }
                         }
 
+#ifdef PORT
+                        /* the port may draw a prop's hole itself (render only; portevents.h) */
+                        if (arg1 != NULL && GE_FX_PROP_IMPACT(&gdl, i))
+                        {
+                            sp48 = -1;
+                            continue;
+                        }
+#endif
+
                         if (sp48 != impact_type)
                         {
                             texSelect(&gdl, &impactimages[impact_type], g_ImpactTypes[impact_type].unk1, g_ImpactTypes[impact_type].unk2, 2U);
@@ -2334,6 +2350,9 @@ Gfx *explosionRenderBulletImpactOnProp(Gfx *gdl, PropRecord *arg1, s32 arg2)
         sp4C->unk02 &= ~(1 << arg2);
     }
 
+#ifdef PORT
+    gDPPortFxEnd(gdl++);
+#endif
     gDPSetColorDither(gdl++, G_CD_BAYER);
 
     return gdl;

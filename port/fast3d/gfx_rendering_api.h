@@ -74,7 +74,10 @@ struct GfxRenderingAPI {
     void (*set_depth_range)(float znear, float zfar);
     void (*set_viewport)(int x, int y, int width, int height);
     void (*set_scissor)(int x, int y, int width, int height);
-    void (*set_use_alpha)(bool use_alpha, bool modulate);
+    /* blendmode: 0 alpha (SRC_ALPHA, 1-SRC_ALPHA), 1 multiply (DST_COLOR, ZERO; G_MODULATE_EXT),
+     * 2 additive (SRC_ALPHA, ONE; the port's glowing effects, portfx.h),
+     * 3 2x multiply (DST_COLOR, SRC_COLOR; the port's bullet holes: 0.5 keeps the wall, below darkens, above lightens) */
+    void (*set_use_alpha)(bool use_alpha, int blendmode);
     void (*draw_triangles)(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris);
     void (*init)(void);
     void (*on_resize)(void);
