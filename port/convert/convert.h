@@ -92,8 +92,9 @@ typedef void (*CvProgressFn)(void *user, int stage, int done, int total);
 void cv_set_progress(CvProgressFn fn, void *user);
 void cv_progress(int stage, int done, int total);
 
-/* Whole pipeline. Region comes from `region` or, when NULL, the ROM header's
- * country byte. Writes <out_root>/data/pcmodels-<region>/ and
+/* Whole pipeline. The ROM must be one of the three retail images (SHA-1,
+ * conv_romcheck.c); the region comes from its hash, and a non-NULL `region`
+ * that disagrees with it is an error. Writes <out_root>/data/pcmodels-<region>/ and
  * <out_root>/data/pccg-<region>/. Prints progress to stdout; returns 0 on
  * success. */
 int cv_convert_rom(const char *rom_path, const char *region,

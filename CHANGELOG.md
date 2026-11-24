@@ -11,6 +11,7 @@
 - Rounder heads: the conversion subdivides the characters' heads (and the heads built into bodies such as Boris or Natalya) up close, with the original mesh as the far level of detail; bodies keep their detailed mesh at every distance instead of switching to the simplified one. The models are converted again once at the next launch
 
 ### Changed
+- The ROM is checked against the three retail images (US, EU, JP) at every start, and the converter takes the region from that check: patched or modified ROMs are refused with a clear message, and a byte-swapped .v64 or .n64 dump is told to be converted to .z64
 - PC: a fresh install now uses the Switch's defaults for the Centered aim style, 4x anti-aliasing and blood on hit; an existing ini keeps its values
 - PC: the stick deadzone is 10% on both sticks by default, as on the Switch (it was 25%, which swallowed the small aim movements); a deadzone you set yourself is kept
 

@@ -102,6 +102,11 @@ static const char *romFileCandidates(void)
 #endif
 }
 
+/* port/convert/conv_romcheck.c (declared here: this TU sees the decomp
+ * include path). Codes: 0 = OK, 1/2 = byte-swapped .v64/.n64, 3 = unknown. */
+extern int cv_romcheck(const unsigned char *rom, unsigned long len, const char **region_out);
+extern const char *cv_romcheck_message(int code);
+
 static int romHeaderValid(const u8 *h, char *err, size_t errsz)
 {
     static const u8 magic[4] = { 0x80, 0x37, 0x12, 0x40 };
@@ -373,11 +378,52 @@ int romdataInit(void)
         }
 
         if (romSize < 0x40 || !romHeaderValid(img, err, sizeof(err))) {
+            /* A byte-swapped dump fails the magic check; say how to fix it
+             * (a 4-byte buffer never matches a hash, so only the swap
+             * detection can answer here). */
+            if (romSize >= 4) {
+                const int sw = cv_romcheck(img, 4, NULL);
+                if (sw == 1 || sw == 2)
+                    snprintf(err, sizeof(err), "%s", cv_romcheck_message(sw));
+            }
             sysLogPrintf(LOG_WARNING, "romdataInit: %s rejected: %s",
                          tok, err);
             snprintf(rejected, sizeof(rejected), "%s: %s", tok, err);
             free(img);
             continue;
+        }
+
+        /* Strict check against the three retail images (#65): a patched or
+         * bad dump may move data, and a wrong-region ROM would load the wrong
+         * tables. Runs at every boot. */
+        {
+#if defined(VERSION_EU)
+            const char *const wantRegion = "pal-final";
+#elif defined(VERSION_JP)
+            const char *const wantRegion = "jpn-final";
+#else
+            const char *const wantRegion = "ntsc-final";
+#endif
+            const char *hashRegion = NULL;
+            const uint64_t t0 = sysGetMicroseconds();
+            const int chk = cv_romcheck(img, romSize, &hashRegion);
+            const unsigned ms = (unsigned)((sysGetMicroseconds() - t0) / 1000);
+
+            if (chk != 0)
+                snprintf(err, sizeof(err), "%s", cv_romcheck_message(chk));
+            else if (strcmp(hashRegion, wantRegion) != 0)
+                snprintf(err, sizeof(err), "ROM is %s, this build expects %s",
+                         hashRegion, wantRegion);
+            else
+                err[0] = 0;
+            if (err[0]) {
+                sysLogPrintf(LOG_WARNING, "romdataInit: %s rejected: %s",
+                             tok, err);
+                snprintf(rejected, sizeof(rejected), "%s: %s", tok, err);
+                free(img);
+                continue;
+            }
+            sysLogPrintf(LOG_INFO, "romdataInit: ROM SHA-1 verified in %u ms", ms);
         }
 
         /* Drop-in ROM support: if the ROM-derived sidecars are missing, run
@@ -513,7 +559,7 @@ int romdataInit(void)
             char *q;
             for (q = msg; *q; q++) if (*q == '\\') *q = '/';
         }
-        bootscreenMessage("ROM not found", msg);
+        bootscreenMessage(rejected[0] ? "Unusable ROM" : "ROM not found", msg);
     }
     return -1;
 }
