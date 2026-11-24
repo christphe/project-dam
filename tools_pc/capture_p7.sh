@@ -76,6 +76,8 @@ CANON_EEP="$ROOT/tools_pc/golden/ge007.eep"
 [ -f "$CANON_EEP" ] || { echo "error: canonical golden save missing: $CANON_EEP (D529)"; exit 2; }
 cd "$ROOT"   # golden paths are root-relative (tools_pc/golden/)
 
+# GE_DATA: a converted game data/ folder to copy from (tools/dev.py tools sets it); default <repo>/data.
+DATA_SRC="${GE_DATA:-$ROOT/data}"
 ROMID="${GE_ROMID:-$(sed -n 's/^ROMID:[A-Za-z]*=//p' "$ROOT/$BUILD_DIR/CMakeCache.txt" 2>/dev/null | head -n1)}"
 if [ -z "$ROMID" ]; then
   roms=$(ls "$ROOT"/data/ge007.*.z64 2>/dev/null)
@@ -84,7 +86,7 @@ if [ -z "$ROMID" ]; then
   else ROMID=ntsc-final; fi
 fi
 for need in "ge007.$ROMID.z64" "pccg-$ROMID" "pcmodels-$ROMID"; do
-  [ -e "$ROOT/data/$need" ] || { echo "error: $ROOT/data/$need missing (needed for the per-run work dir; set GE_ROMID to pick another region)"; exit 2; }
+  [ -e "$DATA_SRC/$need" ] || { echo "error: $DATA_SRC/$need missing (needed for the per-run work dir; set GE_ROMID to pick another region)"; exit 2; }
 done
 
 # recipe comes from the tracked gate tool, not from this file
@@ -109,8 +111,8 @@ capture_one() {
   w="$TMPROOT/$name"; rm -rf "$w"; mkdir -p "$w/data"
   # D531/D529: every level gets the CANONICAL save (the frame depends on its
   # content) and the pinned defaults-only 640x480 ini -- in its OWN data/.
-  cp "$ROOT/data/ge007.$ROMID.z64" "$w/data/" &&
-  cp -r "$ROOT/data/pccg-$ROMID" "$ROOT/data/pcmodels-$ROMID" "$w/data/" &&
+  cp "$DATA_SRC/ge007.$ROMID.z64" "$w/data/" &&
+  cp -r "$DATA_SRC/pccg-$ROMID" "$DATA_SRC/pcmodels-$ROMID" "$w/data/" &&
   cp "$CANON_EEP" "$w/data/ge007.eep" &&
   printf '[Window]\nWidth = 640\nHeight = 480\n' > "$w/data/ge007.ini" ||
     { echo "== $name rc=setup-failed frames=0 secs=0 window=$dump"; return; }

@@ -13,9 +13,11 @@ from the N64 struct layout notes in bondtypes.h -- VERIFY before trusting
 the walk past the first such record.
 """
 import csv, struct, zlib, os, re, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
+import devenv   # the ROM from N64_ROM in .env, or a game data/ folder
 
 REGION = sys.argv[1] if len(sys.argv) > 1 else "ntsc-final"
-ROM_PATH = f"data/ge007.{REGION}.z64"
+ROM_PATH = devenv.rom_path(REGION)
 FILELIST = "scripts/filelist.u.csv"
 
 if not os.path.exists(ROM_PATH):

@@ -5,9 +5,11 @@ Usage: disasm.py <ram_addr_hex> [n_instructions]
 Maps game-segment RAM (base 0x7F000000) to file offset 0x34B28.
 Also handles lib segment (RAM base = _startSegmentEnd - 0x10000000, ROM 0x1050).
 """
-import struct, sys
+import os, struct, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
+import devenv   # the ROM from N64_ROM in .env, or a game data/ folder
 
-ROM = open('data/ge007.ntsc-final.z64', 'rb').read()
+ROM = open(devenv.rom_path(), 'rb').read()
 GAME_RAM_BASE = 0x7F000000
 GAME_ROM_OFF = 0x34B28
 LIB_ROM_OFF = 0x1050

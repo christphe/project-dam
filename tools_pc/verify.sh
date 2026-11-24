@@ -258,17 +258,19 @@ golden_dir_for() {
 #     (tools_pc/golden/ge007.eep, in-tree so a fresh clone or CI can run it).
 CANON_EEP="$ROOT/tools_pc/golden/ge007.eep"
 [ -f "$CANON_EEP" ] || { echo "error: canonical golden save missing: $CANON_EEP (D529)" >&2; exit 2; }
+# GE_DATA: a converted game data/ folder to copy from (tools/dev.py tools sets it); default <repo>/data.
+DATA_SRC="${GE_DATA:-$ROOT/data}"
 ROMID="${GE_ROMID:-$(sed -n 's/^ROMID:[A-Za-z]*=//p' "$BUILD_DIR/CMakeCache.txt" 2>/dev/null | head -n1)}"
 ROMID="${ROMID:-ntsc-final}"
 for need in "ge007.$ROMID.z64" "pccg-$ROMID" "pcmodels-$ROMID"; do
-  [ -e "$ROOT/data/$need" ] || { echo "error: $ROOT/data/$need missing (needed to build the per-run work dir; set GE_ROMID to pick another region)" >&2; exit 2; }
+  [ -e "$DATA_SRC/$need" ] || { echo "error: $DATA_SRC/$need missing (needed to build the per-run work dir; set GE_ROMID to pick another region)" >&2; exit 2; }
 done
 # stage_workdir DIR -> populate DIR/data (the game creates DIR/ppm itself)
 stage_workdir() {
   local d="$1"
   mkdir -p "$d/data" &&
-  cp "$ROOT/data/ge007.$ROMID.z64" "$d/data/" &&
-  cp -r "$ROOT/data/pccg-$ROMID" "$ROOT/data/pcmodels-$ROMID" "$d/data/" &&
+  cp "$DATA_SRC/ge007.$ROMID.z64" "$d/data/" &&
+  cp -r "$DATA_SRC/pccg-$ROMID" "$DATA_SRC/pcmodels-$ROMID" "$d/data/" &&
   cp "$CANON_EEP" "$d/data/ge007.eep" &&
   # Video.DeckPresetApplied: the D283 Steam Deck preset would otherwise switch
   # a fresh ini to fullscreen 1280x800 on a Deck, and no frame would compare.

@@ -7,8 +7,10 @@
 This is the spec that port/src/romdata.c romdataFixupModelFile implements."""
 import csv, struct, zlib, os, re, sys
 from collections import Counter
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
+import devenv   # the ROM from N64_ROM in .env, or a game data/ folder
 
-ROM = open('data/ge007.ntsc-final.z64','rb').read()
+ROM = open(devenv.rom_path(),'rb').read()
 rows = list(csv.reader(open(r"scripts/filelist.u.csv")))
 hdrfiles = set()
 for root, dirs, files in os.walk("assets"):
