@@ -58,6 +58,9 @@ ge_add_pure_test(test_portevents test_portevents.c ${CMAKE_SOURCE_DIR}/port/src/
 # Character-model subdivision (port/convert/conv_subdiv.c): pure, no core.
 ge_add_pure_test(test_subdiv test_subdiv.c ${CMAKE_SOURCE_DIR}/port/convert/conv_subdiv.c)
 
+# The retail ROM check (port/convert/conv_romcheck.c): pure, no core.
+ge_add_pure_test(test_romcheck test_romcheck.c ${CMAKE_SOURCE_DIR}/port/convert/conv_romcheck.c)
+
 # Input strategies (port/src/input/): pure, no core.
 set(GE_INPUT_DIR "${CMAKE_SOURCE_DIR}/port/src/input")
 ge_add_pure_test(test_input_modern test_input_modern.c

@@ -1,5 +1,6 @@
 /* conv_main.c -- pipeline driver shared by the game and the CLI. */
 #include "convert.h"
+#include "conv_romcheck.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,16 +28,6 @@ static void mkdirs(const char *path)
         }
     }
     cv_mkdir(tmp);
-}
-
-static const CvRegionData *region_by_country(int country)
-{
-    switch (country) {
-    case 'E': return &cv_regions[0];
-    case 'P': return &cv_regions[1];
-    case 'J': return &cv_regions[2];
-    }
-    return NULL;
 }
 
 static int region_index_by_name(const char *name)
@@ -69,12 +60,22 @@ int cv_convert_rom(const char *rom_path, const char *region, const char *out_roo
     memset(&c, 0, sizeof c);
     c.rom = rom;
     c.rom_size = (size_t)sz;
-    if (region) {
-        int i = region_index_by_name(region);
+    {
+        const char *hash_region = NULL;
+        int chk = cv_romcheck(rom, (unsigned long)sz, &hash_region);
+        int i;
+        if (chk != CV_ROM_OK) {
+            fprintf(stderr, "%s: %s\n", rom_path, cv_romcheck_message(chk));
+            free(rom);
+            return 1;
+        }
+        if (region && strcmp(region, hash_region) != 0) {
+            fprintf(stderr, "%s is a %s ROM but --region %s was given\n", rom_path, hash_region, region);
+            free(rom);
+            return 1;
+        }
+        i = region_index_by_name(hash_region);
         c.rd = i < 0 ? NULL : &cv_regions[i];
-    } else {
-        /* big-endian .z64: country code byte at 0x3E */
-        c.rd = sz > 0x40 ? region_by_country(rom[0x3E]) : NULL;
     }
     if (!c.rd) { fprintf(stderr, "unrecognised ROM region\n"); free(rom); return 1; }
     c.region = c.rd->region;
