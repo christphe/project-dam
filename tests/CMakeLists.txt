@@ -92,7 +92,7 @@ if(GE007_ROM_TESTS)
 endif()
 
 # Mission setup rebuild (port/mission/mission_apply.c) the Luau runtime (mission_lua.cpp) and the thumb.png pixel conversion (mission_thumb.c): pure, no core.
-foreach(_t test_mission_apply test_mission_lua test_mission_thumb)
+foreach(_t test_mission_apply test_mission_lua test_mission_thumb test_mission_formula)
   ge_add_pure_test(${_t} ${_t}.c)
   target_link_libraries(${_t} ge_mission)
   set_property(TARGET ${_t} PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}"

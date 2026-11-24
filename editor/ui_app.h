@@ -20,6 +20,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -35,17 +36,19 @@
 
 namespace ed {
 
+struct ScriptsUi;   // ui_scripts.cpp
 struct LogLine { std::string text; int sev = 0; };   // sev: 0 info, 1 warning, 2 error
 
 // ---- application state ----
 struct App {
     Doc doc;
+    std::shared_ptr<ScriptsUi> scr;    // the Scripts panel / code editor state (scriptsUi(a))
     Scene scene;
     Camera cam;
     SDL_Window *win = nullptr;
     SDL_GLContext gl = nullptr;
 
-    enum Tool { T_SELECT, T_GUARD, T_OBJECT, T_MOVE } tool = T_SELECT;
+    enum Tool { T_SELECT, T_GUARD, T_OBJECT, T_MOVE, T_ZONE } tool = T_SELECT;
     bool showRooms = true, showProps = true, showPads = true, showMPads = true, showPortals = false, showStan = false;
     char levelDir[512] = "", missionPath[512] = "", newName[128] = "New mission";
     char gameExe[512] = "", padText[64] = "", padFilter[32] = "";
@@ -219,6 +222,18 @@ struct Overlay {
         const Vec3 f1 = rotYaw({ (mn[0] + mx[0]) * 0.5f, (mn[1] + mx[1]) * 0.5f, mx[2] + 40.0f }, yawDeg);
         line({ pos[0] + f0[0], pos[1] + f0[1], pos[2] + f0[2] }, { pos[0] + f1[0], pos[1] + f1[1], pos[2] + f1[2] }, col, th);
     }
+    // an item's box: in a door's pad frame (hasBasis) or the yaw frame of the other items
+    void boxItem(const Item &it, const Vec3 &mn, const Vec3 &mx, ImU32 col, float th = 1.0f) const
+    {
+        if (!it.hasBasis) { boxYaw(it.pos, mn, mx, it.yawDeg, col, th); return; }
+        Vec3 c[8];
+        for (int i = 0; i < 8; i++) {
+            const Vec3 l = { (i & 1) ? mx[0] : mn[0], (i & 2) ? mx[1] : mn[1], (i & 4) ? mx[2] : mn[2] };
+            for (int k = 0; k < 3; k++) c[i][k] = it.pos[k] + it.bas[0][k] * l[0] + it.bas[1][k] * l[1] + it.bas[2][k] * l[2];
+        }
+        static const int e[12][2] = { { 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
+        for (auto &k : e) line(c[k[0]], c[k[1]], col, th);
+    }
     void diamond(const Vec3 &p, float r, ImU32 col, bool fill) const
     {
         ImVec2 s;
@@ -243,6 +258,7 @@ struct GizmoGeo {
     bool ok = false;
     ImVec2 c, tip[3], yaw;
     float len = 0;
+    bool noYaw = false;        // a zone has no facing: no yaw ring
 };
 
 const ImGuiWindowFlags kPanel = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |

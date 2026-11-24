@@ -58,10 +58,14 @@ TransformInfo Doc::getTransform(const Selection &s) const
                 t.pos = { p.pos[0], p.pos[1], p.pos[2] };
                 t.yawDeg = yawOfLook(p.look);
             }
+    } else if (s.kind == Selection::ZONE) {
+        const int zi = zoneIndex(s.id);
+        if (zi >= 0) { const MissionZone &z = mission.zones[zi]; t.valid = t.movable = true; t.pos = { z.pos[0], z.pos[1], z.pos[2] }; }
     } else if (s.kind == Selection::ITEM) {
         for (const Item &it : items()) {
             if (it.added != s.item.added || it.guard != s.item.guard || it.idx != s.item.idx || !it.hasPos) continue;
-            t.valid = true; t.movable = !it.removed && !it.assigned; t.pos = it.pos;
+            t.valid = true; t.movable = !it.removed && !it.assigned && !(it.type == 1 && !it.added);   // a door sits on a bound pad: not movable
+            t.pos = it.pos;
             if (it.pad.is_new) {
                 for (int i = 0; i < mission.npads; i++)
                     if (strcmp(mission.pads[i].id, it.pad.id) == 0) t.yawDeg = yawOfLook(mission.pads[i].look);
@@ -78,8 +82,20 @@ bool Doc::setTransform(const Selection &s, const Vec3 *pos, const float *yawDeg,
     if (!hasMission) { err = "no mission is open"; return false; }
     TransformInfo cur = getTransform(s);
     if (!cur.valid) { err = "nothing selected that has a position"; return false; }
-    if (!cur.movable) { err = "original pads are level data and cannot be moved; place a mission pad instead"; return false; }
+    if (!cur.movable) {
+        if (s.kind == Selection::ITEM && !s.item.guard) err = MISSION_DOOR_PAD_MSG;   // the one item that is never free-moved
+        else err = "original pads are level data and cannot be moved; place a mission pad instead";
+        return false;
+    }
     if (!pos && !yawDeg) return true;
+    if (s.kind == Selection::ZONE) {   // a zone has a centre, no facing
+        if (!pos) return true;
+        std::string zerr;
+        const std::string snapZ = snapshot();
+        if (!setZone(s.id, pos, nullptr, nullptr, false, err)) return false;
+        if (commitUndo) commit(snapZ);
+        return true;
+    }
     std::string snap = snapshot();
     const float yaw = yawDeg ? *yawDeg : cur.yawDeg;
     const float look[3] = { sinf(yaw * 0.017453292f), 0.0f, cosf(yaw * 0.017453292f) };

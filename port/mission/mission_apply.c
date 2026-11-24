@@ -10,6 +10,7 @@
 
 #define PD_END     MISSION_PROPDEF_END
 #define PD_GUARD   9
+#define PD_DOOR    MISSION_PROPDEF_DOOR
 #define PD_COLLECT 8
 #define PD_KEY     4
 #define PD_PROP    3
@@ -82,6 +83,12 @@ static int resolve_pad(const Mission *m, const MissionPadRef *p, int orig_pads)
     return -1;
 }
 
+/* The value of a door record's pad field for a pad ref: the bound-pad index (pad - 10000), or -1 when the ref is not a bound pad. */
+static int door_pad(const MissionPadRef *p)
+{
+    return (!p->is_new && p->num >= 10000) ? p->num - 10000 : -1;
+}
+
 /* The fields an add op names, written over the clone (absent ones keep the template's bytes). */
 static void apply_fields(uint8_t *rec, int type, const MissionFieldVals *fv)
 {
@@ -121,9 +128,10 @@ int missionApplySetup(const Mission *m, const uint8_t *in, uint32_t insize, int 
     return missionApplySetupEx(m, in, insize, spawn_pad, room_scale, -1, out, err, errlen);
 }
 
-int missionApplySetupEx(const Mission *m, const uint8_t *in, uint32_t insize, int spawn_pad, float room_scale, int difficulty,
+int missionApplySetupEx(const Mission *m_, const uint8_t *in, uint32_t insize, int spawn_pad, float room_scale, int difficulty,
                         MissionApplyResult *out, char *err, size_t errlen)
 {
+    Mission *m = (Mission *)m_;   /* the added ops' setup_prop is written back (see mission.h); the caller owns a mutable Mission */
     uint32_t H[10];
     Rec *recs = NULL;
     int nrec = 0, caprec = 0, endrec = -1;
@@ -140,6 +148,8 @@ int missionApplySetupEx(const Mission *m, const uint8_t *in, uint32_t insize, in
     (void)errlen;
 
     memset(out, 0, sizeof *out);
+    for (int i = 0; i < m->nguards; i++) m->guards[i].setup_prop = -1;
+    for (int i = 0; i < m->nobjects; i++) m->objects[i].setup_prop = -1;
     if (room_scale <= 0.0f) room_scale = 1.0f;
     if (insize < MISSION_SETUP_HDR_SIZE) { snprintf(err, errlen, "setup too small (%u)", insize); return 0; }
     for (int i = 0; i < 10; i++) {
@@ -249,7 +259,7 @@ int missionApplySetupEx(const Mission *m, const uint8_t *in, uint32_t insize, in
         if (g->op == MISSION_OP_ADD) {
             uint8_t *c;
             int pad = resolve_pad(m, &g->pad, (int)padn), chrnum;
-            if (diff_excluded(g->diff_mask, difficulty)) { logf_(out, "guard add: not present at difficulty %d, not added", difficulty); continue; }
+            if (diff_excluded(g->diff_mask, difficulty)) { logf_(out, "guard add: \"%s\" %s not present at difficulty %d, not added (setup prop -1)", g->name, g->uuid, difficulty); continue; }
             if (!guard_tpl) { logf_(out, "guard add: skipped, the level has no guard to clone"); out->skipped++; continue; }
             if (pad < 0) { logf_(out, "guard add: skipped, unknown pad"); out->skipped++; continue; }
             if (pad >= 10000) { logf_(out, "guard add: skipped, pad %d is a bound pad", pad); out->skipped++; continue; }
@@ -262,6 +272,7 @@ int missionApplySetupEx(const Mission *m, const uint8_t *in, uint32_t insize, in
             if (g->model >= 0) wr16(c + 8, (unsigned)g->model);
             if (g->ai >= 0) wr16(c + 10, (unsigned)g->ai);
             extra = realloc(extra, (size_t)(nextra + 2) * sizeof *extra);
+            m->guards[i].setup_prop = endrec + nextra;
             extra[nextra++] = c;
             for (int wi = 0; wi < g->nweapons && wi < MISSION_MAX_WEAPONS; wi++) {
                 const MissionWeapon *wp = &g->weapons[wi];
@@ -287,7 +298,7 @@ int missionApplySetupEx(const Mission *m, const uint8_t *in, uint32_t insize, in
                     if (!best && model < 0 && wp->item >= 0) logf_(out, "guard add: weapon %d has no known model, shows as the template's", wp->item);
                 }
             }
-            logf_(out, "guard add: chr %d at pad %d, body %d, ai %#x, weapon %d", chrnum, pad, g->model, g->ai, g->nweapons ? g->weapons[0].item : -1);
+            logf_(out, "guard add: \"%s\" %s -> setup prop %d (chr %d at pad %d, body %d, ai %#x, weapon %d)", g->name, g->uuid, g->setup_prop, chrnum, pad, g->model, g->ai, g->nweapons ? g->weapons[0].item : -1);
             out->guards_added++;
         } else {
             uint8_t *p;
@@ -340,6 +351,10 @@ int missionApplySetupEx(const Mission *m, const uint8_t *in, uint32_t insize, in
             tpl = prop_tpl[o->type];
             if (!tpl) { logf_(out, "object add: skipped, the level has no record of type %d to clone", o->type); out->skipped++; continue; }
             if (pad < 0) { logf_(out, "object add: skipped, unknown pad"); out->skipped++; continue; }
+            if (o->type == PD_DOOR) {
+                pad = door_pad(&o->pad);
+                if (pad < 0) { logf_(out, "object add: skipped, %s", MISSION_DOOR_PAD_MSG); out->skipped++; continue; }
+            }
             c = clone_rec(in, tpl);
             if (!c) { out->skipped++; continue; }
             wr16(c + 6, (unsigned)pad);
@@ -350,8 +365,9 @@ int missionApplySetupEx(const Mission *m, const uint8_t *in, uint32_t insize, in
             wr32(c + 8, rd32(c + 8) & ~PROPFLAG_ASSIGNEDTOCHR);
             if (o->diff_mask) wr32(c + 12, (rd32(c + 12) & ~FLAGS2_NOLOAD_ALL) | diff_noload_bits(o->diff_mask));
             extra = realloc(extra, (size_t)(nextra + 2) * sizeof *extra);
+            m->objects[i].setup_prop = endrec + nextra;     /* the END record's index is the first added record's number */
             extra[nextra++] = c;
-            logf_(out, "object add: type %d model %d item %d at pad %d", o->type, o->model, o->item, pad);
+            logf_(out, "object add: \"%s\" %s -> setup prop %d (type %d model %d item %d at pad %d)", o->name, o->uuid, o->setup_prop, o->type, o->model, o->item, pad);
             out->objects_added++;
         } else {
             uint8_t *p;
@@ -367,6 +383,10 @@ int missionApplySetupEx(const Mission *m, const uint8_t *in, uint32_t insize, in
                 if (o->diff_mask) wr32(p + 12, (rd32(p + 12) & ~FLAGS2_NOLOAD_ALL) | diff_noload_bits(o->diff_mask));
                 if (pad == -2) { logf_(out, "object edit: prop %d (type %d), presence mask %d", idx, recs[idx].type, o->diff_mask); out->objects_moved++; continue; }
                 if (pad < 0) { logf_(out, "object move: skipped, bad pad for prop %d", idx); out->skipped++; continue; }
+                if (recs[idx].type == PD_DOOR) {
+                    pad = door_pad(&o->pad);
+                    if (pad < 0) { logf_(out, "object move: skipped, prop %d: %s", idx, MISSION_DOOR_PAD_MSG); out->skipped++; continue; }
+                }
                 wr16(p + 6, (unsigned)pad);
                 logf_(out, "object move: prop %d (type %d) to pad %d", idx, recs[idx].type, pad);
                 out->objects_moved++;

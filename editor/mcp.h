@@ -10,7 +10,9 @@
 #include "doc.h"
 
 // One JSON-RPC message or batch in, the response out. Empty string: nothing to send (a notification).
-std::string mcpHandleMessage(Doc &doc, const std::string &body);
+// post != nullptr (the HTTP transport): a slow tail of a call (test_run's wait_seconds) is not done here, on the thread that owns the
+// Doc; instead *post is set to a function that completes the response string and may be run on any thread (it never touches the Doc).
+std::string mcpHandleMessage(Doc &doc, const std::string &body, std::function<void(std::string &)> *post = nullptr);
 
 // Reads one request per line from stdin, writes one response per line to stdout, until EOF.
 int mcpStdioLoop(Doc &doc);

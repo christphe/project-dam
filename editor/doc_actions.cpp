@@ -108,12 +108,30 @@ bool Doc::resolvePad(const PadSpec &s, MissionPadRef &out, std::string &err)
     return true;
 }
 
-bool Doc::addGuard(const PadSpec &pad, int model, int ai, int weapon, ItemRef &out, std::string &err)
+// The uuid of a new added prop: `want` when given (it must be a valid, unused uuid), else a fresh v4 one.
+bool Doc::allocUuid(const std::string &want, std::string &out, std::string &err) const
+{
+    if (!want.empty()) {
+        if (!missionUuidValid(want.c_str())) { err = "uuid '" + want + "' is not a lowercase RFC 4122 UUID (36 characters)"; return false; }
+        if (missionFindAdded(&mission, want.c_str(), nullptr)) { err = "uuid " + want + " is already used by another added prop"; return false; }
+        out = want;
+        return true;
+    }
+    do out = generateUuid(); while (missionFindAdded(&mission, out.c_str(), nullptr));
+    return true;
+}
+
+static void setOpName(char *dst, size_t n, const std::string &name) { snprintf(dst, n, "%s", name.c_str()); }
+
+bool Doc::addGuard(const PadSpec &pad, int model, int ai, int weapon, ItemRef &out, std::string &err, const std::string &uuid, const std::string &name)
 {
     if (!hasMission) { err = "no mission is open"; return false; }
+    std::string id;
+    if (!allocUuid(uuid, id, err)) return false;
     std::string snap = snapshot();
     MissionGuardOp g; memset(&g, 0, sizeof g);
-    g.op = MISSION_OP_ADD; g.prop = -1; g.model = model; g.ai = ai;
+    g.op = MISSION_OP_ADD; g.prop = -1; g.model = model; g.ai = ai; g.setup_prop = -1;
+    snprintf(g.uuid, sizeof g.uuid, "%s", id.c_str()); setOpName(g.name, sizeof g.name, name);
     if (weapon >= 0) { g.nweapons = 1; g.weapons[0].item = weapon; g.weapons[0].model = -1; }
     if (!resolvePad(pad, g.pad, err)) return false;
     arrPush(mission.guards, mission.nguards, g);
@@ -122,12 +140,21 @@ bool Doc::addGuard(const PadSpec &pad, int model, int ai, int weapon, ItemRef &o
     return true;
 }
 
-bool Doc::addObject(const PadSpec &pad, int type, int model, int item, ItemRef &out, std::string &err)
+bool padSpecIsBound(const PadSpec &p)
+{
+    return !p.isNew && !p.atPoint && p.num >= 10000;
+}
+
+bool Doc::addObject(const PadSpec &pad, int type, int model, int item, ItemRef &out, std::string &err, const std::string &uuid, const std::string &name)
 {
     if (!hasMission) { err = "no mission is open"; return false; }
+    if (type == MISSION_PROPDEF_DOOR && !padSpecIsBound(pad)) { err = MISSION_DOOR_PAD_MSG; return false; }
+    std::string id;
+    if (!allocUuid(uuid, id, err)) return false;
     std::string snap = snapshot();
     MissionObjectOp o; memset(&o, 0, sizeof o);
-    o.op = MISSION_OP_ADD; o.prop = -1; o.type = type; o.model = model; o.item = item;
+    o.op = MISSION_OP_ADD; o.prop = -1; o.type = type; o.model = model; o.item = item; o.setup_prop = -1;
+    snprintf(o.uuid, sizeof o.uuid, "%s", id.c_str()); setOpName(o.name, sizeof o.name, name);
     if (!resolvePad(pad, o.pad, err)) return false;
     arrPush(mission.objects, mission.nobjects, o);
     commit(snap);
@@ -177,6 +204,14 @@ bool Doc::moveItem(const ItemRef &it, const PadSpec &padSpec, std::string &err)
     if (!hasMission) { err = "no mission is open"; return false; }
     if (!itemInRange(it)) { err = "no such item"; return false; }
     if (isAssignedWeapon(it)) { err = "a weapon a guard carries goes with its guard"; return false; }
+    {   // a door record's pad is a bound-pad index: only an original bound pad (>= 10000) will do (MISSION_DOOR_PAD_MSG)
+        bool door = false;
+        if (!it.guard) {
+            if (it.added) door = it.idx < mission.nobjects && mission.objects[it.idx].type == MISSION_PROPDEF_DOOR;
+            else if (hasLevel) { const LProp *lp = level.prop(it.idx); door = lp && lp->type == MISSION_PROPDEF_DOOR; }
+        }
+        if (door && !padSpecIsBound(padSpec)) { err = MISSION_DOOR_PAD_MSG; return false; }
+    }
     std::string snap = snapshot();
     MissionPadRef ref;
     if (!resolvePad(padSpec, ref, err)) return false;
@@ -296,22 +331,27 @@ bool Doc::copyItem(const ItemRef &r, ClipItem &out, std::string &err) const
     return true;
 }
 
-bool Doc::pasteItem(const ClipItem &c, const PadSpec &pad, ItemRef &out, std::string &err)
+bool Doc::pasteItem(const ClipItem &c, const PadSpec &pad, ItemRef &out, std::string &err, const std::string &uuid, const std::string &name)
 {
     if (!hasMission) { err = "no mission is open"; return false; }
     if (!c.valid) { err = "nothing copied"; return false; }
+    if (!c.guard && c.type == MISSION_PROPDEF_DOOR && !padSpecIsBound(pad)) { err = MISSION_DOOR_PAD_MSG; return false; }
+    std::string id;
+    if (!allocUuid(uuid, id, err)) return false;
     std::string snap = snapshot();
     MissionPadRef ref;
     if (!resolvePad(pad, ref, err)) return false;
     if (c.guard) {
         MissionGuardOp g; memset(&g, 0, sizeof g);
-        g.op = MISSION_OP_ADD; g.prop = -1; g.pad = ref; g.model = c.model; g.ai = c.ai; g.f = c.f;
+        g.op = MISSION_OP_ADD; g.prop = -1; g.pad = ref; g.model = c.model; g.ai = c.ai; g.f = c.f; g.setup_prop = -1;
+        snprintf(g.uuid, sizeof g.uuid, "%s", id.c_str()); setOpName(g.name, sizeof g.name, name);
         for (size_t k = 0; k < c.weapons.size() && k < MISSION_MAX_WEAPONS; k++) g.weapons[g.nweapons++] = c.weapons[k];
         arrPush(mission.guards, mission.nguards, g);
         out.guard = true; out.idx = mission.nguards - 1;
     } else {
         MissionObjectOp o; memset(&o, 0, sizeof o);
-        o.op = MISSION_OP_ADD; o.prop = -1; o.pad = ref; o.type = c.type; o.model = c.model; o.item = c.item; o.f = c.f;
+        o.op = MISSION_OP_ADD; o.prop = -1; o.pad = ref; o.type = c.type; o.model = c.model; o.item = c.item; o.f = c.f; o.setup_prop = -1;
+        snprintf(o.uuid, sizeof o.uuid, "%s", id.c_str()); setOpName(o.name, sizeof o.name, name);
         arrPush(mission.objects, mission.nobjects, o);
         out.guard = false; out.idx = mission.nobjects - 1;
     }
@@ -325,7 +365,7 @@ bool Doc::pasteItem(const ClipItem &c, const PadSpec &pad, ItemRef &out, std::st
     return true;
 }
 
-bool Doc::duplicateItem(const ItemRef &r, const PadSpec *pad, ItemRef &out, std::string &err)
+bool Doc::duplicateItem(const ItemRef &r, const PadSpec *pad, ItemRef &out, std::string &err, const std::string &uuid, const std::string &name)
 {
     Item it;
     ClipItem c;
@@ -334,7 +374,18 @@ bool Doc::duplicateItem(const ItemRef &r, const PadSpec *pad, ItemRef &out, std:
     if (pad) ps = *pad;
     else if (it.pad.is_new) { ps.isNew = true; ps.id = it.pad.id; }
     else { ps.isNew = false; ps.num = it.pad.num; }
-    return pasteItem(c, ps, out, err);
+    return pasteItem(c, ps, out, err, uuid, name);
+}
+
+bool Doc::setAddedName(const ItemRef &it, const std::string &name, std::string &err)
+{
+    if (!hasMission) { err = "no mission is open"; return false; }
+    if (!it.added || !itemInRange(it)) { err = "only items the mission added have a name"; return false; }
+    std::string snap = snapshot();
+    if (it.guard) setOpName(mission.guards[it.idx].name, sizeof mission.guards[it.idx].name, name);
+    else setOpName(mission.objects[it.idx].name, sizeof mission.objects[it.idx].name, name);
+    commit(snap);
+    return true;
 }
 
 bool Doc::setMissionLevel(const std::string &lvl, std::string &err)

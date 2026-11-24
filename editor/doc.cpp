@@ -162,12 +162,17 @@ bool Level::load(const std::string &exportDir, std::string &err)
         LPad p; p.num = sp.num;
         for (int a = 0; a < 3; a++) { p.pos[a] = sp.pos[a]; p.look[a] = sp.look[a]; p.up[a] = sp.up[a]; }
         p.room = roomOfPoint(*this, p.pos);
+        if (sp.bound) { p.bound = true; for (int a = 0; a < 3; a++) { p.bmn[a] = sp.bbox[a]; p.bmx[a] = sp.bbox[3 + a]; } }
         padIndex[p.num] = (int)pads.size();
         pads.push_back(p);
     }
     for (int i = 0; i < sd.nprops; i++) {
         const SetupProp &sp = sd.props[i];
-        LProp p; p.index = sp.index; p.type = sp.type; p.pad = sp.pad; p.model = sp.model; p.item = sp.item; p.ai = sp.ai; p.f = sp.f; p.chr = sp.chr; p.carrier = sp.carrier;
+        LProp p; p.index = sp.index; p.type = sp.type; p.pad = sp.pad;
+        // A door record's pad is ALWAYS a bound-pad index without the +10000 offset (the game reads boundpads[door->pad], prop.c).
+        // Every other type uses pad >= 10000 for bound pads. Normalise once here so the rest of the editor resolves one number.
+        if (sp.type == 1 && sp.pad >= 0 && sp.pad < 10000) p.pad = sp.pad + 10000;
+        p.model = sp.model; p.item = sp.item; p.ai = sp.ai; p.f = sp.f; p.chr = sp.chr; p.carrier = sp.carrier;
         if (sp.model >= 0) {
             auto it = ownerOf.find({ sp.type == 9, sp.model });
             if (it != ownerOf.end()) p.owner = it->second;
@@ -328,6 +333,7 @@ bool Doc::newMission(const std::string &name, const std::string &levelName, std:
     hasMission = true;
     missionPath.clear();
     missionPath = defaultMissionPath(mission.name);
+    scriptBuf.clear(); scriptDirty.clear(); scriptCache.clear();
     undoStack.clear();
     dirty = true;
     sel = Selection();
@@ -368,6 +374,7 @@ bool Doc::openMission(const std::string &path, std::string &err)
     hasMission = true;
     emptyPending = false;
     missionPath = path;
+    scriptBuf.clear(); scriptDirty.clear(); scriptCache.clear();
     undoStack.clear();
     dirty = false;
     sel = Selection();
@@ -386,6 +393,7 @@ bool Doc::saveMission(const std::string &pathIn, std::string &err)
     }
     char e[256] = "";
     if (!missionSaveFile(path.c_str(), &mission, e, sizeof e)) { err = e[0] ? e : "cannot write " + path; return false; }
+    if (!flushScripts(path, err)) return false;
     missionPath = path;
     dirty = false;
     return true;
@@ -451,6 +459,20 @@ static float padYaw(const Doc &d, const MissionPadRef &r)
     return look ? atan2f(look[0], look[2]) * 57.29578f : 0.0f;
 }
 
+// A door (type 1) on a bound pad: the pad's frame, as the game builds it (prop.c sub_GAME_7F001BD4: x along up x look, y up, z look).
+static void setDoorBasis(const Doc &d, Item &it)
+{
+    if (it.type != 1 || it.pad.is_new || !d.hasLevel) return;
+    const LPad *p = d.level.pad(it.pad.num);
+    if (!p || !p->bound) return;
+    Vec3 u = p->up, l = p->look;
+    Vec3 n = { u[1] * l[2] - u[2] * l[1], u[2] * l[0] - u[0] * l[2], u[0] * l[1] - u[1] * l[0] };
+    const float nl = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    if (nl < 1e-6f) return;
+    for (int i = 0; i < 3; i++) n[i] /= nl;
+    it.hasBasis = true; it.bas[0] = n; it.bas[1] = u; it.bas[2] = l;
+}
+
 std::vector<Item> Doc::items() const
 {
     std::vector<Item> out;
@@ -493,6 +515,7 @@ std::vector<Item> Doc::items() const
             }
             it.hasPos = padPos(it.pad, it.pos);
             it.yawDeg = padYaw(*this, it.pad);
+            setDoorBasis(*this, it);
             out.push_back(it);
         }
         // weapons carried by guards: the record's "pad" field is the carrier's chr number, not a pad. They are
@@ -520,6 +543,7 @@ std::vector<Item> Doc::items() const
             const MissionGuardOp &g = mission.guards[i];
             if (g.op != MISSION_OP_ADD) continue;
             Item it; it.added = true; it.guard = true; it.idx = i; it.pad = g.pad; it.type = 9; it.diffMask = g.diff_mask;
+            it.uuid = g.uuid; it.name = g.name;
             it.model = g.model; it.ai = g.ai;
             for (int k = 0; k < g.nweapons && k < MISSION_MAX_WEAPONS; k++) it.weapons.push_back(g.weapons[k]);
             fillAddedFields(*this, it, g.f);
@@ -535,6 +559,7 @@ std::vector<Item> Doc::items() const
             const MissionObjectOp &o = mission.objects[i];
             if (o.op != MISSION_OP_ADD) continue;
             Item it; it.added = true; it.guard = false; it.idx = i; it.pad = o.pad; it.diffMask = o.diff_mask;
+            it.uuid = o.uuid; it.name = o.name;
             it.type = o.type; it.model = o.model; it.item = o.item;
             fillAddedFields(*this, it, o.f);
             it.owner = hasLevel ? level.ownerForModel(false, o.model) : -1;
@@ -606,6 +631,7 @@ std::vector<Issue> Doc::checkIssues() const
         out.push_back(i);
     };
     if (!missionValidate(&mission, e, sizeof e)) add(2, e);
+    scriptIssues(out);
     if (!hasLevel) return out;
     if (level.name != mission.level) {
         snprintf(buf, sizeof buf, "mission level '%s' differs from the loaded export '%s'", mission.level, level.name.c_str());
@@ -645,6 +671,10 @@ std::vector<Issue> Doc::checkIssues() const
             const LProp *p = level.prop(o.prop);
             if (!p) { snprintf(buf, sizeof buf, "object op %d: prop %d does not exist", i, o.prop); add(2, buf); }
             else if (p->type == 9) { snprintf(buf, sizeof buf, "object op %d: prop %d is a guard", i, o.prop); add(2, buf); }
+            else if (p->type == MISSION_PROPDEF_DOOR && (o.pad.is_new || o.pad.num >= 0) && (o.pad.is_new || o.pad.num < 10000)) {
+                snprintf(buf, sizeof buf, "object op %d (door prop %d): %s", i, o.prop, MISSION_DOOR_PAD_MSG);
+                addItem(2, buf, false, false, idx);
+            }
         } else if (o.type <= 0 || o.model < 0) {
             snprintf(buf, sizeof buf, "object op %d: add needs a type and a model", i);
             addItem(2, buf, true, false, i);
@@ -703,14 +733,23 @@ std::vector<Issue> Doc::checkIssues() const
         for (int i = 0; i < mission.nscripts; i++) {
             const MissionScript &s = mission.scripts[i];
             double v = 0;
-            if (s.kind == MISSION_TGT_PROP) {
-                const LProp *p = level.prop(s.prop);
-                if (!p) {
-                    snprintf(buf, sizeof buf, "script %d (%s): its target prop %d does not exist in the level", i, s.use, s.prop);
+            if (s.kind == MISSION_TGT_PROP && s.uuid[0]) {
+                ItemRef pr; int pty = 0;
+                if (!propByUuid(s.uuid, pr, pty)) {
+                    snprintf(buf, sizeof buf, "script %d (%s): its target uuid %s is not a prop the mission adds (deleted?)", i, s.use, s.uuid);
                     add(2, buf);
-                } else if (removedProp(s.prop)) {
+                }
+            } else if (s.kind == MISSION_TGT_PROP) {
+                ItemRef pr; int pty = 0;
+                if (s.prop >= (int)level.props.size() && hasLevel) {
+                    snprintf(buf, sizeof buf, "script %d (%s): its target prop %d is not a prop of the level (it has %d); a prop the mission adds is referenced by its uuid, not a number", i, s.use, s.prop, (int)level.props.size());
+                    add(2, buf);
+                } else if (s.prop >= 0 && !propByNumber(s.prop, pr, pty)) {
+                    snprintf(buf, sizeof buf, "script %d (%s): its target prop %d does not exist", i, s.use, s.prop);
+                    add(2, buf);
+                } else if (s.prop >= 0 && !pr.added && removedProp(s.prop)) {
                     snprintf(buf, sizeof buf, "script %d (%s): its target prop %d is removed by this mission", i, s.use, s.prop);
-                    addItem(2, buf, false, p->type == 9, s.prop);
+                    addItem(2, buf, false, pty == 9, s.prop);
                 }
             } else if (s.kind == MISSION_TGT_PAD && !s.pad.is_new && !level.pad(s.pad.num)) {
                 snprintf(buf, sizeof buf, "script %d (%s): its target pad 0x%x is not in the level", i, s.use, s.pad.num);
@@ -812,6 +851,12 @@ std::string Doc::describe(const std::string &detail) const
             cJSON_AddStringToObject(o, "kind", it.guard ? "guard" : "object");
             if (it.added) cJSON_AddNumberToObject(o, "op", it.idx); else cJSON_AddNumberToObject(o, "prop", it.idx);
             cJSON_AddBoolToObject(o, "added", it.added);
+            if (it.added) {
+                cJSON_AddStringToObject(o, "uuid", it.uuid.c_str());
+                if (!it.name.empty()) cJSON_AddStringToObject(o, "name", it.name.c_str());
+                ItemRef ir; ir.valid = true; ir.added = true; ir.guard = it.guard; ir.idx = it.idx;
+                cJSON_AddNumberToObject(o, "setup_prop_estimate", addedPropNumber(ir));   // display only: scripts use the uuid
+            }
             cJSON_AddBoolToObject(o, "moved", it.moved);
             cJSON_AddBoolToObject(o, "removed", it.removed);
             jaddPadRef(o, "pad", it.pad);

@@ -50,7 +50,7 @@ void drawOverlay(App &a, const Overlay &o)
         if (sel) col = IM_COL32(255, 255, 255, 255);
         Vec3 lmn, lmx;
         itemLocalBox(d, it, lmn, lmx);
-        o.boxYaw(it.pos, lmn, lmx, it.yawDeg, col, it.removed && !sel ? 1.0f : sel ? 2.5f : 1.2f);
+        o.boxItem(it, lmn, lmx, col, it.removed && !sel ? 1.0f : sel ? 2.5f : 1.2f);
         if (it.moved && d.hasLevel) {
             const LPad *op = d.level.pad(it.origPad);
             if (op) o.line(op->pos, it.pos, yellow, 1.0f);
@@ -95,6 +95,7 @@ GizmoGeo gizmoGeo(const App &a, const Overlay &ov, const TransformInfo &t)
         Vec3 p = t.pos; p[i] += g.len;
         if (!ov.pt(p, g.tip[i])) return g;
     }
+    g.noYaw = a.doc.sel.kind == Selection::ZONE;
     const float yr = t.yawDeg * 0.017453292f;
     Vec3 yp = { t.pos[0] + sinf(yr) * g.len * 1.5f, t.pos[1], t.pos[2] + cosf(yr) * g.len * 1.5f };
     if (!ov.pt(yp, g.yaw)) return g;
@@ -115,7 +116,7 @@ float segDist(ImVec2 p, ImVec2 a, ImVec2 b)
 int gizmoHit(const GizmoGeo &g, ImVec2 m)
 {
     auto d2 = [&](ImVec2 q) { return sqrtf((q.x - m.x) * (q.x - m.x) + (q.y - m.y) * (q.y - m.y)); };
-    if (d2(g.yaw) < 10) return 5;
+    if (!g.noYaw && d2(g.yaw) < 10) return 5;
     if (d2(g.c) < 9) return 4;
     int best = 0; float bd = 7;
     for (int i = 0; i < 3; i++) {
@@ -211,8 +212,10 @@ void drawGizmo(App &a, const Overlay &ov, const GizmoGeo &g)
         dl->AddCircleFilled(g.tip[i], 5.0f, act ? IM_COL32(255, 255, 80, 255) : col[i]);
     }
     dl->AddRectFilled(ImVec2(g.c.x - 5, g.c.y - 5), ImVec2(g.c.x + 5, g.c.y + 5), IM_COL32(240, 240, 240, 255));
-    dl->AddLine(g.c, g.yaw, IM_COL32(255, 170, 40, 255), 2.0f);
-    dl->AddCircle(g.yaw, 7.0f, IM_COL32(255, 170, 40, 255), 16, 2.5f);
+    if (!g.noYaw) {
+        dl->AddLine(g.c, g.yaw, IM_COL32(255, 170, 40, 255), 2.0f);
+        dl->AddCircle(g.yaw, 7.0f, IM_COL32(255, 170, 40, 255), 16, 2.5f);
+    }
     if (a.drag.mode != App::Drag::NONE) {
         char t[160];
         if (a.drag.mode == App::Drag::YAW) snprintf(t, sizeof t, "Turning%s - release to confirm, Esc cancels", a.snapGrid ? " (15 deg steps)" : "");

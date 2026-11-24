@@ -34,6 +34,13 @@ std::string defaultGameExe(const std::string &editorDir)
     return "";
 }
 
+// The process the last launchGame started (only this one may be asked about or stopped).
+#ifdef _WIN32
+static HANDLE s_proc = nullptr;
+#else
+static pid_t s_pid = 0;
+#endif
+
 static std::string dirOf(const std::string &p)
 {
     size_t s = p.find_last_of("/\\");
@@ -85,7 +92,8 @@ bool launchGame(const std::string &exeIn, int levelNumber, const std::string &mi
         return false;
     }
     CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
+    if (s_proc) CloseHandle(s_proc);   // an earlier game is left running; only the newest one is tracked
+    s_proc = pi.hProcess;
     return true;
 #else
     signal(SIGCHLD, SIG_IGN);   // the game is never waited for
@@ -102,6 +110,32 @@ bool launchGame(const std::string &exeIn, int levelNumber, const std::string &mi
             execl(arg0.c_str(), arg0.c_str(), a1.c_str(), a2.c_str(), a3.c_str(), a4.c_str(), spawn.c_str(), (char *)nullptr);
         _exit(127);
     }
+    s_pid = pid;
     return true;
 #endif
+}
+
+bool launchedGameRunning()
+{
+#ifdef _WIN32
+    return s_proc && WaitForSingleObject(s_proc, 0) == WAIT_TIMEOUT;
+#else
+    return s_pid > 0 && kill(s_pid, 0) == 0;   // SIGCHLD is ignored: a finished child is reaped at once
+#endif
+}
+
+bool launchedGameStop()
+{
+    if (!launchedGameRunning()) return false;
+#ifdef _WIN32
+    return TerminateProcess(s_proc, 0) != 0;
+#else
+    return kill(s_pid, SIGTERM) == 0;
+#endif
+}
+
+std::string gameLogPath(const std::string &exe)
+{
+    if (exe.empty()) return "";
+    return dirOf(absPath(exe)) + "/data/ge007.log";   // the game's $S/ folder: <exe dir>/data (system.c sysResolvePath)
 }

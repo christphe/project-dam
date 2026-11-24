@@ -14,21 +14,60 @@
  * Script API (globals):
  *   give(item [, player])   take(item [, player])   has(item [, player]) -> bool
  *       item: an ITEM_IDS number; player: 0-based, omitted = every player (has: any player)
- *   message(text)                                   on-screen text
+ *   message(text)                                   on-screen text (bottom of the screen)
+ *   say(who, text)                                  a dialogue line at the top of the screen, shown "who: text" to every player
  *   wait(seconds)                                   sleep
  *   wait(event(name [, filter]))                    sleep until an event matches; returns the event table
  *   event(name [, filter]) -> descriptor            filter: table of field = value that must all match
  *   objectives.add(id, text [, difficulty])   objectives.complete(id)
  *   objectives.is_complete(id) -> bool        objectives.all_complete() -> bool   (of the current difficulty)
+ *   objectives.fail(id)                       shown as failed (pause, end screen, and the game's own "Objective a:
+ *                                             failed" line); it can no longer be completed
+ *   objectives.is_failed(id) -> bool
  *   alarm.trigger()
  *   mission.win()                                   end the level as a success
+ *   mission.fail()                                  end the level as a failure (no progress save)
  *   mission.difficulty() -> 0..3                    the difficulty being played: 0 Agent, 1 Secret Agent, 2 00 Agent, 3 007
  *                                                   (-1 when the host has no difficulty)
  *   door(prop) / guard(prop) -> target              a target for a setup prop number
  *   target (global of the script)                   the script's own target (kind "prop", "pad", "zone", "mission")
  *   props (global of the script)                    the typed values from mission.json
- *   target methods: :lock() :unlock() :open() :close() :is_open() :is_dead()
+ *   target methods: :lock() :unlock([force]) :open() :close() :is_open() :is_dead()
+ *                   unlock(): gives back the door's own key flags; unlock(true) also removes its native lock (a decoder or key
+ *                   door) for the rest of the level, so it stays open to everyone after it closes.
  *                   :set_ai(list) :near(radius) -> bool :distance() -> number (nearest player)
+ *                   :distance_to(other) -> number   distance between two targets (prop / guard / zone / a mission pad by id)
+ *                                                   1e30 when either has no position (a guard not spawned, an original pad number)
+ *                   :near([radius] [, height]) -> bool  a player within radius; with height, radius is measured flat and the
+ *                                                   player is at most height above or below (another floor does not count)
+ *                   :follow([player]) :stop()       a guard follows the nearest living player (or only `player`, 0-based): when
+ *                                                   that player is farther than 200 units, the host orders the guard to the player:
+ *                                                   walk, run beyond 350, sprint beyond 1200. The order is renewed (checked every
+ *                                                   0.5 s) only when it is out of date (see followTick). :follow() also gives the guard
+ *                                                   the passive AI list GAILIST_DEAD_AI (1) so its own AI does not flee, attack or
+ *                                                   path over ours. :stop() only stops issuing moves (the AI list is kept).
+ *                   :surrender() :stand()           hands up (an armed guard drops its weapons); stand still facing the
+ *                                                   nearest living player (hands down). A later :follow() order moves it again.
+ *                   :go_to(target, [speed]) -> bool the guard walks ("walk"), runs (default) or sprints to a prop's pad (in front
+ *                                                   of it for a wall pad); false: no route or refused. Pause :follow() first
+ *                                                   (:stop()), or its next order takes the guard away.
+ *                   :is_moving() -> bool            still on its way
+ *                   :face(target) -> bool           face a prop square on; within 120 units of the spot go_to aims for, the
+ *                                                   guard is first set exactly on that spot. false: someone (a player, a
+ *                                                   guard) stands on it, the guard only turns; call again once it is free
+ *                   :keep_body()                    once dead, the guard's body stays where it fell (the game fades bodies out)
+ *                   :aim_at(other) -> bool          an armed guard keeps another guard covered (actor_aim_at_actor, aim only)
+ *                   :shoot(other)                   it fires at the other guard, which takes the hit the game's own
+ *                                                   hostage takers deal (Frigate: HitChrWithItem part 8, item 10)
+ *                                                   MISSION_SHOT_DELAY later, once the shot has been fired
+ *                   :sees_player() -> bool          the guard sees a living player (chrCheckTargetInSight)
+ *                   :was_shot_at() -> bool          a player's shot just missed it (chrIfNearMiss)
+ *                   :guards_near(radius) -> number  living guards within radius of the target (the target itself left out)
+ *                   :hits() -> number               how many times the guard has been hit (chrGetNumArghs)
+ *                   :make_usable() :was_used()      an object players can activate (it gets the tag flag the game's own
+ *                                                   terminals have); true once per activation since the last call
+ *                   :play_anim(name) -> bool        play a named animation once (missions_host.c kAnims:
+ *                                                   keyboard_right_hand_tapping, keyboard_left_hand, keyboard_right_hand2)
  *                   .prop .kind .zone (fields)
  *   print(...)                                      to the host log
  * Events (name, fields): "start", "end" {win}, "pickup" {item, player}, "death" {prop},
@@ -45,7 +84,7 @@
 extern "C" {
 #endif
 
-enum { MH_DOOR_LOCK, MH_DOOR_UNLOCK, MH_DOOR_OPEN, MH_DOOR_CLOSE };
+enum { MH_DOOR_LOCK, MH_DOOR_UNLOCK, MH_DOOR_OPEN, MH_DOOR_CLOSE, MH_DOOR_UNLOCK_FORCE };
 enum { MH_DOOR_NONE = -1, MH_DOOR_CLOSED = 0, MH_DOOR_OPENED = 1, MH_DOOR_MOVING = 2 };
 
 typedef struct MissionHost {
@@ -64,10 +103,55 @@ typedef struct MissionHost {
     void (*door_cmd)(void *ud, int prop, int cmd);
     int  (*guard_dead)(void *ud, int prop);            /* 1 once the guard's chr is gone / dead */
     void (*guard_set_ai)(void *ud, int prop, int ailist);
+    void (*guard_pose)(void *ud, int prop, int pose, int player);  /* MH_POSE_*: hands up, or stand facing that player */
+    int  (*guard_goto_prop)(void *ud, int prop, int target, int run);  /* to the pad of setup prop `target` (in front of
+                                                                          a wall pad); run as guard_goto; MH_GOTO_* */
+    int  (*guard_moving)(void *ud, int prop);                      /* 1 while the guard is walking to a position */
+    int  (*guard_face_prop)(void *ud, int prop, int target);       /* face setup prop `target` square on, set on the spot in
+                                                                      front of it when close; 0: that spot is occupied */
+    int  (*guard_anim)(void *ud, int prop, const char *name);      /* play a named animation once; 0: unknown or refused */
+    void (*prop_usable)(void *ud, int prop);                       /* a player can activate this object (B / use) */
+    void (*guard_keep_body)(void *ud, int prop);                   /* the guard's body stays when it dies (no fade-out) */
+    int  (*guard_aim_at)(void *ud, int prop, int target, int fire);  /* aim (fire: and shoot) at guard `target`; 0: unarmed */
+    void (*guard_hit)(void *ud, int prop);                         /* the hit the game's own hostage AI deals (HitChrWithItem) */
+    int  (*guard_sees_player)(void *ud, int prop);                 /* 1 when the guard sees a living player */
+    int  (*guard_near_miss)(void *ud, int prop);                   /* 1 when a player's shot just missed the guard */
+    int  (*guards_near)(void *ud, const float pos[3], float radius, int except);  /* living guards within radius (not `except`) */
+    int  (*guard_hits)(void *ud, int prop);                        /* how many times the guard has been hit (chrGetNumArghs) */
+    int  (*prop_used)(void *ud, int prop);                         /* 1 once per activation by a player (clears it) */
     void (*alarm)(void *ud);
     void (*win)(void *ud);
     int  (*difficulty)(void *ud);                      /* 0 Agent .. 3 007; NULL = every objective counts */
+    int  (*guard_goto)(void *ud, int prop, int player, int run);   /* send the guard to that player's position: run 0 walk, 1 run,
+                                                                       2 sprint; returns an MH_GOTO_* result */
+    void (*say)(void *ud, const char *who, const char *text);      /* top-of-screen dialogue line */
+    void (*fail)(void *ud);                            /* end the level as a failure */
 } MissionHost;
+
+/* guard:follow(): the passive AI list (GAILIST_DEAD_AI, "yield forever") and the follow timing. */
+/* guard_pose poses */
+#define MH_POSE_STAND      0   /* stand still facing the player (check_set_actor_standing_still, TARGET_BOND) */
+#define MH_POSE_SURRENDER  1   /* hands up (chrTrySurrender; an armed guard throws its weapon) */
+
+/* guard_goto results */
+#define MH_GOTO_OK       1    /* the guard is on its way */
+#define MH_GOTO_NOROUTE  0    /* no waypoint route between the guard and the player */
+#define MH_GOTO_BUSY    -1    /* the game refuses: 10 or more guards have seen a player recently (chrGoToBond) */
+#define MH_GOTO_GONE    -2    /* no such guard, not spawned, or dead */
+
+#define MISSION_SHOT_DELAY     0.5     /* seconds from a :shoot() order to its hit (the shooter raises and fires first) */
+
+#define MISSION_FOLLOW_AI      1
+#define MISSION_FOLLOW_EVERY   0.5     /* seconds between checks */
+#define MISSION_FOLLOW_NEAR    200.0   /* units: no order while the nearest player is this close */
+#define MISSION_FOLLOW_RUN     350.0   /* units: run instead of walk beyond this */
+#define MISSION_FOLLOW_SPRINT  1200.0  /* units: sprint beyond this */
+#define MISSION_FOLLOW_REPLOT  150.0   /* units: re-order when the player is this far from where the guard is heading ... */
+#define MISSION_FOLLOW_REPLOT_K 0.25   /* ... or this fraction of the distance between them, whichever is larger */
+#define MISSION_FOLLOW_GAP     2.0     /* seconds: at most one order this often, unless a faster speed or another player */
+#define MISSION_FOLLOW_STILL   10.0    /* units: a guard that moved less than this in a check has not moved */
+#define MISSION_FOLLOW_STALL   3.0     /* seconds: a guard that has not moved for this long is re-ordered (starting from a
+                                          standstill can take over a second: turning, accelerating) */
 
 typedef struct MissionRuntime MissionRuntime;
 
@@ -90,6 +174,7 @@ int  missionRtObjectiveCount(const MissionRuntime *rt);
 const char *missionRtObjectiveText(const MissionRuntime *rt, int i);
 int  missionRtObjectiveDifficulty(const MissionRuntime *rt, int i);
 int  missionRtObjectiveComplete(const MissionRuntime *rt, int i);
+int  missionRtObjectiveStatus(const MissionRuntime *rt, int i);   /* OBJECTIVESTATUS: 0 incomplete, 1 complete, 2 failed */
 int  missionRtAllComplete(const MissionRuntime *rt, int difficulty);
 /* Marks an objective complete from the host side (e.g. the debug console). */
 int  missionRtCompleteObjective(MissionRuntime *rt, const char *id);
@@ -101,6 +186,10 @@ int  missionRtScriptsAlive(const MissionRuntime *rt);      /* still waiting */
 /* The built-in library (generated from port/mission/lib/*.luau): NULL name ends the list. */
 typedef struct MissionLibScript { const char *name; const char *source; } MissionLibScript;
 extern const MissionLibScript g_missionLibScripts[];
+
+/* The Luau definition file of the whole script API (port/mission/lib/mission.d.luau, NOT a runnable script):
+ * globals, target methods, event names and the editor-facing aliases (Item, Objective, Door, ...). For the editor. */
+extern const char *const g_missionApiDefs;
 
 #ifdef __cplusplus
 }

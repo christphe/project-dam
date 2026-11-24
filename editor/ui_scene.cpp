@@ -1,6 +1,7 @@
 // The left "Scene" panel: a filter box and collapsible groups of everything in the level and the mission. Clicking a
 // row selects it (double-click frames it). Carried weapons and pads under an item are not listed, as in the view.
 #include "ui_app.h"
+#include "ui_scripts.h"
 
 #include <cctype>
 
@@ -69,30 +70,7 @@ void drawScenePanel(App &a, float x, float y, float w, float h)
         itemGroup(a, false);
     }
 
-    // zones and scripts: the mission's own, read-only for now
-    {
-        char head[40];
-        snprintf(head, sizeof head, "Zones (%d)###zones", d.hasMission ? d.mission.nzones : 0);
-        if (ImGui::CollapsingHeader(head) && d.hasMission) {
-            for (int i = 0; i < d.mission.nzones; i++) {
-                const MissionZone &z = d.mission.zones[i];
-                char l[96]; snprintf(l, sizeof l, "%s  r %.0f  room %d", z.id, z.radius, z.room);
-                if (matches(a, l)) ImGui::TextUnformatted(l);
-            }
-        }
-        snprintf(head, sizeof head, "Scripts (%d)###scripts", d.hasMission ? d.mission.nscripts : 0);
-        if (ImGui::CollapsingHeader(head) && d.hasMission) {
-            for (int i = 0; i < d.mission.nscripts; i++) {
-                const MissionScript &s = d.mission.scripts[i];
-                char l[128];
-                const char *kind = s.kind == MISSION_TGT_PROP ? "prop" : s.kind == MISSION_TGT_PAD ? "pad" : s.kind == MISSION_TGT_ZONE ? "zone" : "mission";
-                if (s.kind == MISSION_TGT_PROP) snprintf(l, sizeof l, "%s > %s %d", s.use, kind, s.prop);
-                else if (s.kind == MISSION_TGT_ZONE) snprintf(l, sizeof l, "%s > %s %s", s.use, kind, s.zone);
-                else snprintf(l, sizeof l, "%s > %s", s.use, kind);
-                if (matches(a, l)) ImGui::TextUnformatted(l);
-            }
-        }
-    }
+    drawSceneZonesAndScripts(a, a.sceneFilter);   // ui_scripts.cpp
 
     if (d.hasMission && d.mission.npads > 0) {
         char head[40];

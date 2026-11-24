@@ -132,6 +132,34 @@ static int getop(const cJSON *o, MissionOpKind *op)
     return 1;
 }
 
+int missionUuidValid(const char *s)
+{
+    static const int dash[] = { 8, 13, 18, 23 };
+    if (!s || strlen(s) != 36) return 0;
+    for (int i = 0; i < 36; i++) {
+        int isdash = i == dash[0] || i == dash[1] || i == dash[2] || i == dash[3];
+        char ch = s[i];
+        if (isdash ? ch != '-' : !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return 0;
+    }
+    return 1;
+}
+
+int missionFindAdded(const Mission *m, const char *uuid, int *index)
+{
+    if (!uuid || !uuid[0]) return 0;
+    for (int i = 0; i < m->nguards; i++)
+        if (m->guards[i].op == MISSION_OP_ADD && !strcmp(m->guards[i].uuid, uuid)) { if (index) *index = i; return 1; }
+    for (int i = 0; i < m->nobjects; i++)
+        if (m->objects[i].op == MISSION_OP_ADD && !strcmp(m->objects[i].uuid, uuid)) { if (index) *index = i; return 2; }
+    return 0;
+}
+
+int missionAddedSetupProp(const Mission *m, const char *uuid)
+{
+    int idx = -1, k = missionFindAdded(m, uuid, &idx);
+    return k == 1 ? m->guards[idx].setup_prop : k == 2 ? m->objects[idx].setup_prop : -1;
+}
+
 /* The record fields of an add op (mission_fields.h): flat keys, and the type's own ones in its sub-object. */
 void missionFieldsFromJson(const void *obj, int rectype, MissionFieldVals *fv)
 {
@@ -274,7 +302,10 @@ int missionParse(const char *json, Mission *m, char *err, size_t errlen)
         getpad(e, "pad", &g->pad);
         g->model = getnum(e, "model", -1); g->ai = getnum(e, "ai", -1);
         g->diff_mask = getdiff(e);
+        g->setup_prop = -1;
         if (g->op == MISSION_OP_ADD) {
+            copystr(g->uuid, sizeof(g->uuid), getstr(e, "uuid"));
+            copystr(g->name, sizeof(g->name), getstr(e, "name"));
             const cJSON *ws = cJSON_GetObjectItemCaseSensitive(e, "weapons"), *we;
             if (cJSON_IsArray(ws)) {
                 cJSON_ArrayForEach(we, ws) {
@@ -299,7 +330,12 @@ int missionParse(const char *json, Mission *m, char *err, size_t errlen)
         getpad(e, "pad", &o->pad);
         o->type = getnum(e, "type", -1); o->model = getnum(e, "model", -1); o->item = getnum(e, "item", -1);
         o->diff_mask = getdiff(e);
-        if (o->op == MISSION_OP_ADD) missionFieldsFromJson(e, o->type, &o->f);
+        o->setup_prop = -1;
+        if (o->op == MISSION_OP_ADD) {
+            copystr(o->uuid, sizeof(o->uuid), getstr(e, "uuid"));
+            copystr(o->name, sizeof(o->name), getstr(e, "name"));
+            missionFieldsFromJson(e, o->type, &o->f);
+        }
     }
     m->objectives = allocarr(root, "objectives", sizeof(MissionObjective), &m->nobjectives, &arr);
     i = 0; cJSON_ArrayForEach(e, arr) {
@@ -316,7 +352,7 @@ int missionParse(const char *json, Mission *m, char *err, size_t errlen)
         const cJSON *t = cJSON_GetObjectItemCaseSensitive(e, "target");
         const char *kind = t ? getstr(t, "kind") : "mission";
         if (!kind || !strcmp(kind, "mission")) s->kind = MISSION_TGT_MISSION;
-        else if (!strcmp(kind, "prop")) { s->kind = MISSION_TGT_PROP; s->prop = getnum(t, "prop", -1); }
+        else if (!strcmp(kind, "prop")) { s->kind = MISSION_TGT_PROP; s->prop = getnum(t, "prop", -1); copystr(s->uuid, sizeof(s->uuid), getstr(t, "uuid")); }
         else if (!strcmp(kind, "pad")) { s->kind = MISSION_TGT_PAD; getpad(t, "pad", &s->pad); }
         else if (!strcmp(kind, "zone")) { s->kind = MISSION_TGT_ZONE; copystr(s->zone, sizeof(s->zone), getstr(t, "zone")); }
         else { seterr(err, errlen, "unknown script target kind", kind); goto fail; }
@@ -435,6 +471,7 @@ char *missionToJson(const Mission *m)
         const MissionGuardOp *g = &m->guards[i];
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "op", opname(g->op));
+        if (g->op == MISSION_OP_ADD) { cJSON_AddStringToObject(o, "uuid", g->uuid); if (g->name[0]) cJSON_AddStringToObject(o, "name", g->name); }
         if (g->op != MISSION_OP_ADD) addopt(o, "prop", g->prop);
         if (g->op != MISSION_OP_REMOVE) addpad(o, "pad", &g->pad);
         if (g->op == MISSION_OP_MOVE) addopt(o, "ai", g->ai);        /* a move may reassign the guard's AI list */
@@ -457,6 +494,7 @@ char *missionToJson(const Mission *m)
         const MissionObjectOp *ob = &m->objects[i];
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "op", opname(ob->op));
+        if (ob->op == MISSION_OP_ADD) { cJSON_AddStringToObject(o, "uuid", ob->uuid); if (ob->name[0]) cJSON_AddStringToObject(o, "name", ob->name); }
         if (ob->op != MISSION_OP_ADD) addopt(o, "prop", ob->prop);
         if (ob->op != MISSION_OP_REMOVE) addpad(o, "pad", &ob->pad);
         if (ob->op != MISSION_OP_REMOVE) adddiff(o, ob->diff_mask);
@@ -479,7 +517,10 @@ char *missionToJson(const Mission *m)
         cJSON *t = cJSON_AddObjectToObject(o, "target");
         static const char *kinds[] = { "mission", "prop", "pad", "zone" };
         cJSON_AddStringToObject(t, "kind", kinds[s->kind]);
-        if (s->kind == MISSION_TGT_PROP) cJSON_AddNumberToObject(t, "prop", s->prop);
+        if (s->kind == MISSION_TGT_PROP) {
+            if (s->uuid[0]) cJSON_AddStringToObject(t, "uuid", s->uuid);
+            else cJSON_AddNumberToObject(t, "prop", s->prop);
+        }
         if (s->kind == MISSION_TGT_PAD) addpad(t, "pad", &s->pad);
         if (s->kind == MISSION_TGT_ZONE) cJSON_AddStringToObject(t, "zone", s->zone);
         cJSON *p = cJSON_AddObjectToObject(o, "props");
@@ -713,6 +754,16 @@ static int padknown(const Mission *m, const MissionPadRef *r)
     return 0;
 }
 
+/* Is `uuid` (an add op of `kind` 1 guard / 2 object, at `index`) already used by an earlier add op? */
+static int dupuuid(const Mission *m, const char *uuid, int kind, int index)
+{
+    for (int j = 0; j < m->nguards && (kind == 2 || j < index); j++)
+        if (m->guards[j].op == MISSION_OP_ADD && !strcmp(m->guards[j].uuid, uuid)) return 1;
+    for (int j = 0; j < m->nobjects && (kind == 1 || j < index); j++)
+        if (m->objects[j].op == MISSION_OP_ADD && !strcmp(m->objects[j].uuid, uuid)) return 1;
+    return 0;
+}
+
 int missionValidate(const Mission *m, char *err, size_t errlen)
 {
     char ctx[96];
@@ -733,6 +784,9 @@ int missionValidate(const Mission *m, char *err, size_t errlen)
         const MissionGuardOp *g = &m->guards[i];
         snprintf(ctx, sizeof(ctx), "guards[%d]", i);
         if (g->op != MISSION_OP_ADD && g->prop < 0) { seterr(err, errlen, "missing prop", ctx); return 0; }
+        if (g->op == MISSION_OP_ADD && !g->uuid[0]) { seterr(err, errlen, "added guard without a uuid", ctx); return 0; }
+        if (g->op == MISSION_OP_ADD && !missionUuidValid(g->uuid)) { seterr(err, errlen, "malformed uuid (lowercase RFC 4122 text expected)", ctx); return 0; }
+        if (g->op == MISSION_OP_ADD && dupuuid(m, g->uuid, 1, i)) { seterr(err, errlen, "duplicate uuid", g->uuid); return 0; }
         if (g->op == MISSION_OP_ADD || (g->op == MISSION_OP_MOVE && (g->pad.is_new || g->pad.num >= 0))) {
             if (!padknown(m, &g->pad)) { seterr(err, errlen, "unknown pad", ctx); return 0; }
         }
@@ -741,10 +795,14 @@ int missionValidate(const Mission *m, char *err, size_t errlen)
         const MissionObjectOp *o = &m->objects[i];
         snprintf(ctx, sizeof(ctx), "objects[%d]", i);
         if (o->op != MISSION_OP_ADD && o->prop < 0) { seterr(err, errlen, "missing prop", ctx); return 0; }
+        if (o->op == MISSION_OP_ADD && !o->uuid[0]) { seterr(err, errlen, "added object without a uuid", ctx); return 0; }
+        if (o->op == MISSION_OP_ADD && !missionUuidValid(o->uuid)) { seterr(err, errlen, "malformed uuid (lowercase RFC 4122 text expected)", ctx); return 0; }
+        if (o->op == MISSION_OP_ADD && dupuuid(m, o->uuid, 2, i)) { seterr(err, errlen, "duplicate uuid", o->uuid); return 0; }
         if (o->op == MISSION_OP_ADD || (o->op == MISSION_OP_MOVE && (o->pad.is_new || o->pad.num >= 0))) {
             if (!padknown(m, &o->pad)) { seterr(err, errlen, "unknown pad", ctx); return 0; }
         }
         if (o->op == MISSION_OP_ADD && o->type < 0) { seterr(err, errlen, "added object without a type", ctx); return 0; }
+        if (o->op == MISSION_OP_ADD && o->type == MISSION_PROPDEF_DOOR && (o->pad.is_new || o->pad.num < 10000)) { seterr(err, errlen, MISSION_DOOR_PAD_MSG, ctx); return 0; }
     }
     for (int i = 0; i < m->nobjectives; i++) {
         if (!m->objectives[i].id[0]) { seterr(err, errlen, "objective without an id", NULL); return 0; }
@@ -755,7 +813,8 @@ int missionValidate(const Mission *m, char *err, size_t errlen)
         const MissionScript *s = &m->scripts[i];
         snprintf(ctx, sizeof(ctx), "scripts[%d]", i);
         if (!s->use[0]) { seterr(err, errlen, "script without 'use'", ctx); return 0; }
-        if (s->kind == MISSION_TGT_PROP && s->prop < 0) { seterr(err, errlen, "missing target prop", ctx); return 0; }
+        if (s->kind == MISSION_TGT_PROP && s->uuid[0] && !missionFindAdded(m, s->uuid, NULL)) { seterr(err, errlen, "target uuid is not an added prop", ctx); return 0; }
+        if (s->kind == MISSION_TGT_PROP && !s->uuid[0] && s->prop < 0) { seterr(err, errlen, "missing target prop", ctx); return 0; }
         if (s->kind == MISSION_TGT_PAD && !padknown(m, &s->pad)) { seterr(err, errlen, "unknown target pad", ctx); return 0; }
         if (s->kind == MISSION_TGT_ZONE) {
             int found = 0;
