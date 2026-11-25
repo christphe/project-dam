@@ -99,7 +99,7 @@ instead of failing silently. `linux` on Windows runs through WSL.
 
 **`editor`** runs the mission editor of the Windows build (`build-win/project-dam-editor.exe`)
 with the game next to it for Play and the level exports (`--build` rebuilds the `windows`
-target first). `--level` opens a solo level, `--mod` a `mods/<mod>` folder, `--mission` a
+target first). `--level` opens a solo level, `--mod` a mod's source folder, `--mission` a
 `mission.json`; other arguments go to the editor.
 
 **`n64`** opens the ROM in the N64 emulator, for reference captures.

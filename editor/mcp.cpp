@@ -521,6 +521,9 @@ const Tool kTools[] = {
       "\"affects\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"story\",\"multiplayer\"]}},\"unlock\":{\"type\":\"string\",\"enum\":[\"ordered\",\"open\"]},"
       "\"mission\":{\"type\":[\"integer\",\"string\"]}},\"required\":[\"dir\"]}", toolModOpen },
     { "mod_save", "Write the open mod's campaign.json (the open mission is saved with mission_save).", "{\"type\":\"object\",\"properties\":{}}", toolModSave },
+    { "mod_publish", "Save the open mod, validate it and its missions (an error refuses), and write it as <out_dir>/<mod>.pmod (a tar of the mod folder; default out_dir <mod>/dist). Returns path and bytes.",
+      "{\"type\":\"object\",\"properties\":{\"out_dir\":{\"type\":\"string\"}}}", toolModPublish },
+    { "mod_deploy", "Like mod_publish, but writes <mods folder>/<mod>.pmod, where the game finds it. Returns path and bytes.", "{\"type\":\"object\",\"properties\":{}}", toolModDeploy },
     { "mod_add_mission", "Add a new mission for a level to the open mod: creates its folder and mission.json, appends it to the campaign (saved) and opens it.",
       "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"level\":{\"type\":\"string\",\"description\":\"solo level name, e.g. bunker1\"},\"folder\":{\"type\":\"string\"}}}", toolModAddMission },
     { "mod_reorder", "Reorder the open mod's missions: order [folder, ...] (a permutation), or mission (folder or index) with to (new index). Save with mod_save.",
@@ -578,7 +581,7 @@ const Tool kTools[] = {
     { "undo", "Undo the last mission edit.", "{\"type\":\"object\",\"properties\":{}}", toolUndo },
     { "validate", "Check the mission (format, ids, pads and props against the level export).",
       "{\"type\":\"object\",\"properties\":{}}", toolValidate },
-    { "test_run", "Save the mission and start the game on it: solo by default, co-op (two players, two pads) with coop: true; at the level's own start unless spawn is given. wait_seconds (cap 120; default 0 = return at once) waits that long (ends early if the game exits) and returns the game log's \"missions:\" lines since the launch (objective completions, script errors and loads) in missions, [ERROR] lines in errors, and running; the editor window is busy while it waits. stop: true then ends the game process this editor started (never another).",
+    { "test_run", "Save the mission and start the game on it (a mission of a mod runs from the mod packed into <mods folder>/<mod>.pmod): solo by default, co-op (two players, two pads) with coop: true; at the level's own start unless spawn is given. wait_seconds (cap 120; default 0 = return at once) waits that long (ends early if the game exits) and returns the game log's \"missions:\" lines since the launch (objective completions, script errors and loads) in missions, [ERROR] lines in errors, and running; the editor window is busy while it waits. stop: true then ends the game process this editor started (never another).",
       "{\"type\":\"object\",\"properties\":{\"wait_seconds\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":120},\"stop\":{\"type\":\"boolean\"},\"spawn\":{\"type\":[\"integer\",\"string\"],\"description\":\"pad to start at: a pad number or a mission pad id (default: the level's own start)\"},\"coop\":{\"type\":\"boolean\",\"description\":\"two players (default false: solo)\"}}}",
       toolTestRun },
 };

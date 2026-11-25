@@ -6,10 +6,19 @@
 #include "ge_test.h"
 #include "mission.h"
 #include "mission_lua.h"
+#include "mission_dir.h"
+#include "mission_pkg.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <direct.h>
+#define RMDIR(p) _rmdir(p)
+#else
+#include <unistd.h>
+#define RMDIR(p) rmdir(p)
+#endif
 
 #define NPROPS 600
 #define KAL 523    /* the washroom Kalinin (Agent) */
@@ -193,6 +202,47 @@ int main(void)
     GE_CHECK_EQ_INT(m.objects[7].diff_mask, 0xC);             /* the password list: difficulties 2 and 3 */
 
     snprintf(path, sizeof path, "%s/formula", dir);
+
+    /* ---- the same mod as a .pmod: campaign, mission and its script load through the package layer ---------------- */
+    {
+        char tmp[500], pkg[600], file[700];
+        static Campaign pc;
+        static Mission pm;
+        MissionRuntime *prt;
+        static Fake pf;
+        const char *t = getenv("TEMP");
+        if (!t || !*t) t = getenv("TMPDIR");
+        if (!t || !*t) t = "/tmp";
+        snprintf(tmp, sizeof tmp, "%s/ge_pmod_formula_test", t);
+        missionMakeDir(tmp);
+        snprintf(pkg, sizeof pkg, "%s/formula.pmod", tmp);
+        GE_CHECK_EQ_INT(pkgWriteDir(dir, pkg, err, sizeof err), 1);
+        if (err[0]) printf("  pkgWriteDir: %s\n", err);
+        snprintf(file, sizeof file, "%s/campaign.json", pkg);
+        campaignInit(&pc);
+        GE_CHECK_EQ_INT(campaignLoadFile(file, &pc, err, sizeof err), 1);
+        GE_CHECK(!strcmp(pc.name, "Formula"));
+        campaignFree(&pc);
+        snprintf(file, sizeof file, "%s/formula/mission.json", pkg);
+        missionInit(&pm);
+        GE_CHECK_EQ_INT(missionLoadFile(file, &pm, err, sizeof err), 1);
+        GE_CHECK_EQ_INT(missionValidate(&pm, err, sizeof err), 1);
+        snprintf(file, sizeof file, "%s/cover.png", pkg);
+        GE_CHECK_EQ_INT(pkgExists(file), 1);
+        snprintf(file, sizeof file, "%s/formula/formula/mission.json", pkg);
+        GE_CHECK_EQ_INT(pkgExists(file), 0);
+        snprintf(file, sizeof file, "%s/formula", pkg);
+        prt = start(&pm, &pf, file, 1);   /* the script is read from <pkg>/formula/scripts/ */
+        GE_CHECK(prt != NULL);
+        if (prt) {
+            GE_CHECK_EQ_INT(missionRtScriptCount(prt), 1);
+            run(prt, 1.0);
+            missionRtDestroy(prt);
+        }
+        missionFree(&pm);
+        remove(pkg);
+        RMDIR(tmp);
+    }
 
     /* ---- Secret Agent: a full playthrough ----------------------------------- */
     rt = start(&m, &f, path, 1);

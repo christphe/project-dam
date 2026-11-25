@@ -54,6 +54,8 @@ static std::string absPath(const std::string &p)
     if (_fullpath(buf, p.c_str(), sizeof buf)) return buf;
 #else
     if (realpath(p.c_str(), buf)) return buf;
+    // a path inside a .pmod file does not resolve (not a directory): make it absolute by hand
+    if (!p.empty() && p[0] != '/' && getcwd(buf, sizeof buf)) return std::string(buf) + "/" + p;
 #endif
     return p;
 }

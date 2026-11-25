@@ -187,11 +187,21 @@ fast3d OpenGL backend, so textures and colours match the game (fog is off).
   `port/mission/mission_thumb.c` (the game's own code path): the mission select film strip (68x44 grey) and the
   briefing polaroid (16 greys in two 128x64 halves). The base image is the last capture of the session, or the loaded
   `thumb.png`. *File*: the mission path, Open / Save as, the recent list, the level to open or re-export.
-* **Mod tab.** A mod is `mods/<mod>/campaign.json` + `<mission>/mission.json` + `thumb.png`. Open or create a folder; edit
+* **Mod tab.** A mod is a folder `<mod>/campaign.json` + `<mission>/mission.json` + `thumb.png`. Open or create a folder; edit
   name, author, description, affects (Story / Multiplayer) and the unlock order (ordered / open); the missions are a list
   with thumbnail, name and level: open, reorder, remove (the folder stays), *New mission...*, *Add the open mission*
-  (saved into the mod's folder); *Save mod* / *Check mod*. `thumb.png` of a mission in the open mod is next to its
-  `mission.json`; any other mission uses the folder of its file.
+  (saved into the mod's folder); *Save mod* / *Check mod* / *Publish...*. `thumb.png` of a mission in the open mod is next
+  to its `mission.json`; any other mission uses the folder of its file.
+* **Packages (.pmod).** The game loads a mod as `mods/<mod>.pmod`, a plain `tar` of the mod's source folder (the source folder
+  is the one you open in the Mod tab, kept outside `mods/`, usually a git repository of its own). *Play* on a mission of an
+  open mod first writes `<mods>/<mod>.pmod` (the whole folder, so its scripts and pictures are what the game reads) and
+  starts the game on `--mission <mods>/<mod>.pmod/<mission>/mission.json`; if the package cannot be written (the game
+  holds it open) Play reports the error and does not start. *Mod > Publish...* (also a button of the Mod tab) opens a dialog
+  with an output folder (default `<mod>/dist`): **Publish** writes `<folder>/<mod>.pmod` to share, **Deploy** writes
+  `<mods>/<mod>.pmod`. Both save the mod, validate its campaign and every mission (an error refuses, the message shows in
+  the dialog) and report the path and size written. Dotfiles (`.git`, `.gitignore`) and a top-level `dist/` are not packed. A
+  new mod gets a `.gitignore` containing `dist/`. MCP: `mod_publish` (`out_dir` optional) and `mod_deploy` return the path and
+  byte count; `test_run` follows Play.
 * **Check (Mission > Validate, the log).** Format and ids; pads and ops against the level; every pad in use against the
   walkable floor (a stan tile within 35 units on the ground plane): a guard standing off the floor is an *error* (it does
   not spawn), an object or a mission pad is a *warning*; scripts whose target prop is removed or missing, whose

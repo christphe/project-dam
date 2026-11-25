@@ -6,20 +6,32 @@ never game data, so it is safe to share. The format is documented in `port/missi
 
 ## Installing a mod
 
-Put the mod folder next to the game's `data/` folder, under `mods/`:
+A mod is shipped as a **`.pmod`** file: a plain, uncompressed `tar` (ustar) of the mod's source folder. Put it next to the
+game's `data/` folder, under `mods/`:
 
 ```
-<game>/mods/formula/campaign.json
-<game>/mods/formula/formula/mission.json
-<game>/mods/formula/formula/scripts/formula.luau
+<game>/mods/formula.pmod
 ```
 
 (On the Switch: `sdmc:/switch/project-dam/mods/`.) The mod then shows on the game's Mods screen and its missions fill the
-mission select. The folder name is free; progress is kept per mod by the `id` in `campaign.json`.
+mission select. `mods/` holds only `.pmod` entries: anything else in it is ignored (the log names it). The file name
+without `.pmod` is the mod's folder name (`--mod formula` starts the game on `formula.pmod`); progress is kept per mod by the
+`id` in `campaign.json`.
+
+The mod's *source* (`campaign.json`, `<mission>/mission.json`, `<mission>/thumb.png`, `cover.png`, `scripts/*.luau`,
+anything else) lives in a folder of its own, outside `mods/`, usually its own git repository. The editor writes the
+package: *Mod > Publish...* (**Publish** writes `<mod>/dist/<mod>.pmod` to share, **Deploy** writes it straight into the game's
+`mods/`), and **Play** repackages the mod into `mods/` before it starts the game. Dotfiles (`.git`, `.gitignore`) and a
+top-level `dist/` are left out of the package; a new mod gets a `.gitignore` with `dist/`.
+
+To look inside a package: `tar -tf formula.pmod` lists it and `tar -xf formula.pmod` unpacks it. An unpacked folder named
+`formula.pmod/` placed in `mods/` works exactly like the file (handy while developing without the editor).
 
 ## The Formula sample
 
-`docs/modding/samples/formula/` is a complete mod you can copy into `mods/` and play, or open in the editor
+`docs/modding/samples/formula/` is a complete mod source. To play it, pack it with
+`tar -cf mods/formula.pmod -C docs/modding/samples/formula .` (or copy the folder to `mods/formula.pmod/`); to edit it, open
+it in the editor
 (**project-dam-editor**: open the mod folder from its Mod tab, see `editor/README.md`; the editor shows the Facility from a
 level export it makes from your own game data). It is a Facility mission with an ally to protect:
 

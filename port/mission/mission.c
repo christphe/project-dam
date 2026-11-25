@@ -1,5 +1,6 @@
 /* Custom co-op missions: mission.json load/save/validate (format in mission.h). */
 #include "mission.h"
+#include "mission_pkg.h"
 #include "cJSON.h"
 
 #include <stdio.h>
@@ -398,18 +399,11 @@ fail:
 
 int missionLoadFile(const char *path, Mission *out, char *err, size_t errlen)
 {
-    FILE *f = fopen(path, "rb");
-    if (!f) { missionInit(out); seterr(err, errlen, "cannot open", path); return 0; }
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *buf = malloc((size_t)n + 1);
-    size_t got = buf ? fread(buf, 1, (size_t)n, f) : 0;
-    fclose(f);
-    if (!buf) { missionInit(out); seterr(err, errlen, "out of memory", NULL); return 0; }
-    buf[got] = 0;
-    int ok = missionParse(buf, out, err, errlen);
-    free(buf);
+    uint8_t *buf = NULL;   /* through the package layer: path may be inside a .pmod */
+    size_t n = 0;
+    if (!pkgReadFile(path, &buf, &n)) { missionInit(out); seterr(err, errlen, "cannot open", path); return 0; }
+    int ok = missionParse((const char *)buf, out, err, errlen);
+    pkgFree(buf);
     return ok;
 }
 
@@ -583,17 +577,10 @@ static int writefile(const char *path, char *json, char *err, size_t errlen)
 
 static char *readfile(const char *path, char *err, size_t errlen)
 {
-    FILE *f = fopen(path, "rb");
-    if (!f) { seterr(err, errlen, "cannot open", path); return NULL; }
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *buf = malloc(n > 0 ? (size_t)n + 1 : 1);
-    size_t got = buf ? fread(buf, 1, (size_t)n, f) : 0;
-    fclose(f);
-    if (!buf) { seterr(err, errlen, "out of memory", NULL); return NULL; }
-    buf[got] = 0;
-    return buf;
+    uint8_t *buf = NULL;
+    size_t n = 0;
+    if (!pkgReadFile(path, &buf, &n)) { seterr(err, errlen, "cannot open", path); return NULL; }
+    return (char *)buf;
 }
 
 /* ---- campaign ------------------------------------------------------------- */

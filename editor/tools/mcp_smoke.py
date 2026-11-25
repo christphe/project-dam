@@ -574,6 +574,26 @@ def mod_checks(exe, export, work):
     err, d = s.tool("mod_add_mission", name="Third")
     err, d = s.tool("mod_open", dir=moddir)
     check(d["missions"] == ["second", "first", "third"] or d["missions"] == ["second", "first"], "mod_open reloads the order: " + json.dumps(d["missions"]))
+    # .pmod packages: a new mod has a .gitignore with dist/; mod_publish / mod_deploy write a ustar tar of the folder
+    check(open(os.path.join(moddir, ".gitignore")).read().strip() == "dist/", "a new mod gets .gitignore with dist/")
+    import tarfile
+    err, d = s.tool("mod_publish")
+    check(not err and d["path"].replace("\\", "/").endswith("/dist/smokemod.pmod") and os.path.isfile(d["path"]) and d["bytes"] == os.path.getsize(d["path"]),
+          "mod_publish writes <mod>/dist/<mod>.pmod: " + json.dumps(d))
+    if not err:
+        with tarfile.open(d["path"]) as tf:
+            names = sorted(m.name for m in tf.getmembers())
+            check("campaign.json" in names and "first/mission.json" in names and "second/mission.json" in names, "the package lists the mod's files: " + ",".join(names))
+            check(not any(n.startswith("dist") or n.startswith(".") for n in names), "the package leaves out dist/ and dotfiles")
+            check(all(m.isfile() for m in tf.getmembers()), "the package holds regular files only")
+            check(tf.extractfile("campaign.json").read() == open(os.path.join(moddir, "campaign.json"), "rb").read(), "campaign.json is byte-identical in the package")
+    out2 = os.path.join(work, "pubout")
+    err, d = s.tool("mod_publish", out_dir=out2)
+    check(not err and os.path.isfile(os.path.join(out2, "smokemod.pmod")), "mod_publish out_dir")
+    err, d = s.tool("mod_deploy")
+    check(not err and d["path"].replace("\\", "/").endswith("/mods/smokemod.pmod") and os.path.isfile(d["path"]), "mod_deploy writes <mods>/<mod>.pmod: " + json.dumps(d))
+    if not err:
+        os.remove(d["path"])
     s.close()
 
     s = Stdio(exe, export)

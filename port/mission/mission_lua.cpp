@@ -1,5 +1,6 @@
 // The Luau runtime of a custom mission: see mission_lua.h.
 #include "mission_lua.h"
+#include "mission_pkg.h"
 
 #include <algorithm>
 #include <chrono>
@@ -891,13 +892,11 @@ bool loadSource(MissionRuntime *rt, const std::string &use, std::string &out, st
     }
     if (!rt->modDir.empty()) cands[nc++] = rt->modDir + "/scripts/" + use + ".luau";
     for (int i = 0; i < nc; i++) {
-        FILE *f = fopen(cands[i].c_str(), "rb");
-        if (f) {
-            char buf[4096];
-            size_t n;
-            out.clear();
-            while ((n = fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
-            fclose(f);
+        uint8_t *data = nullptr;   // through the package layer: a mod's scripts may live inside its .pmod
+        size_t n = 0;
+        if (pkgReadFile(cands[i].c_str(), &data, &n)) {
+            out.assign((const char *)data, n);
+            pkgFree(data);
             origin = cands[i];
             return true;
         }

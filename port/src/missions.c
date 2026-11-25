@@ -248,7 +248,15 @@ void missionsEnsureArgs(void)
             if (end && *end == 0 && n >= 0) spawn = (int)n;
             else snprintf(s_spawnId, sizeof s_spawnId, "%s", sp);
         }
-        if (!missionsActivateFile(f, spawn, NULL, -1)) return;
+        char modDir[512] = "";   /* --mission <...>/X.pmod/<mission>/mission.json: X.pmod is the mod, its scripts/ resolve */
+        for (const char *p = f; *p; p++) {
+            if (p > f && !strncmp(p, ".pmod", 5) && (p[5] == '/' || p[5] == '\\')) {
+                size_t n = (size_t)(p + 5 - f);
+                if (n < sizeof modDir) { memcpy(modDir, f, n); modDir[n] = 0; }
+                break;
+            }
+        }
+        if (!missionsActivateFile(f, spawn, modDir[0] ? modDir : NULL, -1)) return;
     }
     {
         int boot = bootLevel();

@@ -22,6 +22,15 @@ void doCheckMod(App &a)
     for (auto &s : v) a.say("mod: %s", s.c_str());
 }
 
+void doPublishMod(App &a)
+{
+    if (!a.doc.hasMod) { a.say("publish: no mod is open"); return; }
+    snprintf(a.pubDir, sizeof a.pubDir, "%s", (a.doc.modDir + "/dist").c_str());
+    a.pubResult.clear();
+    a.pubFailed = false;
+    a.askPublish = true;
+}
+
 // A text field of the campaign: marks the mod as changed.
 static void modText(App &a, const char *label, char *buf, size_t n, bool multiline = false)
 {
@@ -86,12 +95,13 @@ static std::string modPicture(const std::string &dir, const Campaign &c)
     return "";
 }
 
-// No mod open: the mods of the game's mods folder as cards (picture, name, missions and author); a click opens one with its
-// first mission.
+// No mod open: the mods opened lately (their source folders, from the recent list) as cards (picture, name, missions and
+// author); a click opens one with its first mission. The game's mods folder holds packages (.pmod), not sources.
 static void modList(App &a)
 {
     Doc &d = a.doc;
     const std::string root = d.modsRoot();
+    (void)d;
     struct Card { std::string dir, name, sub, pic; };
     static std::string lastRoot;              // the folder is read again every half second at most, not every frame
     static double lastScan = -1;
@@ -100,10 +110,12 @@ static void modList(App &a)
         lastRoot = root; lastScan = ImGui::GetTime();
         mods.clear();
         std::error_code ec;
-        for (auto it = std::filesystem::directory_iterator(root, ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
-            const std::string dir = it->path().generic_string(), file = dir + "/campaign.json";
+        for (const std::string &r : a.recent) {
+            const std::filesystem::path rp(r);
+            if (rp.filename() != "campaign.json") continue;
+            const std::string dir = rp.parent_path().generic_string(), file = dir + "/campaign.json";
             if (!std::filesystem::exists(file, ec)) continue;
-            Card k{ dir, it->path().filename().string(), "(campaign.json unreadable)", "" };
+            Card k{ dir, rp.parent_path().filename().string(), "(campaign.json unreadable)", "" };
             Campaign c; campaignInit(&c);
             char e[200] = "";
             if (campaignLoadFile(file.c_str(), &c, e, sizeof e)) {
@@ -118,11 +130,11 @@ static void modList(App &a)
         }
         std::sort(mods.begin(), mods.end(), [](const Card &x, const Card &y) { return x.name < y.name; });
     }
-    ImGui::TextUnformatted("Mods");
+    ImGui::TextUnformatted("Recent mods");
     ImGui::SameLine();
     ImGui::TextDisabled("(%d)", (int)mods.size());
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", root.c_str());
-    if (mods.empty()) ImGui::TextDisabled("No mod yet: create one below.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mods opened lately; the game plays the packages in %s", root.c_str());
+    if (mods.empty()) ImGui::TextDisabled("No mod opened lately: open one, or type a folder above to create one.");
     const float rowH = 52.0f;
     for (size_t i = 0; i < mods.size(); i++) {
         ImGui::PushID((int)i);
@@ -181,6 +193,9 @@ static void propertiesSection(App &a)
     if (ImGui::Button("Save mod")) doSaveMod(a);
     ImGui::SameLine();
     if (ImGui::Button("Check mod")) doCheckMod(a);
+    ImGui::SameLine();
+    if (ImGui::Button("Publish...")) doPublishMod(a);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Packs the mod into a .pmod file (to share) or into the game's mods folder (to play)");
     if (d.modDirty) { ImGui::SameLine(); ImGui::TextDisabled("(unsaved)"); }
 }
 
@@ -255,7 +270,7 @@ void drawModTab(App &a)
 {
     Doc &d = a.doc;
     ImGui::SetNextItemWidth(-90);
-    ImGui::InputText("##moddir", a.modDirBuf, sizeof a.modDirBuf);
+    ImGui::InputTextWithHint("##moddir", "mod folder (its own repo)", a.modDirBuf, sizeof a.modDirBuf);
     ImGui::SameLine();
     if (ImGui::Button("Open/new##mod")) guarded(a, [&a] { doOpenModPath(a, a.modDirBuf); });
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens the mod in this folder, or creates it when the folder has no campaign.json");
@@ -271,7 +286,7 @@ void drawModTab(App &a)
     }
     if (!d.hasMod) {
         ImGui::PushTextWrapPos(0);
-        ImGui::TextDisabled("A mod is a campaign: mods/<mod>/campaign.json plus one folder per mission. Opening one of its missions opens it too.");
+        ImGui::TextDisabled("A mod is a campaign: a folder of its own (keep it in its own git repo) with campaign.json plus one folder per mission. Play and Publish... pack it into a .pmod. Opening one of its missions opens it too.");
         ImGui::PopTextWrapPos();
         ImGui::Separator();
         modList(a);

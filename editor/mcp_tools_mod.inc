@@ -57,6 +57,34 @@ ToolResult toolModOpen(Doc &d, const cJSON *a)
     return okJson(modJson(d));
 }
 
+// Publish / Deploy (the Mod > Publish... dialog's two buttons): the mod as a .pmod; saves and validates first.
+static ToolResult modPackResult(bool ok, const std::string &path, uint64_t bytes, const std::string &err)
+{
+    if (!ok) return fail(err);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "path", path.c_str());
+    cJSON_AddNumberToObject(o, "bytes", (double)bytes);
+    return okJson(o);
+}
+
+ToolResult toolModPublish(Doc &d, const cJSON *a)
+{
+    std::string path, err;
+    uint64_t bytes = 0;
+    std::string out = argStr(a, "out_dir");
+    if (out.empty()) out = d.modDir + "/dist";
+    const bool ok = d.publishMod(out, path, bytes, err);
+    return modPackResult(ok, path, bytes, err);
+}
+
+ToolResult toolModDeploy(Doc &d, const cJSON *)
+{
+    std::string path, err;
+    uint64_t bytes = 0;
+    const bool ok = d.deployMod(path, bytes, err);
+    return modPackResult(ok, path, bytes, err);
+}
+
 ToolResult toolModSave(Doc &d, const cJSON *)
 {
     std::string err;

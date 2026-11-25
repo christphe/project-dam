@@ -930,7 +930,10 @@ bool Doc::testRun(const std::string &spawnIn, bool coop, std::string &err)
     if (lvl < 0) { err = "unknown level"; return false; }
     // no spawn chosen (Spawn here / MCP spawn): no --spawn, the mission starts at the level's own start
     const std::string spawn = spawnIn;
-    return launchGame(gameExe, lvl, missionPath, spawn, coop, lastPlay, err);
+    // A mission of a mod runs from the packaged mod (<mods>/<mod>.pmod), the way the game loads it for a player.
+    std::string run;
+    if (hasMod && !modPackForPlay(missionPath, run, err)) { err = "cannot package the mod: " + err; return false; }
+    return launchGame(gameExe, lvl, run.empty() ? missionPath : run, spawn, coop, lastPlay, err);
 }
 
 bool padSpecFromJson(const cJSON *args, PadSpec &out, std::string &err)

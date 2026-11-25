@@ -23,6 +23,7 @@
 #include "fs.h"
 #include "missions.h"
 #include "missions_priv.h"
+#include "mission_pkg.h"
 #include "realzlib.h"
 
 static int iabs(int v) { return v < 0 ? -v : v; }   /* the game's stdlib.h shadows the host one: no abs() */
@@ -43,17 +44,14 @@ static uint32_t be32(const uint8_t *p) { return ((uint32_t)p[0] << 24) | ((uint3
 /* Decode `path` into a w*h grey image (area average). 1 on success. */
 static int pngGray(const char *path, int dw, int dh, uint8_t *out)
 {
-    FSFile *f = fsOpen(path, "rb");
     uint8_t *file = NULL, *idat = NULL, *raw = NULL, *pix = NULL;
+    size_t flen = 0;
     int32_t fsz;
     uint32_t w = 0, h = 0, idatn = 0, pos = 8, ch, bpp, stride;
     int ctype = -1, ok = 0;
     z_stream z;
-    if (!f) return 0;
-    fsz = fsSize(f);
-    file = (uint8_t *)malloc((size_t)fsz + 1);
-    if (!file || fsRead(f, file, fsz) != fsz) { fsClose(f); free(file); return 0; }
-    fsClose(f);
+    if (!pkgReadFile(path, &file, &flen)) return 0;   /* the package layer: the PNG may be inside a .pmod */
+    fsz = (int32_t)flen;
     if (fsz < 33 || memcmp(file, "\x89PNG\r\n\x1a\n", 8)) goto done;
     idat = (uint8_t *)malloc((size_t)fsz);
     if (!idat) goto done;
@@ -118,7 +116,7 @@ void modsThumbsLoad(const char *modDir, const char (*folders)[MISSION_ID_LEN], i
     for (int i = 0; i < count && i < 20; i++) {
         char path[760];
         snprintf(path, sizeof path, "%s/%s/thumb.png", modDir, folders[i]);
-        if (!fsExists(path)) continue;
+        if (!pkgExists(path)) continue;
         if (pngGray(path, FULL_W, FULL_H, s_pix[i])) {
             s_have[i] = 1;
             sysLogPrintf(LOG_INFO, "missions: thumb %s (grey %dx%d)", path, FULL_W, FULL_H);

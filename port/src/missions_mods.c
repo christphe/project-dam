@@ -19,6 +19,7 @@
 #include "missions.h"
 #include "missions_priv.h"
 #include "mission_dir.h"
+#include "mission_pkg.h"
 #include "game/front.h"   /* mission_folder_setup_entries */
 
 extern int  portEepromSelect(const char *path);   /* libultra.c */
@@ -57,15 +58,20 @@ static void scan(void)
     for (int k = 0; k < n && s_nmods < MODS_MAX; k++) {
         char path[640], err[160] = "";
         ModEntry *me = &s_mods[s_nmods];
+        size_t nl = strlen(names[k]);
+        if (nl <= 5 || strcmp(names[k] + nl - 5, ".pmod")) {   /* mods/ holds only X.pmod (a tar file, or an unpacked folder) */
+            sysLogPrintf(LOG_INFO, "missions: %s/%s ignored: not a .pmod", base, names[k]);
+            continue;
+        }
         snprintf(path, sizeof path, "%s/%s/campaign.json", base, names[k]);
-        if (!fsExists(path)) continue;
+        if (!pkgExists(path)) continue;
         campaignInit(&me->c);
         if (!campaignLoadFile(path, &me->c, err, sizeof err) || !campaignValidate(&me->c, err, sizeof err)) {
             sysLogPrintf(LOG_WARNING, "missions: %s: %s", path, err);
             campaignFree(&me->c);
             continue;
         }
-        snprintf(me->folder, sizeof me->folder, "%s", names[k]);
+        snprintf(me->folder, sizeof me->folder, "%.*s", (int)(nl - 5), names[k]);   /* X of X.pmod: what --mod takes */
         snprintf(me->dir, sizeof me->dir, "%s/%s", base, names[k]);
         s_nmods++;
     }

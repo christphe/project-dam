@@ -86,7 +86,7 @@ struct App {
     float gridStep = 25.0f;
     char thumbPath[512] = "thumb.png";
     std::string lastAutoThumb;
-    char modDirBuf[512] = "mods/mymod", modNewName[64] = "New mission", modNewLevel[32] = "bunker1";
+    char modDirBuf[512] = "", modNewName[64] = "New mission", modNewLevel[32] = "bunker1";
     std::map<std::string, uint32_t> thumbTex;   // thumb.png path -> GL texture (0: missing)
     std::string envSnap;
     bool sunDrag = false;
@@ -126,6 +126,11 @@ struct App {
     int nmLevel = 0;                   // index into missionLevelNameAt()
     int nmStart = 0;                   // 0 the level as is, 1 an emptied level
     bool nmAddToMod = true;
+    // ---- Mod > Publish... (a modal; issue #139) ----
+    bool askPublish = false;
+    char pubDir[512] = "";             // the output folder of Publish
+    std::string pubResult;             // the last line shown in the modal (written path + size, or the refusal)
+    bool pubFailed = false;
     // Name and level of a mission file (the recent lists and the mod's mission list show these, not paths); cached.
     struct MissionInfo { std::string name, level; bool ok = false; };
     std::map<std::string, MissionInfo> infoCache;
@@ -326,6 +331,7 @@ void drawMissionTab(App &a);
 void drawModTab(App &a);
 void doSaveMod(App &a);
 void doCheckMod(App &a);
+void doPublishMod(App &a);                                    // Mod > Publish...: opens the dialog
 void drawStatusBar(App &a, float x, float y, float w, float h);
 // ui_thumb.cpp
 void thumbSync(App &a);                                       // follows the open mission's thumb.png (base image, sliders)

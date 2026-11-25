@@ -62,6 +62,7 @@ void drawMenuBar(App &a)
         if (ImGui::MenuItem("Open/new mod...")) a.forceTab = 2;      // the path field lives in the Mod tab
         if (ImGui::MenuItem("Save mod", nullptr, false, a.doc.hasMod)) doSaveMod(a);
         if (ImGui::MenuItem("Check mod", nullptr, false, a.doc.hasMod)) doCheckMod(a);
+        if (ImGui::MenuItem("Publish...", nullptr, false, a.doc.hasMod)) doPublishMod(a);
         ImGui::EndMenu();
     }
     if (title("Tools")) {
