@@ -88,6 +88,28 @@ editor/third_party/imgui_backends/ holds the unmodified 1.92.9b SDL2 and OpenGL3
 MIT license (editor/third_party/imgui_backends/LICENSE.txt). tools_pc/menuview/backends/ (Win32 and
 OpenGL3, a dev tool) holds the unmodified 1.92.9b files too.
 
+THIRD-PARTY CODE: LUAU
+--------------------------------------------------
+
+port/third_party/luau/ is Luau 0.746 (https://github.com/luau-lang/luau, tag 0.746), MIT license,
+Copyright (c) 2019-2026 Roblox Corporation (port/third_party/luau/LICENSE.txt); the VM also carries
+Lua code, Copyright (c) 1994-2019 Lua.org, PUC-Rio, MIT license (port/third_party/luau/lua_LICENSE.txt).
+Unmodified. VM, Compiler, Ast, Bytecode and Common run the mission scripts in the game. Analysis and
+Config (the type checker, port/third_party/luau/Analysis and Config) are the same release and are built
+into the mission editor only (editor/CMakeLists.txt, ge_luau_analysis), never into the game.
+editor/third_party/luau_shim/Windows.h is our own one-line forwarding header (a MinGW cross build
+has only <windows.h>, Analysis includes <Windows.h>).
+
+THIRD-PARTY CODE: IMGUICOLORTEXTEDIT
+--------------------------------------------------
+
+editor/third_party/ImGuiColorTextEdit/ is ImGuiColorTextEdit by Johan A. Goossens
+(https://github.com/goossens/ImGuiColorTextEdit, master at ba4bafe, 2026-11-19), MIT license,
+Copyright (c) 2024-2026 Johan A. Goossens (editor/third_party/ImGuiColorTextEdit/LICENSE). It is the
+Luau code editor widget of the mission editor. TextEditor.h, TextEditor.cpp, TextEditorLanguages.h and
+languages/ only (the optional TextDiff, dtl, extras and the example are not included), unmodified.
+It builds against the vendored Dear ImGui 1.92.9b.
+
 THIRD-PARTY FONTS: BARLOW CONDENSED AND FIRA SANS
 --------------------------------------------------
 

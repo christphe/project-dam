@@ -1,6 +1,8 @@
 -- key_door: a door that stays locked until a player has the key item.
 -- target: a door prop.  props: key (item id), message (shown near the locked door),
 --         objective (optional objective id completed when the door unlocks).
+export type Props = { key: Item, message: string?, objective: Objective? }
+
 local key = props.key
 local text = props.message or "Locked"
 local cooldown = 0

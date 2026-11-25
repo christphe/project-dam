@@ -1,5 +1,7 @@
 // ui_selection.cpp: see ui_app.h for how the editor UI is split.
 #include "ui_app.h"
+#include "ui_scripts.h"
+#include <cstring>
 
 
 namespace ed {
@@ -40,6 +42,26 @@ void fieldsPanel(App &a, const Item &it)
     ImGui::Separator();
     ImGui::TextWrapped("%s", it.added ? "Fields (grey: the template's value, edit to set)" : "Fields (original, read-only: copy to edit)");
     if (it.guard) ImGui::TextWrapped("body = model (65535 = random); head -1 = random");
+    if (it.guard) {   // sunglasses: bitflags bit 0 = always, bit 1 = one time in two (chraction.c retrieve_header_for_body_and_head)
+        int bi = -1;
+        for (int i = 0; i < n; i++) if (!strcmp(f[i].name, "bitflags")) bi = i;
+        if (bi >= 0) {
+            const unsigned bf = ((it.f.set >> bi) & 1) ? (unsigned)it.f.v[bi] : 0u;
+            int mode = (bf & 1) ? 1 : (bf & 2) ? 2 : 0;
+            static const char *const kGlasses[] = { "never", "always", "random (1 in 2)" };
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("sunglasses");
+            ImGui::SameLine(150);
+            ImGui::SetNextItemWidth(160);
+            if (!it.added) ImGui::TextDisabled("%s", kGlasses[mode]);
+            else if (ImGui::Combo("##glasses", &mode, kGlasses, 3)) {
+                const unsigned nb = (bf & ~3u) | (mode == 1 ? 1u : mode == 2 ? 2u : 0u);
+                std::string err;
+                if (!a.doc.setItemField(a.doc.sel.item, bi, (double)nb, err)) a.say("sunglasses: %s", err.c_str());
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Only for a head with sunglasses (the bitflags field, bits 1 and 2)");
+        }
+    }
     const char *group = missionRecGroup(type);
     bool inGroup = false;
     for (int i = 0; i < n; i++) {
@@ -120,11 +142,31 @@ void drawSelectionTab(App &a)
         transformFields(a);
         break;
     }
+    case Selection::ZONE: drawZoneSection(a); break;
+    case Selection::SCRIPT: drawScriptSection(a); break;
     case Selection::ITEM: {
         const Item *it = selectedItem(a);
         if (!it) { ImGui::TextDisabled("(item no longer exists)"); break; }
         if (it->added) ImGui::Text("%s +%d  (added by the mission)", it->guard ? "Guard" : "Object", it->idx);
         else ImGui::Text("%s prop %d  (original)", it->guard ? "Guard" : "Object", it->idx);
+        if (it->added) {   // the id scripts reference this prop by, and its display name
+            static char nameBuf[MISSION_NAME_LEN];
+            static ItemRef nameFor;
+            static std::string nameSeen;
+            if (!(nameFor == sel.item) || nameSeen != it->name) { snprintf(nameBuf, sizeof nameBuf, "%s", it->name.c_str()); nameFor = sel.item; nameSeen = it->name; }
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("name");
+            ImGui::SameLine(60);
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputTextWithHint("##addname", "(optional label)", nameBuf, sizeof nameBuf);
+            if (ImGui::IsItemDeactivatedAfterEdit() && it->name != nameBuf) {
+                if (!a.doc.setAddedName(sel.item, nameBuf, err)) a.say("edit: %s", err.c_str());
+            }
+            ImGui::Text("uuid  %s", it->uuid.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Copy##uuid")) { ImGui::SetClipboardText(it->uuid.c_str()); a.say("uuid copied"); }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scripts reference a prop the mission adds by this uuid (a Door / Guard / Prop property, a prop target)");
+        }
         if (it->removed) ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1), "removed by the mission");
         if (it->moved) ImGui::TextColored(ImVec4(1, 0.85f, 0.2f, 1), "moved (was pad 0x%x)", it->origPad);
         ImGui::Text("pad   %s", padLabel(it->pad).c_str());

@@ -6,6 +6,7 @@
 #include <array>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -13,11 +14,14 @@ extern "C" {
 #include "mission.h"
 }
 #include "levelrec.h"
+#include "script_check.h"
 
 typedef std::array<float, 3> Vec3;
 
 struct LRoom { int index = 0; Vec3 mn{}, mx{}; };
-struct LPad { int num = 0; Vec3 pos{}, look{}, up{}; int room = -1; };
+struct LPad { int num = 0; Vec3 pos{}, look{}, up{}; int room = -1;
+              bool bound = false; Vec3 bmn{}, bmx{};   // a bound pad (num >= 10000): its box in the pad frame (x along up x look, y up, z look), as the game fits a door to it
+};
 struct LProp { int index = 0, type = 0, pad = 0, model = -1, item = -1, ai = -1, owner = -1;
                MissionFieldVals f{};   // every record field of the original (mission_fields.h), from the setup
     int chr = -1;           // a guard's chr number
@@ -86,10 +90,13 @@ struct Item {
     int origPad = -1;          // original pad num (original props)
     int type = 0, model = -1, item = -1, ai = -1, weapon = -1;
     int owner = -1;
+    std::string uuid, name;    // an added item: its uuid (scripts reference it by that) and display name; empty for an original
     int diffMask = 0;          // the difficulties it is present on (bit n = difficulty n; 0 = all)
     bool hasPos = false;
     Vec3 pos{};
     float yawDeg = 0;          // facing: the look of the pad it stands on (0 = +z)
+    bool hasBasis = false;     // a door on a bound pad: its box is in the pad frame (x = up x look, y = up, z = look), not a yaw frame
+    Vec3 bas[3]{};             // those three unit axes in world space
     // The record fields (missionRecFields(type)): an original prop's own; an added one's own where its op
     // gives them (bit set in `given`), else the template's (the level's first record of the type).
     MissionFieldVals f{};
@@ -136,9 +143,9 @@ struct ClipItem {
 };
 
 struct Selection {
-    enum Kind { NONE, ROOM, PAD, MPAD, ITEM } kind = NONE;
-    int num = -1;              // ROOM: index; PAD: pad num
-    std::string id;            // MPAD
+    enum Kind { NONE, ROOM, PAD, MPAD, ITEM, ZONE, SCRIPT } kind = NONE;
+    int num = -1;              // ROOM: index; PAD: pad num; SCRIPT: index in mission.scripts
+    std::string id;            // MPAD, ZONE
     ItemRef item;              // ITEM
 };
 
@@ -148,6 +155,8 @@ struct Issue {
     std::string text;
     bool hasSel = false;
     Selection sel;
+    std::string script;        // a script finding: the script's name ("use") and the 1-based line in its source (0 = none)
+    int line = 0;
 };
 
 // A model the open level uses (its setup props): the Props browser lists these.
@@ -217,8 +226,12 @@ struct Doc {
 
     // ---- actions (each pushes an undo step on success) ----
     bool resolvePad(const PadSpec &s, MissionPadRef &out, std::string &err);   // creates the pad at a point
-    bool addGuard(const PadSpec &pad, int model, int ai, int weapon, ItemRef &out, std::string &err);
-    bool addObject(const PadSpec &pad, int type, int model, int item, ItemRef &out, std::string &err);
+    // Every added guard / object has a uuid (scripts reference it by that): `uuid` "" makes a fresh v4 one; a given one must be a
+    // valid lowercase UUID not used by another added prop. `name` is the optional display label.
+    bool addGuard(const PadSpec &pad, int model, int ai, int weapon, ItemRef &out, std::string &err, const std::string &uuid = "", const std::string &name = "");
+    bool addObject(const PadSpec &pad, int type, int model, int item, ItemRef &out, std::string &err, const std::string &uuid = "", const std::string &name = "");
+    bool allocUuid(const std::string &want, std::string &out, std::string &err) const;
+    bool setAddedName(const ItemRef &it, const std::string &name, std::string &err);   // the display name of an added item
     bool moveItem(const ItemRef &it, const PadSpec &pad, std::string &err);
     bool removeItem(const ItemRef &it, std::string &err);
     bool createPad(const Vec3 &pos, int room, std::string &id, std::string &err);
@@ -231,8 +244,8 @@ struct Doc {
     // the pad (a point makes a mission pad there, with the copied facing); duplicate stands it on the item's
     // own pad unless `pad` is given.
     bool copyItem(const ItemRef &it, ClipItem &out, std::string &err) const;
-    bool pasteItem(const ClipItem &c, const PadSpec &pad, ItemRef &out, std::string &err);
-    bool duplicateItem(const ItemRef &it, const PadSpec *pad, ItemRef &out, std::string &err);
+    bool pasteItem(const ClipItem &c, const PadSpec &pad, ItemRef &out, std::string &err, const std::string &uuid = "", const std::string &name = "");
+    bool duplicateItem(const ItemRef &it, const PadSpec *pad, ItemRef &out, std::string &err, const std::string &uuid = "", const std::string &name = "");
     ClipItem clip;             // the app's clipboard (Ctrl+C)
     bool itemFromProp(int prop, ItemRef &out, std::string &err) const;   // original prop index -> ItemRef
 
@@ -294,6 +307,57 @@ struct Doc {
     // ---- environment (mission.env; undo covers it) ----
     bool setEnv(const MissionEnv &e, bool commitUndo);
 
+    // ---- scripts and zones (doc_scripts.cpp) ----
+    // A script's source: the mission's own (<mission dir>/<use>.luau or <mission dir>/scripts/<use>.luau, editable, held in
+    // scriptBuf until saved), the mod's (mods/<mod>/scripts/<use>.luau, read-only here), or the built-in library (g_missionLibScripts).
+    enum ScriptOrigin { SRC_NONE, SRC_MISSION, SRC_MOD, SRC_LIBRARY };
+    struct ScriptSrc { ScriptOrigin origin = SRC_NONE; std::string path, text; };
+    ScriptSrc scriptSource(const std::string &use) const;
+    ScriptSrc scriptSourceUncached(const std::string &use, const std::string &dir) const;
+    mutable std::map<std::string, ScriptSrc> scriptCache;   // disk lookups of scriptSource (the GUI clears it every ~second)
+    void scriptCacheClear() { scriptCache.clear(); }
+    std::vector<std::string> libraryScripts() const;
+    std::vector<std::string> missionScriptNames() const;     // the .luau files of the mission's own folders
+    std::string missionDir() const;                          // folder of mission.json ("" for an unnamed mission)
+    std::string newScriptPath(const std::string &use) const; // <mission dir>/scripts/<use>.luau
+    bool setScriptText(const std::string &use, const std::string &text, std::string &err);   // a mission script (creates it); saved with the mission
+    bool newScript(std::string &use, std::string &err);      // use = wanted name (made unique); writes the template
+    bool copyScriptToMission(const std::string &use, std::string &newUse, std::string &err); // library / mod script -> a mission script
+    bool flushScripts(const std::string &missionFile, std::string &err);   // writes the edited scripts next to the mission file
+    bool scriptsDirty() const { return !scriptDirty.empty(); }
+    std::map<std::string, std::string> scriptBuf;            // use -> text of the mission scripts touched this session
+    std::set<std::string> scriptDirty;                       // uses edited since the last save
+    // The checks of one script entry: the Props schema and the type checker's findings (1-based lines).
+    struct ScriptDiagnostics { bool found = false; ScriptOrigin origin = SRC_NONE; bool hasProps = false; std::vector<ScriptDiag> diags; std::string defsError; };
+    ScriptDiagnostics scriptDiagnostics(const std::string &use, const std::string &targetKind) const;
+    static const char *targetKindName(MissionTargetKind k);
+    void scriptIssues(std::vector<Issue> &out) const;        // part of checkIssues: sources, props against Props, the type checker
+    // entries (one undo step each)
+    bool addScript(const std::string &use, MissionTargetKind kind, int &outIndex, std::string &err);   // target left empty: set it next
+    bool removeScript(int index, std::string &err);
+    bool moveScript(int index, int newIndex, std::string &err);
+    bool setScriptUse(int index, const std::string &use, std::string &err);
+    // The target: PROP = prop number or added prop uuid, PAD = pad ref, ZONE = id.
+    // PROP: `prop` is an original prop's number, or `uuid` names a prop the mission adds (then `prop` is ignored).
+    bool setScriptTarget(int index, MissionTargetKind kind, int prop, const MissionPadRef &pad, const std::string &zone, std::string &err, const std::string &uuid = "");
+    // One value: value == nullptr removes the key. A number, string or bool.
+    bool setScriptProp(int index, const std::string &name, const MissionProp *value, std::string &err);
+    // Many at once from a JSON object (one undo step); replace: keys not in it are dropped.
+    bool setScriptProps(int index, const struct cJSON *obj, bool replace, std::string &err);
+    // zones
+    bool addZone(const Vec3 &pos, float radius, int room, std::string &id, std::string &err);   // id "" = z1, z2, ...
+    bool setZone(const std::string &id, const Vec3 *pos, const float *radius, const int *room, bool commitUndo, std::string &err);
+    bool removeZone(const std::string &id, std::string &err);
+    int zoneIndex(const std::string &id) const;
+    // Setup prop numbers, as scripts see them (door(63), guard(523), ...): the level's own props are 0..N-1 in file order; what the
+    // mission adds follows, in the order mission_apply.c appends it: every added guard (each followed by the weapons it carries,
+    // at most two), then every added object. (Difficulty-dependent skips are not modelled.)
+    int propTotal() const;
+    int addedPropNumber(const ItemRef &r) const;                   // prop number of an item (original: its own index); -1 unknown
+    bool propByNumber(int n, ItemRef &out, int &type) const;       // the item behind a prop number and its setup type (9 guard, 1 door, ...)
+    bool propByUuid(const std::string &uuid, ItemRef &out, int &type) const;   // the added item with this uuid and its setup type
+    std::string propLabel(const ItemRef &r) const;                 // "Kalinin (added guard)" for an added item, "#63 door" for an original
+
     // ---- play ----
     // Saves the mission, then starts the game on its level with --mission/--spawn (launch.cpp).
     bool testRun(const std::string &spawn, bool coop, std::string &err);   // coop: two players
@@ -310,6 +374,7 @@ private:
 
 // Small helpers shared by the UI and MCP code.
 bool readFile(const std::string &path, std::string &out);
+bool padSpecIsBound(const PadSpec &p);   // an original bound pad (>= 10000): the only pad a door may stand on
 bool padSpecFromJson(const struct cJSON *args, PadSpec &out, std::string &err);   // "pad": n | "id", or "pos": [x,y,z]
 
 // UUID v4 from a real random source (std::random_device); and the 8-4-4-4-12 hex check.

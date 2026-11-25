@@ -39,7 +39,9 @@ bool McpHttp::start(int port, std::function<void(std::function<void()>)> runOnMa
             return;
         }
         std::string out;
-        runOnMain([&] { out = mcpHandleMessage(*docp, req.body); });
+        std::function<void(std::string &)> post;
+        runOnMain([&] { out = mcpHandleMessage(*docp, req.body, &post); });
+        if (post) post(out);   // test_run's wait + log read: here, so the editor's main thread keeps drawing
         if (out.empty()) { res.status = 202; return; }   // notification: accepted, no body
         res.set_content(out, "application/json");
     });

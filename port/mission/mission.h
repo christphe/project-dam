@@ -65,11 +65,12 @@
  *                                                                      a presence edit (or "ai") of an original prop
  *     { "op": "move",   "prop": 19, "pad": 0x2716, "ai": 0x401 },    a move may carry "ai": the guard's new AI list
  *                                                                      (the same pad number keeps it where it is)
- *     { "op": "add",    "pad": "p1", "model": 3, "ai": 0x401, "weapons": [ { "item": 17 } ] },
+ *     { "op": "add",    "uuid": "6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01", "name": "Kalinin",
+ *       "pad": "p1", "model": 3, "ai": 0x401, "weapons": [ { "item": 17 } ] },
  *     { "op": "remove", "prop": 18 }
  *   ],
  *   "objects": [
- *     { "op": "add",    "type": 4, "pad": 0x2733, "model": 120, "item": 33 },
+ *     { "op": "add",    "uuid": "0b8e7c64-52a1-4f3d-8c19-7e6a2d9b3f10", "type": 4, "pad": 0x2733, "model": 120, "item": 33 },
  *     { "op": "move",   "prop": 40, "pad": "p1" },
  *     { "op": "remove", "prop": 41 }
  *   ],
@@ -84,7 +85,9 @@
  *                                                 level's env record copy); fog distance is not here
  *   "scripts": [
  *     { "use": "key_door", "target": { "kind": "prop", "prop": 52 },
- *       "props": { "key": 33, "message": "Locked" } }
+ *       "props": { "key": 33, "message": "Locked" } },
+ *     { "use": "guard_talk", "target": { "kind": "prop", "uuid": "6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01" },
+ *       "props": { "door": 63, "terminal": "0b8e7c64-52a1-4f3d-8c19-7e6a2d9b3f10" } }
  *   ]
  * }
  *
@@ -101,7 +104,15 @@
  * - "pad": an integer is an original setup pad number; a string is the id of
  *   one of this mission's "pads".
  * - "prop": the index of a prop in the level's original setup propDefs list,
- *   in file order (as level.json from --export-level lists them).
+ *   in file order (as level.json from --export-level lists them). move / remove ops and script references of an ORIGINAL prop
+ *   use it.
+ * - "uuid" / "name" on every guard or object "add" op: "uuid" is REQUIRED (lowercase RFC 4122 text, 36 characters, unique in the
+ *   mission; the editor makes a v4 one), "name" is an optional display label. A prop a mission adds has no stable setup prop
+ *   number (it is the level's prop count + its position in the add list), so scripts reference it by its uuid, never by a
+ *   number: a "props" value that is a prop of a script (Guard, Door, Prop) is the uuid string, and a script target is
+ *   { "kind": "prop", "uuid": "..." } (an original prop: { "kind": "prop", "prop": N }). A number at or past the level's own
+ *   prop count is an error. The game resolves each uuid to the setup prop number the added record got when it builds the
+ *   setup (a prop that is absent on the chosen difficulty resolves to -1: a script treats it as a missing prop).
  * - "type": the setup prop type number (PROPDEF_*), "model" a model id,
  *   "item" an ITEM_IDS value, "ai" an AI list id.
  * - "difficulties": [0, 1, 2, 3] on an add / move op of a guard or object: it is present only on those difficulties
@@ -128,8 +139,17 @@ extern "C" {
 #endif
 
 #define MISSION_FORMAT 1
+
+/* A door record's pad field is a bound-pad index WITHOUT the +10000 (the game reads boundpads[door->pad], src/game/prop.c); every
+ * other prop type writes a bound pad as pad >= 10000. A door op (add / move) may therefore only name an original pad number
+ * >= 10000: a normal pad or a mission pad (mission pads are appended to the normal pads) is refused. One wording for the apply log,
+ * the validator and the editor. */
+#define MISSION_PROPDEF_DOOR 1
+#define MISSION_DOOR_PAD_MSG "a door can only stand on a bound pad of the level (an original pad number >= 10000)"
 #define MISSION_ID_LEN 32
 #define MISSION_TEXT_LEN 512
+#define MISSION_UUID_LEN 40             /* a UUID's 36 characters + NUL, with room */
+#define MISSION_NAME_LEN 64             /* an added prop's display name */
 
 typedef struct MissionPadRef {
     int is_new;                     /* 0: original pad number in `num`; 1: new pad id in `id` */
@@ -175,6 +195,9 @@ typedef struct MissionGuardOp {
     int nweapons;                   /* ADD: the carried weapons */
     MissionWeapon weapons[MISSION_MAX_WEAPONS];
     MissionFieldVals f;             /* ADD: the other record fields (mission_fields.h, type 9) */
+    char uuid[MISSION_UUID_LEN];    /* ADD: the stable id scripts reference the added guard by (required) */
+    char name[MISSION_NAME_LEN];    /* ADD: display name (optional, editor only) */
+    int setup_prop;                 /* ADD: the setup prop number the record got (missionApplySetupEx); -1 = not present */
 } MissionGuardOp;
 
 typedef struct MissionObjectOp {
@@ -184,6 +207,9 @@ typedef struct MissionObjectOp {
     MissionPadRef pad;              /* MOVE/ADD */
     int type, model, item;          /* ADD (-1 = none) */
     MissionFieldVals f;             /* ADD: the other record fields (mission_fields.h, type = `type`) */
+    char uuid[MISSION_UUID_LEN];    /* ADD: the stable id scripts reference the added object by (required) */
+    char name[MISSION_NAME_LEN];    /* ADD: display name (optional) */
+    int setup_prop;                 /* ADD: the setup prop number the record got; -1 = not present */
 } MissionObjectOp;
 
 typedef struct MissionObjective {
@@ -206,7 +232,8 @@ typedef enum MissionTargetKind { MISSION_TGT_MISSION, MISSION_TGT_PROP, MISSION_
 typedef struct MissionScript {
     char use[MISSION_ID_LEN];       /* library script name, without .luau */
     MissionTargetKind kind;
-    int prop;                       /* PROP */
+    int prop;                       /* PROP: an original prop's number (-1 when `uuid` names an added one) */
+    char uuid[MISSION_UUID_LEN];    /* PROP: the uuid of an added prop ("" = `prop` is the target) */
     MissionPadRef pad;              /* PAD */
     char zone[MISSION_ID_LEN];      /* ZONE */
     MissionProp *props; int nprops;
@@ -256,6 +283,14 @@ int  missionSaveFile(const char *path, const Mission *m, char *err, size_t errle
 /* Structural checks that need no level data: format, level name known,
  * pad string ids resolve, zone ids resolve, ids unique, ops complete. */
 int  missionValidate(const Mission *m, char *err, size_t errlen);
+
+/* A lowercase RFC 4122 UUID text: 36 characters, dashes at 8/13/18/23, lowercase hex elsewhere. */
+int  missionUuidValid(const char *s);
+/* The added prop with this uuid: 1 = guard (index into m->guards), 2 = object (m->objects), 0 = none. */
+int  missionFindAdded(const Mission *m, const char *uuid, int *index);
+/* The setup prop number an added prop got when the mission was applied (see setup_prop); -1 when `uuid` names no added prop
+ * or the prop is not present on this difficulty. */
+int  missionAddedSetupProp(const Mission *m, const char *uuid);
 
 /* Solo level name -> the -level_XX stage number (e.g. "bunker1" -> 9), -1 if unknown. */
 int  missionLevelNumber(const char *name);

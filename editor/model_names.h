@@ -1,0 +1,98 @@
+// Body and head ids with their model file names and labels, for level_describe detail "names" and the guard entries of
+// detail "props". GENERATED, not hand-edited: the file name of id N is the N-th row of c_item_entries
+// (assets/obseg/chr/chrModelFileRecords.inc.c, the rows of every included chrModelFileRecord.inc.c in order; a guard's "model" is
+// the body id and its "head" field the head id, both indexes into that table). The label is the same position in the BODIES enum
+// of src/bondconstants.h (ALL_BONDS not defined) with the BODY_ prefix dropped. The editor builds without the game's headers, so
+// the table is copied here. Regenerate by re-reading those two sources if either changes.
+#pragma once
+
+struct ModelName { int id; const char *file; const char *label; };
+static const int kFirstHeadId = 42;   // ids below are bodies, ids from here on are heads
+static const ModelName kModelNames[] = {
+    { 0, "CcamguardZ", "Jungle_Commando" },
+    { 1, "CgreyguardZ", "St_Petersburg_Guard" },
+    { 2, "ColiveguardZ", "Russian_Soldier" },
+    { 3, "CrusguardZ", "Russian_Infantry" },
+    { 4, "CtrevguardZ", "Janus_Special_Forces" },
+    { 5, "CdjbondZ", "Brosnan_Tuxedo" },
+    { 6, "CborisZ", "Boris" },
+    { 7, "CorumovZ", "Ourumov" },
+    { 8, "CtrevelyanZ", "Trevelyan_Janus" },
+    { 9, "CboilertrevZ", "Trevelyan_006" },
+    { 10, "CvalentinZ", "Valentin_" },
+    { 11, "CxeniaZ", "Xenia" },
+    { 12, "CbaronsamediZ", "Baron_Samedi" },
+    { 13, "CjawsZ", "Jaws" },
+    { 14, "CmaydayZ", "Mayday" },
+    { 15, "CoddjobZ", "Oddjob" },
+    { 16, "CnatalyaZ", "Natalya_Skirt" },
+    { 17, "CarmourguardZ", "Janus_Marine" },
+    { 18, "CcommguardZ", "Russian_Commandant" },
+    { 19, "CgreatguardZ", "Siberian_Guard_1_Mishkin" },
+    { 20, "CnavyguardZ", "Naval_Officer" },
+    { 21, "CsnowguardZ", "Siberian_Special_Forces" },
+    { 22, "CboilerbondZ", "Special_Operations_Uniform" },
+    { 23, "CsuitbondZ", "Formal_Wear" },
+    { 24, "CtimberbondZ", "Jungle_Fatigues" },
+    { 25, "CsnowbondZ", "Parka" },
+    { 26, "CbluewomanZ", "Unused_Female" },
+    { 27, "CfattechwomanZ", "Rosika" },
+    { 28, "CtechwomanZ", "Scientist_2_Female" },
+    { 29, "CjeanwomanZ", "Civilian_1_Female" },
+    { 30, "CgreymanZ", "Unused_Male_1" },
+    { 31, "CbluemanZ", "Unused_Male_2" },
+    { 32, "CredmanZ", "Civilian_4" },
+    { 33, "CcardimanZ", "Civilian_2" },
+    { 34, "CcheckmanZ", "Civilian_3" },
+    { 35, "CtechmanZ", "Scientist_1_Male" },
+    { 36, "CpilotZ", "Helicopter_Pilot" },
+    { 37, "Cgreatguard2Z", "Siberian_Guard_2" },
+    { 38, "CbluecamguardZ", "Arctic_Commando" },
+    { 39, "CmoonguardZ", "Moonraker_Elite_1_Male" },
+    { 40, "CmoonfemaleZ", "Moonraker_Elite_2_Female" },
+    { 41, "Csuit_lf_handZ", "Left_Suit_Hand_Floating_Arm" },
+    { 42, "CheadkarlZ", "Male_Karl" },
+    { 43, "CheadalanZ", "Male_Alan" },
+    { 44, "CheadpeteZ", "Male_Pete" },
+    { 45, "CheadmartinZ", "Male_Martin" },
+    { 46, "CheadmarkZ", "Male_Mark" },
+    { 47, "CheadduncanZ", "Male_Duncan" },
+    { 48, "CheadshaunZ", "Male_Shaun" },
+    { 49, "CheaddwayneZ", "Male_Dwayne" },
+    { 50, "CheadbZ", "Male_B" },
+    { 51, "CheaddaveZ", "Male_Dave_Dr_Doak" },
+    { 52, "CheadgrantZ", "Male_Grant" },
+    { 53, "CheaddesZ", "Male_Des" },
+    { 54, "CheadchrisZ", "Male_Chris" },
+    { 55, "CheadleeZ", "Male_Lee" },
+    { 56, "CheadneilZ", "Male_Neil" },
+    { 57, "CheadjimZ", "Male_Jim" },
+    { 58, "CheadrobinZ", "Male_Robin" },
+    { 59, "CheadstevehZ", "Male_Steve_H" },
+    { 60, "CheadbalaclavaZ", "Male_Terrorist" },
+    { 61, "CheadbikeZ", "Male_Biker" },
+    { 62, "CheadgrahamZ", "Male_Graeme" },
+    { 63, "CheadsteveeZ", "Male_Steve_Ellis" },
+    { 64, "CheadjoelZ", "Male_Joel" },
+    { 65, "CheadscottZ", "Male_Scott" },
+    { 66, "CheadjoeZ", "Male_Joe_Altered" },
+    { 67, "CheadkenZ", "Male_Ken" },
+    { 68, "Cheadjoe2Z", "Male_Joe" },
+    { 69, "CheadmishkinZ", "Male_Mishkin" },
+    { 70, "CheadsallyZ", "Female_Sally" },
+    { 71, "CheadmarionZ", "Female_Marion_Rosika" },
+    { 72, "CheadmandyZ", "Female_Mandy" },
+    { 73, "CheadvivienZ", "Female_Vivien" },
+    { 74, "CheadbrosnanboilerZ", "Male_Pierce_Bond_1" },
+    { 75, "CheadbrosnansuitZ", "Male_Pierce_Bond_2" },
+    { 76, "CheadbrosnantimberZ", "Male_Pierce_Bond_3" },
+    { 77, "CheadbrosnansnowZ", "Male_Pierce_Bond_Parka" },
+    { 78, "CheadbrosnanZ", "Male_Pierce_Bond_Tuxedo" },
+    { 79, "CspicebondZ", "Natalya_Jungle_Fatigues" },
+};
+static const int kModelNameCount = (int)(sizeof kModelNames / sizeof kModelNames[0]);
+
+inline const ModelName *modelName(int id)
+{
+    return id >= 0 && id < kModelNameCount ? &kModelNames[id] : nullptr;
+}

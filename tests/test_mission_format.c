@@ -15,13 +15,15 @@ static const char *kSample =
     "  \"pads\": [ { \"id\": \"p1\", \"pos\": [1, 2, 3], \"look\": [0, 0, 1], \"room\": 4 } ],\n"
     "  \"zones\": [ { \"id\": \"z1\", \"pos\": [5, 6, 7], \"radius\": 120, \"room\": 4 } ],\n"
     "  \"guards\": [ { \"op\": \"move\", \"prop\": 17, \"pad\": 10005 },\n"
-    "              { \"op\": \"add\", \"pad\": \"p1\", \"model\": 3, \"ai\": 1025 },\n"
+    "              { \"op\": \"add\", \"uuid\": \"6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01\", \"name\": \"Kalinin\", \"pad\": \"p1\", \"model\": 3, \"ai\": 1025 },\n"
     "              { \"op\": \"remove\", \"prop\": 18 } ],\n"
-    "  \"objects\": [ { \"op\": \"add\", \"type\": 4, \"pad\": \"p1\", \"item\": 33 } ],\n"
+    "  \"objects\": [ { \"op\": \"add\", \"uuid\": \"0b8e7c64-52a1-4f3d-8c19-7e6a2d9b3f10\", \"type\": 4, \"pad\": \"p1\", \"item\": 33 } ],\n"
     "  \"objectives\": [ { \"id\": \"o1\", \"text\": \"Find the key\", \"difficulty\": 1 } ],\n"
     "  \"scripts\": [ { \"use\": \"key_door\", \"target\": { \"kind\": \"prop\", \"prop\": 52 },\n"
     "                 \"props\": { \"key\": 33, \"message\": \"Locked\", \"once\": true } },\n"
-    "               { \"use\": \"exit_unlock\", \"target\": { \"kind\": \"zone\", \"zone\": \"z1\" } } ],\n"
+    "               { \"use\": \"exit_unlock\", \"target\": { \"kind\": \"zone\", \"zone\": \"z1\" } },\n"
+    "               { \"use\": \"follow\", \"target\": { \"kind\": \"prop\", \"uuid\": \"6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01\" },\n"
+    "                 \"props\": { \"terminal\": \"0b8e7c64-52a1-4f3d-8c19-7e6a2d9b3f10\" } } ],\n"
     "  \"environment\": { \"mood\": \"dusk\", \"sun\": { \"azimuth\": 120, \"elevation\": 12 },\n"
     "                   \"sky\": [0.5, 0.6, 0.7], \"sea\": { \"enabled\": true, \"height\": -120, \"swell\": 2 } },\n"
     "  \"x_future\": { \"keep\": 1 } }\n";
@@ -43,11 +45,24 @@ static void check_mission(const Mission *m)
     GE_CHECK_EQ_INT(m->objects[0].item, 33);
     GE_CHECK_EQ_INT(m->nobjectives, 1);
     GE_CHECK_EQ_INT(m->objectives[0].difficulty, 1);
-    GE_CHECK_EQ_INT(m->nscripts, 2);
+    GE_CHECK_EQ_INT(m->nscripts, 3);
     GE_CHECK_EQ_INT(m->scripts[0].kind, MISSION_TGT_PROP);
     GE_CHECK_EQ_INT(m->scripts[0].prop, 52);
     GE_CHECK_EQ_INT(m->scripts[0].nprops, 3);
     GE_CHECK_EQ_INT(m->scripts[1].kind, MISSION_TGT_ZONE);
+    GE_CHECK_EQ_INT(m->scripts[2].kind, MISSION_TGT_PROP);                       /* a prop the mission adds: by uuid, no number */
+    GE_CHECK_EQ_INT(m->scripts[2].prop, -1);
+    GE_CHECK(!strcmp(m->scripts[2].uuid, "6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01"));
+    GE_CHECK_EQ_INT(m->scripts[2].props[0].kind, MISSION_VAL_STRING);
+    GE_CHECK(!strcmp(m->scripts[0].uuid, ""));
+    GE_CHECK(!strcmp(m->guards[1].uuid, "6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01"));                                  /* uuid + name of the add ops */
+    GE_CHECK(!strcmp(m->guards[1].name, "Kalinin"));
+    GE_CHECK(!strcmp(m->objects[0].uuid, "0b8e7c64-52a1-4f3d-8c19-7e6a2d9b3f10"));
+    GE_CHECK(!strcmp(m->objects[0].name, ""));
+    GE_CHECK_EQ_INT(m->guards[1].setup_prop, -1);                                /* only the apply fills it */
+    GE_CHECK_EQ_INT(missionFindAdded(m, "6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01", NULL), 1);
+    GE_CHECK_EQ_INT(missionFindAdded(m, "0b8e7c64-52a1-4f3d-8c19-7e6a2d9b3f10", NULL), 2);
+    GE_CHECK_EQ_INT(missionFindAdded(m, "00000000-0000-4000-8000-000000000000", NULL), 0);
     GE_CHECK(m->extra != NULL);
     GE_CHECK_EQ_INT(m->env.mood, MISSION_MOOD_DUSK);
     GE_CHECK_EQ_INT(m->env.has_sun, 1);
@@ -70,6 +85,7 @@ static void test_roundtrip(void)
     char *json = missionToJson(&m);
     GE_CHECK(json != NULL);
     GE_CHECK(strstr(json, "x_future") != NULL);
+    GE_CHECK(strstr(json, "6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01") != NULL && strstr(json, "\"Kalinin\"") != NULL);
     GE_CHECK(missionParse(json, &m2, err, sizeof(err)));
     check_mission(&m2);
     free(json);
@@ -90,13 +106,76 @@ static void test_validate(void)
     GE_CHECK(!missionValidate(&m, err, sizeof(err)));
     missionFree(&m);
     GE_CHECK(missionParse("{\"format\":1,\"name\":\"x\",\"level\":\"bunker1\","
-                          "\"guards\":[{\"op\":\"add\",\"pad\":\"missing\"}]}", &m, err, sizeof(err)));
+                          "\"guards\":[{\"op\":\"add\",\"uuid\":\"6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01\",\"pad\":\"missing\"}]}", &m, err, sizeof(err)));
     GE_CHECK(!missionValidate(&m, err, sizeof(err)));
     missionFree(&m);
     GE_CHECK(!missionParse("{\"format\":2}", &m, err, sizeof(err)));
     GE_CHECK(!missionParse("not json", &m, err, sizeof(err)));
     GE_CHECK_EQ_INT(missionLevelNumber("bunker1"), 9);
     GE_CHECK_EQ_INT(missionLevelNumber("dam"), 33);
+}
+
+/* uuid / name on the add ops: required, well formed, unique; scripts reference an added prop by it. */
+static void test_uuid(void)
+{
+    static const char *head = "{\"format\":1,\"name\":\"x\",\"level\":\"bunker1\",";
+    static const char *u1 = "6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01", *u2 = "0b8e7c64-52a1-4f3d-8c19-7e6a2d9b3f10";
+    Mission m;
+    char err[200], doc[1024];
+    GE_CHECK(missionUuidValid(u1));
+    GE_CHECK(!missionUuidValid(""));
+    GE_CHECK(!missionUuidValid("6F1C2A9E-3B7D-4E55-9A10-5D2C8B7E4F01"));            /* lowercase only */
+    GE_CHECK(!missionUuidValid("6f1c2a9e3b7d4e559a105d2c8b7e4f01"));               /* no dashes */
+    GE_CHECK(!missionUuidValid("6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f0g"));
+    /* missing uuid */
+    snprintf(doc, sizeof doc, "%s\"guards\":[{\"op\":\"add\",\"pad\":3}]}", head);
+    GE_CHECK(missionParse(doc, &m, err, sizeof err));
+    GE_CHECK(!missionValidate(&m, err, sizeof err));
+    GE_CHECK(strstr(err, "without a uuid") != NULL);
+    missionFree(&m);
+    snprintf(doc, sizeof doc, "%s\"objects\":[{\"op\":\"add\",\"type\":3,\"pad\":3}]}", head);
+    GE_CHECK(missionParse(doc, &m, err, sizeof err));
+    GE_CHECK(!missionValidate(&m, err, sizeof err));
+    GE_CHECK(strstr(err, "without a uuid") != NULL);
+    missionFree(&m);
+    /* malformed */
+    snprintf(doc, sizeof doc, "%s\"guards\":[{\"op\":\"add\",\"uuid\":\"nope\",\"pad\":3}]}", head);
+    GE_CHECK(missionParse(doc, &m, err, sizeof err));
+    GE_CHECK(!missionValidate(&m, err, sizeof err));
+    GE_CHECK(strstr(err, "malformed") != NULL);
+    missionFree(&m);
+    /* duplicate: guard + object, and two objects */
+    snprintf(doc, sizeof doc, "%s\"guards\":[{\"op\":\"add\",\"uuid\":\"%s\",\"pad\":3}],"
+             "\"objects\":[{\"op\":\"add\",\"uuid\":\"%s\",\"type\":3,\"pad\":3}]}", head, u1, u1);
+    GE_CHECK(missionParse(doc, &m, err, sizeof err));
+    GE_CHECK(!missionValidate(&m, err, sizeof err));
+    GE_CHECK(strstr(err, "duplicate uuid") != NULL);
+    missionFree(&m);
+    snprintf(doc, sizeof doc, "%s\"objects\":[{\"op\":\"add\",\"uuid\":\"%s\",\"type\":3,\"pad\":3},"
+             "{\"op\":\"add\",\"uuid\":\"%s\",\"type\":3,\"pad\":3}]}", head, u1, u1);
+    GE_CHECK(missionParse(doc, &m, err, sizeof err));
+    GE_CHECK(!missionValidate(&m, err, sizeof err));
+    GE_CHECK(strstr(err, "duplicate uuid") != NULL);
+    missionFree(&m);
+    /* two different ones are fine; a move / remove needs none; a target uuid must be an added prop */
+    snprintf(doc, sizeof doc, "%s\"guards\":[{\"op\":\"add\",\"uuid\":\"%s\",\"pad\":3},{\"op\":\"remove\",\"prop\":4}],"
+             "\"objects\":[{\"op\":\"add\",\"uuid\":\"%s\",\"type\":3,\"pad\":3}],"
+             "\"scripts\":[{\"use\":\"a\",\"target\":{\"kind\":\"prop\",\"uuid\":\"%s\"}}]}", head, u1, u2, u2);
+    GE_CHECK(missionParse(doc, &m, err, sizeof err));
+    GE_CHECK_EQ_INT(missionValidate(&m, err, sizeof err), 1);
+    GE_CHECK(!strcmp(m.guards[1].uuid, ""));
+    {
+        char *js = missionToJson(&m);
+        GE_CHECK(js != NULL && strstr(js, "0b8e7c64-52a1-4f3d-8c19-7e6a2d9b3f10") != NULL);
+        free(js);
+    }
+    missionFree(&m);
+    snprintf(doc, sizeof doc, "%s\"guards\":[{\"op\":\"add\",\"uuid\":\"%s\",\"pad\":3}],"
+             "\"scripts\":[{\"use\":\"a\",\"target\":{\"kind\":\"prop\",\"uuid\":\"%s\"}}]}", head, u1, u2);
+    GE_CHECK(missionParse(doc, &m, err, sizeof err));
+    GE_CHECK(!missionValidate(&m, err, sizeof err));
+    GE_CHECK(strstr(err, "target uuid") != NULL);
+    missionFree(&m);
 }
 
 static void test_levelrec(void)
@@ -303,10 +382,10 @@ static void test_difficulties(void)
     static const char *json =
         "{ \"format\": 1, \"name\": \"d\", \"level\": \"bunker1\",\n"
         "  \"guards\": [ { \"op\": \"move\", \"prop\": 3, \"difficulties\": [1, 3] },\n"
-        "              { \"op\": \"add\", \"pad\": 5, \"difficulties\": [0, 1, 2, 3] },\n"
+        "              { \"op\": \"add\", \"uuid\": \"6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01\", \"pad\": 5, \"difficulties\": [0, 1, 2, 3] },\n"
         "              { \"op\": \"remove\", \"prop\": 4, \"difficulties\": [0] } ],\n"
         "  \"objects\": [ { \"op\": \"move\", \"prop\": 7, \"difficulties\": [2] },\n"
-        "               { \"op\": \"add\", \"type\": 3, \"pad\": 5, \"model\": 1, \"difficulties\": [] } ] }\n";
+        "               { \"op\": \"add\", \"uuid\": \"0b8e7c64-52a1-4f3d-8c19-7e6a2d9b3f10\", \"type\": 3, \"pad\": 5, \"model\": 1, \"difficulties\": [] } ] }\n";
     Mission m;
     char err[160] = "";
     char *out;
@@ -337,6 +416,7 @@ int main(void)
     test_roundtrip();
     test_difficulties();
     test_validate();
+    test_uuid();
     test_levelrec();
     test_campaign();
     test_fields();

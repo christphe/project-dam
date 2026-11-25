@@ -1,5 +1,6 @@
 // ui_frame.cpp: see ui_app.h for how the editor UI is split.
 #include "ui_app.h"
+#include "ui_scripts.h"
 #include <cmath>
 #include <filesystem>
 
@@ -122,6 +123,8 @@ void frameUi(App &a, int winW, int winH, bool &quit)
     drawStatusBar(a, leftW, H - statusH, W - leftW, statusH);
     drawSettingsWindow(a);
     drawPropsWindow(a);
+    scriptsFrame(a);
+    drawScriptEditorWindow(a);
     drawModals(a);
 
     const ImVec2 mp = io.MousePos;
@@ -202,7 +205,7 @@ void frameUi(App &a, int winW, int winH, bool &quit)
             if (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_S, false) && fileDialogAvailable()) doSaveAs(a);
             if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_O, false) && fileDialogAvailable()) guarded(a, [&a] { doOpenDialog(a); });
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && a.doc.sel.kind == Selection::ITEM) { std::string e; a.doc.removeItem(a.doc.sel.item, e); }
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && (a.doc.sel.kind == Selection::ITEM || a.doc.sel.kind == Selection::ZONE)) deleteSelected(a);
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) a.tool = App::T_SELECT;
         if (ImGui::IsKeyPressed(ImGuiKey_F, false) && !io.KeyCtrl) {
             if (const Item *it = selectedItem(a)) { if (it->hasPos) focusOn(a, it->pos); }
@@ -213,6 +216,7 @@ void frameUi(App &a, int winW, int winH, bool &quit)
 
     ov.dl->PushClipRect(ImVec2(a.vx, a.vy), ImVec2(a.vx + a.vw, a.vy + a.vh), true);
     drawOverlay(a, ov);
+    drawScriptOverlay(a, ov);
     drawSun(a, ov);
     {   // the gizmo follows the selection live while it is dragged
         TransformInfo t2 = a.doc.getTransform(a.doc.sel);

@@ -44,6 +44,7 @@
 #include "scene.h"
 #include "view.h"
 #include "ui_app.h"
+#include "ui_scripts.h"
 
 extern "C" void editorStubsSetArgs(int argc, char **argv);   // fast3d_stubs.cpp
 
@@ -81,6 +82,8 @@ struct Options {
     bool placeGuard = false;
     int placeModel = 0, placeType = 3, placeItem = -1;
     float placeAt[2] = { 0, 0 };
+    int winW = 1500, winH = 920;                 // test aid: --win W,H (a taller window shows more of the panels in a screenshot)
+    std::string selectWhat, openScript;          // test aids: --select script:N|zone:ID|prop:N, --open-script NAME[:LINE]
     std::string openMenu, openWindow, openTab;   // test aids: --open-menu File, --open-window settings|help|log, --open-tab selection|mission|mod
 };
 
@@ -139,7 +142,7 @@ void usage()
          "    --game EXE        game executable for Play (default: GE_EDITOR_GAME, else ge007 next to the editor)\n"
          "    --screenshot F.png [--frames N]   render N frames, save the window to a PNG and exit\n"
          "    --cam x,y,z,yaw,pitch             start camera (radians)\n"
-         "    --click X,Y [--tool select|guard|object|move]   test aid: click the view at window pixel X,Y on frame 3\n"
+         "    --click X,Y [--tool select|guard|object|move|zone]   test aid: click the view at window pixel X,Y on frame 3\n"
          "    --key FRAME[xLEN]:SPEC            test aid: key / button / wheel events, SPEC = ctrl+c, ctrl+d, rmb+ctrl, w, wheel1, wheel-2, quit ...\n"
          "    --mouse-at X,Y                    test aid: the cursor rests at window pixel X,Y from frame 4\n"
          "    --mouse-then FRAME,X,Y            test aid: from that frame the cursor rests at X,Y instead\n"
@@ -152,6 +155,8 @@ void usage()
          "    --import-picture F.png            test aid: Thumbnail > Import picture with that file on frame 10\n"
          "    --thumb-adjust CONTRAST,BRIGHTNESS  test aid: the Thumbnail sliders from frame 12\n"
          "    --open-tab NAME                   test aid: select the right panel tab (selection, mission, mod)\n"
+         "    --select WHAT                     test aid: select script:N (0-based entry), zone:ID or prop:N (an original prop)\n"
+         "    --open-script NAME[:LINE]         test aid: open a script in the code editor window\n"
          "  Camera: hold the right mouse button to fly: mouse = look, WASD/ZQSD/arrows = move, Space = up, Ctrl = down, Shift = fast.\n"
          "          The movement keys do nothing without the right button, so shortcuts (Ctrl+C/V/D, G, X/Y/Z) never move the camera.\n"
          "          Middle button = pan, mouse wheel = zoom toward the cursor (15% of the distance to the point under it per notch).\n"
@@ -176,6 +181,7 @@ bool parseArgs(int argc, char **argv, Options &o)
         else if (s == "--screenshot") next(o.screenshot);
         else if (s == "--port" && i + 1 < argc) { o.port = atoi(argv[++i]); o.portGiven = true; }
         else if (s == "--frames" && i + 1 < argc) o.frames = atoi(argv[++i]);
+        else if (s == "--win" && i + 1 < argc) sscanf(argv[++i], "%d,%d", &o.winW, &o.winH);
         else if (s == "--cam" && i + 1 < argc) {
             o.hasCam = sscanf(argv[++i], "%f,%f,%f,%f,%f", &o.cam[0], &o.cam[1], &o.cam[2], &o.cam[3], &o.cam[4]) == 5;
         } else if (s == "--click" && i + 1 < argc) {
@@ -203,6 +209,8 @@ bool parseArgs(int argc, char **argv, Options &o)
         } else if (s == "--thumb-adjust" && i + 1 < argc) {
             o.hasThumbAdj = sscanf(argv[++i], "%f,%f", &o.thumbAdj[0], &o.thumbAdj[1]) == 2;
         } else if (s == "--open-tab") { next(o.openTab);
+        } else if (s == "--select") { next(o.selectWhat);
+        } else if (s == "--open-script") { next(o.openScript);
         } else if (s == "--place-model" && i + 1 < argc) {
             const char *v = argv[++i];
             o.placeGuard = strncmp(v, "guard:", 6) == 0;
@@ -303,7 +311,7 @@ int main(int argc, char **argv)
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
-    app.win = SDL_CreateWindow("Project Dam editor", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1500, 920,
+    app.win = SDL_CreateWindow("Project Dam editor", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, opt.winW, opt.winH,
                                SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!app.win) { fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return 1; }
     {   // the window icon (tools_pc/make_icon.py), R,G,B,A bytes per pixel
@@ -375,9 +383,21 @@ int main(int argc, char **argv)
     else if (opt.openWindow == "log") app.showLog = true;
     else if (opt.openWindow == "props") app.showPropsWin = true;
     else if (opt.openWindow == "newmission") doNewMission(app);
+    if (opt.selectWhat.rfind("script:", 0) == 0) selectScript(app, atoi(opt.selectWhat.c_str() + 7));
+    else if (opt.selectWhat.rfind("zone:", 0) == 0) { app.doc.sel = Selection(); app.doc.sel.kind = Selection::ZONE; app.doc.sel.id = opt.selectWhat.substr(5); }
+    int pendingSelectProp = opt.selectWhat.rfind("prop:", 0) == 0 ? atoi(opt.selectWhat.c_str() + 5) : -1;   // applied once the level is loaded
+    if (!opt.openScript.empty()) {
+        const size_t colon = opt.openScript.find(':');
+        openScriptEditor(app, opt.openScript.substr(0, colon), colon == std::string::npos ? 0 : atoi(opt.openScript.c_str() + colon + 1));
+    }
     app.forceTab = opt.openTab == "selection" ? 0 : opt.openTab == "mission" ? 1 : opt.openTab == "mod" ? 2 : -1;
     Vec3 lastCam = app.cam.pos;
     while (!quit) {
+        if (pendingSelectProp >= 0 && app.doc.hasLevel) {
+            ItemRef r; std::string e;
+            int ty = 0; if (app.doc.itemFromProp(pendingSelectProp, r, e) || app.doc.propByNumber(pendingSelectProp, r, ty)) selectNewItem(app, r); else app.say("select: %s", e.c_str());
+            pendingSelectProp = -1;
+        }
         SDL_Event e;
         static ImVec2 mdStart;
         if (opt.hasMouseDrag && frame >= 4 && frame <= 20) {   // test aid: press on the gizmo, move, release, as a hand does
@@ -504,6 +524,7 @@ int main(int argc, char **argv)
             if (opt.tool == "guard") app.tool = App::T_GUARD;
             else if (opt.tool == "object") app.tool = App::T_OBJECT;
             else if (opt.tool == "move") app.tool = App::T_MOVE;
+            else if (opt.tool == "zone") app.tool = App::T_ZONE;
             Vec3 org, dir;
             app.cam.ray(opt.click[0] - app.vx, opt.click[1] - app.vy, app.vw, app.vh, org, dir);
             Hit h = pickScene(app.doc, org, dir);

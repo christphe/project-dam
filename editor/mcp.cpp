@@ -1,12 +1,25 @@
 #include "mcp.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
+#include <map>
+#include <system_error>
+#include <thread>
+#include <vector>
 
 #include "cJSON.h"
+#include "item_names.h"
+#include "launch.h"
+#include "mission_apply.h"
+#include "mission_setup.h"
+#include "model_names.h"
+#include "script_props.h"
 
 // ---------------------------------------------------------------------------------------------
 // JSON helpers
@@ -86,25 +99,37 @@ std::string argStr(const cJSON *a, const char *k, const char *def = "")
 
 bool argHas(const cJSON *a, const char *k) { return cJSON_GetObjectItemCaseSensitive(a, k) != nullptr; }
 
-cJSON *refJson(const ItemRef &r)
+// An item as a result: kind + prop (original) or op (added); an added one also names its uuid and display name (the id scripts use).
+cJSON *refJson(const ItemRef &r, const Doc *d = nullptr)
 {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "kind", r.guard ? "guard" : "object");
     cJSON_AddNumberToObject(o, r.added ? "op" : "prop", r.idx);
+    if (d && r.added && r.valid && d->hasMission && r.idx >= 0 && r.idx < (r.guard ? d->mission.nguards : d->mission.nobjects)) {
+        cJSON_AddStringToObject(o, "uuid", r.guard ? d->mission.guards[r.idx].uuid : d->mission.objects[r.idx].uuid);
+        const char *nm = r.guard ? d->mission.guards[r.idx].name : d->mission.objects[r.idx].name;
+        if (nm[0]) cJSON_AddStringToObject(o, "name", nm);
+    }
     return o;
 }
 
-// "prop": N (an original prop) or "kind": "guard"|"object" + "op": N (an added one, its index in
-// the mission's guards/objects list).
-bool itemFromArgs(Doc &d, const cJSON *a, ItemRef &out, std::string &err)
+// "prop": N (an original prop), "uuid": the uuid of an added item, or "kind": "guard"|"object" + "op": N (an added one,
+// its index in the mission's guards/objects list).
+// `uuidKey` is the argument that names an added item by its uuid ("uuid"; duplicate uses "from_uuid" because its "uuid" is the new copy's).
+bool itemFromArgs(Doc &d, const cJSON *a, ItemRef &out, std::string &err, const char *uuidKey = "uuid")
 {
     if (argHas(a, "prop")) return d.itemFromProp(argInt(a, "prop", -1), out, err);
+    if (uuidKey && argHas(a, uuidKey)) {
+        int ty = 0;
+        if (!d.propByUuid(argStr(a, uuidKey), out, ty)) { err = "no prop the mission adds has uuid '" + argStr(a, uuidKey) + "'"; return false; }
+        return true;
+    }
     std::string kind = argStr(a, "kind");
     if ((kind == "guard" || kind == "object") && argHas(a, "op")) {
         out.valid = true; out.added = true; out.guard = kind == "guard"; out.idx = argInt(a, "op", -1);
         return true;
     }
-    err = "give \"prop\" (an original setup prop index) or \"kind\" (guard|object) with \"op\" (index of an added item)";
+    err = "give \"prop\" (an original setup prop index), \"uuid\" (an added item), or \"kind\" (guard|object) with \"op\" (index of an added item)";
     return false;
 }
 
@@ -118,11 +143,17 @@ cJSON *padRefJson(const Doc &d, const PadSpec &s)
     return o;
 }
 
+#include "mcp_tools_mission.inc"
+
 // ---- the tools ----
 
 ToolResult toolLevelDescribe(Doc &d, const cJSON *a)
 {
-    ToolResult r; r.text = d.describe(argStr(a, "detail", "summary"));
+    const std::string detail = argStr(a, "detail", "summary");
+    if (detail == "links") return toolDescribeLinks(d, a);
+    if (detail == "names") return toolDescribeNames(d, a);
+    ToolResult r; r.text = d.describe(detail);
+    if (detail == "props" || detail == "items") r.text = msAnnotateGuards(r.text);
     return r;
 }
 
@@ -181,11 +212,15 @@ ToolResult toolPlaceGuard(Doc &d, const cJSON *a)
 {
     PadSpec pad; std::string err;
     if (!padSpecFromJson(a, pad, err)) return fail(err);
+    RecExtras ex;
+    if (!recParsePlace(a, true, ex, err)) return fail(err);
     ItemRef ref;
-    if (!d.addGuard(pad, argInt(a, "model", -1), argInt(a, "ai", -1), argInt(a, "weapon", -1), ref, err)) return fail(err);
+    if (!d.addGuard(pad, argInt(a, "model", -1), argInt(a, "ai", -1), argInt(a, "weapon", -1), ref, err, argStr(a, "uuid"), argStr(a, "name"))) return fail(err);
+    recApplyPlace(d, ref, true, ex);   // the record fields, weapons and difficulties: part of the add's undo step
     d.sel = Selection(); d.sel.kind = Selection::ITEM; d.sel.item = ref;
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddItemToObject(o, "added", refJson(ref));
+    cJSON_AddItemToObject(o, "added", refJson(ref, &d));
+    cJSON_AddStringToObject(o, "uuid", d.mission.guards[ref.idx].uuid);
     cJSON_AddItemToObject(o, "at", padRefJson(d, pad));
     if (pad.atPoint) cJSON_AddStringToObject(o, "new_pad", d.mission.pads[d.mission.npads - 1].id);
     return okJson(o);
@@ -196,11 +231,15 @@ ToolResult toolPlaceObject(Doc &d, const cJSON *a)
     PadSpec pad; std::string err;
     if (!padSpecFromJson(a, pad, err)) return fail(err);
     if (!argHas(a, "type") || !argHas(a, "model")) return fail("\"type\" (setup prop type) and \"model\" are required");
+    RecExtras ex;
+    if (!recParsePlace(a, false, ex, err)) return fail(err);
     ItemRef ref;
-    if (!d.addObject(pad, argInt(a, "type", -1), argInt(a, "model", -1), argInt(a, "item", -1), ref, err)) return fail(err);
+    if (!d.addObject(pad, argInt(a, "type", -1), argInt(a, "model", -1), argInt(a, "item", -1), ref, err, argStr(a, "uuid"), argStr(a, "name"))) return fail(err);
+    recApplyPlace(d, ref, false, ex);
     d.sel = Selection(); d.sel.kind = Selection::ITEM; d.sel.item = ref;
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddItemToObject(o, "added", refJson(ref));
+    cJSON_AddItemToObject(o, "added", refJson(ref, &d));
+    cJSON_AddStringToObject(o, "uuid", d.mission.objects[ref.idx].uuid);
     cJSON_AddItemToObject(o, "at", padRefJson(d, pad));
     if (pad.atPoint) cJSON_AddStringToObject(o, "new_pad", d.mission.pads[d.mission.npads - 1].id);
     return okJson(o);
@@ -269,6 +308,7 @@ ToolResult freeTransform(Doc &d, const cJSON *a, bool needSomething)
 }
 
 #include "mcp_tools_mod.inc"
+#include "mcp_tools_script.inc"
 
 ToolResult toolSetTransform(Doc &d, const cJSON *a) { return freeTransform(d, a, true); }
 
@@ -294,7 +334,7 @@ ToolResult toolMove(Doc &d, const cJSON *a)
     if (!itemFromArgs(d, a, ref, err) || !padSpecFromJson(a, pad, err)) return fail(err);
     if (!d.moveItem(ref, pad, err)) return fail(err);
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddItemToObject(o, "moved", refJson(ref));
+    cJSON_AddItemToObject(o, "moved", refJson(ref, &d));
     cJSON_AddItemToObject(o, "to", padRefJson(d, pad));
     return okJson(o);
 }
@@ -305,21 +345,22 @@ ToolResult toolRemove(Doc &d, const cJSON *a)
     if (!itemFromArgs(d, a, ref, err)) return fail(err);
     if (!d.removeItem(ref, err)) return fail(err);
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddItemToObject(o, "removed", refJson(ref));
+    cJSON_AddItemToObject(o, "removed", refJson(ref));   // (deleted: no uuid to show)
     return okJson(o);
 }
 
 ToolResult toolDuplicate(Doc &d, const cJSON *a)
 {
     ItemRef ref, out; PadSpec pad; std::string err;
-    if (!itemFromArgs(d, a, ref, err)) return fail(err);
+    if (!itemFromArgs(d, a, ref, err, "from_uuid")) return fail(err);
     const bool hasPad = argHas(a, "pad") || argHas(a, "pos");
     if (hasPad && !padSpecFromJson(a, pad, err)) return fail(err);
-    if (!d.duplicateItem(ref, hasPad ? &pad : nullptr, out, err)) return fail(err);
+    if (!d.duplicateItem(ref, hasPad ? &pad : nullptr, out, err, argStr(a, "uuid"), argStr(a, "name"))) return fail(err);
     d.sel = Selection(); d.sel.kind = Selection::ITEM; d.sel.item = out;
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddItemToObject(o, "copied", refJson(ref));
-    cJSON_AddItemToObject(o, "added", refJson(out));
+    cJSON_AddItemToObject(o, "copied", refJson(ref, &d));
+    cJSON_AddItemToObject(o, "added", refJson(out, &d));
+    cJSON_AddStringToObject(o, "uuid", out.guard ? d.mission.guards[out.idx].uuid : d.mission.objects[out.idx].uuid);
     if (hasPad && pad.atPoint) cJSON_AddStringToObject(o, "new_pad", d.mission.pads[d.mission.npads - 1].id);
     return okJson(o);
 }
@@ -346,11 +387,14 @@ ToolResult toolValidate(Doc &d, const cJSON *)
         cJSON *x = cJSON_CreateObject();
         cJSON_AddStringToObject(x, "severity", i.sev >= 2 ? "error" : "warning");
         cJSON_AddStringToObject(x, "text", i.text.c_str());
+        if (!i.script.empty()) cJSON_AddStringToObject(x, "script", i.script.c_str());
+        if (i.line > 0) cJSON_AddNumberToObject(x, "line", i.line);
         if (i.hasSel) {
             if (i.sel.kind == Selection::ITEM) {
-                cJSON_AddItemToObject(x, "item", refJson(i.sel.item));
+                cJSON_AddItemToObject(x, "item", refJson(i.sel.item, &d));
             } else if (i.sel.kind == Selection::PAD) cJSON_AddNumberToObject(x, "pad", i.sel.num);
             else if (i.sel.kind == Selection::MPAD) cJSON_AddStringToObject(x, "mission_pad", i.sel.id.c_str());
+            else if (i.sel.kind == Selection::SCRIPT) cJSON_AddNumberToObject(x, "script_index", i.sel.num);
         }
         cJSON_AddItemToArray(det, x);
     }
@@ -373,7 +417,7 @@ ToolResult toolSetPresence(Doc &d, const cJSON *a)
     if (!mask) return fail("a prop must be present on at least one difficulty (use remove to take it out)");
     if (!d.setPresence(ref, mask, err)) return fail(err);
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddItemToObject(o, "item", refJson(ref));
+    cJSON_AddItemToObject(o, "item", refJson(ref, &d));
     cJSON *r = cJSON_AddArrayToObject(o, "difficulties");
     for (int k = 0; k < 4; k++) if (mask & (1 << k)) cJSON_AddItemToArray(r, cJSON_CreateNumber(k));
     return okJson(o);
@@ -389,7 +433,7 @@ ToolResult toolSetGuardBehavior(Doc &d, const cJSON *a)
     const int ai = argInt(a, "ai", -1);
     if (!d.setGuardAi(ref, ai, err)) return fail(err);
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddItemToObject(o, "guard", refJson(ref));
+    cJSON_AddItemToObject(o, "guard", refJson(ref, &d));
     cJSON_AddNumberToObject(o, "ai", ai);
     const bool known = d.hasLevel && std::find(d.level.ailists.begin(), d.level.ailists.end(), ai) != d.level.ailists.end();
     cJSON_AddBoolToObject(o, "level_own_list", known);
@@ -402,10 +446,12 @@ ToolResult toolTestRun(Doc &d, const cJSON *a)
     std::string err;
     std::string spawn = argStr(a, "spawn");
     if (spawn.empty() && cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(a, "spawn"))) spawn = std::to_string(argInt(a, "spawn", 0));
+    const RunMark mark = testRunMark();
     if (!d.testRun(spawn, cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(a, "coop")), err)) return fail(err);
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "started", d.lastPlay.c_str());
     cJSON_AddStringToObject(o, "mission", d.missionPath.c_str());
+    testRunReport(d, a, mark, o);   // wait_seconds / stop: the game's log lines since the launch
     return okJson(o);
 }
 
@@ -423,8 +469,8 @@ const char *kPadProps =
     "\"items\":{\"type\":\"number\"},\"minItems\":3,\"maxItems\":3}";
 
 const Tool kTools[] = {
-    { "level_describe", "Describe the loaded level export: rooms, pads, setup props, and the open mission. detail = summary | pads | props | mission.",
-      "{\"type\":\"object\",\"properties\":{\"detail\":{\"type\":\"string\",\"enum\":[\"summary\",\"pads\",\"props\",\"mission\"]}}}",
+    { "level_describe", "Describe the loaded level export: rooms, pads, setup props, and the open mission. detail = summary | pads | props | mission | links | names. links: the switch pairs (terminal prop <-> door prop), dual-weapon links, tag records (tag id -> prop) and every door's bound pad, terminals and tags. names: body / head ids with their model file names, and the item ids with names. props also names each guard's body and head.",
+      "{\"type\":\"object\",\"properties\":{\"detail\":{\"type\":\"string\",\"enum\":[\"summary\",\"pads\",\"props\",\"mission\",\"links\",\"names\"]}}}",
       toolLevelDescribe },
     { "level_open", "Load a solo level by name (level, e.g. bunker1): from the export cache next to the game, or the game "
       "exports it first (a few seconds; reexport: true redoes it). Or load an export directory (dir).",
@@ -437,17 +483,28 @@ const Tool kTools[] = {
       toolMissionOpen },
     { "mission_save", "Save the open mission to its file (or to path).",
       "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}", toolMissionSave },
-    { "place_guard", "Add a guard to the mission at a pad (or at a point: a new pad is created there).",
-      "{\"type\":\"object\",\"properties\":{ KPAD ,\"model\":{\"type\":\"integer\"},\"ai\":{\"type\":\"integer\",\"description\":\"AI list id\"},"
-      "\"weapon\":{\"type\":\"integer\"}}}",
+    { "place_guard", "Add a guard to the mission at a pad (or at a point: a new pad is created there). It gets a uuid (given as uuid, else made and returned in the result): scripts reference an added prop by it, never by a number. model = body id (65535 random; level_describe detail names). "
+      "Any record field of the add op is accepted by name (mission_fields.h: head (-1 random), health, reaction_time, bitflags (1 = sunglasses always, 2 = one time in two; the head must have them), preset, chrpreset1, extrascale, state; unknown names are refused with the list), "
+      "weapons = a list (at most 2) of {item, model?, flags?, collectable: {timer...}} instead of weapon, difficulties = [0..3] (0 Agent, 1 Secret Agent, 2 00 Agent, 3 007; all four = everywhere).",
+      "{\"type\":\"object\",\"properties\":{ KPAD ,\"uuid\":{\"type\":\"string\",\"description\":\"lowercase RFC 4122 UUID the scripts reference this prop by; omitted = the editor makes one and returns it\"},\"name\":{\"type\":\"string\",\"description\":\"display name (optional)\"},\"model\":{\"type\":\"integer\"},\"ai\":{\"type\":\"integer\",\"description\":\"AI list id\"},"
+      "\"weapon\":{\"type\":\"integer\"},\"weapons\":{\"type\":\"array\",\"maxItems\":2,\"items\":{\"type\":\"object\"}},"
+      "\"difficulties\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":3}},"
+      "\"head\":{\"type\":\"integer\"},\"health\":{\"type\":\"integer\"},\"reaction_time\":{\"type\":\"integer\"},\"bitflags\":{\"type\":\"integer\"},"
+      "\"preset\":{\"type\":\"integer\"},\"chrpreset1\":{\"type\":\"integer\"},\"extrascale\":{\"type\":\"integer\"},\"state\":{\"type\":\"integer\"}}}",
       toolPlaceGuard },
-    { "place_object", "Add an object (setup prop type + model, optionally an item id) to the mission at a pad or point.",
-      "{\"type\":\"object\",\"properties\":{ KPAD ,\"type\":{\"type\":\"integer\"},\"model\":{\"type\":\"integer\"},\"item\":{\"type\":\"integer\"}},"
+    { "place_object", "Add an object (setup prop type + model, optionally an item id) to the mission at a pad or point. It gets a uuid (given as uuid, else made and returned in the result) that scripts reference it by. Any record field of the add op is accepted by name: "
+      "the header fields flat (flags, flags2, maxdamage, damage, extrascale, state) and the type's own in a sub-object named for it, e.g. {\"type\":1,\"door\":{\"max_speed\":0.1}} or {\"monitor\":{...}} "
+      "(mission_fields.h; unknown names are refused with the list). difficulties = [0..3] as place_guard.",
+      "{\"type\":\"object\",\"properties\":{ KPAD ,\"uuid\":{\"type\":\"string\",\"description\":\"lowercase RFC 4122 UUID the scripts reference this prop by; omitted = the editor makes one and returns it\"},\"name\":{\"type\":\"string\",\"description\":\"display name (optional)\"},\"type\":{\"type\":\"integer\"},\"model\":{\"type\":\"integer\"},\"item\":{\"type\":\"integer\"},"
+      "\"difficulties\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":3}},"
+      "\"flags\":{\"type\":\"integer\"},\"flags2\":{\"type\":\"integer\"},\"maxdamage\":{\"type\":\"number\"},\"damage\":{\"type\":\"number\"},"
+      "\"extrascale\":{\"type\":\"integer\"},\"state\":{\"type\":\"integer\"}},"
+      "\"additionalProperties\":{\"description\":\"the type's own record fields: a sub-object named for the type (door, key, cctv, magazine, collectable, monitor, multi_monitor, autogun, ammo, armour, vehicle, aircraft, tank, tinted_glass)\"},"
       "\"required\":[\"type\",\"model\"]}",
       toolPlaceObject },
     { "move", "Move a guard or object. To a pad (pad), or to a free position (pos [x,y,z], the prop then stands on a mission pad of its own there), "
       "optionally locked to one axis (axis x|y|z: only that component of pos is used) and snapped (snap {grid, floor, pads}). Give prop for an "
-      "original setup prop, or kind + op for an item the mission added.",
+      "original setup prop, uuid for an item the mission added, or kind + op.",
       "{\"type\":\"object\",\"properties\":{\"prop\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"enum\":[\"guard\",\"object\"]},"
       "\"op\":{\"type\":\"integer\"}, KPAD ,\"axis\":{\"type\":\"string\",\"enum\":[\"x\",\"y\",\"z\"]}, KSNAP }}",
       toolMove },
@@ -478,9 +535,9 @@ const Tool kTools[] = {
       "{\"type\":\"object\",\"properties\":{\"prop\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"enum\":[\"guard\",\"object\"]},"
       "\"op\":{\"type\":\"integer\"}}}",
       toolRemove },
-    { "duplicate", "Duplicate a guard or object (prop for an original setup prop, or kind + op for an added one) as a NEW item the mission adds, with all its record fields and its facing. Without pad/pos it stands on the original's pad (move it afterwards); with pad or pos [x,y,z] (a new mission pad there, same facing) it is placed there. The original is untouched.",
+    { "duplicate", "Duplicate a guard or object (prop for an original setup prop, or kind + op / from_uuid for an added one) as a NEW item the mission adds (a fresh uuid unless uuid is given, returned in the result), with all its record fields and its facing. Without pad/pos it stands on the original's pad (move it afterwards); with pad or pos [x,y,z] (a new mission pad there, same facing) it is placed there. The original is untouched.",
       "{\"type\":\"object\",\"properties\":{\"prop\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"enum\":[\"guard\",\"object\"]},"
-      "\"op\":{\"type\":\"integer\"}, KPAD }}",
+      "\"op\":{\"type\":\"integer\"},\"from_uuid\":{\"type\":\"string\",\"description\":\"the added item to copy, by uuid\"}, KPAD ,\"uuid\":{\"type\":\"string\",\"description\":\"lowercase RFC 4122 UUID the scripts reference this prop by; omitted = the editor makes one and returns it\"},\"name\":{\"type\":\"string\",\"description\":\"display name (optional)\"}}}",
       toolDuplicate },
     { "set_presence", "Make a guard or object present only on some difficulties: difficulties = a list of 0 Agent, 1 Secret Agent, 2 00 Agent, 3 007 (all four = everywhere). prop = an original prop (it gets a move op without a pad), or kind + op = one the mission added. An object gets the game's per-difficulty do-not-load flags; a guard is sunk like a removed one on the other difficulties.",
       "{\"type\":\"object\",\"properties\":{\"prop\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"enum\":[\"guard\",\"object\"]},\"op\":{\"type\":\"integer\"},"
@@ -488,11 +545,41 @@ const Tool kTools[] = {
     { "set_guard_behavior", "Reassign a guard's AI list (what it does: patrol, guard, flee...). prop = an original guard (it gets a move op that keeps its pad and carries the new list), or kind guard + op = a guard the mission added. ai = the AI list id (number or \"0x401\"); level_describe props lists each guard's current ai.",
       "{\"type\":\"object\",\"properties\":{\"prop\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"enum\":[\"guard\"]},\"op\":{\"type\":\"integer\"},"
       "\"ai\":{\"type\":[\"integer\",\"string\"],\"description\":\"AI list id\"}},\"required\":[\"ai\"]}", toolSetGuardBehavior },
+    { "script_list", "The mission's script entries (use, target, props, the script's Props schema), the built-in library scripts and the mission's own scripts with their Props schema (field name, type alias: Item / Objective / Door / Guard / Prop / Zone / Pad / number / string / boolean, optional), and the zone ids.",
+      "{\"type\":\"object\",\"properties\":{}}", toolScriptList },
+    { "script_read", "A script's source (use = library name, the mod's, or the mission's own), its Props schema and the type checker's findings.",
+      "{\"type\":\"object\",\"properties\":{\"use\":{\"type\":\"string\"}},\"required\":[\"use\"]}", toolScriptRead },
+    { "script_write", "Write the source of a mission script (created when new; library and mod scripts are read-only: script_copy first). Held in the editor and saved next to mission.json by mission_save. Returns the type checker's findings (line, severity, text) against mission.d.luau, with props typed as the script's Props.",
+      "{\"type\":\"object\",\"properties\":{\"use\":{\"type\":\"string\",\"description\":\"script name: letters, digits, _ and -\"},\"text\":{\"type\":\"string\"}},\"required\":[\"use\",\"text\"]}", toolScriptWrite },
+    { "script_copy", "Copy a library or mod script into the mission as its own editable script (<mission dir>/scripts/<name>.luau on save). switch: true also points the entries that used it at the copy.",
+      "{\"type\":\"object\",\"properties\":{\"use\":{\"type\":\"string\"},\"switch\":{\"type\":\"boolean\"}},\"required\":[\"use\"]}", toolScriptCopy },
+    { "script_attach", "Add a script entry (use + target + props), or with index update one (use, target and/or props; props are merged unless replace: true). target = {kind: prop, prop: N (an original prop)} | {kind: prop, uuid: <uuid> (a prop the mission adds)} | {kind: pad, pad: N or id} | {kind: zone, zone: id} | {kind: mission}. props = {name: number | string | boolean}; a Door / Guard / Prop property is an original prop's number or an added prop's uuid string (a number at or past the level's own prop count is an error); names and meanings come from the script's Props schema (script_list).",
+      "{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"integer\"},\"use\":{\"type\":\"string\"},\"target\":{\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"prop\",\"pad\",\"zone\",\"mission\"]},\"prop\":{\"type\":\"integer\"},\"uuid\":{\"type\":\"string\"},\"pad\":{\"type\":[\"integer\",\"string\"]},\"zone\":{\"type\":\"string\"}}},\"props\":{\"type\":\"object\"},\"replace\":{\"type\":\"boolean\"}}}", toolScriptAttach },
+    { "set_props", "Update the property values of a script entry (index): props {name: value} merged (replace: true replaces them all); unset [names] removes keys (an optional property left empty).",
+      "{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"integer\"},\"props\":{\"type\":\"object\"},\"unset\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"replace\":{\"type\":\"boolean\"}},\"required\":[\"index\"]}", toolSetProps },
+    { "script_remove", "Remove a script entry (index). The script file stays.",
+      "{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"integer\"}},\"required\":[\"index\"]}", toolScriptRemove },
+    { "zone_add", "Add a zone (a sphere scripts can test: a player within radius): pos [x,y,z], radius (default 150), room (default: the room at pos), id (default z1, z2, ...).",
+      "{\"type\":\"object\",\"properties\":{\"pos\":{\"type\":\"array\",\"items\":{\"type\":\"number\"},\"minItems\":3,\"maxItems\":3},\"radius\":{\"type\":\"number\"},\"room\":{\"type\":\"integer\"},\"id\":{\"type\":\"string\"}},\"required\":[\"pos\"]}", toolZoneAdd },
+    { "zone_set", "Change a zone: pos [x,y,z], radius and/or room.",
+      "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"pos\":{\"type\":\"array\",\"items\":{\"type\":\"number\"},\"minItems\":3,\"maxItems\":3},\"radius\":{\"type\":\"number\"},\"room\":{\"type\":\"integer\"}},\"required\":[\"id\"]}", toolZoneSet },
+    { "zone_remove", "Remove a zone (scripts that target it are reported by validate).",
+      "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}", toolZoneRemove },
+    { "mission_set", "Set the open mission's name, briefing and/or description (one undo step).",
+      "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"briefing\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"}}}", toolMissionSet },
+    { "objective_add", "Add an objective: id (letters, digits, _ -; unique; scripts name the objective by it), text, difficulty = the lowest difficulty it applies to (0 Agent, 1 Secret Agent, 2 00 Agent; default 0). An objective is completed by a script or a zone.",
+      "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"},\"difficulty\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2}},\"required\":[\"id\",\"text\"]}", toolObjectiveAdd },
+    { "objective_set", "Change an objective (by id): text, difficulty, new_id (scripts that name the old id are then reported by validate), index (move it to that position in the list).",
+      "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"},\"difficulty\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2},\"new_id\":{\"type\":\"string\"},\"index\":{\"type\":\"integer\",\"minimum\":0}},\"required\":[\"id\"]}", toolObjectiveSet },
+    { "objective_remove", "Remove an objective by id.",
+      "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}", toolObjectiveRemove },
+    { "script_check", "Type-check a DRAFT Luau source against the script API without writing it anywhere: text, target_kind (mission|prop|pad|zone; default: the kind of the first entry that uses `use`, else mission), use (optional name). Returns the diagnostics (line, column, severity, text) and the source's Props schema.",
+      "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"},\"target_kind\":{\"type\":\"string\",\"enum\":[\"mission\",\"prop\",\"pad\",\"zone\"]},\"use\":{\"type\":\"string\"}},\"required\":[\"text\"]}", toolScriptCheck },
     { "undo", "Undo the last mission edit.", "{\"type\":\"object\",\"properties\":{}}", toolUndo },
     { "validate", "Check the mission (format, ids, pads and props against the level export).",
       "{\"type\":\"object\",\"properties\":{}}", toolValidate },
-    { "test_run", "Save the mission and start the game on it: solo by default, co-op (two players, two pads) with coop: true; at the level's own start unless spawn is given.",
-      "{\"type\":\"object\",\"properties\":{\"spawn\":{\"type\":[\"integer\",\"string\"],\"description\":\"pad to start at: a pad number or a mission pad id (default: the level's own start)\"},\"coop\":{\"type\":\"boolean\",\"description\":\"two players (default false: solo)\"}}}",
+    { "test_run", "Save the mission and start the game on it: solo by default, co-op (two players, two pads) with coop: true; at the level's own start unless spawn is given. wait_seconds (cap 120; default 0 = return at once) waits that long (ends early if the game exits) and returns the game log's \"missions:\" lines since the launch (objective completions, script errors and loads) in missions, [ERROR] lines in errors, and running; the editor window is busy while it waits. stop: true then ends the game process this editor started (never another).",
+      "{\"type\":\"object\",\"properties\":{\"wait_seconds\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":120},\"stop\":{\"type\":\"boolean\"},\"spawn\":{\"type\":[\"integer\",\"string\"],\"description\":\"pad to start at: a pad number or a mission pad id (default: the level's own start)\"},\"coop\":{\"type\":\"boolean\",\"description\":\"two players (default false: solo)\"}}}",
       toolTestRun },
 };
 
@@ -585,12 +672,37 @@ cJSON *handleOne(Doc &d, const cJSON *req)
 
 } // namespace
 
-std::string mcpHandleMessage(Doc &doc, const std::string &body)
+// Completes a tools/call response (result.content[0].text is the tool's JSON) with a deferred tail.
+static void applyDeferred(std::function<void(cJSON *)> tail, std::string &resp)
+{
+    J r(cJSON_Parse(resp.c_str()));
+    cJSON *res = r.p ? cJSON_GetObjectItemCaseSensitive(r.p, "result") : nullptr;
+    cJSON *content = res ? cJSON_GetObjectItemCaseSensitive(res, "content") : nullptr;
+    cJSON *c0 = cJSON_IsArray(content) ? cJSON_GetArrayItem(content, 0) : nullptr;
+    cJSON *text = c0 ? cJSON_GetObjectItemCaseSensitive(c0, "text") : nullptr;
+    if (!cJSON_IsString(text)) return;
+    J inner(cJSON_Parse(text->valuestring));
+    if (!inner.p) return;
+    tail(inner.p);
+    const std::string s = print(inner.p);
+    cJSON_ReplaceItemInObjectCaseSensitive(c0, "text", cJSON_CreateString(s.c_str()));
+    resp = print(r.p);
+}
+
+std::string mcpHandleMessage(Doc &doc, const std::string &body, std::function<void(std::string &)> *post)
 {
     J root(cJSON_Parse(body.c_str()));
     if (!root.p) {
         J e(rpcError(nullptr, -32700, "parse error"));
         return print(e.p);
+    }
+    if (post && cJSON_IsObject(root.p)) {
+        gAllowDefer = true; gDeferred = nullptr;
+        J r(handleOne(doc, root.p));
+        gAllowDefer = false;
+        std::string out = r.p ? print(r.p) : std::string();
+        if (gDeferred) { auto tail = gDeferred; gDeferred = nullptr; *post = [tail](std::string &s) { applyDeferred(tail, s); }; }
+        return out;
     }
     if (cJSON_IsArray(root.p)) {
         J out(cJSON_CreateArray());

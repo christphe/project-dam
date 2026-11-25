@@ -1,5 +1,6 @@
 // ui_actions.cpp: see ui_app.h for how the editor UI is split.
 #include "ui_app.h"
+#include "ui_scripts.h"
 #include <cmath>
 #include <filesystem>
 #include "launch.h"
@@ -75,6 +76,8 @@ bool ensureMission(App &a)
 void applyClick(App &a, const Hit &h)
 {
     std::string err;
+    if (scriptPickClick(a, h)) return;      // picking a script's target / property in the view
+    if (zoneToolClick(a, h)) return;        // the Zone tool
     if (a.pickSpawn && (h.kind == Hit::PAD || h.kind == Hit::MPAD || h.kind == Hit::ITEM)) {   // Mission tab > Start and test > pick in the view
         PadSpec ps;
         if (padFromHit(a, h, ps)) {
@@ -89,6 +92,7 @@ void applyClick(App &a, const Hit &h)
         if (h.kind == Hit::ITEM) a.doc.sel.kind = Selection::ITEM, a.doc.sel.item = h.item;
         else if (h.kind == Hit::PAD) a.doc.sel.kind = Selection::PAD, a.doc.sel.num = h.num;
         else if (h.kind == Hit::MPAD) a.doc.sel.kind = Selection::MPAD, a.doc.sel.id = h.id;
+        else if (h.kind == Hit::ZONE) a.doc.sel.kind = Selection::ZONE, a.doc.sel.id = h.id;
         else if (h.kind == Hit::SURFACE) a.doc.sel.kind = Selection::ROOM, a.doc.sel.num = h.room;
         return;
     }
@@ -566,6 +570,8 @@ void deleteSelected(App &a)
 {
     std::string e;
     if (a.doc.sel.kind == Selection::ITEM && !a.doc.removeItem(a.doc.sel.item, e)) a.say("remove: %s", e.c_str());
+    else if (a.doc.sel.kind == Selection::ZONE) { if (a.doc.removeZone(a.doc.sel.id, e)) a.doc.sel = Selection(); else a.say("remove: %s", e.c_str()); }
+    else if (a.doc.sel.kind == Selection::SCRIPT) { if (a.doc.removeScript(a.doc.sel.num, e)) a.doc.sel = Selection(); else a.say("remove: %s", e.c_str()); }
 }
 
 void undoLast(App &a)
@@ -592,6 +598,7 @@ void selectIssue(App &a, const Issue &i)
 {
     if (!i.hasSel) return;
     a.doc.sel = i.sel;
+    if (i.sel.kind == Selection::SCRIPT && i.line > 0 && !i.script.empty()) openScriptEditor(a, i.script, i.line);
     Vec3 p{};
     bool have = false;
     if (i.sel.kind == Selection::ITEM) {

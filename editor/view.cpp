@@ -185,10 +185,104 @@ static const OwnerInfo *ownerOf(const Doc &d, const Item &it)
     return nullptr;
 }
 
+// A door of the level: its model is recorded as the game placed it, scaled and turned to its bound pad's box, so it is drawn
+// and picked as recorded; a pad-anchored placement would only lose that. Doors are not movable.
+static bool isDoor(const Item &it) { return it.type == 1; }
+
+// A door as the game places it (src/game/prop.c setupDoor): the volume of its BOUND pad, a box in the pad's frame (x along up x look, y up,
+// z along look; Item::bas) around the pad position, and the door model scaled per axis to that box: model x to the pad's y extent, model y
+// to z, model z to x (the xscale / yscale / zscale of setupDoor). (g_DoorScale is 1 in the levels the editor opens.) A door record's pad is
+// a bound pad; see doc.cpp, LProp::pad.
+static Vec3 dot3axes(const Item &it, const Vec3 &l)   // pad frame -> world offset
+{
+    return { it.bas[0][0] * l[0] + it.bas[1][0] * l[1] + it.bas[2][0] * l[2], it.bas[0][1] * l[0] + it.bas[1][1] * l[1] + it.bas[2][1] * l[2],
+             it.bas[0][2] * l[0] + it.bas[1][2] * l[1] + it.bas[2][2] * l[2] };
+}
+static Vec3 toPadFrame(const Item &it, const Vec3 &w)   // world offset -> pad frame
+{
+    return { w[0] * it.bas[0][0] + w[1] * it.bas[0][1] + w[2] * it.bas[0][2], w[0] * it.bas[1][0] + w[1] * it.bas[1][1] + w[2] * it.bas[1][2],
+             w[0] * it.bas[2][0] + w[1] * it.bas[2][1] + w[2] * it.bas[2][2] };
+}
+static bool padBasis(const LPad &p, Vec3 *b)   // the same frame as Item::bas (doc.cpp setDoorBasis)
+{
+    Vec3 n = { p.up[1] * p.look[2] - p.up[2] * p.look[1], p.up[2] * p.look[0] - p.up[0] * p.look[2], p.up[0] * p.look[1] - p.up[1] * p.look[0] };
+    const float nl = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    if (nl < 1e-6f) return false;
+    for (int i = 0; i < 3; i++) n[i] /= nl;
+    b[0] = n; b[1] = p.up; b[2] = p.look;
+    return true;
+}
+static bool doorBox(const Doc &d, const Item &it, Vec3 &mn, Vec3 &mx)
+{
+    if (!it.hasBasis) return false;
+    const LPad *p = d.level.pad(it.pad.num);
+    if (!p || !p->bound) return false;
+    mn = p->bmn; mx = p->bmx;
+    return true;
+}
+// The recorded model of a door is either as the game placed one of its doors (world space) or in model space: told apart by whether its
+// bounds sit around some door's box.
+static bool doorSourceBox(const Doc &d, const Item &it, Vec3 &c, Vec3 &size)
+{
+    const OwnerInfo *o = ownerOf(d, it);
+    if (!o) return false;
+    c = { (o->mn[0] + o->mx[0]) * 0.5f, (o->mn[1] + o->mx[1]) * 0.5f, (o->mn[2] + o->mx[2]) * 0.5f };
+    size = { o->mx[0] - o->mn[0], o->mx[1] - o->mn[1], o->mx[2] - o->mn[2] };
+    return true;
+}
+
 Mat4 itemPlacement(const Doc &d, const Item &it)
 {
     const OwnerInfo *o = ownerOf(d, it);
     if (!it.hasPos || !o) return mat4Identity();
+    if (isDoor(it)) {
+        Vec3 mn, mx, c, sz;
+        if (!doorBox(d, it, mn, mx) || !doorSourceBox(d, it, c, sz)) return mat4Identity();
+        const Vec3 half = { (mn[0] + mx[0]) * 0.5f, (mn[1] + mx[1]) * 0.5f, (mn[2] + mx[2]) * 0.5f };
+        const Vec3 off = dot3axes(it, half);
+        const Vec3 c1 = { it.pos[0] + off[0], it.pos[1] + off[1], it.pos[2] + off[2] };   // the box centre in world space
+        const Vec3 bs = { mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2] };                  // box size in the pad frame
+        auto basisMat = [](const Vec3 *b) { Mat4 m = mat4Identity(); for (int k = 0; k < 3; k++) for (int r = 0; r < 3; r++) m.m[k * 4 + r] = b[k][r]; return m; };
+        auto transposed = [](Mat4 m) { Mat4 t = m; for (int r = 0; r < 3; r++) for (int k = 0; k < 3; k++) t.m[k * 4 + r] = m.m[r * 4 + k]; return t; };
+        // 1. the recorded model is how the game placed ONE of the level's doors of this model (a source pad whose box it sits in): move it
+        //    from that box to this one (centre, frame, per-axis size)
+        {
+            const LPad *best = nullptr; float bestD = 1e30f;
+            for (const LProp &p : d.level.props) {
+                if (p.type != 1 || p.owner != it.owner) continue;
+                const LPad *sp = d.level.pad(p.pad);
+                if (!sp || !sp->bound) continue;
+                Vec3 sb[3];
+                if (!padBasis(*sp, sb)) continue;
+                const Vec3 sh = { (sp->bmn[0] + sp->bmx[0]) * 0.5f, (sp->bmn[1] + sp->bmx[1]) * 0.5f, (sp->bmn[2] + sp->bmx[2]) * 0.5f };
+                const Vec3 sc = { sp->pos[0] + sb[0][0] * sh[0] + sb[1][0] * sh[1] + sb[2][0] * sh[2], sp->pos[1] + sb[0][1] * sh[0] + sb[1][1] * sh[1] + sb[2][1] * sh[2],
+                                  sp->pos[2] + sb[0][2] * sh[0] + sb[1][2] * sh[1] + sb[2][2] * sh[2] };
+                const float dd = std::sqrt((c[0] - sc[0]) * (c[0] - sc[0]) + (c[1] - sc[1]) * (c[1] - sc[1]) + (c[2] - sc[2]) * (c[2] - sc[2]));
+                if (dd < bestD) { bestD = dd; best = sp; }
+            }
+            Vec3 sb[3];
+            if (best && bestD < 0.6f * std::max({ sz[0], sz[1], sz[2] }) + 10.0f && padBasis(*best, sb)) {
+                const Vec3 sh = { (best->bmn[0] + best->bmx[0]) * 0.5f, (best->bmn[1] + best->bmx[1]) * 0.5f, (best->bmn[2] + best->bmx[2]) * 0.5f };
+                const Vec3 sc = { best->pos[0] + sb[0][0] * sh[0] + sb[1][0] * sh[1] + sb[2][0] * sh[2], best->pos[1] + sb[0][1] * sh[0] + sb[1][1] * sh[1] + sb[2][1] * sh[2],
+                                  best->pos[2] + sb[0][2] * sh[0] + sb[1][2] * sh[1] + sb[2][2] * sh[2] };
+                if (it.pad.num == best->num) return mat4Identity();
+                const Vec3 ss = { best->bmx[0] - best->bmn[0], best->bmx[1] - best->bmn[1], best->bmx[2] - best->bmn[2] };
+                Mat4 S = mat4Identity();
+                S.m[0] = ss[0] > 1e-3f ? bs[0] / ss[0] : 1.0f; S.m[5] = ss[1] > 1e-3f ? bs[1] / ss[1] : 1.0f; S.m[10] = ss[2] > 1e-3f ? bs[2] / ss[2] : 1.0f;
+                return mat4Mul(mat4Mul(mat4Mul(mat4Mul(mat4Translate(c1[0], c1[1], c1[2]), basisMat(it.bas)), S), transposed(basisMat(sb))),
+                               mat4Translate(-sc[0], -sc[1], -sc[2]));
+            }
+        }
+        // 2. the recorded bounds are in model space: model (x, y, z) -> pad (z, x, y), each axis scaled to the box
+        const float sx = sz[0] > 1e-3f ? bs[1] / sz[0] : 1.0f, sy = sz[1] > 1e-3f ? bs[2] / sz[1] : 1.0f, szz = sz[2] > 1e-3f ? bs[0] / sz[2] : 1.0f;
+        Mat4 M = mat4Identity();
+        for (int r = 0; r < 3; r++) {
+            M.m[0 * 4 + r] = it.bas[1][r] * sx;      // model x -> pad y
+            M.m[1 * 4 + r] = it.bas[2][r] * sy;      // model y -> pad z
+            M.m[2 * 4 + r] = it.bas[0][r] * szz;     // model z -> pad x
+        }
+        return mat4Mul(mat4Mul(mat4Translate(c1[0], c1[1], c1[2]), M), mat4Translate(-c[0], -c[1], -c[2]));
+    }
     return mat4Mul(mat4Mul(mat4Translate(it.pos[0], it.pos[1], it.pos[2]), mat4RotY(it.yawDeg)),
                    mat4Translate(-o->anchor[0], -o->anchor[1], -o->anchor[2]));
 }
@@ -196,6 +290,7 @@ Mat4 itemPlacement(const Doc &d, const Item &it)
 bool itemLocalBox(const Doc &d, const Item &it, Vec3 &mn, Vec3 &mx)
 {
     if (!it.hasPos) return false;
+    if (isDoor(it)) { Vec3 m0, m1; if (doorBox(d, it, m0, m1)) { mn = m0; mx = m1; return true; } }   // the bound pad's own box, in the pad frame
     if (const OwnerInfo *o = ownerOf(d, it)) {
         for (int i = 0; i < 3; i++) { mn[i] = o->mn[i] - o->anchor[i]; mx[i] = o->mx[i] - o->anchor[i]; }
         return true;
@@ -213,7 +308,7 @@ bool itemBounds(const Doc &d, const Item &it, Vec3 &mn, Vec3 &mx)
     mn = { 1e30f, 1e30f, 1e30f }; mx = { -1e30f, -1e30f, -1e30f };
     for (int i = 0; i < 8; i++) {
         const Vec3 c = { (i & 1) ? lmx[0] : lmn[0], (i & 2) ? lmx[1] : lmn[1], (i & 4) ? lmx[2] : lmn[2] };
-        const Vec3 w = add(rotYaw(c, it.yawDeg), it.pos);
+        const Vec3 w = add(it.hasBasis ? dot3axes(it, c) : rotYaw(c, it.yawDeg), it.pos);
         for (int k = 0; k < 3; k++) { mn[k] = std::min(mn[k], w[k]); mx[k] = std::max(mx[k], w[k]); }
     }
     return true;
@@ -267,12 +362,21 @@ Hit pickScene(const Doc &d, const Vec3 &org, const Vec3 &dir)
             const MissionPad &p = d.mission.pads[i];
             if (!occ.mission.count(p.id)) tryPad({ p.pos[0], p.pos[1], p.pos[2] }, Hit::MPAD, -1, p.id);
         }
+    // a zone's centre handle (drawn as a ring on the floor with a marker at its centre)
+    if (d.hasMission)
+        for (int i = 0; i < d.mission.nzones; i++) {
+            const MissionZone &z = d.mission.zones[i];
+            float t;
+            if (raySphere(org, dir, { z.pos[0], z.pos[1], z.pos[2] }, 28.0f, t) && t <= limit && t < cand.t) {
+                cand = Hit(); cand.kind = Hit::ZONE; cand.id = z.id; cand.t = t; cand.point = { z.pos[0], z.pos[1], z.pos[2] };
+            }
+        }
     // items win over a pad at the same spot (they are drawn on it)
     for (const Item &it : d.items()) {
         Vec3 mn, mx; float t;
         if (it.removed || it.assigned || !itemLocalBox(d, it, mn, mx)) continue;
         // the box is turned with the model: test the ray in the item's own frame (a rotation keeps t)
-        const Vec3 lo = rotYaw(sub(org, it.pos), -it.yawDeg), ld = rotYaw(dir, -it.yawDeg);
+        const Vec3 lo = it.hasBasis ? toPadFrame(it, sub(org, it.pos)) : rotYaw(sub(org, it.pos), -it.yawDeg), ld = it.hasBasis ? toPadFrame(it, dir) : rotYaw(dir, -it.yawDeg);
         if (rayAabb(lo, ld, mn, mx, t) && t <= limit && (cand.kind == Hit::NONE || t <= cand.t + 30.0f)) {
             Hit h; h.kind = Hit::ITEM; h.item.valid = true; h.item.added = it.added; h.item.guard = it.guard; h.item.idx = it.idx;
             h.t = t; h.point = it.pos;

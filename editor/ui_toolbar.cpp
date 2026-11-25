@@ -27,7 +27,7 @@ void drawToolbar(App &a, float y, float h)
     toolBtn("Move", App::T_MOVE);
     toolBtn("Guard", App::T_GUARD);
     toolBtn("Object", App::T_OBJECT);
-    futureBtn("Zone", "#105");
+    toolBtn("Zone", App::T_ZONE);
     futureBtn("Geometry", "#105");
     ImGui::TextUnformatted("|"); ImGui::SameLine();
     if (ImGui::Button("Play")) doPlay(a);

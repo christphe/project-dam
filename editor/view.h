@@ -37,10 +37,10 @@ struct Camera {
 };
 
 struct Hit {
-    enum Kind { NONE, ITEM, PAD, MPAD, SURFACE } kind = NONE;
+    enum Kind { NONE, ITEM, PAD, MPAD, SURFACE, ZONE } kind = NONE;
     ItemRef item;
     int num = -1;           // PAD
-    std::string id;         // MPAD
+    std::string id;         // MPAD, ZONE
     float t = 0;
     Vec3 point{};           // the picked point (on the surface for SURFACE, the object's pad otherwise)
     Vec3 surfacePoint{};    // where the ray meets room geometry (valid when hasSurface)

@@ -1,0 +1,220 @@
+{
+	"format":	1,
+	"name":	"Formula",
+	"level":	"facility",
+	"description":	"Escort a programmer through the Facility's locked doors and steal the formulas.",
+	"briefing":	"A chemist inside the Arkhangelsk facility has been passing us notes for months. His last message says the nerve agent formulas are kept in a sealed office past the security doors, and that only the base's own programmers can override those doors. He has found one willing to help: Yuri Kalinin, hiding in the washrooms by the vent you will come in through. Keep Kalinin alive, 007. Without him every door stays shut, and without the formulas this trip is wasted.",
+	"pads":	[{
+			"id":	"p1",
+			"pos":	[6469.693359375, 53.04693603515625, -4889.00537109375],
+			"look":	[-0.0017590008210390806, 0, 0.999998450279236],
+			"room":	64
+		}, {
+			"id":	"p3",
+			"pos":	[-663, -45, -546],
+			"look":	[0, 0, 1],
+			"room":	12
+		}, {
+			"id":	"p4",
+			"pos":	[841, -425.20388793945312, 328],
+			"look":	[0, 0, 1],
+			"room":	20
+		}, {
+			"id":	"p2",
+			"pos":	[-306.10000610351562, -425.20001220703125, 883.5999755859375],
+			"look":	[0.93788892030715942, 0, 0.3469356894493103],
+			"room":	4
+		}, {
+			"id":	"p5",
+			"pos":	[-381.10000610351562, -425.20001220703125, 855.79998779296875],
+			"look":	[0.93788892030715942, 0, 0.3469356894493103],
+			"room":	4
+		}],
+	"zones":	[{
+			"id":	"exit",
+			"pos":	[7971.20849609375, -396.53924560546875, -5432.11376953125],
+			"radius":	220,
+			"room":	69
+		}],
+	"guards":	[{
+			"op":	"remove",
+			"prop":	382
+		}, {
+			"op":	"add",
+			"uuid":	"1e003ce7-98a8-4829-b7e4-bd06a4e38b4c",
+			"name":	"Kalinin",
+			"pad":	"p3",
+			"difficulties":	[0],
+			"model":	33,
+			"ai":	1,
+			"bitflags":	1,
+			"head":	50
+		}, {
+			"op":	"add",
+			"uuid":	"5bd9729d-b7a0-4c64-8699-9a6c73b70ec8",
+			"name":	"Kalinin (hostage)",
+			"pad":	"p2",
+			"difficulties":	[1, 2, 3],
+			"model":	33,
+			"ai":	1,
+			"bitflags":	1,
+			"head":	50
+		}, {
+			"op":	"add",
+			"uuid":	"7d617805-7469-4e5c-9934-2e88302954e5",
+			"name":	"Captor",
+			"pad":	"p5",
+			"difficulties":	[1, 2, 3],
+			"model":	2,
+			"ai":	1,
+			"weapons":	[{
+					"item":	8,
+					"model":	184
+				}]
+		}],
+	"objects":	[{
+			"op":	"remove",
+			"prop":	64
+		}, {
+			"op":	"remove",
+			"prop":	70
+		}, {
+			"op":	"remove",
+			"prop":	78
+		}, {
+			"op":	"add",
+			"uuid":	"954bcbf7-b716-419a-8cac-e6568be2af4c",
+			"name":	"Laboratory terminal",
+			"pad":	10035,
+			"type":	10,
+			"model":	337,
+			"extrascale":	256,
+			"state":	0,
+			"flags":	268435873,
+			"flags2":	2048,
+			"maxdamage":	0,
+			"damage":	1000,
+			"monitor":	{
+				"owner_offset":	-1,
+				"owner_part":	-1,
+				"image_num":	48
+			}
+		}, {
+			"op":	"add",
+			"uuid":	"0cfae576-1f9a-4dc2-89e9-a7f2f91f0731",
+			"name":	"East terminal 1",
+			"pad":	10049,
+			"type":	10,
+			"model":	337,
+			"extrascale":	256,
+			"state":	0,
+			"flags":	268435873,
+			"flags2":	2048,
+			"maxdamage":	0,
+			"damage":	1000,
+			"monitor":	{
+				"owner_offset":	-1,
+				"owner_part":	-1,
+				"image_num":	48
+			}
+		}, {
+			"op":	"add",
+			"uuid":	"4a820d95-394c-4624-a544-0a358d6e0167",
+			"name":	"East terminal 2",
+			"pad":	10048,
+			"type":	10,
+			"model":	337,
+			"extrascale":	256,
+			"state":	0,
+			"flags":	268435873,
+			"flags2":	2048,
+			"maxdamage":	0,
+			"damage":	1000,
+			"monitor":	{
+				"owner_offset":	-1,
+				"owner_part":	-1,
+				"image_num":	48
+			}
+		}, {
+			"op":	"add",
+			"uuid":	"6afa6dd6-f6c9-4468-9485-ee577baaf103",
+			"name":	"Formula computer",
+			"pad":	"p1",
+			"type":	10,
+			"model":	337,
+			"extrascale":	256,
+			"state":	0,
+			"flags":	268435873,
+			"flags2":	2048,
+			"maxdamage":	0,
+			"damage":	1000,
+			"monitor":	{
+				"owner_offset":	-1,
+				"owner_part":	-1,
+				"image_num":	48
+			}
+		}, {
+			"op":	"add",
+			"uuid":	"3b6f5ea5-19ef-4169-adf8-ee178d1bd1b9",
+			"name":	"Password list",
+			"pad":	"p4",
+			"difficulties":	[2, 3],
+			"type":	8,
+			"model":	270,
+			"item":	66
+		}],
+	"objectives":	[{
+			"id":	"find",
+			"text":	"Find the programmer",
+			"difficulty":	0
+		}, {
+			"id":	"lab",
+			"text":	"Override the laboratory security door",
+			"difficulty":	1
+		}, {
+			"id":	"east",
+			"text":	"Override the east wing doors",
+			"difficulty":	1
+		}, {
+			"id":	"passwords",
+			"text":	"Recover today's encrypted password list",
+			"difficulty":	2
+		}, {
+			"id":	"formulas",
+			"text":	"Download the formulas",
+			"difficulty":	1
+		}, {
+			"id":	"alive",
+			"text":	"Keep Kalinin alive",
+			"difficulty":	0
+		}],
+	"scripts":	[{
+			"use":	"formula",
+			"target":	{
+				"kind":	"zone",
+				"zone":	"exit"
+			},
+			"props":	{
+				"kalinin":	"1e003ce7-98a8-4829-b7e4-bd06a4e38b4c",
+				"hideDoor":	32,
+				"terminal1":	"954bcbf7-b716-419a-8cac-e6568be2af4c",
+				"door1":	63,
+				"terminal2":	"0cfae576-1f9a-4dc2-89e9-a7f2f91f0731",
+				"door2":	69,
+				"terminal3":	"4a820d95-394c-4624-a544-0a358d6e0167",
+				"door3":	77,
+				"computer":	"6afa6dd6-f6c9-4468-9485-ee577baaf103",
+				"passwords":	66,
+				"formulas":	75,
+				"objFind":	"find",
+				"objLab":	"lab",
+				"objEast":	"east",
+				"objPasswords":	"passwords",
+				"objFormulas":	"formulas",
+				"objAlive":	"alive",
+				"kalininHostage":	"5bd9729d-b7a0-4c64-8699-9a6c73b70ec8",
+				"captor":	"7d617805-7469-4e5c-9934-2e88302954e5",
+				"hostageDoor":	56
+			}
+		}]
+}

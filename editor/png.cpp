@@ -1,10 +1,12 @@
-// A minimal PNG writer (stored deflate blocks, RGB8): enough for --screenshot, no dependency.
+// A minimal PNG writer (RGB8, per-row filter, zlib level 9) and reader: --screenshot and thumb.png.
 #include "png.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+
+#include <zlib.h>
 
 static uint32_t crcTable[256];
 static void crcInit()
@@ -43,31 +45,50 @@ static void chunk(FILE *f, const char *type, const std::vector<uint8_t> &data)
 bool writePng(const char *path, int w, int h, const uint8_t *rgba)
 {
     crcInit();
-    std::vector<uint8_t> raw;
-    raw.reserve((size_t)(w * 3 + 1) * h);
-    for (int y = 0; y < h; y++) {
-        raw.push_back(0);   // filter: none
+    // RGB8 rows, each with the PNG filter that leaves the smallest sum of absolute bytes (the usual heuristic), then
+    // zlib at level 9: a 320x240 thumb.png goes from ~230 KB (stored blocks) to a few tens of KB. The game's reader
+    // (port/src/missions_thumb.c) unfilters all five types.
+    const size_t stride = (size_t)w * 3;
+    std::vector<uint8_t> rgb(stride * h);
+    for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) {
-            const uint8_t *p = rgba + ((size_t)y * w + x) * 4;
-            raw.push_back(p[0]); raw.push_back(p[1]); raw.push_back(p[2]);
+            const uint8_t *q = rgba + ((size_t)y * w + x) * 4;
+            uint8_t *d = &rgb[(size_t)y * stride + (size_t)x * 3];
+            d[0] = q[0]; d[1] = q[1]; d[2] = q[2];
         }
+    std::vector<uint8_t> raw;
+    raw.reserve((stride + 1) * h);
+    std::vector<uint8_t> cand[5];
+    for (auto &c : cand) c.resize(stride);
+    for (int y = 0; y < h; y++) {
+        const uint8_t *row = &rgb[(size_t)y * stride], *up = y ? row - stride : nullptr;
+        size_t best = 0, bestSum = (size_t)-1;
+        for (int ft = 0; ft < 5; ft++) {
+            size_t sum = 0;
+            for (size_t x = 0; x < stride; x++) {
+                const int a = x >= 3 ? row[x - 3] : 0, b = up ? up[x] : 0, c = (up && x >= 3) ? up[x - 3] : 0;
+                int pr = 0;
+                switch (ft) {
+                case 1: pr = a; break;
+                case 2: pr = b; break;
+                case 3: pr = (a + b) / 2; break;
+                case 4: { const int pp = a + b - c, pa = abs(pp - a), pb = abs(pp - b), pc = abs(pp - c);
+                          pr = (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c); break; }
+                default: break;
+                }
+                const uint8_t v = (uint8_t)(row[x] - pr);
+                cand[ft][x] = v;
+                sum += v < 128 ? v : 256 - v;
+            }
+            if (sum < bestSum) { bestSum = sum; best = (size_t)ft; }
+        }
+        raw.push_back((uint8_t)best);
+        raw.insert(raw.end(), cand[best].begin(), cand[best].end());
     }
-    std::vector<uint8_t> z;
-    z.push_back(0x78); z.push_back(0x01);
-    size_t pos = 0;
-    uint32_t a = 1, b = 0;
-    for (uint8_t c : raw) { a = (a + c) % 65521; b = (b + a) % 65521; }
-    do {
-        size_t n = raw.size() - pos;
-        if (n > 65535) n = 65535;
-        bool last = pos + n >= raw.size();
-        z.push_back(last ? 1 : 0);
-        z.push_back((uint8_t)(n & 0xff)); z.push_back((uint8_t)(n >> 8));
-        z.push_back((uint8_t)(~n & 0xff)); z.push_back((uint8_t)((~n >> 8) & 0xff));
-        z.insert(z.end(), raw.begin() + pos, raw.begin() + pos + n);
-        pos += n;
-    } while (pos < raw.size());
-    put32(z, (b << 16) | a);
+    uLongf zlen = compressBound((uLong)raw.size());
+    std::vector<uint8_t> z(zlen);
+    if (compress2(z.data(), &zlen, raw.data(), (uLong)raw.size(), 9) != Z_OK) return false;
+    z.resize(zlen);
 
     FILE *f = fopen(path, "wb");
     if (!f) return false;
@@ -83,7 +104,6 @@ bool writePng(const char *path, int w, int h, const uint8_t *rgba)
     return true;
 }
 
-#include <zlib.h>
 
 bool readPng(const char *path, int &w, int &h, std::vector<uint8_t> &rgba)
 {

@@ -60,6 +60,19 @@ static void build(void)
     g_size = cur + 8;
 }
 
+/* A setup with a door record (raw pad 5 = bound pad 5) next to a guard. */
+static void build_door(void)
+{
+    uint32_t cur = STREAM;
+    uint8_t *p;
+    build();
+    memset(g_file + STREAM, 0, sizeof g_file - STREAM);
+    p = rec(&cur, 9); wr16(p + 4, 0); wr16(p + 6, 0); wr16(p + 8, 2); wr16(p + 10, 2);
+    p = rec(&cur, 1); wr16(p + 4, 158); wr16(p + 6, 5); wr32(p + 8, 0x101);              /* door on bound pad 5 */
+    p = rec(&cur, 48);
+    g_size = cur + 8;
+}
+
 static Mission *load(const char *json)
 {
     static Mission m;
@@ -82,6 +95,48 @@ static const char *kJson =
     "               { \"op\": \"remove\", \"prop\": 4 },\n"
     "               { \"op\": \"add\", \"type\": 4, \"pad\": 0 } ] }\n";
 
+
+/* The n-th record of an applied setup */
+static const uint8_t *nth_rec(const MissionApplyResult *r, int n)
+{
+    uint32_t q = rd32(r->data + 8 * 3);
+    for (int i = 0; i < n; i++) q += missionPropdefSize(r->data[q + 3]);
+    return r->data + q;
+}
+
+/* A door's pad field is a bound-pad index without the +10000: doors go on bound pads only. */
+static void test_doors(void)
+{
+    MissionApplyResult r;
+    char err[128] = "";
+    const Mission *m;
+    build_door();
+    /* add on a bound pad writes pad - 10000; a move onto another bound pad too */
+    m = load("{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\",\n"
+             "  \"objects\": [ { \"op\": \"add\", \"uuid\": \"6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01\", \"type\": 1, \"pad\": 10003 }, { \"op\": \"move\", \"prop\": 1, \"pad\": 10002 } ] }\n");
+    GE_CHECK(m != NULL);
+    GE_CHECK_EQ_INT(missionValidate(m, err, sizeof err), 1);
+    GE_CHECK_EQ_INT(missionApplySetup(m, g_file, g_size, -1, 1.0f, &r, err, sizeof err), 1);
+    GE_CHECK_EQ_INT(r.skipped, 0);
+    GE_CHECK_EQ_INT(nth_rec(&r, 1)[3], 1);
+    GE_CHECK_EQ_INT(rd16(nth_rec(&r, 1) + 6), 2);           /* moved: bound pad 2 */
+    GE_CHECK_EQ_INT(nth_rec(&r, 2)[3], 1);
+    GE_CHECK_EQ_INT(rd16(nth_rec(&r, 2) + 6), 3);           /* added: bound pad 3 */
+    missionApplyFree(&r);
+    /* a normal pad or a mission pad is refused (add and move), the record stays as it was */
+    m = load("{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\",\n"
+             "  \"pads\": [ { \"id\": \"p1\", \"pos\": [250, 20, 5], \"look\": [0, 0, 2], \"room\": 1 } ],\n"
+             "  \"objects\": [ { \"op\": \"add\", \"uuid\": \"6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01\", \"type\": 1, \"pad\": 1 }, { \"op\": \"move\", \"prop\": 1, \"pad\": 1 },\n"
+             "               { \"op\": \"move\", \"prop\": 1, \"pad\": \"p1\" } ] }\n");
+    GE_CHECK(m != NULL);
+    GE_CHECK_EQ_INT(missionValidate(m, err, sizeof err), 0);        /* the add on a normal pad */
+    GE_CHECK(strstr(err, "bound pad") != NULL);
+    GE_CHECK_EQ_INT(missionApplySetup(m, g_file, g_size, -1, 1.0f, &r, err, sizeof err), 1);
+    GE_CHECK_EQ_INT(r.skipped, 3);
+    GE_CHECK_EQ_INT(rd16(nth_rec(&r, 1) + 6), 5);
+    GE_CHECK_EQ_INT(nth_rec(&r, 2)[3], 48);                 /* nothing was added */
+    missionApplyFree(&r);
+}
 
 /* An add op's fields land in the cloned record; chrnum is new; absent fields keep the template's bytes. */
 static void test_fields(void)
@@ -179,9 +234,9 @@ static void test_difficulties(void)
         "{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\",\n"
         "  \"guards\": [ { \"op\": \"move\", \"prop\": 0, \"difficulties\": [2, 3] },\n"
         "              { \"op\": \"move\", \"prop\": 1, \"difficulties\": [0] },\n"
-        "              { \"op\": \"add\", \"pad\": 2, \"model\": 5, \"difficulties\": [3] } ],\n"
+        "              { \"op\": \"add\", \"uuid\": \"6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01\", \"name\": \"Late guard\", \"pad\": 2, \"model\": 5, \"difficulties\": [3] } ],\n"
         "  \"objects\": [ { \"op\": \"move\", \"prop\": 2, \"difficulties\": [1] },\n"
-        "               { \"op\": \"add\", \"type\": 3, \"pad\": 2, \"model\": 38, \"difficulties\": [0, 3] } ] }\n";
+        "               { \"op\": \"add\", \"uuid\": \"0b8e7c64-52a1-4f3d-8c19-7e6a2d9b3f10\", \"type\": 3, \"pad\": 2, \"model\": 38, \"difficulties\": [0, 3] } ] }\n";
     MissionApplyResult r;
     char err[128] = "";
     const Mission *m;
@@ -205,6 +260,8 @@ static void test_difficulties(void)
     GE_CHECK_EQ_INT(r.guards_added, 0);
     GE_CHECK_EQ_INT(r.guards_removed, 1);
     GE_CHECK_EQ_INT(rd32(s + 528 + 12) & 0xF0, 0x60);      /* the added object: Agent and 007 only */
+    GE_CHECK_EQ_INT(m->guards[2].setup_prop, -1);          /* the guard is absent here: its uuid resolves to nothing */
+    GE_CHECK_EQ_INT(m->objects[1].setup_prop, 5);          /* the level has 5 records: the object is the first added one */
     missionApplyFree(&r);
 
     /* difficulty 2 (00 Agent): guard 0 stays, guard 1 sunk and its weapon not loaded */
@@ -220,6 +277,10 @@ static void test_difficulties(void)
     /* difficulty 3 (007): the added guard is there; unknown difficulty (-1): every guard present, object bits still set */
     GE_CHECK_EQ_INT(missionApplySetupEx(m, g_file, g_size, -1, 1.0f, 3, &r, err, sizeof err), 1);
     GE_CHECK_EQ_INT(r.guards_added, 1);
+    GE_CHECK_EQ_INT(m->guards[2].setup_prop, 5);           /* present on 007: the first added record ... */
+    GE_CHECK_EQ_INT(m->objects[1].setup_prop, 6);          /* ... the object follows it (a rebuild renumbers) */
+    GE_CHECK_EQ_INT(missionAddedSetupProp(m, "6f1c2a9e-3b7d-4e55-9a10-5d2c8b7e4f01"), 5);
+    GE_CHECK(strstr(r.log, "Late guard") != NULL && strstr(r.log, "setup prop 5") != NULL);
     missionApplyFree(&r);
     GE_CHECK_EQ_INT(missionApplySetupEx(m, g_file, g_size, -1, 1.0f, -1, &r, err, sizeof err), 1);
     s = r.data + rd32(r.data + 8 * 3);
@@ -239,6 +300,41 @@ static void test_difficulties(void)
         missionFree(&again);
     }
     free(back);
+}
+
+/* An added prop's setup prop number (recorded on its op): the END record's index, guards first (each followed by the weapons it
+ * carries), then objects, in file order. */
+static void test_setup_prop(void)
+{
+    static const char *json =
+        "{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\",\n"
+        "  \"guards\": [ { \"op\": \"add\", \"uuid\": \"11111111-1111-4111-8111-111111111111\", \"pad\": 1, \"weapons\": [ { \"item\": 17 }, { \"item\": 8 } ] },\n"
+        "              { \"op\": \"remove\", \"prop\": 0 },\n"
+        "              { \"op\": \"add\", \"uuid\": \"22222222-2222-4222-8222-222222222222\", \"pad\": 2 } ],\n"
+        "  \"objects\": [ { \"op\": \"add\", \"uuid\": \"33333333-3333-4333-8333-333333333333\", \"type\": 3, \"pad\": 2 } ] }\n";
+    MissionApplyResult r;
+    char err[128] = "";
+    const Mission *m;
+    build();
+    m = load(json);
+    GE_CHECK(m != NULL);
+    if (!m) return;
+    GE_CHECK_EQ_INT(missionValidate(m, err, sizeof err), 1);
+    GE_CHECK_EQ_INT(m->guards[0].setup_prop, -1);                   /* not applied yet */
+    GE_CHECK_EQ_INT(missionApplySetup(m, g_file, g_size, -1, 1.0f, &r, err, sizeof err), 1);
+    GE_CHECK_EQ_INT(m->guards[0].setup_prop, 5);
+    GE_CHECK_EQ_INT(m->guards[1].setup_prop, -1);                   /* a remove op has none */
+    GE_CHECK_EQ_INT(m->guards[2].setup_prop, 8);                    /* 5 + the guard + its two weapons */
+    GE_CHECK_EQ_INT(m->objects[0].setup_prop, 9);
+    GE_CHECK_EQ_INT(missionAddedSetupProp(m, "33333333-3333-4333-8333-333333333333"), 9);
+    GE_CHECK_EQ_INT(missionAddedSetupProp(m, "44444444-4444-4444-8444-444444444444"), -1);   /* unknown uuid */
+    GE_CHECK(strstr(r.log, "33333333-3333-4333-8333-333333333333 -> setup prop 9") != NULL);
+    {   /* the record at that number is the one the op added */
+        uint32_t q = rd32(r.data + 8 * 3);
+        for (int i = 0; i < 9; i++) q += missionPropdefSize(r.data[q + 3]);
+        GE_CHECK_EQ_INT(r.data[q + 3], 3);
+    }
+    missionApplyFree(&r);
 }
 
 /* The editor's reader sees the same setup the apply code edits: pads (scaled), props with their fields, AI lists. */
@@ -416,8 +512,10 @@ int main(void)
     }
 
     test_fields();
+    test_doors();
     test_move_ai();
     test_difficulties();
+    test_setup_prop();
     test_weapons();
     test_setup_decode();
 

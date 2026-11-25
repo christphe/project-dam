@@ -73,7 +73,7 @@ int missionsPauseActive(void)
 
 int missionsPauseObjCount(void) { return missionRtObjectiveCount(missionsRuntime()); }
 int missionsPauseObjDifficulty(int i) { return missionRtObjectiveDifficulty(missionsRuntime(), i); }
-int missionsPauseObjStatus(int i) { return missionRtObjectiveComplete(missionsRuntime(), i) ? 1 : 0; }
+int missionsPauseObjStatus(int i) { return missionRtObjectiveStatus(missionsRuntime(), i); }   /* OBJECTIVESTATUS */
 
 const char *missionsPauseObjText(int i)
 {
@@ -128,6 +128,12 @@ Gfx *missionsObjectivesDraw(Gfx *gdl, int ytop, int withStatus)
         if (withStatus) setTextWordWrap(2);
         textWrap(withStatus ? 0xDC : 0x140, (char *)t, wrapped, ptrFontZurichBoldChars, ptrFontZurichBold);
         if (withStatus) setTextWordWrap(0);
+        /* the game's own strings end in '\n' and sub_GAME_7F0AC0E8 counts newlines for the line advance;
+         * a mod's text has none, so every objective would advance by 0 lines and overprint the last */
+        {
+            size_t wn = strlen(wrapped);
+            if (wn == 0 || wrapped[wn - 1] != '\n') { if (wn + 2 < sizeof wrapped) { wrapped[wn] = '\n'; wrapped[wn + 1] = 0; } }
+        }
         gdl = frontPrintText(gdl, &x, &y, wrapped, ptrFontZurichBoldChars, ptrFontZurichBold, 0xFF, viGetX(), viGetY(), 0, 0);
         if (withStatus) {
             int done = rt && missionRtObjectiveComplete(rt, i);

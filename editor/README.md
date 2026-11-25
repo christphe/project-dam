@@ -11,7 +11,13 @@ The level view comes from a **level export** (`level.rec` + `level.json`), writt
 the user's own ROM. It contains ROM-derived geometry and textures. Exports live in your local data
 directory, are gitignored, and must never be committed, attached to issues or sent to anyone. What
 you share is the mission: `mission.json` (and its Luau scripts). A mission holds only numbers (prop
-indices, pad numbers, model ids), no ROM data.
+indices, pad numbers, model ids) and the uuids of the props it adds, no ROM data.
+
+**Added props have a uuid.** Every added guard or object (Add, Duplicate, Paste, MCP) gets a fresh random v4 `"uuid"` in its `add` op
+and an optional `"name"` (the Selection tab shows both; the name is editable, the uuid has a Copy button). Scripts reference an
+added prop by that uuid (a `Guard` / `Door` / `Prop` property is the uuid string, a prop target is `{"kind": "prop", "uuid": "..."}`),
+an original level prop by its number; the game resolves each uuid to the setup prop number the record gets, so adding or deleting
+other props no longer shifts a script's references. Format: `port/mission/mission.h`.
 
 **Where the data comes from.** The renderer-only part (room geometry, models, stan tiles, portals, the
 model-to-owner link) is the export. The level *setup* (pads, guards, objects with every record field,
@@ -38,7 +44,7 @@ docker compose run --rm windows sh -c 'export SDL2DIR=/usr/x86_64-w64-mingw32/sy
   && cmake --build build-win --target project-dam-editor make_test_rec'
 ```
 
-Targets (`editor/CMakeLists.txt`): `project-dam-editor`; `ge_editor_f3d` (fast3d's OpenGL backend and glad,
+Targets (`editor/CMakeLists.txt`): `project-dam-editor`; `ge_luau_analysis` (Luau Analysis, a static library of its own with a clean include path); `ge_editor_f3d` (fast3d's OpenGL backend and glad,
 compiled as the game compiles them, plus `fast3d_stubs.cpp` for the few game symbols it expects);
 `make_test_rec`. Needs OpenGL 3.3 core.
 
@@ -79,7 +85,7 @@ Options: `--port N`, `--no-mcp`, `--game EXE`, `--mcp-stdio`, `--mcp-http`, `--s
 * **Facing.** Models and their selection boxes are drawn turned by the yaw of the pad they stand on (a line out of
   the front of the box shows it); picking uses the same turned box.
 * **Window layout.** A menu bar (File, Edit, View, Mission, Mod, Tools, Help), a short toolbar (tools Select /
-  Move / Guard / Object, Play + Co-op + the spawn label, snapping; Zone and Geometry are greyed out for #105), the
+  Move / Guard / Object / Zone, Play + Co-op + the spawn label, snapping; Geometry is greyed out for #105), the
   *Scene* tree on the left (filter box; Guards, Objects, Zones, Scripts, Mission pads, Free pads, Rooms, each with
   its count), the 3D view, and on the right three tabs: *Selection*, *Mission* (the mission's properties: sections General, Start and test,
   Objectives, Environment, Thumbnail, File) and *Mod* (the mod's properties and its missions). The bottom is one status line (the last message, red for a
@@ -106,6 +112,42 @@ Props are drawn with the model the exporter recorded for their owner, placed so 
 of the recorded geometry sits on the prop's pad (the recorded placement and rotation are not
 reused); a prop with no recorded model is a box. Everything is replayed through the game's own
 fast3d OpenGL backend, so textures and colours match the game (fog is off).
+
+### Scripts and zones
+
+* **Doors.** A door record's pad is a bound pad of the level: the editor draws and picks a door as the game fits it (the model scaled to its bound pad's box, turned with the pad). A door can only be moved, added or pasted onto another *bound pad* (an original pad number >= 10000, click it in the view or `move` with `pad`); anywhere else is refused with one message, in the apply log, Validate and the tools, and the gizmo does not move doors.
+* **Zones.** The *Zone* tool: a click on the floor (or a pad) creates a zone there, id `z1`, `z2`, ... , radius 150, the room under
+  the point, its centre 50 units above the floor point (a script sees a player when the player's position is within the radius of
+  the centre: a sphere). A zone is drawn as a ring with two faint vertical rings and a height marker; click it (or its row under
+  *Zones* in the Scene tree) to select it. The gizmo (or `G`) moves it; the Selection tab edits centre, radius and room, *Remove* (or
+  `Delete`) deletes it. All of it is undoable.
+* **Script entries.** *Scripts* in the Scene tree lists every entry of `mission.json` "scripts" as `use > target`; a red row has
+  an error. *Add script...* offers the built-in library (`g_missionLibScripts`), the mission's own scripts
+  (`<mission dir>/<use>.luau` or `<mission dir>/scripts/<use>.luau`) and *New script* (a template with `export type Props = {}`).
+  Selecting a row shows the **Script** section in the Selection tab and highlights the target in the view (cyan; what its
+  properties point at is lighter): Up / Down / Remove reorder and delete; *script* picks another `use`; *Target* is a kind (mission /
+  prop / pad / zone) plus the value, which *Pick in view* takes from a click (a door, guard or object; a pad); then the **typed
+  property form**. Every change is one undo step and ends up in `mission.json`.
+* **The form comes from the script's own `export type Props = { ... }`**, read with the vendored Luau parser (not text matching).
+  The aliases of `port/mission/lib/mission.d.luau` choose the widget: `Item` an item combo (names from `item_names.h`, plus the
+  number), `Objective` a combo of the mission's objectives, `Zone` a combo of its zones, `Door` / `Prop` / `Guard` the number of an
+  original prop (typed, or picked in the view; its kind and model are shown) or a prop the mission adds, chosen from the *added...*
+  combo (listed by name, "Kalinin (added guard)") or picked in the view: the form then holds its uuid, shown by name (`#` goes back to
+  a number). Validate reports an unknown uuid, a uuid of the wrong kind (a `Door` field naming a guard) and a number that designates an
+  added prop. `Pad` a pad number
+  or mission pad id (picked in the view), `string` a text field, `number` a number field, `boolean` a checkbox. A `T?` field has a
+  checkbox: unticked, the key is left out of `mission.json`. The form is rebuilt when the script's `Props` changes.
+* **Code editor** (the *Code* button, a double click on a row, a finding in the log): a floating window with the vendored
+  ImGuiColorTextEdit (Luau colouring, line numbers). A built-in library script is read-only with *Copy into the mission*, which writes
+  `<mission dir>/scripts/<name>.luau` and points the entry at the copy; the mission's own scripts are edited and saved with
+  `Ctrl+S` together with the mission (a new, unsaved mission has no folder yet: save it first).
+* **Type checking.** Each script is checked with the vendored Luau Analysis (the editor only, never the game) in strict mode
+  against `mission.d.luau` (`g_missionApiDefs`): `props` has the script's own `Props` type, `target` the class of the entry's
+  target kind (`PropTarget`, `PadTarget`, `ZoneTarget`, `MissionTarget`, all `Target`). Findings show as a marker and squiggle on their
+  line, in the list under the editor (350 ms after the last key), in Mission > Validate and the log, and in MCP `validate`
+  (`severity`, `script`, `line`). The same Validate checks every entry's properties against `Props` (a required one missing, a
+  wrong kind, an objective / zone / prop / pad that does not exist). `mission.d.luau` is written in the Luau 0.746 definition dialect and loaded as is (see
+  `docs/porting-notes.md`).
 
 ### Transform, mods, thumbnails, environment
 
@@ -175,15 +217,30 @@ stdin/stdout; `--mcp-http` serves HTTP without a window.
 
 Test aids for scripted runs and screenshots: `--click X,Y`, `--mouse-at X,Y`, `--mouse-then FRAME,X,Y`,
 `--key FRAME[xLEN]:SPEC` (ctrl+c, ctrl+d, rmb+ctrl, wheel1 ...), `--mouse-drag` (+ `--mouse-from X,Y`), `--open-tab`,
-`--open-menu`, `--open-window settings|help|log|props|newmission`, `--capture` and `--thumb-adjust C,B` (the Thumbnail
+`--open-menu`, `--open-window settings|help|log|props|newmission`, `--select script:N|zone:ID|prop:N`, `--open-script NAME[:LINE]`, `--capture` and `--thumb-adjust C,B` (the Thumbnail
 section), `--place-model object|guard:MODEL,TYPE,ITEM@X,Y`, `--log-cam` (see `--help`).
 
-Tools: `level_describe` (`detail`: summary, pads, props, mission), `level_open`, `mission_open`
+Tools: `level_describe` (`detail`: summary, pads, props, mission, links, names), `level_open`, `mission_open`
 (`path`, or `new` + `level` + `name` [+ `emptied`]; optional `export`), `mission_save`, `place_guard`,
-`place_object`, `move`, `remove` (original props by `prop`, added ones by `kind` + `op`), `undo`,
+`place_object`, `move`, `remove` (original props by `prop`, added ones by `uuid` or `kind` + `op`; `move`, `set_transform`, `set_presence` and
+`set_guard_behavior` take the same), `undo`,
 `validate`, `set_guard_behavior` (a guard's AI list: an original guard gets a `move` op that keeps its pad and carries
 `ai`, an added one its own `ai`), `test_run`, `set_transform` (pos, yaw, axis, snap), `capture_thumb`, `mod_open`, `mod_save`,
-`mod_add_mission`, `mod_reorder`, `set_environment`, `duplicate` (a guard or object, with all its fields and its facing, as a new item; optional `pad` / `pos`). `level_describe` `props` lists every item's record fields. `move` also takes `pos` (+ `axis`, `snap`). A pad is an original pad number or a mission pad id; `pos: [x, y, z]`
+`mod_add_mission`, `mod_reorder`, `set_environment`, `script_list`, `script_read`, `script_write`, `script_copy`, `script_attach`, `set_props`, `script_remove`, `zone_add`, `zone_set`, `zone_remove`, `duplicate` (a guard or object, with all its fields and its facing, as a new item; optional `pad` / `pos`; an added item to copy is named by `from_uuid`).
+`place_guard`, `place_object` and `duplicate` accept an optional `uuid` (lowercase UUID, unused) and `name`; without a `uuid` the editor makes one and returns it
+(`{"added": {"kind": "guard", "op": 3, "uuid": "...", "name": "..."}, "uuid": "..."}`). `level_describe` items and `script_list` (`added_props`) show the uuid and name of every added prop. Scripts and zones: `script_list` (the entries with `use`, `target`, `props` and the script's Props schema, the library, the mission's own scripts, the zone ids), `script_read {use}` (source, schema, type-checker findings), `script_write {use, text}` (a mission script; held until `mission_save`; returns the findings with line numbers), `script_copy {use, switch?}` (library or mod script -> the mission's own), `script_attach {use, target, props}` or with `index` an update (`target` = `{kind: prop, prop: N}` (an original prop) | `{kind: prop, uuid: "..."}` (a prop the mission adds) | `{kind: pad, pad: N | "id"}` | `{kind: zone, zone: "id"}` | `{kind: mission}`; `props` = `{name: number | string | boolean}`; a `Door` / `Guard` / `Prop` property is an original prop's number or an added prop's uuid string), `set_props {index, props?, unset?, replace?}`, `script_remove {index}`, `zone_add {pos, radius?, room?, id?}`, `zone_set {id, pos?, radius?, room?}`, `zone_remove {id}`. `validate` returns the type-checker findings as issues with `script` and `line`.
+
+A whole mission can be authored, checked and play-tested through these tools alone (the sample `docs/modding/samples/formula` is such a mission):
+`mission_set {name?, briefing?, description?}`; `objective_add {id, text, difficulty?}`, `objective_set {id, text?, difficulty?, new_id?, index?}`
+(`index` reorders), `objective_remove {id}` (`difficulty` = the lowest difficulty, 0 Agent .. 2 00 Agent; ids are unique, one undo step each);
+`place_guard` / `place_object` take every record field of the add op by name (`head`, `health`, `reaction_time`, `bitflags`, ... for a guard; the
+header fields flat and the type's own in a sub-object, e.g. `{"type": 1, "door": {...}}`, for an object; `mission_fields.h`), `difficulties`
+and, for a guard, `weapons` (a list of at most two `{item, model?, flags?, collectable: {...}}`); an unknown field is refused with the valid names;
+`level_describe` `detail: "links"` lists the terminal <-> door pairs, the dual-weapon links, the tag records (tag id -> prop) and every door's bound pad,
+terminals and tags (read from the setup the editor loaded), `detail: "names"` the body / head ids with their model file names and the item ids
+with names (`props` also names each guard's body and head); `script_check {text, target_kind?, use?}` type-checks a draft source without
+writing it; `test_run {wait_seconds?, stop?}` can wait (cap 120 s; over HTTP the wait runs on the transport thread, so the editor keeps drawing and other calls are answered meanwhile; over stdio the call blocks) and returns the game log's
+`missions:` lines since the launch, the `[ERROR]` lines and `running`; `stop: true` then ends the game process this editor started. `level_describe` `props` lists every item's record fields. `move` also takes `pos` (+ `axis`, `snap`). A pad is an original pad number or a mission pad id; `pos: [x, y, z]`
 creates a new mission pad there.
 
 Smoke test (headless stdio plus HTTP, against the synthetic export):
@@ -203,11 +260,16 @@ python editor/tools/mcp_smoke.py <project-dam-editor exe> <export dir> <scratch 
 | `ui_app.h` | the GUI state (`App`) and the helpers shared by the panel files |
 | `ui_menubar.cpp`, `ui_toolbar.cpp`, `ui_scene.cpp` | menu bar, toolbar, the left Scene tree |
 | `ui_selection.cpp`, `ui_mission.cpp`, `ui_mod.cpp` | the right panel's tabs (its tab bar is in `ui_frame.cpp`) |
+| `ui_scripts.cpp`, `ui_scripts.h` | the Scripts and Zones panels: Scene tree nodes, the Selection tab's Script / Zone sections (the typed property form), the code editor window, picking in the view, the zone and target overlay |
+| `doc_scripts.cpp` | the document side: script entries, zones, script sources and their save, prop numbers, the script checks of Validate |
+| `script_props.cpp`, `script_check.cpp` | the `Props` schema (Luau parser); the type checker (Luau Analysis, `props` / `target` typed per script) |
+| `mcp_tools_script.inc`, `item_names.h` | the script and zone MCP tools; the ITEM_IDS names |
+| `mcp_tools_mission.inc`, `model_names.h` | the mission-authoring MCP tools (metadata, objectives, record fields, links / names, script_check, test_run log); the body / head model names (generated) |
 | `ui_thumb.cpp`, `ui_props.cpp` | the Mission tab's Thumbnail section (previews through `port/mission/mission_thumb.c`); the Props browser |
 | `ui_settings.cpp`, `ui_modals.cpp`, `ui_log.cpp` | Settings window, popups (unsaved changes, mission level, New mission, Controls), status line + log |
 | `ui_overlay.cpp`, `ui_frame.cpp`, `ui_actions.cpp` | 3D overlay + gizmo + sun marker; one frame (layout, camera, shortcuts); actions shared by menus, buttons and keys |
 | `launch.cpp` | starting the game |
-| `third_party/` | cpp-httplib, the ImGui SDL2 and OpenGL3 backends (see `NOTICE`) |
+| `third_party/` | cpp-httplib, the ImGui SDL2 and OpenGL3 backends, ImGuiColorTextEdit (the code editor), `luau_shim/` (see `NOTICE`) |
 | `tools/` | `make_test_rec.cpp`, `mcp_smoke.py` |
 
-Dear ImGui itself and `port/fast3d/` are the game's vendored copies, used unmodified.
+Dear ImGui itself and `port/fast3d/` are the game's vendored copies, used unmodified. The Luau type checker is `port/third_party/luau/Analysis` + `Config` (the same 0.746 as the game's VM and compiler), built as `ge_luau_analysis` for the editor only.

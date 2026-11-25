@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "id": "3f209aa5-55d5-4453-8dd1-58bfae3efe13",
+  "name": "Formula",
+  "author": "project-dam samples",
+  "description": "Escort a programmer through the Facility's locked doors and steal the formulas.",
+  "affects": ["story"],
+  "unlock": "ordered",
+  "missions": ["formula"]
+}

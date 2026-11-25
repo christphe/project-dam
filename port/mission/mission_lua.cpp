@@ -1,6 +1,7 @@
 // The Luau runtime of a custom mission: see mission_lua.h.
 #include "mission_lua.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdarg>
 #include <cmath>
@@ -36,6 +37,20 @@ struct Event {
     std::vector<Field> f;
 };
 
+struct Follow {
+    int prop = -1;
+    int player = -1;   // -1: the nearest living player
+    // The last order: re-plotting resets the guard's speed to 0 (plot_course_for_actor), so an order is only re-sent
+    // when it is out of date (see followTick).
+    bool ordered = false;
+    int who = -1, speed = 0;
+    float tgt[3] = { 0, 0, 0 };    // where the player was
+    float last[3] = { 0, 0, 0 };   // where the guard was at the previous tick
+    double since = 0;              // time of the order
+    int lastResult = 99;           // the previous order's MH_GOTO_* result (a repeated failure is logged once)
+    double movedAt = 0;            // the last time the guard was seen moving
+};
+
 enum class St { Run, Sleep, Event, Done };
 
 struct Script {
@@ -53,6 +68,7 @@ struct Objective {
     std::string id, text;
     int difficulty = 0;
     bool done = false;
+    bool failed = false;   // objectives.fail(): shown as failed; it can no longer be completed
 };
 
 struct Alloc {
@@ -70,7 +86,10 @@ struct MissionRuntime {
     std::vector<std::unique_ptr<Script>> scripts;
     std::vector<Objective> objs;
     std::vector<Event> queue;
-    double time = 0, lastScan = -1;
+    std::vector<Follow> follows;
+    struct PendingHit { int target; double at; };
+    std::vector<PendingHit> hits;   // :shoot(): the hit lands once the shooter has had time to raise and fire
+    double time = 0, lastScan = -1, lastFollow = -1;
     bool first = true, ended = false, scanned = false;
     Clock::time_point deadline;
     // state diffed into events
@@ -211,6 +230,15 @@ int l_message(lua_State *L)
     return 0;
 }
 
+int l_say(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    const char *who = luaL_checkstring(L, 1);
+    const char *t = luaL_checkstring(L, 2);
+    if (rt->host.say) rt->host.say(rt->host.ud, who, t);
+    return 0;
+}
+
 int l_give(lua_State *L)
 {
     MissionRuntime *rt = rtOf(L);
@@ -306,7 +334,7 @@ bool completeObjective(MissionRuntime *rt, const char *id)
 {
     Objective *o = findObj(rt, id);
     if (!o) return false;
-    if (!o->done) {
+    if (!o->done && !o->failed) {
         o->done = true;
         rt->log("objective complete: %s", id);
         raise(rt, Event{ "objective", { str("id", id) } });
@@ -320,6 +348,28 @@ int l_obj_complete(lua_State *L)
     const char *id = luaL_checkstring(L, 1);
     if (!completeObjective(rt, id)) luaL_error(L, "no objective '%s'", id);
     return 0;
+}
+
+int l_obj_fail(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    const char *id = luaL_checkstring(L, 1);
+    Objective *o = findObj(rt, id);
+    if (!o) luaL_error(L, "no objective '%s'", id);
+    if (!o->done && !o->failed) {
+        o->failed = true;
+        rt->log("objective failed: %s", id);
+        raise(rt, Event{ "objective_failed", { str("id", id) } });
+    }
+    return 0;
+}
+
+int l_obj_is_failed(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    Objective *o = findObj(rt, luaL_checkstring(L, 1));
+    lua_pushboolean(L, o && o->failed);
+    return 1;
 }
 
 int l_obj_is_complete(lua_State *L)
@@ -366,17 +416,28 @@ int l_win(lua_State *L)
     return 0;
 }
 
+int l_fail(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    rt->log("mission.fail()");
+    if (rt->host.fail) rt->host.fail(rt->host.ud);
+    rt->deadline = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(kResumeBudget));
+    return 0;
+}
+
 // ------------------------------------------------------------ targets
 const char kTargetMT[] = "ge.target";
 
-int tgtProp(lua_State *L)
+int tgtPropAt(lua_State *L, int idx)
 {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    lua_getfield(L, 1, "prop");
+    luaL_checktype(L, idx, LUA_TTABLE);
+    lua_getfield(L, idx, "prop");
     int p = lua_isnumber(L, -1) ? (int)lua_tonumber(L, -1) : -1;
     lua_pop(L, 1);
     return p;
 }
+
+int tgtProp(lua_State *L) { return tgtPropAt(L, 1); }
 
 int t_door(lua_State *L, int cmd)
 {
@@ -387,7 +448,7 @@ int t_door(lua_State *L, int cmd)
     return 0;
 }
 int t_lock(lua_State *L) { return t_door(L, MH_DOOR_LOCK); }
-int t_unlock(lua_State *L) { return t_door(L, MH_DOOR_UNLOCK); }
+int t_unlock(lua_State *L) { return t_door(L, lua_toboolean(L, 2) ? MH_DOOR_UNLOCK_FORCE : MH_DOOR_UNLOCK); }
 int t_open(lua_State *L) { return t_door(L, MH_DOOR_OPEN); }
 int t_close(lua_State *L) { return t_door(L, MH_DOOR_CLOSE); }
 
@@ -417,24 +478,187 @@ int t_set_ai(lua_State *L)
     return 0;
 }
 
-bool targetPos(lua_State *L, MissionRuntime *rt, float xyz[3], float *radius)
+double nearestPlayerIdx(MissionRuntime *rt, const float c[3], int only, int *which);
+
+static int poseCmd(lua_State *L, int pose)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L);
+    if (p < 0) luaL_error(L, "this target is not a prop");
+    float g[3];
+    int who = 0;
+    if (rt->host.prop_pos && rt->host.prop_pos(rt->host.ud, p, g)) nearestPlayerIdx(rt, g, -1, &who);
+    if (who < 0) who = 0;
+    if (rt->host.guard_pose) rt->host.guard_pose(rt->host.ud, p, pose, who);
+    rt->log("guard %d: %s", p, pose == MH_POSE_SURRENDER ? "surrender" : "stand");
+    return 0;
+}
+int t_surrender(lua_State *L) { return poseCmd(L, MH_POSE_SURRENDER); }
+
+static const char *gotoResult(int res)
+{
+    return res == MH_GOTO_OK ? "ok" : res == MH_GOTO_NOROUTE ? "NO ROUTE" : res == MH_GOTO_BUSY ? "REFUSED (10+ guards saw a player)" : "GONE";
+}
+
+int t_go_to(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L), t = tgtPropAt(L, 2);
+    const char *sp = luaL_optstring(L, 3, "run");
+    if (p < 0 || t < 0) luaL_error(L, "go_to: the guard and the target must be props");
+    const int run = !strcmp(sp, "walk") ? 0 : !strcmp(sp, "sprint") ? 2 : 1;
+    const int res = rt->host.guard_goto_prop ? rt->host.guard_goto_prop(rt->host.ud, p, t, run) : MH_GOTO_GONE;
+    rt->log("guard %d: go_to prop %d (%s): %s", p, t, sp, gotoResult(res));
+    lua_pushboolean(L, res == MH_GOTO_OK);
+    return 1;
+}
+
+int t_is_moving(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L);
+    lua_pushboolean(L, p >= 0 && rt->host.guard_moving && rt->host.guard_moving(rt->host.ud, p));
+    return 1;
+}
+
+int t_face(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L), t = tgtPropAt(L, 2);
+    if (p < 0 || t < 0) luaL_error(L, "face: the guard and the target must be props");
+    const int ok = !rt->host.guard_face_prop || rt->host.guard_face_prop(rt->host.ud, p, t);
+    lua_pushboolean(L, ok);
+    return 1;
+}
+
+int t_aim_at(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L), t = tgtPropAt(L, 2);
+    if (p < 0 || t < 0) luaL_error(L, "aim_at: the guard and the target must be props");
+    lua_pushboolean(L, rt->host.guard_aim_at && rt->host.guard_aim_at(rt->host.ud, p, t, 0));
+    return 1;
+}
+
+int t_shoot(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L), t = tgtPropAt(L, 2);
+    if (p < 0 || t < 0) luaL_error(L, "shoot: the guard and the target must be props");
+    if (rt->host.guard_aim_at) rt->host.guard_aim_at(rt->host.ud, p, t, 1);
+    // Frigate's hostage takers fire, wait five AI ticks, then deal the hit: the shot is seen before the target falls.
+    rt->hits.push_back({ t, rt->time + MISSION_SHOT_DELAY });
+    rt->log("guard %d: shoots guard %d", p, t);
+    return 0;
+}
+
+int t_sees_player(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L);
+    lua_pushboolean(L, p >= 0 && rt->host.guard_sees_player && rt->host.guard_sees_player(rt->host.ud, p));
+    return 1;
+}
+
+int t_was_shot_at(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L);
+    lua_pushboolean(L, p >= 0 && rt->host.guard_near_miss && rt->host.guard_near_miss(rt->host.ud, p));
+    return 1;
+}
+
+bool targetPos(lua_State *L, MissionRuntime *rt, float xyz[3], float *radius);
+
+int t_guards_near(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    float c[3], r;
+    const double radius = luaL_checknumber(L, 2);
+    if (!targetPos(L, rt, c, &r) || !rt->host.guards_near) { lua_pushnumber(L, 0); return 1; }
+    lua_pushnumber(L, rt->host.guards_near(rt->host.ud, c, (float)radius, tgtProp(L)));
+    return 1;
+}
+
+int t_hits(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L);
+    lua_pushnumber(L, (p >= 0 && rt->host.guard_hits) ? rt->host.guard_hits(rt->host.ud, p) : 0);
+    return 1;
+}
+
+int t_keep_body(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L);
+    if (p < 0) luaL_error(L, "keep_body: this target is not a prop");
+    if (rt->host.guard_keep_body) rt->host.guard_keep_body(rt->host.ud, p);
+    return 0;
+}
+
+int t_make_usable(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L);
+    if (p < 0) luaL_error(L, "make_usable: this target is not a prop");
+    if (rt->host.prop_usable) rt->host.prop_usable(rt->host.ud, p);
+    return 0;
+}
+
+int t_was_used(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L);
+    const int used = p >= 0 && rt->host.prop_used && rt->host.prop_used(rt->host.ud, p);
+    if (used) rt->log("prop %d: used by a player", p);
+    lua_pushboolean(L, used);
+    return 1;
+}
+
+int t_play_anim(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L);
+    const char *name = luaL_checkstring(L, 2);
+    const int ok = p >= 0 && rt->host.guard_anim && rt->host.guard_anim(rt->host.ud, p, name);
+    rt->log("guard %d: play_anim %s: %s", p, name, ok ? "ok" : "unknown animation or refused");
+    lua_pushboolean(L, ok);
+    return 1;
+}
+int t_stand(lua_State *L) { return poseCmd(L, MH_POSE_STAND); }
+
+// The position of the target table at `idx`: a prop (guard / object / door), a zone, or a mission pad (by id).
+// An original pad number has no position the runtime knows: false.
+bool targetPosAt(lua_State *L, int idx, MissionRuntime *rt, float xyz[3], float *radius)
 {
     *radius = 0;
-    lua_getfield(L, 1, "kind");
+    lua_getfield(L, idx, "kind");
     std::string kind = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
     lua_pop(L, 1);
     if (kind == "prop") {
-        int p = tgtProp(L);
+        int p = tgtPropAt(L, idx);
         return p >= 0 && rt->host.prop_pos && rt->host.prop_pos(rt->host.ud, p, xyz);
+    }
+    if (kind == "pad") {
+        lua_getfield(L, idx, "pad");
+        std::string id = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "";
+        lua_pop(L, 1);
+        for (int i = 0; !id.empty() && i < rt->m->npads; i++) {
+            if (id != rt->m->pads[i].id) continue;
+            for (int a = 0; a < 3; a++) xyz[a] = rt->m->pads[i].pos[a];
+            return true;
+        }
+        return false;
     }
     if (kind == "zone") {
         const char *keys[3] = { "x", "y", "z" };
         for (int i = 0; i < 3; i++) {
-            lua_getfield(L, 1, keys[i]);
+            lua_getfield(L, idx, keys[i]);
             xyz[i] = (float)lua_tonumber(L, -1);
             lua_pop(L, 1);
         }
-        lua_getfield(L, 1, "radius");
+        lua_getfield(L, idx, "radius");
         *radius = (float)lua_tonumber(L, -1);
         lua_pop(L, 1);
         return true;
@@ -442,18 +666,118 @@ bool targetPos(lua_State *L, MissionRuntime *rt, float xyz[3], float *radius)
     return false;
 }
 
-double nearestPlayer(MissionRuntime *rt, const float c[3])
+bool targetPos(lua_State *L, MissionRuntime *rt, float xyz[3], float *radius) { return targetPosAt(L, 1, rt, xyz, radius); }
+
+// The nearest living player to `c` (only `only` when >= 0); its index in *which (-1 if none) and its distance.
+double nearestPlayerIdx(MissionRuntime *rt, const float c[3], int only, int *which)
 {
     double best = 1e30;
     int n = rt->host.player_count ? rt->host.player_count(rt->host.ud) : 0;
+    if (which) *which = -1;
     for (int p = 0; p < n && p < kMaxPlayers; p++) {
         float q[3];
+        if (only >= 0 && p != only) continue;
         if (!rt->host.player_pos || !rt->host.player_pos(rt->host.ud, p, q)) continue;
         double dx = q[0] - c[0], dy = q[1] - c[1], dz = q[2] - c[2];
         double d = std::sqrt(dx * dx + dy * dy + dz * dz);
-        if (d < best) best = d;
+        if (d < best) { best = d; if (which) *which = p; }
     }
     return best;
+}
+
+double nearestPlayer(MissionRuntime *rt, const float c[3]) { return nearestPlayerIdx(rt, c, -1, nullptr); }
+
+int t_distance_to(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    float a[3], b[3], r;
+    luaL_checktype(L, 2, LUA_TTABLE);
+    if (!targetPosAt(L, 1, rt, a, &r) || !targetPosAt(L, 2, rt, b, &r)) { lua_pushnumber(L, 1e30); return 1; }
+    double dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+    lua_pushnumber(L, std::sqrt(dx * dx + dy * dy + dz * dz));
+    return 1;
+}
+
+// guard:follow([player]): see mission_lua.h
+int t_follow(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L);
+    int player = optPlayer(L, 2, -1);
+    if (p < 0) luaL_error(L, "this target is not a prop");
+    bool found = false;
+    for (Follow &f : rt->follows)
+        if (f.prop == p) { f.player = player; f.ordered = false; found = true; }
+    if (!found) {
+        Follow f;
+        f.prop = p;
+        f.player = player;
+        rt->follows.push_back(f);
+        if (rt->host.guard_set_ai) rt->host.guard_set_ai(rt->host.ud, p, MISSION_FOLLOW_AI);
+    }
+    rt->lastFollow = -1;   // the first order at the next tick
+    return 0;
+}
+
+int t_stop(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int p = tgtProp(L);
+    for (size_t i = 0; i < rt->follows.size(); i++)
+        if (rt->follows[i].prop == p) { rt->follows.erase(rt->follows.begin() + (long)i); break; }
+    return 0;
+}
+
+static double dist3(const float a[3], const float b[3])
+{
+    const double dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+// Every MISSION_FOLLOW_EVERY: order each following guard to its player when that player is far enough. Each order
+// restarts the guard from a standstill (plot_course_for_actor sets act_gopos.speed to 0), so an order is sent only when
+// the previous one is out of date: a new player to follow, a faster speed needed, the player moved MISSION_FOLLOW_REPLOT
+// from where the guard is heading, or the guard has not moved for a tick since an order at least MISSION_FOLLOW_STALL old.
+void followTick(MissionRuntime *rt)
+{
+    const MissionHost &h = rt->host;
+    for (size_t i = 0; i < rt->follows.size();) {
+        Follow &f = rt->follows[i];
+        float g[3], q[3];
+        if (h.guard_dead && h.guard_dead(h.ud, f.prop)) { rt->follows.erase(rt->follows.begin() + (long)i); continue; }
+        i++;
+        if (!h.prop_pos || !h.prop_pos(h.ud, f.prop, g)) continue;
+        int who;
+        const double d = nearestPlayerIdx(rt, g, f.player, &who);
+        if (dist3(g, f.last) >= MISSION_FOLLOW_STILL) f.movedAt = rt->time;
+        memcpy(f.last, g, sizeof f.last);
+        if (who < 0 || d <= MISSION_FOLLOW_NEAR || !h.guard_goto || !h.player_pos || !h.player_pos(h.ud, who, q)) {
+            f.ordered = false;   // close enough: the guard stops where it was sent
+            continue;
+        }
+        const int speed = d > MISSION_FOLLOW_SPRINT ? 2 : d > MISSION_FOLLOW_RUN ? 1 : 0;
+        // Every order restarts the guard from a standstill, so: an urgent one (none yet, another player, faster) at once;
+        // otherwise at most one per MISSION_FOLLOW_GAP, and only when the player has drifted far from where the guard is
+        // heading (relative to the distance: from far away, last position is good enough) or the guard has not moved
+        // for MISSION_FOLLOW_STALL.
+        const bool urgent = !f.ordered || who != f.who || speed > f.speed;
+        const double drift = dist3(q, f.tgt), driftMax = std::max(MISSION_FOLLOW_REPLOT, d * MISSION_FOLLOW_REPLOT_K);
+        const bool stalled = rt->time - f.movedAt >= MISSION_FOLLOW_STALL && rt->time - f.since >= MISSION_FOLLOW_STALL;
+        const bool stale = urgent || (rt->time - f.since >= MISSION_FOLLOW_GAP && (drift > driftMax || stalled));
+        if (!stale) continue;
+        const char *why = !f.ordered ? "start" : who != f.who ? "other player" : speed > f.speed ? "faster"
+                        : drift > driftMax ? "player moved" : "stalled";
+        const int res = h.guard_goto(h.ud, f.prop, who, speed);
+        static const char *const kSpeed[] = { "walk", "run", "sprint" };
+        const char *rs = res == MH_GOTO_OK ? "ok" : res == MH_GOTO_NOROUTE ? "NO ROUTE" : res == MH_GOTO_BUSY ? "REFUSED (10+ guards saw a player)" : "GONE";
+        if (res == MH_GOTO_OK || res != f.lastResult)
+            rt->log("follow: prop %d at %.0f %.0f %.0f -> player %d at %.0f %.0f %.0f, %.0f away, %s (%s): %s", f.prop, g[0], g[1], g[2],
+                    who, q[0], q[1], q[2], d, kSpeed[speed], why, rs);
+        f.lastResult = res;
+        if (res != MH_GOTO_OK) { f.ordered = false; continue; }   // retried at the next check
+        f.ordered = true; f.who = who; f.speed = speed; f.since = rt->time; f.movedAt = rt->time;
+        memcpy(f.tgt, q, sizeof f.tgt);
+    }
 }
 
 int t_distance(lua_State *L)
@@ -470,9 +794,23 @@ int t_near(lua_State *L)
     MissionRuntime *rt = rtOf(L);
     float c[3], r;
     double radius = luaL_optnumber(L, 2, 0);
+    const double height = luaL_optnumber(L, 3, -1);
     if (!targetPos(L, rt, c, &r)) { lua_pushboolean(L, 0); return 1; }
     if (radius <= 0) radius = r > 0 ? r : 150;
-    lua_pushboolean(L, nearestPlayer(rt, c) <= radius);
+    if (height < 0) {
+        lua_pushboolean(L, nearestPlayer(rt, c) <= radius);
+        return 1;
+    }
+    // with a height: horizontal distance within radius and vertical gap within height (a floor above does not count)
+    const int n = rt->host.player_count ? rt->host.player_count(rt->host.ud) : 0;
+    bool any = false;
+    for (int p = 0; p < n && p < kMaxPlayers && !any; p++) {
+        float q[3];
+        if (!rt->host.player_pos || !rt->host.player_pos(rt->host.ud, p, q)) continue;
+        const double dx = q[0] - c[0], dz = q[2] - c[2];
+        any = dx * dx + dz * dz <= radius * radius && std::fabs(q[1] - c[1]) <= height;
+    }
+    lua_pushboolean(L, any);
     return 1;
 }
 
@@ -525,12 +863,39 @@ bool loadSource(MissionRuntime *rt, const std::string &use, std::string &out, st
     return false;
 }
 
-void pushProps(lua_State *T, const MissionScript &ms)
+// The setup prop number of the added prop `uuid` names (-1: not present on this difficulty); logs each resolution once per use.
+int resolveUuid(MissionRuntime *rt, const char *uuid, const char *what)
+{
+    int idx = -1;
+    int kind = missionFindAdded(rt->m, uuid, &idx);
+    if (!kind) return -2;
+    const char *name = kind == 1 ? rt->m->guards[idx].name : rt->m->objects[idx].name;
+    int prop = kind == 1 ? rt->m->guards[idx].setup_prop : rt->m->objects[idx].setup_prop;
+    rt->log("%s: \"%s\" %s -> setup prop %d%s", what, name, uuid, prop, prop < 0 ? " (not present on this difficulty)" : "");
+    return prop;
+}
+
+// The level's own prop count: the first added prop's number, else every record is the level's.
+int originalPropCount(MissionRuntime *rt)
+{
+    int n = rt->host.prop_count ? rt->host.prop_count(rt->host.ud) : 0, first = -1;
+    for (int i = 0; i < rt->m->nguards; i++)
+        if (rt->m->guards[i].op == MISSION_OP_ADD && rt->m->guards[i].setup_prop >= 0 && (first < 0 || rt->m->guards[i].setup_prop < first)) first = rt->m->guards[i].setup_prop;
+    for (int i = 0; i < rt->m->nobjects; i++)
+        if (rt->m->objects[i].op == MISSION_OP_ADD && rt->m->objects[i].setup_prop >= 0 && (first < 0 || rt->m->objects[i].setup_prop < first)) first = rt->m->objects[i].setup_prop;
+    return first >= 0 ? first : n;
+}
+
+void pushProps(MissionRuntime *rt, lua_State *T, const MissionScript &ms)
 {
     lua_createtable(T, 0, ms.nprops);
     for (int i = 0; i < ms.nprops; i++) {
         const MissionProp &p = ms.props[i];
-        if (p.kind == MISSION_VAL_STRING) lua_pushstring(T, p.str);
+        if (p.kind == MISSION_VAL_STRING && missionUuidValid(p.str) && missionFindAdded(rt->m, p.str, nullptr)) {
+            std::string what = std::string("script ") + ms.use + " prop " + p.name;
+            lua_pushnumber(T, resolveUuid(rt, p.str, what.c_str()));       // an added prop: its setup prop number
+        }
+        else if (p.kind == MISSION_VAL_STRING) lua_pushstring(T, p.str);
         else if (p.kind == MISSION_VAL_BOOL) lua_pushboolean(T, p.num != 0);
         else lua_pushnumber(T, p.num);
         lua_setfield(T, -2, p.name);
@@ -541,7 +906,17 @@ void pushScriptTarget(MissionRuntime *rt, lua_State *T, const MissionScript &ms)
 {
     switch (ms.kind) {
     case MISSION_TGT_PROP:
-        pushTarget(T, "prop", ms.prop);
+        if (ms.uuid[0]) {
+            std::string what = std::string("script ") + ms.use + " target";
+            int p = resolveUuid(rt, ms.uuid, what.c_str());
+            if (p == -2) rt->log("script %s: target uuid %s is not an added prop: treated as missing", ms.use, ms.uuid);
+            pushTarget(T, "prop", p < 0 ? -1 : p);        // no "prop" field = a missing prop (the host checks every number)
+        } else {
+            const int orig = originalPropCount(rt);
+            const bool added = orig > 0 && ms.prop >= orig;
+            if (added) rt->log("script %s: target prop %d is an added prop: reference it by its uuid (treated as missing)", ms.use, ms.prop);
+            pushTarget(T, "prop", added ? -1 : ms.prop);
+        }
         break;
     case MISSION_TGT_PAD:
         pushTarget(T, "pad", -1);
@@ -597,7 +972,7 @@ bool startScript(MissionRuntime *rt, const MissionScript &ms, int index)
         return false;
     }
     // props and target as globals of this script's own environment
-    pushProps(T, ms);
+    pushProps(rt, T, ms);
     lua_setglobal(T, "props");
     pushScriptTarget(rt, T, ms);
     lua_setglobal(T, "target");
@@ -727,12 +1102,19 @@ MissionRuntime *missionRtCreate(const Mission *m, const MissionHost *host, const
     lua_callbacks(L)->userdata = rt.get();
     lua_callbacks(L)->interrupt = onInterrupt;
     luaL_openlibs(L);
+    {   // math.random differs from one run to the next (Luau seeds it with a constant)
+        lua_getglobal(L, "math");
+        lua_getfield(L, -1, "randomseed");
+        lua_pushnumber(L, (double)(std::chrono::steady_clock::now().time_since_epoch().count() & 0x7fffffff));
+        lua_call(L, 1, 0);
+        lua_pop(L, 1);
+    }
     for (const char *drop : { "os", "io", "debug", "require", "dofile", "loadfile", "collectgarbage" }) {
         lua_pushnil(L);
         lua_setglobal(L, drop);
     }
     struct Fn { const char *name; lua_CFunction f; };
-    for (const Fn &f : { Fn{ "print", l_print }, Fn{ "message", l_message }, Fn{ "give", l_give }, Fn{ "take", l_take },
+    for (const Fn &f : { Fn{ "print", l_print }, Fn{ "message", l_message }, Fn{ "say", l_say }, Fn{ "give", l_give }, Fn{ "take", l_take },
                          Fn{ "has", l_has }, Fn{ "wait", l_wait }, Fn{ "event", l_event }, Fn{ "door", l_door }, Fn{ "guard", l_door } }) {
         lua_pushcfunction(L, f.f, f.name);
         lua_setglobal(L, f.name);
@@ -746,15 +1128,20 @@ MissionRuntime *missionRtCreate(const Mission *m, const MissionHost *host, const
         lua_setglobal(L, name);
     };
     table("objectives", { Fn{ "add", l_obj_add }, Fn{ "complete", l_obj_complete }, Fn{ "is_complete", l_obj_is_complete },
-                          Fn{ "all_complete", l_obj_all } });
+                          Fn{ "fail", l_obj_fail }, Fn{ "is_failed", l_obj_is_failed }, Fn{ "all_complete", l_obj_all } });
     table("alarm", { Fn{ "trigger", l_alarm_trigger } });
-    table("mission", { Fn{ "win", l_win }, Fn{ "difficulty", l_difficulty } });
+    table("mission", { Fn{ "win", l_win }, Fn{ "fail", l_fail }, Fn{ "difficulty", l_difficulty } });
     luaL_newmetatable(L, kTargetMT);
     lua_pushvalue(L, -1);
     lua_setfield(L, -2, "__index");
     for (const Fn &f : { Fn{ "lock", t_lock }, Fn{ "unlock", t_unlock }, Fn{ "open", t_open }, Fn{ "close", t_close },
                          Fn{ "is_open", t_is_open }, Fn{ "is_dead", t_is_dead }, Fn{ "set_ai", t_set_ai },
-                         Fn{ "near", t_near }, Fn{ "distance", t_distance } }) {
+                         Fn{ "near", t_near }, Fn{ "distance", t_distance }, Fn{ "distance_to", t_distance_to },
+                         Fn{ "follow", t_follow }, Fn{ "stop", t_stop }, Fn{ "surrender", t_surrender }, Fn{ "stand", t_stand },
+                         Fn{ "go_to", t_go_to }, Fn{ "is_moving", t_is_moving }, Fn{ "face", t_face }, Fn{ "play_anim", t_play_anim },
+                         Fn{ "make_usable", t_make_usable }, Fn{ "was_used", t_was_used }, Fn{ "keep_body", t_keep_body },
+                         Fn{ "aim_at", t_aim_at }, Fn{ "shoot", t_shoot }, Fn{ "sees_player", t_sees_player },
+                         Fn{ "was_shot_at", t_was_shot_at }, Fn{ "guards_near", t_guards_near }, Fn{ "hits", t_hits } }) {
         lua_pushcfunction(L, f.f, f.name);
         lua_setfield(L, -2, f.name);
     }
@@ -790,6 +1177,15 @@ void missionRtTick(MissionRuntime *rt, double dt)
     for (auto &sp : rt->scripts)
         if (sp->st == St::Sleep && rt->time >= sp->wake) resumeScript(rt, *sp, nullptr);
     dispatch(rt);
+    for (size_t i = 0; i < rt->hits.size();) {
+        if (rt->time < rt->hits[i].at) { i++; continue; }
+        if (rt->host.guard_hit) rt->host.guard_hit(rt->host.ud, rt->hits[i].target);
+        rt->hits.erase(rt->hits.begin() + (long)i);
+    }
+    if (!rt->follows.empty() && rt->time - rt->lastFollow >= MISSION_FOLLOW_EVERY) {
+        rt->lastFollow = rt->time;
+        followTick(rt);
+    }
     lua_gc(rt->L, LUA_GCSTEP, 4);
 }
 
@@ -805,6 +1201,12 @@ int missionRtObjectiveCount(const MissionRuntime *rt) { return rt ? (int)rt->obj
 const char *missionRtObjectiveText(const MissionRuntime *rt, int i) { return (rt && i >= 0 && i < (int)rt->objs.size()) ? rt->objs[i].text.c_str() : ""; }
 int missionRtObjectiveDifficulty(const MissionRuntime *rt, int i) { return (rt && i >= 0 && i < (int)rt->objs.size()) ? rt->objs[i].difficulty : 0; }
 int missionRtObjectiveComplete(const MissionRuntime *rt, int i) { return (rt && i >= 0 && i < (int)rt->objs.size()) ? rt->objs[i].done : 0; }
+
+int missionRtObjectiveStatus(const MissionRuntime *rt, int i)
+{
+    if (!rt || i < 0 || i >= (int)rt->objs.size()) return 0;
+    return rt->objs[i].done ? 1 : rt->objs[i].failed ? 2 : 0;
+}
 
 int missionRtAllComplete(const MissionRuntime *rt, int difficulty)
 {
