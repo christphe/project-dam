@@ -58,6 +58,7 @@
 #ifdef PORT
 #include "hudaspect.h"   /* D335 HUD alignment under native widescreen */
 #endif
+#include "saymarker.h"   /* #132 positioned dialogue lines */
 #endif
 
 #ifdef VERSION_EU
@@ -9384,12 +9385,16 @@ Gfx *maybe_mp_interface(Gfx *gdl)
 #ifdef PORT
         PORT_HUD_SCALE_PCT(gdl, portDialogueHudScalePercent(), viGetViewLeft() + 0x1e, viGetViewTop());   /* D226: dialogue, width-capped */
 #endif
+#ifdef PORT
+        if (!sayMarkerHidesLine())   /* #132: a script line out of this player's range */
+#endif
         gdl = sub_GAME_7F08AAE8(gdl);
 #ifdef PORT
         PORT_HUD_SCALE_END(gdl);
 #endif
 #ifdef PORT
         PORT_HUD_ASPECT(gdl, GE_HUD_ASPECT_NONE);
+        gdl = sayMarkerRender(gdl);  /* #132: the speaker's marker, in the world's x mapping */
 #endif
 #ifdef PORT
         PORT_HUD_ASPECT(gdl, GE_HUD_ASPECT_CENTER);
@@ -9579,12 +9584,16 @@ Gfx *maybe_mp_interface(Gfx *gdl)
 #ifdef PORT
     PORT_HUD_SCALE_PCT(gdl, portDialogueHudScalePercent(), viGetViewLeft() + 0x1e, viGetViewTop());   /* D226: dialogue, width-capped */
 #endif
+#ifdef PORT
+    if (!sayMarkerHidesLine())   /* #132: a script line out of this player's range */
+#endif
     gdl = sub_GAME_7F08AAE8(gdl);
 #ifdef PORT
     PORT_HUD_SCALE_END(gdl);
 #endif
 #ifdef PORT
     PORT_HUD_ASPECT(gdl, GE_HUD_ASPECT_NONE);
+    gdl = sayMarkerRender(gdl);  /* #132: the speaker's marker, in the world's x mapping */
 #endif
     gunDrawSight(&gdl);
     gdl = generate_ammo_total_microcode(gdl);
@@ -10434,6 +10443,9 @@ void bondviewResetUpperTextDisplay(void)
     display_upper_text_window = 0;
     upper_text_buffer_index = 0;
     g_UpperTextDisplayFlag = 0;
+#ifdef PORT
+    sayMarkerReset();   /* #132 */
+#endif
 }
 
 

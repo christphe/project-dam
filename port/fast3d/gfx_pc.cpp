@@ -3,6 +3,7 @@
 #include "floatvtx.h" /* D245 */
 #include "gfx_ui.h"    /* menu UI drawn through the rendering API */
 #include "skyplus.h"  /* GE+ sky: G_SKYPLUS_EXT */
+#include "filltri.h"  /* G_FILLTRI_EXT: a fill triangle in screen space (the dialogue marker's arrow) */
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -6374,6 +6375,42 @@ static void gfx_dp_fill_rectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t
     rdp.combine_mode = saved_combine_mode;
 }
 
+/* G_FILLTRI_EXT: one triangle with the fill rectangle's setup (10.2 screen coordinates, HUD scale and aspect, the
+ * current combiner), drawn as a real triangle: its slanted edges are smooth at the output resolution. */
+static void gfx_dp_fill_triangle(const int32_t xq[3], const int32_t yq[3]) {
+    float x[3], y[3];
+    for (int i = 0; i < 3; i++) {
+        int32_t ax = xq[i], ay = yq[i], bx = xq[i], by = yq[i];
+        gfx_hud_scale_rect(ax, ay, bx, by);   /* D226, the point's own scale */
+        x[i] = (float)(ax + rdp.subpixel_ofs_x);
+        y[i] = (float)(ay + rdp.subpixel_ofs_y);
+    }
+    uint64_t saved_combine_mode = rdp.combine_mode;
+    if ((rdp.other_mode_h & (3U << G_MDSFT_CYCLETYPE)) == G_CYC_FILL) {
+        gfx_dp_set_combine_mode(color_comb(0, 0, 0, G_CCMUX_SHADE), alpha_comb(0, 0, 0, G_ACMUX_SHADE), 0, 0);
+    }
+    for (int i = 0; i < 3; i++) {
+        struct LoadedVertex* v = &rsp.loaded_vertices[MAX_VERTICES + i];
+        v->x = gfx_adjust_x_for_aspect_ratio(x[i] / (4.0f * HALF_SCREEN_WIDTH) - 1.0f);
+        v->y = -(y[i] / (4.0f * HALF_SCREEN_HEIGHT)) + 1.0f;
+        v->z = -1.0f;
+        v->w = 1.0f;
+        v->color = rdp.fill_color;
+    }
+    struct XYWidthHeight default_viewport = { 0, (int16_t)SCREEN_HEIGHT, (uint32_t)SCREEN_WIDTH, (uint32_t)SCREEN_HEIGHT };
+    struct XYWidthHeight viewport_saved = rdp.viewport;
+    uint32_t geometry_mode_saved = rsp.geometry_mode;
+    gfx_adjust_viewport_or_scissor(&default_viewport);
+    rdp.viewport = default_viewport;
+    rdp.viewport_or_scissor_changed = true;
+    rsp.geometry_mode = 0;
+    gfx_sp_tri1(MAX_VERTICES + 0, MAX_VERTICES + 1, MAX_VERTICES + 2, true);
+    rsp.geometry_mode = geometry_mode_saved;
+    rdp.viewport = viewport_saved;
+    rdp.viewport_or_scissor_changed = true;
+    rdp.combine_mode = saved_combine_mode;
+}
+
 static void gfx_dp_set_z_image(void* z_buf_address) {
     rdp.z_buf_address = z_buf_address;
 }
@@ -6816,6 +6853,18 @@ static void gfx_run_dl(Gfx* cmd) {
             case G_FILLRECT:
                 gfx_dp_fill_rectangle(C1(12, 12), C1(0, 12), C0(12, 12), C0(0, 12));
                 break;
+            case G_FILLTRI_EXT: {   /* port/include/filltri.h */
+                int32_t xq[3], yq[3];
+                xq[0] = (int16_t)C1(16, 16);
+                yq[0] = (int16_t)C1(0, 16);
+                ++cmd;
+                xq[1] = (int16_t)C0(16, 16);
+                yq[1] = (int16_t)C0(0, 16);
+                xq[2] = (int16_t)C1(16, 16);
+                yq[2] = (int16_t)C1(0, 16);
+                gfx_dp_fill_triangle(xq, yq);
+                break;
+            }
             case G_FILLRECT_WIDE_EXT: {
                 int32_t lrx, lry, ulx, uly;
                 lrx = (int32_t)(C0(0, 24) << 8) >> 8;

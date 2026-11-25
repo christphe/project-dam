@@ -687,6 +687,26 @@ double nearestPlayerIdx(MissionRuntime *rt, const float c[3], int only, int *whi
 
 double nearestPlayer(MissionRuntime *rt, const float c[3]) { return nearestPlayerIdx(rt, c, -1, nullptr); }
 
+// target:say(who, text [, range]): say() from the target's place (missions_host.c hSayAt). A prop is followed while
+// the line shows; a pad or a zone is its point; no position: a plain say().
+int t_say(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    const char *who = luaL_checkstring(L, 2);
+    const char *t = luaL_checkstring(L, 3);
+    float range = (float)luaL_optnumber(L, 4, 0.0);
+    float xyz[3], r;
+    lua_getfield(L, 1, "kind");
+    bool prop = lua_isstring(L, -1) && !strcmp(lua_tostring(L, -1), "prop");
+    lua_pop(L, 1);
+    if (rt->host.say_at && targetPos(L, rt, xyz, &r)) {
+        rt->host.say_at(rt->host.ud, who, t, prop ? tgtProp(L) : -1, xyz, range < 0 ? 0 : range);
+        return 0;
+    }
+    if (rt->host.say) rt->host.say(rt->host.ud, who, t);
+    return 0;
+}
+
 int t_distance_to(lua_State *L)
 {
     MissionRuntime *rt = rtOf(L);
@@ -1141,7 +1161,8 @@ MissionRuntime *missionRtCreate(const Mission *m, const MissionHost *host, const
                          Fn{ "go_to", t_go_to }, Fn{ "is_moving", t_is_moving }, Fn{ "face", t_face }, Fn{ "play_anim", t_play_anim },
                          Fn{ "make_usable", t_make_usable }, Fn{ "was_used", t_was_used }, Fn{ "keep_body", t_keep_body },
                          Fn{ "aim_at", t_aim_at }, Fn{ "shoot", t_shoot }, Fn{ "sees_player", t_sees_player },
-                         Fn{ "was_shot_at", t_was_shot_at }, Fn{ "guards_near", t_guards_near }, Fn{ "hits", t_hits } }) {
+                         Fn{ "was_shot_at", t_was_shot_at }, Fn{ "guards_near", t_guards_near }, Fn{ "hits", t_hits },
+                         Fn{ "say", t_say } }) {
         lua_pushcfunction(L, f.f, f.name);
         lua_setfield(L, -2, f.name);
     }

@@ -89,7 +89,10 @@ The whole API (globals, target methods, event names) is declared in **`port/miss
 definition file. It is the reference; the prose version is the comment at the top of `port/mission/mission_lua.h`. In
 short: `give` / `take` / `has` for items, `message` and `say` for text, `wait(seconds)` and `wait(event(...))`,
 `objectives.*` (`complete`, `fail`), `alarm.trigger()`, `mission.win()` / `mission.fail()`, and targets with `:lock()`,
-`:unlock([force])`, `:open()`, `:near([radius] [, height])`, `:distance()`, `:distance_to(other)`, `:is_dead()`, `:set_ai()`.
+`:unlock([force])`, `:open()`, `:near([radius] [, height])`, `:distance()`, `:distance_to(other)`, `:is_dead()`, `:set_ai()`,
+and `:say(who, text [, range])`: the line of `say`, with a marker over the target (above a guard's head) in every
+player's view, pinned to the edge of the view when the speaker is out of it, fainter and smaller the further away; with
+a range, players farther away see neither the line nor the marker.
 Guards also have `:follow()` / `:stop()`, `:go_to(target)` / `:is_moving()`, `:face(target)`, `:play_anim(name)`,
 `:surrender()` / `:stand()`, `:aim_at(other)` / `:shoot(other)`, `:sees_player()`, `:was_shot_at()`, `:hits()`,
 `:guards_near(radius)` and `:keep_body()`; objects have `:make_usable()` / `:was_used()` (a terminal a player activates).

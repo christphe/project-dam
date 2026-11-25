@@ -77,6 +77,11 @@ declare extern type Target with
                                               -- above or below (a floor above or below does not count)
     function distance(self): number                     -- to the nearest living player
     function distance_to(self, other: Target): number   -- between two targets; 1e30 when one has no position
+    -- dialogue
+    function say(self, who: string, text: string, range: number?)   -- say(who, text) spoken from the target: a marker
+                                              -- over it (above a guard's head, followed) in every player's view, pinned to
+                                              -- the edge when out of view, fainter and smaller further away; range: players
+                                              -- farther away get neither the line nor the marker. No position: plain say()
 end
 
 -- The type of `target` per attachment kind (the editor binds the one that matches the entry; fields of that kind are not optional).

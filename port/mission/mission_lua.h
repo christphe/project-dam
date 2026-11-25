@@ -68,6 +68,11 @@
  *                                                   terminals have); true once per activation since the last call
  *                   :play_anim(name) -> bool        play a named animation once (missions_host.c kAnims:
  *                                                   keyboard_right_hand_tapping, keyboard_left_hand, keyboard_right_hand2)
+ *                   :say(who, text [, range])       say(who, text) spoken from the target: a marker over it (a guard: above
+ *                                                   its head, followed while it moves; a pad or a zone: its point) in every
+ *                                                   player's view, pinned to the edge when out of view; range > 0: players
+ *                                                   farther away see neither the line nor the marker. A target with no
+ *                                                   position (an original pad number, a guard not spawned) says it plainly
  *                   .prop .kind .zone (fields)
  *   print(...)                                      to the host log
  * Events (name, fields): "start", "end" {win}, "pickup" {item, player}, "death" {prop},
@@ -125,6 +130,9 @@ typedef struct MissionHost {
     int  (*guard_goto)(void *ud, int prop, int player, int run);   /* send the guard to that player's position: run 0 walk, 1 run,
                                                                        2 sprint; returns an MH_GOTO_* result */
     void (*say)(void *ud, const char *who, const char *text);      /* top-of-screen dialogue line */
+    /* The same line, spoken from a place: setup prop `prop` (followed while it moves) when >= 0, else the fixed point
+     * pos; range > 0: players farther away do not get it. */
+    void (*say_at)(void *ud, const char *who, const char *text, int prop, const float pos[3], float range);
     void (*fail)(void *ud);                            /* end the level as a failure */
 } MissionHost;
 

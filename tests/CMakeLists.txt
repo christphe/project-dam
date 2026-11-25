@@ -55,6 +55,9 @@ ge_add_pure_test(test_porttex test_porttex.c ${CMAKE_SOURCE_DIR}/port/src/portte
 # The game event bus (port/src/portevents.c): pure, no core.
 ge_add_pure_test(test_portevents test_portevents.c ${CMAKE_SOURCE_DIR}/port/src/portevents.c)
 
+# Positioned dialogue markers (port/src/saymarker_math.c, #132): pure, no core.
+ge_add_pure_test(test_saymarker test_saymarker.c ${CMAKE_SOURCE_DIR}/port/src/saymarker_math.c)
+
 # Character-model subdivision (port/convert/conv_subdiv.c): pure, no core.
 ge_add_pure_test(test_subdiv test_subdiv.c ${CMAKE_SOURCE_DIR}/port/convert/conv_subdiv.c)
 
