@@ -389,22 +389,14 @@ static Cluster *newCluster(const float pos[3], const float n[3], float size, int
     return k;
 }
 
-/* ---- the props' holes: one hole each, drawn in the game's place (GE_FX_PROP_IMPACT) ------------ */
-
-/* A prop's hole texture: the template stamped alone, coloured, cached by (template, colour). */
-#define FXCL_PROPTEX 24
-typedef struct PropTex {
-    int used;
-    unsigned int key, age;
-    int colorId, depthId;
-    float depthUV;
-} PropTex;
-static PropTex s_propTex[FXCL_PROPTEX];
+/* ---- the props' holes, drawn in the game's place (GE_FX_PROP_IMPACT) ---------------------------- */
 
 typedef struct PropHole {
     void *prop;
-    int type, tex, mat, var;   /* tex -1: not built yet (glass: until fast3d decoded the game's image) */
+    int type, mat, var;
     float base[3];
+    int grp;                 /* its group (s_grp), -1: none yet */
+    unsigned int grpGen;     /* that group's generation when it joined */
 } PropHole;
 static PropHole s_propHole[BULLET_IMPACT_BUFFER_LEN];
 
@@ -421,69 +413,19 @@ static uintptr_t modelTexImage(const void *tricmd)
     return 0;
 }
 
-static int propTexture(int m, int var, const float base[3], const FxcTemplate *tpl)
-{
-    unsigned int key = (unsigned int)m << 24 | (unsigned int)var << 16;
-    int q[3];
-    for (int j = 0; j < 3; j++) {
-        q[j] = (int)(base[j] * 31.0f + 0.5f);
-        q[j] = q[j] < 0 ? 0 : q[j] > 31 ? 31 : q[j];
-    }
-    key |= (unsigned int)(q[0] << 10 | q[1] << 5 | q[2]);
-    PropTex *slot = &s_propTex[0];
-    for (int i = 0; i < FXCL_PROPTEX; i++) {
-        PropTex *p = &s_propTex[i];
-        if (p->used && p->key == key) {
-            p->age = ++s_age;
-            return i;
-        }
-        if (!p->used || (slot->used && p->age < slot->age)) slot = p;
-    }
-    const FxcTemplate *t = tpl != NULL ? tpl : templateFor(m, var);
-    if (t == NULL) return -1;
-    static FxcCluster c;
-    static unsigned char dep[FXCL_DEPTH * FXCL_DEPTH * 4], tmpRgba[FXCL_DEPTH * FXCL_DEPTH * 4];
-    static float dep01[FXCL_DEPTH * FXCL_DEPTH];
-    fxc_cluster_clear(&c, -1.0f, -1.0f, 2.0f);
-    FxcHole h;
-    h.x = 0.0f; h.y = 0.0f; h.hw = 1.0f; h.hh = 1.0f; h.mat = kMat[m].gen; h.var = var;
-    for (int j = 0; j < 3; j++) h.base[j] = q[j] / 31.0f;
-    fxc_stamp(&c, t, &h);
-    fxc_cluster_resample(&c, FXCL_DEPTH, tmpRgba, dep01);
-    for (int i = 0; i < FXCL_DEPTH * FXCL_DEPTH; i++) {
-        const float d = dep01[i];
-        dep[i * 4 + 0] = (unsigned char)(d > 1.0f ? 255.0f : d * 255.0f + 0.5f);
-        dep[i * 4 + 1] = 0; dep[i * 4 + 2] = 0; dep[i * 4 + 3] = 255;
-    }
-    const int idx = (int)(slot - s_propTex);
-    char name[PORTTEX_NAME_MAX];
-    snprintf(name, sizeof name, "impact/prop/%d/color", idx);
-    slot->colorId = portTexRegister(name, FXC_N, FXC_N, c.rgba, PORTTEX_COPY);
-    snprintf(name, sizeof name, "impact/prop/%d/depth", idx);
-    slot->depthId = portTexRegister(name, FXCL_DEPTH, FXCL_DEPTH, dep, PORTTEX_COPY);
-    slot->depthUV = c.depthMax / c.size;
-    slot->used = 1;
-    slot->key = key;
-    slot->age = ++s_age;
-    for (int i = 0; i < BULLET_IMPACT_BUFFER_LEN; i++) {   /* the holes that used this entry before */
-        if (s_propHole[i].tex == idx) s_propHole[i].tex = -1;   /* rebuilt when drawn */
-    }
-    return idx;
-}
-
 static void propImpact(const PortEvImpact *e)
 {
     if (e->slot < 0 || e->slot >= BULLET_IMPACT_BUFFER_LEN) return;
     PropHole *ph = &s_propHole[e->slot];
     ph->prop = NULL;
+    ph->grp = -1;
     int m = matOf(e->material);
     if (kMat[m].gen == FXC_GLASS) {   /* windows: the game's glass image, its middle empty (built when drawn) */
         ph->prop = e->prop;
         ph->type = e->impact_type;
-        ph->tex = -1;
         ph->mat = m;
         ph->var = e->impact_type;   /* the glass template is per impact type */
-        ph->base[0] = ph->base[1] = ph->base[2] = 0.0f;
+        ph->base[0] = ph->base[1] = ph->base[2] = 1.0f;
         glassTemplate(e->impact_type);   /* asks fast3d for the image */
         return;
     }
@@ -494,12 +436,10 @@ static void propImpact(const PortEvImpact *e)
     if (timg != 0 && gfx_texture_average(timg, avg)) {   /* the prop's texture, 15 % lighter */
         for (int j = 0; j < 3; j++) base[j] = avg[j] * 1.15f > 1.0f ? 1.0f : avg[j] * 1.15f;
     }
-    const int var = (int)(rnd01() * FXCL_VARS) % FXCL_VARS;
     ph->prop = e->prop;
     ph->type = e->impact_type;
-    ph->tex = propTexture(m, var, base, NULL);
     ph->mat = m;
-    ph->var = var;
+    ph->var = (int)(rnd01() * FXCL_VARS) % FXCL_VARS;
     for (int j = 0; j < 3; j++) ph->base[j] = base[j];
 }
 
@@ -539,29 +479,36 @@ static Gfx *propDrawEnd(Gfx *gdl)
     return gdl;
 }
 
-/* ---- glass objects: the holes on one pane fused into one cluster ----------------------------------
- * The game draws each hole of a prop on its own, so one hole's cracks covered another's empty middle. The holes
- * of a glass prop that lie on one plane (one model part) share a cluster here, in the part's model space (the
- * game's matrix): it is drawn once, in place of the first of them the game's loop meets, and the others draw
- * nothing. Rebuilt when its holes change. */
-#define FXCL_GLASSGRP 6
-typedef struct GlassGroup {
-    int used;
+/* ---- the props' holes fused: one cluster per group of nearby holes on one plane ------------------
+ * The game draws each hole of a prop on its own, so overlapping holes covered each other: one hole's glass cracks
+ * over another's empty middle, a metal hole's dent and soft edge over another's pit (stacked grey discs). The holes
+ * of a prop that lie on one plane (one model part) and near each other share a cluster here, in the part's model
+ * space (the game's matrix), fused as the level's are ("the deepest wins", fxcluster.h). It is drawn once, in place
+ * of the first of its holes the game's loop meets, and the others draw nothing. Glass never shares a group with
+ * the other materials (it is filtered as the game's image and drawn unlit). Rebuilt when its holes change. */
+#define FXCL_PROPGRP 16
+#define FXCL_GRP_REACH 5.0f   /* a group's holes lie within this many radii of its first hole (a level cluster: 10 across) */
+typedef struct PropGroup {
+    int used, glass;
+    unsigned int gen;            /* bumped when the slot is reused: its old holes look for a group again */
     void *prop;
     int rpi;                     /* model_render_pos_index */
     float N[3], d;               /* the plane, model space */
     float T[3], B[3], o[3];      /* the cluster's axes and centre */
+    float a[3], reach;           /* its first hole's centre, and how far from it (in T and B) a hole may reach */
     unsigned int members;        /* a hash of its holes */
     unsigned int drawnAt, age;
+    float depthUV, light;
     FxcCluster c;
     unsigned char depthTex[FXCL_DEPTH * FXCL_DEPTH * 4];
     int colorId, depthId;
-} GlassGroup;
-static GlassGroup s_glassGrp[FXCL_GLASSGRP];
+} PropGroup;
+static PropGroup s_grp[FXCL_PROPGRP];
 static unsigned int s_drawSerial;   /* one per fxClustersDraw (each view of each frame) */
 
-/* A hole's quad in model space (explosion.c: v0 = c-U-V tc(0,h), v1 = c-U+V tc(0,0), v2 = c+U+V, v3 = c+U-V). */
-static void holeFrame(const struct BulletImpact *b, float c[3], float u[3], float v[3], float *hw, float *hh)
+/* A hole's quad in model space (explosion.c: v0 = c-U-V tc(0,h), v1 = c-U+V tc(0,0), v2 = c+U+V, v3 = c+U-V);
+ * n = U x V. */
+static void holeFrame(const struct BulletImpact *b, float c[3], float u[3], float v[3], float n[3], float *hw, float *hh)
 {
     const Vtx *q = b->vertex_list;
     for (int j = 0; j < 3; j++) {
@@ -575,19 +522,39 @@ static void holeFrame(const struct BulletImpact *b, float c[3], float u[3], floa
         u[j] /= *hw > 1e-6f ? *hw : 1.0f;
         v[j] /= *hh > 1e-6f ? *hh : 1.0f;
     }
+    n[0] = u[1] * v[2] - u[2] * v[1]; n[1] = u[2] * v[0] - u[0] * v[2]; n[2] = u[0] * v[1] - u[1] * v[0];
 }
 
-static int glassHoleOk(int s)
+/* A hole the game still draws, as we recorded it. */
+static int propHoleOk(int s)
 {
     const PropHole *h = &s_propHole[s];
     const struct BulletImpact *b = &g_BulletImpactBuffer[s];
-    return h->prop != NULL && h->prop == (void *)b->prop && h->type == b->impact_type && b->room >= 0 &&
-           kMat[h->mat].gen == FXC_GLASS;
+    return h->prop != NULL && h->prop == (void *)b->prop && h->type == b->impact_type && b->room >= 0;
 }
 
-static int onPlane(const GlassGroup *g, const float c[3], const float n[3])
+static int isGlass(int s) { return kMat[s_propHole[s].mat].gen == FXC_GLASS; }
+
+static int grpValid(const PropHole *h)
 {
-    return __builtin_fabsf(dot3(n, g->N)) > 0.95f && __builtin_fabsf(dot3(c, g->N) - g->d) < 2.0f;
+    return h->grp >= 0 && s_grp[h->grp].used && s_grp[h->grp].gen == h->grpGen;
+}
+
+static int inGroup(const PropGroup *g, int s)
+{
+    return propHoleOk(s) && s_propHole[s].grp == (int)(g - s_grp) && s_propHole[s].grpGen == g->gen;
+}
+
+/* Whether hole s may join g: same prop, part, kind, plane, and it fits whole within the group's reach. */
+static int fitsGroup(const PropGroup *g, int s)
+{
+    const struct BulletImpact *b = &g_BulletImpactBuffer[s];
+    if (b->prop != g->prop || b->model_render_pos_index != g->rpi || isGlass(s) != g->glass) return 0;
+    float c[3], u[3], v[3], n[3], hw, hh;
+    holeFrame(b, c, u, v, n, &hw, &hh);
+    if (__builtin_fabsf(dot3(n, g->N)) <= 0.95f || __builtin_fabsf(dot3(c, g->N) - g->d) >= 2.0f) return 0;
+    const float d[3] = { c[0] - g->a[0], c[1] - g->a[1], c[2] - g->a[2] }, r = hw > hh ? hw : hh;
+    return __builtin_fabsf(dot3(d, g->T)) + r <= g->reach && __builtin_fabsf(dot3(d, g->B)) + r <= g->reach;
 }
 
 /* A separable box filter of width w texels over an RGBA FXC_N x FXC_N image, on premultiplied alpha. */
@@ -628,18 +595,34 @@ static void boxFilter(unsigned char *rgba, int w)
     }
 }
 
-/* Stamps every hole of the group again; returns 0 when a glass image is not decoded yet. */
-static int glassGroupBuild(GlassGroup *g)
+/* Hole s's template, NULL while a glass image is not decoded yet. */
+static const FxcTemplate *holeTemplate(int s)
+{
+    const PropHole *h = &s_propHole[s];
+    return isGlass(s) ? glassTemplate(h->type) : templateFor(h->mat, h->var);
+}
+
+/* The template with its coverage scaled by the game's fade (explosionSetBulletImpactAlpha fades the oldest
+ * holes out through the quad's vertex alpha, which a fused cluster cannot use). */
+static const FxcTemplate *fadedTemplate(const FxcTemplate *t, int alpha)
+{
+    if (alpha >= 255) return t;
+    static FxcTemplate f;
+    f = *t;
+    for (int i = 0; i < FXC_TPL * FXC_TPL; i++) f.rgba[i * 4 + 3] = (unsigned char)(t->rgba[i * 4 + 3] * alpha / 255);
+    return &f;
+}
+
+/* Stamps every hole of the group again; returns 0 when a template is not ready (a glass image not decoded). */
+static int groupBuild(PropGroup *g)
 {
     float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
     int n = 0;
     for (int s = 0; s < BULLET_IMPACT_BUFFER_LEN; s++) {
-        if (!glassHoleOk(s) || s_propHole[s].prop != g->prop || g_BulletImpactBuffer[s].model_render_pos_index != g->rpi) continue;
-        float c[3], u[3], v[3], hw, hh, nn[3];
-        holeFrame(&g_BulletImpactBuffer[s], c, u, v, &hw, &hh);
-        nn[0] = u[1] * v[2] - u[2] * v[1]; nn[1] = u[2] * v[0] - u[0] * v[2]; nn[2] = u[0] * v[1] - u[1] * v[0];
-        if (!onPlane(g, c, nn)) continue;
-        if (glassTemplate(s_propHole[s].type) == NULL) return 0;
+        if (!inGroup(g, s)) continue;
+        if (holeTemplate(s) == NULL) return 0;
+        float c[3], u[3], v[3], nn[3], hw, hh;
+        holeFrame(&g_BulletImpactBuffer[s], c, u, v, nn, &hw, &hh);
         const float d[3] = { c[0] - g->o[0], c[1] - g->o[1], c[2] - g->o[2] };
         const float x = dot3(d, g->T), y = dot3(d, g->B), r = hw > hh ? hw : hh;
         x0 = x - r < x0 ? x - r : x0; x1 = x + r > x1 ? x + r : x1;
@@ -648,28 +631,32 @@ static int glassGroupBuild(GlassGroup *g)
     }
     if (n == 0) return 0;
     const float size = (x1 - x0 > y1 - y0 ? x1 - x0 : y1 - y0) * 1.02f;
-    float texelSum = 0.0f;   /* the game image's texel, in cluster texels (for the filter after the fusion) */
+    float texelSum = 0.0f;   /* glass: the game image's texel, in cluster texels (for the filter after the fusion) */
     const float cx = 0.5f * (x0 + x1), cy = 0.5f * (y0 + y1);
     for (int j = 0; j < 3; j++) g->o[j] += g->T[j] * cx + g->B[j] * cy;   /* centre the square on the holes */
     fxc_cluster_clear(&g->c, -size * 0.5f, -size * 0.5f, size);
+    g->light = 0.0f;
     for (int s = 0; s < BULLET_IMPACT_BUFFER_LEN; s++) {
-        if (!glassHoleOk(s) || s_propHole[s].prop != g->prop || g_BulletImpactBuffer[s].model_render_pos_index != g->rpi) continue;
-        float c[3], u[3], v[3], hw, hh, nn[3];
-        holeFrame(&g_BulletImpactBuffer[s], c, u, v, &hw, &hh);
-        nn[0] = u[1] * v[2] - u[2] * v[1]; nn[1] = u[2] * v[0] - u[0] * v[2]; nn[2] = u[0] * v[1] - u[1] * v[0];
-        if (!onPlane(g, c, nn)) continue;
+        if (!inGroup(g, s)) continue;
+        const PropHole *ph = &s_propHole[s];
+        const struct BulletImpact *b = &g_BulletImpactBuffer[s];
+        float c[3], u[3], v[3], nn[3], hw, hh;
+        holeFrame(b, c, u, v, nn, &hw, &hh);
         const float d[3] = { c[0] - g->o[0], c[1] - g->o[1], c[2] - g->o[2] };
         FxcHole h;
         h.x = dot3(d, g->T); h.y = dot3(d, g->B); h.hw = hw; h.hh = hh;
-        h.mat = FXC_GLASS; h.var = 0;
-        h.base[0] = h.base[1] = h.base[2] = 1.0f;
-        fxc_stamp(&g->c, glassTemplate(s_propHole[s].type), &h);
-        const PortTex *src = portTexGet(s_gameImg[s_propHole[s].type] - 1);
-        if (src != NULL && src->w > 0) texelSum += 2.0f * hw / src->w / size * FXC_N;
+        h.mat = kMat[ph->mat].gen; h.var = ph->var;
+        for (int j = 0; j < 3; j++) h.base[j] = ph->base[j];
+        fxc_stamp(&g->c, fadedTemplate(holeTemplate(s), b->vertex_list[0].v.cn[3]), &h);
+        if (kMat[ph->mat].light > g->light) g->light = kMat[ph->mat].light;
+        if (g->glass) {
+            const PortTex *src = portTexGet(s_gameImg[ph->type] - 1);
+            if (src != NULL && src->w > 0) texelSum += 2.0f * hw / src->w / size * FXC_N;
+        }
     }
-    /* the fusion is texel-exact (the game's texels, nearest); now filter it as the game filters its image: a box
-     * one game texel wide, on premultiplied colour (empty texels do not darken the cracks' edges) */
-    boxFilter(g->c.rgba, (int)(texelSum / n + 0.5f));
+    /* glass: the fusion is texel-exact (the game's texels, nearest); now filter it as the game filters its image:
+     * a box one game texel wide, on premultiplied colour (empty texels do not darken the cracks' edges) */
+    if (g->glass) boxFilter(g->c.rgba, (int)(texelSum / n + 0.5f));
     static unsigned char tmpRgba[FXCL_DEPTH * FXCL_DEPTH * 4];
     static float dep01[FXCL_DEPTH * FXCL_DEPTH];
     fxc_cluster_resample(&g->c, FXCL_DEPTH, tmpRgba, dep01);
@@ -678,54 +665,65 @@ static int glassGroupBuild(GlassGroup *g)
         g->depthTex[i * 4 + 0] = (unsigned char)(dd > 1.0f ? 255.0f : dd * 255.0f + 0.5f);
         g->depthTex[i * 4 + 1] = 0; g->depthTex[i * 4 + 2] = 0; g->depthTex[i * 4 + 3] = 255;
     }
+    g->depthUV = g->c.depthMax / g->c.size;
     portTexTouch(g->colorId);
     portTexTouch(g->depthId);
     return 1;
 }
 
-static s32 glassGroupDraw(Gfx **gdlp, int slot)
+static s32 groupDraw(Gfx **gdlp, int slot)
 {
+    PropHole *ph = &s_propHole[slot];
     const struct BulletImpact *b = &g_BulletImpactBuffer[slot];
-    float c[3], u[3], v[3], hw, hh, nn[3];
-    holeFrame(b, c, u, v, &hw, &hh);
-    nn[0] = u[1] * v[2] - u[2] * v[1]; nn[1] = u[2] * v[0] - u[0] * v[2]; nn[2] = u[0] * v[1] - u[1] * v[0];
+    float c[3], u[3], v[3], nn[3], hw, hh;
+    holeFrame(b, c, u, v, nn, &hw, &hh);
     if (hw < 1e-3f || hh < 1e-3f) return 0;
 
-    GlassGroup *g = NULL;
-    for (int i = 0; i < FXCL_GLASSGRP && g == NULL; i++) {
-        GlassGroup *k = &s_glassGrp[i];
-        if (k->used && k->prop == b->prop && k->rpi == b->model_render_pos_index && onPlane(k, c, nn)) g = k;
+    PropGroup *g = grpValid(ph) ? &s_grp[ph->grp] : NULL;
+    for (int i = 0; i < FXCL_PROPGRP && g == NULL; i++) {
+        if (s_grp[i].used && fitsGroup(&s_grp[i], slot)) g = &s_grp[i];
     }
-    if (g == NULL) {   /* a new pane: the oldest group goes */
-        g = &s_glassGrp[0];
-        for (int i = 0; i < FXCL_GLASSGRP; i++) {
-            if (!s_glassGrp[i].used) { g = &s_glassGrp[i]; break; }
-            if (s_glassGrp[i].age < g->age) g = &s_glassGrp[i];
+    if (g == NULL) {   /* a new group around this hole: the oldest goes */
+        g = &s_grp[0];
+        for (int i = 0; i < FXCL_PROPGRP; i++) {
+            if (!s_grp[i].used) { g = &s_grp[i]; break; }
+            if (s_grp[i].age < g->age) g = &s_grp[i];
         }
-        const int idx = (int)(g - s_glassGrp);
+        const int idx = (int)(g - s_grp);
         g->used = 1;
+        g->gen++;
+        g->glass = isGlass(slot);
         g->prop = b->prop;
         g->rpi = b->model_render_pos_index;
-        for (int j = 0; j < 3; j++) { g->N[j] = nn[j]; g->T[j] = u[j]; g->B[j] = v[j]; g->o[j] = c[j]; }
+        for (int j = 0; j < 3; j++) { g->N[j] = nn[j]; g->T[j] = u[j]; g->B[j] = v[j]; g->o[j] = c[j]; g->a[j] = c[j]; }
         g->d = dot3(c, nn);
+        g->reach = (hw > hh ? hw : hh) * FXCL_GRP_REACH;
         g->members = 0;
         g->drawnAt = 0;
         char name[PORTTEX_NAME_MAX];
-        snprintf(name, sizeof name, "impact/glasspane/%d/color", idx);
+        snprintf(name, sizeof name, "impact/propgroup/%d/color", idx);
         g->colorId = portTexRegister(name, FXC_N, FXC_N, g->c.rgba, PORTTEX_EXTERNAL);
-        snprintf(name, sizeof name, "impact/glasspane/%d/depth", idx);
+        snprintf(name, sizeof name, "impact/propgroup/%d/depth", idx);
         g->depthId = portTexRegister(name, FXCL_DEPTH, FXCL_DEPTH, g->depthTex, PORTTEX_EXTERNAL);
     }
+    ph->grp = (int)(g - s_grp);
+    ph->grpGen = g->gen;
     g->age = ++s_age;
     if (g->drawnAt == s_drawSerial) return 1;   /* drawn already with the first of its holes */
 
+    /* the holes without a group yet that fit this one join it now, so they are in it from their first frame */
     unsigned int h = 2166136261u;   /* its holes now */
     for (int s = 0; s < BULLET_IMPACT_BUFFER_LEN; s++) {
-        if (!glassHoleOk(s) || s_propHole[s].prop != g->prop || g_BulletImpactBuffer[s].model_render_pos_index != g->rpi) continue;
-        h = (h ^ (unsigned int)(s * 131 + g_BulletImpactBuffer[s].impact_type)) * 16777619u;
+        if (!propHoleOk(s)) continue;
+        PropHole *o = &s_propHole[s];
+        if (!grpValid(o) && fitsGroup(g, s)) { o->grp = (int)(g - s_grp); o->grpGen = g->gen; }
+        if (!inGroup(g, s)) continue;
+        const struct BulletImpact *bs = &g_BulletImpactBuffer[s];
+        h = (h ^ (unsigned int)(s * 131 + bs->impact_type)) * 16777619u;
+        h = (h ^ bs->vertex_list[0].v.cn[3]) * 16777619u;   /* the game's fade */
     }
     if (h != g->members) {
-        if (!glassGroupBuild(g)) return 0;   /* the game draws it until the glass image is decoded */
+        if (!groupBuild(g)) return 0;   /* the game draws it until the glass image is decoded */
         g->members = h;
     }
     g->drawnAt = s_drawSerial;
@@ -734,6 +732,9 @@ static s32 glassGroupDraw(Gfx **gdlp, int slot)
     Vtx *vt = dynAllocateVertices(4);
     static const float cs[4][2] = { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } };
     const float half = g->c.size * 0.5f;
+    /* the vertex colour: r the relief's depth in uv units x 4, g how much it is lit (0 for glass: flat, unlit) */
+    const unsigned char vr = (unsigned char)(g->depthUV * 4.0f > 1.0f ? 255.0f : g->depthUV * 4.0f * 255.0f + 0.5f);
+    const unsigned char vg = (unsigned char)(g->light * 255.0f + 0.5f);
     for (int q = 0; q < 4; q++) {
         for (int j = 0; j < 3; j++) {
             const float w = g->o[j] + (g->T[j] * cs[q][0] + g->B[j] * cs[q][1]) * half;
@@ -742,7 +743,7 @@ static s32 glassGroupDraw(Gfx **gdlp, int slot)
         vt[q].v.flag = 0;
         vt[q].v.tc[0] = (s16)(cs[q][0] > 0 ? FXC_N << 5 : 0);
         vt[q].v.tc[1] = (s16)(cs[q][1] > 0 ? FXC_N << 5 : 0);
-        vt[q].v.cn[0] = 0; vt[q].v.cn[1] = 0; vt[q].v.cn[2] = 255; vt[q].v.cn[3] = 255;   /* flat, unlit (glass) */
+        vt[q].v.cn[0] = vr; vt[q].v.cn[1] = vg; vt[q].v.cn[2] = 255; vt[q].v.cn[3] = 255;   /* the fade is in the texture */
     }
     gSPVertex(gdl++, osVirtualToPhysical(vt), 4, 0);
     gSP2Triangles(gdl++, 0, 1, 2, 0, 0, 2, 3, 0);
@@ -753,37 +754,8 @@ static s32 glassGroupDraw(Gfx **gdlp, int slot)
 s32 portFxPropImpact(Gfx **gdlp, s32 slot)
 {
     if (slot < 0 || slot >= BULLET_IMPACT_BUFFER_LEN || !portFxUserOn) return 0;
-    PropHole *ph = &s_propHole[slot];
-    const struct BulletImpact *b = &g_BulletImpactBuffer[slot];
-    if (ph->prop == NULL || ph->prop != (void *)b->prop || ph->type != b->impact_type) return 0;
-    if (kMat[ph->mat].gen == FXC_GLASS) return glassGroupDraw(gdlp, slot);
-    if (ph->tex < 0) {   /* build it now: glass once its image is decoded (the game draws it until then) */
-        const FxcTemplate *gt = NULL;
-        if (kMat[ph->mat].gen == FXC_GLASS) {
-            gt = glassTemplate(ph->type);
-            if (gt == NULL) return 0;
-        }
-        ph->tex = propTexture(ph->mat, ph->var, ph->base, gt);
-        if (ph->tex < 0) return 0;
-    }
-    const PropTex *pt = &s_propTex[ph->tex];
-    if (!pt->used || impactimages == NULL) return 0;
-    const int iw = impactimages[b->impact_type].width, ih = impactimages[b->impact_type].height;
-    if (iw <= 0 || ih <= 0) return 0;
-    Gfx *gdl = propDrawBegin(*gdlp, pt->colorId, pt->depthId);
-    Vtx *v = dynAllocateVertices(4);
-    const unsigned char vr = (unsigned char)(pt->depthUV * 4.0f > 1.0f ? 255.0f : pt->depthUV * 4.0f * 255.0f + 0.5f);
-    const unsigned char vg = (unsigned char)(kMat[ph->mat].light * 255.0f + 0.5f);
-    for (int q = 0; q < 4; q++) {
-        v[q] = b->vertex_list[q];
-        v[q].v.tc[0] = (s16)((int)b->vertex_list[q].v.tc[0] * FXC_N / iw);   /* the game's image -> the port's */
-        v[q].v.tc[1] = (s16)((int)b->vertex_list[q].v.tc[1] * FXC_N / ih);
-        v[q].v.cn[0] = vr; v[q].v.cn[1] = vg; v[q].v.cn[2] = 255;   /* alpha: the game's fade */
-    }
-    gSPVertex(gdl++, osVirtualToPhysical(v), 4, 0);
-    gSP2Triangles(gdl++, 0, 1, 2, 0, 0, 2, 3, 0);
-    *gdlp = propDrawEnd(gdl);
-    return 1;
+    if (!propHoleOk(slot)) return 0;
+    return groupDraw(gdlp, slot);
 }
 
 /* The texture number of the pool texture whose pixels a G_SETTIMG word names, -1 if none: on PC the level's hit
