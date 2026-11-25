@@ -1,4 +1,4 @@
-/* CONSOLE mode precedence (port/include/console.h): pure, header only. */
+/* CONSOLE and HANDHELD precedence (port/include/console.h): pure, header only. */
 #include "ge_test.h"
 #include "../port/include/console.h"
 
@@ -26,5 +26,22 @@ int main(void)
     GE_CHECK_EQ_INT(why, PORT_CONSOLE_INI);
     GE_CHECK_EQ_INT(portConsoleResolve(0, NULL, 7, &why), 0);
     GE_CHECK_EQ_INT(why, PORT_CONSOLE_OFF);
+
+    /* handheld (#131): default off */
+    GE_CHECK_EQ_INT(portHandheldResolve(NULL, -1, &why), 0);
+    GE_CHECK_EQ_INT(why, PORT_HANDHELD_OFF);
+    /* env wins over the ini, both ways */
+    GE_CHECK_EQ_INT(portHandheldResolve("1", 0, &why), 1);
+    GE_CHECK_EQ_INT(why, PORT_HANDHELD_ENV);
+    GE_CHECK_EQ_INT(portHandheldResolve("0", 1, &why), 0);
+    GE_CHECK_EQ_INT(why, PORT_HANDHELD_ENV);
+    /* ini when no (valid) env */
+    GE_CHECK_EQ_INT(portHandheldResolve(NULL, 1, &why), 1);
+    GE_CHECK_EQ_INT(why, PORT_HANDHELD_INI);
+    GE_CHECK_EQ_INT(portHandheldResolve("10", 1, &why), 1);
+    GE_CHECK_EQ_INT(why, PORT_HANDHELD_INI);
+    GE_CHECK_EQ_INT(portHandheldResolve("yes", -1, &why), 0);
+    GE_CHECK_EQ_INT(why, PORT_HANDHELD_OFF);
+    GE_CHECK_EQ_INT(portHandheldResolve(NULL, 2, NULL), 0);
     return GE_TEST_END();
 }

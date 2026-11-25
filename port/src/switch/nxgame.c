@@ -77,20 +77,13 @@ PD_CONSTRUCTOR static void nxBloodRegisterConfig(void)
  */
 #include <time.h>
 
-#if defined(PLATFORM_SWITCH)
-extern int nxIsHandheld(void);
-#endif
-/* Game.AimZoom applies on a console (no keyboard/mouse, small screen): on the
- * Switch only while handheld (the docked TV is big), on any other console
- * (a PortMaster handheld, GE_CONSOLE=1) always. Never on a desktop. */
+/* Game.AimZoom applies on a console (no keyboard/mouse) with a small screen:
+ * the Switch while handheld (the docked TV is big), elsewhere a console run
+ * with GE_HANDHELD=1 / System.Handheld (a Linux handheld; a Pi on a TV is not,
+ * #131). Never on a desktop. */
 static int aimZoomAllowed(void)
 {
-    if (!portIsConsole()) return 0;
-#if defined(PLATFORM_SWITCH)
-    return nxIsHandheld();
-#else
-    return 1;
-#endif
+    return portIsConsole() && portIsHandheld();
 }
 extern s32 getPlayerCount(void);
 extern bool currentPlayerGetIsAiming(void);
