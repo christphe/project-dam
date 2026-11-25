@@ -28,8 +28,8 @@
 
 /* HUD pixels an edge-pinned marker keeps from the view's edges. The top one clears the dialogue box
  * (bondview2.c: the box starts at the view top + 0xd, one line of Zurich Bold below it). */
-/* The bubble's size at full strength: 1.5 x its 14 x 10 drawing, so it reads on a TV in half a split screen. */
-#define SAY_SIZE 1.5f
+/* The bubble's size at full strength: its 14 x 10 drawing as is (1.5 x was too big in play). */
+#define SAY_SIZE 1.0f
 
 #define SAY_INSET_X      14.0f
 #define SAY_INSET_TOP    48.0f
