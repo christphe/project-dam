@@ -628,7 +628,16 @@ int t_play_anim(lua_State *L)
 }
 int t_stand(lua_State *L) { return poseCmd(L, MH_POSE_STAND); }
 
-// The position of the target table at `idx`: a prop (guard / object / door), a zone, or a mission pad (by id).
+// player(n)'s index (the "player" field), -1 if none.
+int tgtPlayer(lua_State *L, int idx)
+{
+    lua_getfield(L, idx, "player");
+    int p = lua_isnumber(L, -1) ? (int)lua_tonumber(L, -1) : -1;
+    lua_pop(L, 1);
+    return p;
+}
+
+// The position of the target table at `idx`: a prop (guard / object / door), a player, a zone, or a mission pad (by id).
 // An original pad number has no position the runtime knows: false.
 bool targetPosAt(lua_State *L, int idx, MissionRuntime *rt, float xyz[3], float *radius)
 {
@@ -639,6 +648,10 @@ bool targetPosAt(lua_State *L, int idx, MissionRuntime *rt, float xyz[3], float 
     if (kind == "prop") {
         int p = tgtPropAt(L, idx);
         return p >= 0 && rt->host.prop_pos && rt->host.prop_pos(rt->host.ud, p, xyz);
+    }
+    if (kind == "player") {
+        int p = tgtPlayer(L, idx);
+        return p >= 0 && rt->host.player_pos && rt->host.player_pos(rt->host.ud, p, xyz);
     }
     if (kind == "pad") {
         lua_getfield(L, idx, "pad");
@@ -697,10 +710,12 @@ int t_say(lua_State *L)
     float range = (float)luaL_optnumber(L, 4, 0.0);
     float xyz[3], r;
     lua_getfield(L, 1, "kind");
-    bool prop = lua_isstring(L, -1) && !strcmp(lua_tostring(L, -1), "prop");
+    std::string kind = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
     lua_pop(L, 1);
     if (rt->host.say_at && targetPos(L, rt, xyz, &r)) {
-        rt->host.say_at(rt->host.ud, who, t, prop ? tgtProp(L) : -1, xyz, range < 0 ? 0 : range);
+        int k = kind == "prop" ? MH_SAY_PROP : kind == "player" ? MH_SAY_PLAYER : MH_SAY_POINT;
+        int index = k == MH_SAY_PROP ? tgtProp(L) : k == MH_SAY_PLAYER ? tgtPlayer(L, 1) : -1;
+        rt->host.say_at(rt->host.ud, who, t, k, index, xyz, range < 0 ? 0 : range);
         return 0;
     }
     if (rt->host.say) rt->host.say(rt->host.ud, who, t);
@@ -845,6 +860,16 @@ void pushTarget(lua_State *L, const char *kind, int prop)
 }
 
 int l_door(lua_State *L) { pushTarget(L, "prop", (int)luaL_checkinteger(L, 1)); return 1; }
+
+// player(n): player n (0-based) as a target.
+int l_player(lua_State *L)
+{
+    int n = (int)luaL_checkinteger(L, 1);
+    pushTarget(L, "player", -1);
+    lua_pushnumber(L, n);
+    lua_setfield(L, -2, "player");
+    return 1;
+}
 
 // -------------------------------------------------------------- scripts
 bool validName(const char *n)
@@ -1135,7 +1160,8 @@ MissionRuntime *missionRtCreate(const Mission *m, const MissionHost *host, const
     }
     struct Fn { const char *name; lua_CFunction f; };
     for (const Fn &f : { Fn{ "print", l_print }, Fn{ "message", l_message }, Fn{ "say", l_say }, Fn{ "give", l_give }, Fn{ "take", l_take },
-                         Fn{ "has", l_has }, Fn{ "wait", l_wait }, Fn{ "event", l_event }, Fn{ "door", l_door }, Fn{ "guard", l_door } }) {
+                         Fn{ "has", l_has }, Fn{ "wait", l_wait }, Fn{ "event", l_event }, Fn{ "door", l_door }, Fn{ "guard", l_door },
+                         Fn{ "player", l_player } }) {
         lua_pushcfunction(L, f.f, f.name);
         lua_setglobal(L, f.name);
     }

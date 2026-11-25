@@ -638,12 +638,12 @@ static int hGuardAnim(void *ud, int i, const char *name)
 }
 
 /* say(who, text): the line the AI command AI_TextPrintTop shows (chrai.c: hudmsgTopShow). It copies the string. */
-struct sayArg { const char *line; SayAnchorFn fn; int key; const float *fixed; float range; };
+struct sayArg { const char *line; SayAnchorFn fn; int key; const float *fixed; float range; int self; };
 
 static void showTop(void *arg)
 {
     struct sayArg *a = arg;
-    sayMarkerQueue(a->line, a->fn, NULL, a->key, a->fixed, a->range);   /* the slot this line lands in: its speaker */
+    sayMarkerQueue(a->line, a->fn, NULL, a->key, a->fixed, a->range, a->self);   /* the slot this line lands in: its speaker */
     hudmsgTopShow((char *)a->line);
 }
 
@@ -662,6 +662,18 @@ static int sayPropAnchor(void *ud, int key, float xyz[3])
         if (!c || !c->model) return 0;
         xyz[1] = c->ground + c->chrheight + 10.0f;
     }
+    return 1;
+}
+
+/* A player's anchor: above its head (its eye, the camera of its own view, a little higher), followed. */
+static int sayPlayerAnchor(void *ud, int key, float xyz[3])
+{
+    struct player *pl;
+    (void)ud;
+    if (key < 0 || key >= getPlayerCount() || !(pl = g_playerPointers[key]) || !pl->prop || pl->bonddead) return 0;
+    xyz[0] = pl->prop->pos.f[0];
+    xyz[1] = pl->viewtoworldmtxf ? pl->viewtoworldmtxf->m[3][1] + 20.0f : pl->prop->pos.f[1];
+    xyz[2] = pl->prop->pos.f[2];
     return 1;
 }
 
@@ -686,19 +698,23 @@ static void sayLine(const char *who, const char *text, struct sayArg *a)
 
 static void hSay(void *ud, const char *who, const char *text)
 {
-    struct sayArg a = { NULL, NULL, -1, NULL, 0.0f };
+    struct sayArg a = { NULL, NULL, -1, NULL, 0.0f, -1 };
     (void)ud;
     sayLine(who, text, &a);
 }
 
 /* target:say(): the same line, with a marker over its speaker in every player's view (port/src/saymarker.c). */
-static void hSayAt(void *ud, const char *who, const char *text, int prop, const float pos[3], float range)
+static void hSayAt(void *ud, const char *who, const char *text, int kind, int index, const float pos[3], float range)
 {
-    struct sayArg a = { NULL, NULL, -1, NULL, range };
+    struct sayArg a = { NULL, NULL, -1, NULL, range, -1 };
     (void)ud;
-    if (prop >= 0) {
+    if (kind == MH_SAY_PROP && index >= 0) {
         a.fn = sayPropAnchor;   /* followed while the line shows */
-        a.key = prop;
+        a.key = index;
+    } else if (kind == MH_SAY_PLAYER && index >= 0) {
+        a.fn = sayPlayerAnchor; /* followed; never over its own head */
+        a.key = index;
+        a.self = index;
     } else {
         a.fixed = pos;          /* a pad's or a zone's point (sayMarkerQueue copies it) */
     }

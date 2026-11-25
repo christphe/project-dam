@@ -91,7 +91,7 @@ short: `give` / `take` / `has` for items, `message` and `say` for text, `wait(se
 `objectives.*` (`complete`, `fail`), `alarm.trigger()`, `mission.win()` / `mission.fail()`, and targets with `:lock()`,
 `:unlock([force])`, `:open()`, `:near([radius] [, height])`, `:distance()`, `:distance_to(other)`, `:is_dead()`, `:set_ai()`,
 and `:say(who, text [, range])`: the line of `say`, with a marker over the target (above a guard's head) in every
-player's view, pinned to the edge of the view when the speaker is out of it, fainter and smaller the further away; with
+player's view (`player(n):say(...)` makes a player speak: the others see the marker over it), pinned to the edge of the view when the speaker is out of it, fainter and smaller the further away; with
 a range, players farther away see neither the line nor the marker.
 Guards also have `:follow()` / `:stop()`, `:go_to(target)` / `:is_moving()`, `:face(target)`, `:play_anim(name)`,
 `:surrender()` / `:stand()`, `:aim_at(other)` / `:shoot(other)`, `:sees_player()`, `:was_shot_at()`, `:hits()`,

@@ -47,11 +47,12 @@ typedef struct SaySlot {
     s32 key;
     f32 fixed[3];
     f32 range;
+    s32 self;           /* the speaking player (no marker in its own view), -1: not a player */
 } SaySlot;
 
 static SaySlot s_slots[2];
 
-void sayMarkerQueue(const char *line, SayAnchorFn fn, void *ud, int key, const float *fixed, float range)
+void sayMarkerQueue(const char *line, SayAnchorFn fn, void *ud, int key, const float *fixed, float range, int self)
 {
     SaySlot *s;
     if (display_upper_text_window >= 2) return;   /* hudmsgTopShow drops the line: the queue is full */
@@ -64,6 +65,7 @@ void sayMarkerQueue(const char *line, SayAnchorFn fn, void *ud, int key, const f
     s->key = key;
     if (fixed) memcpy(s->fixed, fixed, sizeof s->fixed);
     s->range = range;
+    s->self = self;
     s->active = 1;
 }
 
@@ -178,7 +180,7 @@ Gfx *sayMarkerRender(Gfx *gdl)
     f32 d, k, sc, alpha, far;
     s32 i, j;
 
-    if (!s || !g_CurrentPlayer->field_10CC) return gdl;
+    if (!s || !g_CurrentPlayer->field_10CC || s->self == get_cur_playernum()) return gdl;   /* not over your own head */
     d = speakerDistance(s, xyz);
     if (d < 0.0f) return gdl;
     if (s->range > 0.0f && d > s->range) return gdl;

@@ -32,7 +32,7 @@ typedef struct Fake {
     int set_ai[8][2], nset_ai;        /* guard_set_ai: prop, list */
     char says[8][160];
     int nsay;
-    char saysAt[8][160];              /* say_at: who|text|prop|x|z|range */
+    char saysAt[8][160];              /* say_at: who|text|kind:index|x|z|range */
     int nsayAt;
     int failed;
     float g6z;                        /* guard 6's z (it is at x = 60) */
@@ -56,10 +56,10 @@ static int  fDiff(void *u) { return ((Fake *)u)->diff; }
 static int  fGoto(void *u, int prop, int player, int run) { Fake *f = u; if (f->ngoto < 16) { f->gotos[f->ngoto][0] = prop; f->gotos[f->ngoto][1] = player; f->gotos[f->ngoto][2] = run; f->ngoto++; } return MH_GOTO_OK; }
 static void fSetAi(void *u, int prop, int ai) { Fake *f = u; if (f->nset_ai < 8) { f->set_ai[f->nset_ai][0] = prop; f->set_ai[f->nset_ai][1] = ai; f->nset_ai++; } }
 static void fSay(void *u, const char *who, const char *t) { Fake *f = u; if (f->nsay < 8) snprintf(f->says[f->nsay++], 160, "%s|%s", who, t); }
-static void fSayAt(void *u, const char *who, const char *t, int prop, const float pos[3], float range)
+static void fSayAt(void *u, const char *who, const char *t, int kind, int index, const float pos[3], float range)
 {
     Fake *f = u;
-    if (f->nsayAt < 8) snprintf(f->saysAt[f->nsayAt++], 160, "%s|%s|%d|%.0f|%.0f|%.0f", who, t, prop, pos[0], pos[2], range);
+    if (f->nsayAt < 8) snprintf(f->saysAt[f->nsayAt++], 160, "%s|%s|%d:%d|%.0f|%.0f|%.0f", who, t, kind, index, pos[0], pos[2], range);
 }
 static void fFail(void *u) { ((Fake *)u)->failed = 1; }
 
@@ -297,6 +297,7 @@ int main(void)
                   "say('Yuri', 'Wait for me!')\n"
                   "g:say('Yuri', 'Over here', 300)\n"
                   "target:say('M', 'no place')\n"
+                  "player(1):say('Bond', 'Coming')\n"
                   "wait(event('pickup', { item = 91 }))\n"
                   "door(5):unlock(true)\n"
                   "door(5):unlock()\n"
@@ -378,12 +379,14 @@ int main(void)
         GE_CHECK_EQ_INT(f.nsay, 2);
         GE_CHECK(!strcmp(f.says[0], "Yuri|Wait for me!"));
         GE_CHECK(!strcmp(f.says[1], "M|no place"));          /* target:say() on the mission (no position): plain */
-        GE_CHECK_EQ_INT(f.nsayAt, 2);
-        GE_CHECK(!strcmp(f.saysAt[0], "P|pad|-1|60|100|0")); /* a pad: its point, no prop */
+        GE_CHECK_EQ_INT(f.nsayAt, 3);
+        GE_CHECK(!strcmp(f.saysAt[0], "P|pad|0:-1|60|100|0"));   /* a pad: its point */
         {
             char want[160];
-            snprintf(want, sizeof want, "Yuri|Over here|6|60|%.0f|300", f.g6z);   /* a guard: followed (prop 6), its range */
+            snprintf(want, sizeof want, "Yuri|Over here|1:6|60|%.0f|300", f.g6z);   /* a guard: followed (prop 6), its range */
             GE_CHECK(!strcmp(f.saysAt[1], want));
+            snprintf(want, sizeof want, "Bond|Coming|2:1|%.0f|%.0f|0", f.ppos[1][0], f.ppos[1][2]);   /* player 1, where it is */
+            GE_CHECK(!strcmp(f.saysAt[2], want));
         }
         GE_CHECK_EQ_INT(f.failed, 0);
         f.has[0][91] = 1;

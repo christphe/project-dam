@@ -18,8 +18,9 @@ typedef int (*SayAnchorFn)(void *ud, int key, float xyz[3]);
 
 /* Call right before hudmsgTopShow(line). The speaker is fn(ud, key) while the line shows (a moving guard), or the
  * fixed point when fn is NULL (a pad, a zone); neither: a line with no place (plain say), the slot carries no marker.
- * range > 0: a player farther than this (world units) sees neither the line nor the marker; 0: no limit. */
-void sayMarkerQueue(const char *line, SayAnchorFn fn, void *ud, int key, const float *fixed, float range);
+ * range > 0: a player farther than this (world units) sees neither the line nor the marker; 0: no limit.
+ * self >= 0: the speaker is that player, whose own view gets the line but no marker (it is the camera). */
+void sayMarkerQueue(const char *line, SayAnchorFn fn, void *ud, int key, const float *fixed, float range, int self);
 
 /* Stage load (bondviewResetUpperTextDisplay): forget every marker. */
 void sayMarkerReset(void);
