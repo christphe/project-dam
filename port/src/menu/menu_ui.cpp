@@ -293,7 +293,7 @@ void drawSlider(ImDrawList* dl, const Control& c, int fi, float x, float y, floa
 
 void drawAction(ImDrawList* dl, const Control& c, int fi, float x, float y, float u, bool disabled) {
     const float bh = 3.1f * u;
-    const ImVec2 sz = textSize(g_head, 1.55f * u, tr(c.label).c_str());
+    const ImVec2 sz = textSize(g_head, 1.55f * u, tr(controlLabel(c, g_state)).c_str());
     const float bw = maxf(14.0f * u, sz.x + 3.0f * u);
     char id[64];
     snprintf(id, sizeof id, "##%s", c.id.c_str());
@@ -305,7 +305,7 @@ void drawAction(ImDrawList* dl, const Control& c, int fi, float x, float y, floa
     const ImVec2 a(x + in, y + in), b(x + bw - in, y + bh - in);
     box(dl, a, b, IM_COL32(21, 22, 15, 255), k > 0 ? kGold : kRule);
     if (k > 0) dl->AddRectFilled(a, b, IM_COL32(230, 194, 90, (int)(110 * k)));
-    textCenter(dl, g_head, 1.55f * u, a, b, disabled ? kDisabled : kInk, tr(c.label).c_str());
+    textCenter(dl, g_head, 1.55f * u, a, b, disabled ? kDisabled : kInk, tr(controlLabel(c, g_state)).c_str());
     if (g_focus == fi && !disabled) focusFrame(dl, ImVec2(x, y), ImVec2(x + bw, y + bh), u);
 }
 
@@ -560,6 +560,7 @@ bool setData(const char* json, size_t len, std::string* err) {
     State fresh;
     fresh.pc = g_state.pc;
     fresh.console = g_state.console;   /* set before setData (menu_game.cpp): a fresh State would show the window rows */
+    fresh.handheld = g_state.handheld;
     fresh.dev = g_state.dev;
     fresh.reset(g_model);
     for (auto& kv : fresh.v) {   /* keep what was set */
@@ -659,6 +660,7 @@ void setPlatform(bool pc) {
     g_focus = -1;
 }
 void setConsole(bool console) { g_state.console = console; g_entry = 0; g_focus = -1; }
+void setHandheld(bool handheld) { g_state.handheld = handheld; g_entry = 0; g_focus = -1; }
 void setPadFamily(int fam) { g_padFam = fam; }
 void setDev(bool dev) { g_state.dev = dev; g_entry = 0; g_focus = -1; }
 bool isPc() { return g_state.pc; }
@@ -1144,7 +1146,7 @@ void draw(float W, float H) {
             const std::string help = tr(helpFor(c, g_state.get(c.id)));
             const float baseH = rowH - rows[i].helpH;
             if (g_focus == fi) dl->AddRectFilled(ImVec2(fx, y0), ImVec2(fx + fw, y0 + rowH), kGoldSoft);
-            const std::string lab = (c.type == CT_ACTION || c.type == CT_DIAGRAM) ? std::string() : tr(c.label);
+            const std::string lab = (c.type == CT_ACTION || c.type == CT_DIAGRAM) ? std::string() : tr(controlLabel(c, g_state));
             text(dl, g_head, 1.7f * u, ImVec2(fx + 1.2f * u, y0 + (4.6f * u - 1.7f * u) * 0.5f), dis ? kDisabled : kInk, lab.c_str());
             std::string tagText = c.tag.empty() ? std::string() : tr(c.tag);
             if (c.restart) tagText += (tagText.empty() ? "" : " ") + tr("(restart)");
