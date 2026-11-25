@@ -45,6 +45,9 @@ that edits them. How the menu binds them: [options-menu.md](options-menu.md).
     The probe turns it off where it costs frames; `GE_A2C=0/1` pins it for one run.
   - `System.Console` (0/1): run as a console (no keyboard or mouse; the window is the panel). A PortMaster handheld
     launcher sets it; the Switch is always a console. `GE_CONSOLE=1` overrides it (`port/include/console.h`).
+  - `System.Handheld` (0/1): the screen is small (a Linux handheld, not a Pi on a TV); with console mode it turns on
+    `Game.AimZoom`. Off the Switch only (the Switch uses its docked/handheld state). `GE_HANDHELD=1` overrides it;
+    `packaging/linux-arm64/project-dam-handheld.sh` sets it (#131).
 - **Per-profile settings** (`Bond.*` in the menu: music and FX volume, aim control, auto-aim, look ahead (Off, Original, Low, Medium or High; only Off / Original is in the save, the level is `Game.LookAheadLevel` above),
   sight and ammo on screen, control style of the Original scheme) are not in the ini, apart from that level: they live
   in the save file, as on the N64.

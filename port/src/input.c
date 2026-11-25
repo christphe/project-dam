@@ -3190,9 +3190,34 @@ int portIsConsole(void)
     return resolved;
 }
 
+/* HANDHELD (port/include/console.h, #131): small screen. The Switch asks the
+ * applet every time; elsewhere GE_HANDHELD / System.Handheld, resolved once. */
+static int cfgHandheld;  /* System.Handheld: hidden ini override, 0/1 */
+#ifdef __SWITCH__
+extern int nxIsHandheld(void);
+#endif
+int portIsHandheld(void)
+{
+#ifdef __SWITCH__
+    return nxIsHandheld();
+#else
+    static int resolved = -1;
+    if (resolved < 0) {
+        static const char *const kWhy[] = { "off", "GE_HANDHELD", "ini" };
+        int why = 0;
+        resolved = portHandheldResolve(getenv("GE_HANDHELD"),
+                                       configIntKeyWasLoaded("System.Handheld") ? cfgHandheld : -1, &why);
+        sysLogPrintf(LOG_NOTE, resolved ? "handheld mode: on (%s)" : "handheld mode: %s",
+                     resolved ? kWhy[why] : kWhy[0]);
+    }
+    return resolved;
+#endif
+}
+
 PD_CONSTRUCTOR static void inputConfigInit(void)
 {
     configRegisterInt("System.Console", &cfgConsole, 0, 1);   /* hidden: not in the options menu */
+    configRegisterInt("System.Handheld", &cfgHandheld, 0, 1); /* hidden: not in the options menu (#131) */
     /* D518: per seat. The pre-D518 global key is kept as seat 1's, so an
      * existing ini keeps its value for P1 and P2-P4 start at Jinx. */
     configRegisterInt("Input.PadPreset",  &padPreset[0], 0, 5);   /* D498: 0 Jinx 1.1, 1 Christmas 1.2, 2 Frost 1.3, 3 Custom, 4 Elektra 1.4 */
