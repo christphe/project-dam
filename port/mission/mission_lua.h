@@ -30,6 +30,8 @@
  *   mission.difficulty() -> 0..3                    the difficulty being played: 0 Agent, 1 Secret Agent, 2 00 Agent, 3 007
  *                                                   (-1 when the host has no difficulty)
  *   door(prop) / guard(prop) -> target              a target for a setup prop number
+ *   player(n) -> target                             player n (0-based) as a target (kind "player"): :say(), :distance(),
+ *                                                   :near(), :distance_to() (the prop methods do nothing on it)
  *   target (global of the script)                   the script's own target (kind "prop", "pad", "zone", "mission")
  *   props (global of the script)                    the typed values from mission.json
  *   target methods: :lock() :unlock([force]) :open() :close() :is_open() :is_dead()
@@ -68,6 +70,12 @@
  *                                                   terminals have); true once per activation since the last call
  *                   :play_anim(name) -> bool        play a named animation once (missions_host.c kAnims:
  *                                                   keyboard_right_hand_tapping, keyboard_left_hand, keyboard_right_hand2)
+ *                   :say(who, text [, range])       say(who, text) spoken from the target: a marker over it (a guard or a
+ *                                                   player: above its head, followed while it moves, never in that player's
+ *                                                   own view; a pad or a zone: its point) in every
+ *                                                   player's view, pinned to the edge when out of view; range > 0: players
+ *                                                   farther away see neither the line nor the marker. A target with no
+ *                                                   position (an original pad number, a guard not spawned) says it plainly
  *                   .prop .kind .zone (fields)
  *   print(...)                                      to the host log
  * Events (name, fields): "start", "end" {win}, "pickup" {item, player}, "death" {prop},
@@ -125,10 +133,19 @@ typedef struct MissionHost {
     int  (*guard_goto)(void *ud, int prop, int player, int run);   /* send the guard to that player's position: run 0 walk, 1 run,
                                                                        2 sprint; returns an MH_GOTO_* result */
     void (*say)(void *ud, const char *who, const char *text);      /* top-of-screen dialogue line */
+    /* The same line, spoken from a place: `kind` MH_SAY_PROP (setup prop `index`, followed while it moves),
+     * MH_SAY_PLAYER (player `index`, followed; no marker in its own view) or MH_SAY_POINT (the fixed point pos, a pad
+     * or a zone); pos is the speaker's position now in every case. range > 0: players farther away do not get it. */
+    void (*say_at)(void *ud, const char *who, const char *text, int kind, int index, const float pos[3], float range);
     void (*fail)(void *ud);                            /* end the level as a failure */
 } MissionHost;
 
 /* guard:follow(): the passive AI list (GAILIST_DEAD_AI, "yield forever") and the follow timing. */
+/* say_at speakers */
+#define MH_SAY_POINT   0
+#define MH_SAY_PROP    1
+#define MH_SAY_PLAYER  2
+
 /* guard_pose poses */
 #define MH_POSE_STAND      0   /* stand still facing the player (check_set_actor_standing_still, TARGET_BOND) */
 #define MH_POSE_SURRENDER  1   /* hands up (chrTrySurrender; an armed guard throws its weapon) */

@@ -32,6 +32,8 @@ typedef struct Fake {
     int set_ai[8][2], nset_ai;        /* guard_set_ai: prop, list */
     char says[8][160];
     int nsay;
+    char saysAt[8][160];              /* say_at: who|text|kind:index|x|z|range */
+    int nsayAt;
     int failed;
     float g6z;                        /* guard 6's z (it is at x = 60) */
 } Fake;
@@ -54,6 +56,11 @@ static int  fDiff(void *u) { return ((Fake *)u)->diff; }
 static int  fGoto(void *u, int prop, int player, int run) { Fake *f = u; if (f->ngoto < 16) { f->gotos[f->ngoto][0] = prop; f->gotos[f->ngoto][1] = player; f->gotos[f->ngoto][2] = run; f->ngoto++; } return MH_GOTO_OK; }
 static void fSetAi(void *u, int prop, int ai) { Fake *f = u; if (f->nset_ai < 8) { f->set_ai[f->nset_ai][0] = prop; f->set_ai[f->nset_ai][1] = ai; f->nset_ai++; } }
 static void fSay(void *u, const char *who, const char *t) { Fake *f = u; if (f->nsay < 8) snprintf(f->says[f->nsay++], 160, "%s|%s", who, t); }
+static void fSayAt(void *u, const char *who, const char *t, int kind, int index, const float pos[3], float range)
+{
+    Fake *f = u;
+    if (f->nsayAt < 8) snprintf(f->saysAt[f->nsayAt++], 160, "%s|%s|%d:%d|%.0f|%.0f|%.0f", who, t, kind, index, pos[0], pos[2], range);
+}
 static void fFail(void *u) { ((Fake *)u)->failed = 1; }
 
 static MissionHost host(Fake *f)
@@ -63,7 +70,7 @@ static MissionHost host(Fake *f)
     h.ud = f; h.log = fLog; h.message = fMsg; h.give = fGive; h.take = fTake; h.has = fHas;
     h.player_count = fPc; h.player_pos = fPpos; h.prop_count = fPropCount; h.prop_type = fPropType;
     h.prop_pos = fPropPos; h.door_state = fDoorState; h.door_cmd = fDoorCmd; h.guard_dead = fDead; h.win = fWin; h.difficulty = fDiff;
-    h.guard_goto = fGoto; h.guard_set_ai = fSetAi; h.say = fSay; h.fail = fFail;
+    h.guard_goto = fGoto; h.guard_set_ai = fSetAi; h.say = fSay; h.say_at = fSayAt; h.fail = fFail;
     return h;
 }
 
@@ -288,6 +295,9 @@ int main(void)
                   "wait(event('pickup', { item = 90 }))\n"
                   "g:stop()\n"
                   "say('Yuri', 'Wait for me!')\n"
+                  "g:say('Yuri', 'Over here', 300)\n"
+                  "target:say('M', 'no place')\n"
+                  "player(1):say('Bond', 'Coming')\n"
                   "wait(event('pickup', { item = 91 }))\n"
                   "door(5):unlock(true)\n"
                   "door(5):unlock()\n"
@@ -295,7 +305,7 @@ int main(void)
             fclose(fp);
         }
         fp = fopen("tmp_missiontest/scripts/padprobe.luau", "wb");
-        if (fp) { fputs("message('padd ' .. target:distance_to(guard(6)))\nwait(event('start'))\n", fp); fclose(fp); }
+        if (fp) { fputs("message('padd ' .. target:distance_to(guard(6)))\ntarget:say('P', 'pad')\nwait(event('start'))\n", fp); fclose(fp); }
         fp = fopen("tmp_missiontest/scripts/zoneprobe.luau", "wb");
         if (fp) { fputs("message('zoned ' .. target:distance_to(guard(6)))\nwait(event('start'))\n", fp); fclose(fp); }
         missionInit(&m4);
@@ -366,8 +376,18 @@ int main(void)
         f.ngoto = 0;
         run(rt, 2.0);
         GE_CHECK_EQ_INT(f.ngoto, 0);                         /* stopped: no more orders although everybody is far */
-        GE_CHECK_EQ_INT(f.nsay, 1);
+        GE_CHECK_EQ_INT(f.nsay, 2);
         GE_CHECK(!strcmp(f.says[0], "Yuri|Wait for me!"));
+        GE_CHECK(!strcmp(f.says[1], "M|no place"));          /* target:say() on the mission (no position): plain */
+        GE_CHECK_EQ_INT(f.nsayAt, 3);
+        GE_CHECK(!strcmp(f.saysAt[0], "P|pad|0:-1|60|100|0"));   /* a pad: its point */
+        {
+            char want[160];
+            snprintf(want, sizeof want, "Yuri|Over here|1:6|60|%.0f|300", f.g6z);   /* a guard: followed (prop 6), its range */
+            GE_CHECK(!strcmp(f.saysAt[1], want));
+            snprintf(want, sizeof want, "Bond|Coming|2:1|%.0f|%.0f|0", f.ppos[1][0], f.ppos[1][2]);   /* player 1, where it is */
+            GE_CHECK(!strcmp(f.saysAt[2], want));
+        }
         GE_CHECK_EQ_INT(f.failed, 0);
         f.has[0][91] = 1;
         run(rt, 0.3);

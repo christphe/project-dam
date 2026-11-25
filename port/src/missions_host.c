@@ -37,6 +37,7 @@
 #include "mission_lua.h"
 #include "missions.h"
 #include "missions_priv.h"
+#include "saymarker.h"
 
 extern struct player *g_playerPointers[4];
 extern s32 g_ClockTimer;
@@ -637,14 +638,49 @@ static int hGuardAnim(void *ud, int i, const char *name)
 }
 
 /* say(who, text): the line the AI command AI_TextPrintTop shows (chrai.c: hudmsgTopShow). It copies the string. */
-static void showTop(void *arg) { hudmsgTopShow((char *)arg); }
+struct sayArg { const char *line; SayAnchorFn fn; int key; const float *fixed; float range; int self; };
 
-static void hSay(void *ud, const char *who, const char *text)
+static void showTop(void *arg)
+{
+    struct sayArg *a = arg;
+    sayMarkerQueue(a->line, a->fn, NULL, a->key, a->fixed, a->range, a->self);   /* the slot this line lands in: its speaker */
+    hudmsgTopShow((char *)a->line);
+}
+
+/* A setup prop's anchor while its line shows: above a guard's head (the game's own chr height over its ground, as
+ * chr.c gives the collision top), an object's own position. */
+static int sayPropAnchor(void *ud, int key, float xyz[3])
+{
+    PropRecord *p;
+    (void)ud;
+    if (key < 0 || key >= s_nprop || !(p = propOf(key))) return 0;
+    xyz[0] = p->pos.f[0];
+    xyz[1] = p->pos.f[1];
+    xyz[2] = p->pos.f[2];
+    if (s_prop[key]->type == PROPDEF_GUARD) {
+        ChrRecord *c = ((GuardRecord *)s_prop[key])->Data;
+        if (!c || !c->model) return 0;
+        xyz[1] = c->ground + c->chrheight + 10.0f;
+    }
+    return 1;
+}
+
+/* A player's anchor: above its head (its eye, the camera of its own view, a little higher), followed. */
+static int sayPlayerAnchor(void *ud, int key, float xyz[3])
+{
+    struct player *pl;
+    (void)ud;
+    if (key < 0 || key >= getPlayerCount() || !(pl = g_playerPointers[key]) || !pl->prop || pl->bonddead) return 0;
+    xyz[0] = pl->prop->pos.f[0];
+    xyz[1] = pl->viewtoworldmtxf ? pl->viewtoworldmtxf->m[3][1] + 20.0f : pl->prop->pos.f[1];
+    xyz[2] = pl->prop->pos.f[2];
+    return 1;
+}
+
+static void sayLine(const char *who, const char *text, struct sayArg *a)
 {
     char raw[0x200], line[0x200];
-    int n = getPlayerCount();
     size_t len;
-    (void)ud;
     snprintf(raw, sizeof raw, "%s: %s", who ? who : "", text ? text : "");
     /* The top message is drawn as is: never wrapped, and its dark box is as tall as textMeasure says, which counts
      * the newlines (the game's own strings all end in one). Wrap it to the width the HUD gives it (bondview2.c: x 0x1e
@@ -654,7 +690,35 @@ static void hSay(void *ud, const char *who, const char *text)
     if (len + 2 >= 0x97) len = 0x97 - 2;   /* bondview2.c BONDVIEW_HUD_MSG_TOP_BUFFER_LENGTH, with room for the newline */
     if (len == 0 || line[len - 1] != '\n') line[len++] = '\n';
     line[len] = 0;
-    for (int p = 0; p < n; p++) withPlayer(p, showTop, line);
+    a->line = line;
+    /* Once: the top message is one queue shared by every player's view (bondview2.c hudmsgTopShow), each player's
+     * HUD pass draws it. One call per player queued the same line twice in co-op. */
+    showTop(a);
+}
+
+static void hSay(void *ud, const char *who, const char *text)
+{
+    struct sayArg a = { NULL, NULL, -1, NULL, 0.0f, -1 };
+    (void)ud;
+    sayLine(who, text, &a);
+}
+
+/* target:say(): the same line, with a marker over its speaker in every player's view (port/src/saymarker.c). */
+static void hSayAt(void *ud, const char *who, const char *text, int kind, int index, const float pos[3], float range)
+{
+    struct sayArg a = { NULL, NULL, -1, NULL, range, -1 };
+    (void)ud;
+    if (kind == MH_SAY_PROP && index >= 0) {
+        a.fn = sayPropAnchor;   /* followed while the line shows */
+        a.key = index;
+    } else if (kind == MH_SAY_PLAYER && index >= 0) {
+        a.fn = sayPlayerAnchor; /* followed; never over its own head */
+        a.key = index;
+        a.self = index;
+    } else {
+        a.fixed = pos;          /* a pad's or a zone's point (sayMarkerQueue copies it) */
+    }
+    sayLine(who, text, &a);
 }
 
 static void hWin(void *ud)
@@ -713,7 +777,7 @@ static void startRuntime(void)
     host.door_state = hDoorState; host.door_cmd = hDoorCmd;
     host.guard_dead = hGuardDead; host.guard_set_ai = hGuardSetAi; host.alarm = hAlarm; host.win = hWin;
     host.difficulty = hDifficulty;
-    host.guard_goto = hGuardGoto; host.say = hSay; host.fail = hFail; host.guard_pose = hGuardPose;
+    host.guard_goto = hGuardGoto; host.say = hSay; host.say_at = hSayAt; host.fail = hFail; host.guard_pose = hGuardPose;
     host.guard_goto_prop = hGuardGotoProp; host.guard_moving = hGuardMoving; host.guard_face_prop = hGuardFaceProp;
     host.guard_anim = hGuardAnim; host.prop_usable = hPropUsable; host.prop_used = hPropUsed;
     host.guard_keep_body = hGuardKeepBody;

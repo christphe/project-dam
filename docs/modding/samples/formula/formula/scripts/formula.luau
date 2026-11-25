@@ -219,14 +219,14 @@ local function work(t: Terminal)
         elseif not met then
             message("The terminal needs a security override.")
         elseif busy or clock < freeAt then
-            say("Kalinin", "One at a time!")
+            kalinin:say("Kalinin", "One at a time!")
         elseif t.gate and not t.gate() then
-            say("Kalinin", t.gateText or "I can't.")
+            kalinin:say("Kalinin", t.gateText or "I can't.")
         else
             -- He stops following, walks up to the terminal, faces it and types; then follows again.
             busy = t
             kalinin:stop()
-            say("Kalinin", line(t, false))
+            kalinin:say("Kalinin", line(t, false))
             if kalinin:go_to(t.term, "run") then
                 t.state = "walking"
             else
@@ -246,7 +246,7 @@ local function work(t: Terminal)
                 t.faced = true
                 t.since = clock
             elseif not t.askedAside then
-                say("Kalinin", "Excuse me, I need to get to the terminal.")
+                kalinin:say("Kalinin", "Excuse me, I need to get to the terminal.")
                 t.askedAside = true
             end
         elseif clock - t.since >= 0.5 then   -- time to turn
@@ -259,7 +259,7 @@ local function work(t: Terminal)
             t.door:unlock(true)
             t.door:open()
         end
-        say("Kalinin", line(t, true))
+        kalinin:say("Kalinin", line(t, true))
         t.state = "done"
         busy = nil
         freeAt = clock + NEXT_DELAY
@@ -311,10 +311,10 @@ while true do
         elseif captor:is_dead() and clock - safeSince >= SAFE_FOR then
             met = true
             kalinin:stand()      -- turns to face the player
-            say("Kalinin", "Thank you... you saved my life, Englishman. I owe you. Get me out of here and I'll open every door for you.")
+            kalinin:say("Kalinin", "Thank you... you saved my life, Englishman. I owe you. Get me out of here and I'll open every door for you.")
             objectives.complete(P.objFind)
             wait(4)
-            say("Kalinin", "Stay close. I'm right behind you.")
+            kalinin:say("Kalinin", "Stay close. I'm right behind you.")
             wait(1)
             kalinin:follow()
         elseif not captor:is_dead() then
@@ -329,13 +329,15 @@ while true do
             if not doorOpen and not pleaded and not executing and heard < #INTERROGATION
                 and clock >= nextLine and hostageDoor ~= nil and hostageDoor:near(INTERROGATION_RANGE, INTERROGATION_HEIGHT) then
                 heard += 1
-                say(INTERROGATION[heard][1], INTERROGATION[heard][2])
+                local who = INTERROGATION[heard][1]
+                local speaker = if who == "Guard" then captor else kalinin   -- the marker over whoever speaks
+                if speaker then speaker:say(who, INTERROGATION[heard][2]) else say(who, INTERROGATION[heard][2]) end
                 nextLine = clock + INTERROGATION_EVERY
             end
             -- He calls out when a player opens the door to his room (or, without that door, when the captor sees one).
             if not pleaded and not executing and (doorOpen or (not hostageDoor and seen)) then
                 pleaded = true
-                say("Kalinin", "Please! Don't let him shoot me!")
+                kalinin:say("Kalinin", "Please! Don't let him shoot me!")
             end
             -- Hit but not killed: he executes Kalinin as soon as he recovers.
             if captorHits < 0 then
@@ -360,22 +362,22 @@ while true do
         if (hideDoor and hideDoor:is_open()) or kalinin:near(MEET_RANGE) then
             met = true
             kalinin:stand()      -- turns to face the player
-            say("Kalinin", "Don't shoot! You're the Englishman? Thank God. Get me out of here, I'll open your doors.")
+            kalinin:say("Kalinin", "Don't shoot! You're the Englishman? Thank God. Get me out of here, I'll open your doors.")
             wait(0.5)
             kalinin:surrender()
             objectives.complete(P.objFind)
             wait(4)
             kalinin:stand()
-            say("Kalinin", "Stay close. I'm right behind you.")
+            kalinin:say("Kalinin", "Stay close. I'm right behind you.")
             wait(1)
             kalinin:follow()
         end
     else
         if kalinin:distance() > LAG_RANGE and clock - lastLag >= LAG_EVERY then
-            say("Kalinin", pick(WAIT_LINES))
+            kalinin:say("Kalinin", pick(WAIT_LINES))
             lastLag = clock
         elseif not busy and clock >= nextChatter then
-            say("Kalinin", pick(CHATTER_LINES))
+            kalinin:say("Kalinin", pick(CHATTER_LINES))
             nextChatter = clock + math.random(CHATTER_MIN, CHATTER_MAX)
         end
     end
@@ -401,7 +403,7 @@ while true do
         passwordsDone = true
         objectives.complete(P.objPasswords)
         if met then
-            say("Kalinin", "Today's passwords! That's what I need for the main computer.")
+            kalinin:say("Kalinin", "Today's passwords! That's what I need for the main computer.")
         else
             message("Today's password list. The programmer will need it.")
         end
@@ -414,7 +416,7 @@ while true do
 
     if met and not dead and target:near() and othersDone() then
         objectives.complete(P.objAlive)
-        say("Kalinin", "I never want to see this place again.")
+        kalinin:say("Kalinin", "I never want to see this place again.")
         wait(3)
         mission.win()
         return
