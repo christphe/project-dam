@@ -25,6 +25,7 @@ struct Control {
     std::string id;       /* unique; what expressions call it */
     std::string key;      /* the game's config key this control drives (the adapter finds the row by it) */
     std::string label;
+    std::string labelPc;  /* "label": {"switch": a, "pc": b} gives the PC its own text (controlLabel) */
     std::string tag;      /* a small note after the label: "per profile", "restart" */
     std::string disabledTag;   /* a note shown only while the control is greyed out: "(fullscreen)" */
     std::string help;     /* one text for every value ... */
@@ -80,6 +81,7 @@ bool loadModel(const char* json, size_t len, Model* m, std::string* err);
 struct State {
     bool pc = true;
     bool console = false;              /* no keyboard/mouse (portIsConsole): hides the window, mouse and key-binding settings */
+    bool handheld = false;             /* off the Switch: a small screen (portIsHandheld, GE_HANDHELD; #131). Always false on the Switch, whose handheld state is live */
     bool dev = false;
     bool fileSelect = false;           /* the game is on the file select screen (the profile can be chosen) */
     bool profile = false;              /* a save file is selected: the per-profile settings can be read and written */
@@ -98,6 +100,7 @@ struct State {
 
 bool evalBool(const std::string& expr, const Model& m, const State& s, std::string* err = nullptr);
 bool controlVisible(const Control& c, const Model& m, const State& s);
+const std::string& controlLabel(const Control& c, const State& s);   /* the label for this platform */
 bool controlDisabled(const Control& c, const Model& m, const State& s);
 bool itemVisible(const Item& it, const Model& m, const State& s);   /* an entry shows when it has a visible control */
 double controlToConfig(const Control& c, double ctl);                  /* the value the game stores for this control's value */

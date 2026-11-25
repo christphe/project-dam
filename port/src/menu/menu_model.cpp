@@ -34,6 +34,7 @@ struct Expr {
         EV e;
         if (name == "platform") { e.isStr = true; e.s = ctx.st->pc ? "pc" : "switch"; return e; }
         if (name == "console") { e.n = ctx.st->console ? 1 : 0; return e; }
+        if (name == "handheld") { e.n = ctx.st->handheld ? 1 : 0; return e; }
         if (name == "dev") { e.n = ctx.st->dev ? 1 : 0; return e; }
         if (name == "fileselect") { e.n = ctx.st->fileSelect ? 1 : 0; return e; }
         if (name == "profile") { e.n = ctx.st->profile ? 1 : 0; return e; }
@@ -170,7 +171,10 @@ bool readDefault(const Json* d, Control* c, std::string* err) {
 bool readControl(const Json& j, Control* c, std::string* err) {
     c->id = j.str("id");
     c->key = j.str("key");
-    c->label = j.str("label");
+    if (const Json* l = j.get("label"); l && l->t == Json::Obj) {   /* {"switch": a, "pc": b} */
+        c->label = l->str("switch");
+        c->labelPc = l->str("pc");
+    } else c->label = j.str("label");
     c->tag = j.str("tag");
     c->disabledTag = j.str("disabledTag");
     c->show = j.str("show");
@@ -318,6 +322,10 @@ bool evalBool(const std::string& expr, const Model& m, const State& s, std::stri
     const bool r = ex.orExpr().truthy();
     if (err) *err = ex.err;
     return r;
+}
+
+const std::string& controlLabel(const Control& c, const State& s) {
+    return (s.pc && !c.labelPc.empty()) ? c.labelPc : c.label;
 }
 
 bool controlVisible(const Control& c, const Model& m, const State& s) {

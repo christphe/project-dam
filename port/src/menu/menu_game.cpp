@@ -164,6 +164,9 @@ void init() {
     menu::setPlatform(true);
 #endif
     menu::setConsole(portIsConsole() != 0);   /* the Switch, or GE_CONSOLE=1 / System.Console on a handheld */
+#ifndef __SWITCH__
+    menu::setHandheld(portIsHandheld() != 0);   /* GE_HANDHELD=1 / System.Handheld; the Switch's handheld state is live, not a menu flag */
+#endif
     menu::setDev(portDevMode() != 0);   /* Dev.Mode in the ini */
     {
         std::string err;

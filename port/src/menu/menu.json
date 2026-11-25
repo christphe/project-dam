@@ -10,7 +10,7 @@
     "help compare ids. default: a value, an option id, or {\"switch\": v, \"pc\": v}. help: a text, or {option id: text}",
     "(toggles: \"1\" / \"0\").",
     "Expressions: ids, 'strings', numbers, == != && || ! and parentheses; names are the control ids plus \"platform\"",
-    "('switch' | 'pc'), \"console\" (1 = no keyboard/mouse: the Switch, or a handheld run with GE_CONSOLE=1) and \"dev\". Edit this file and press F5 in tools_pc/menuview to see the change."
+    "('switch' | 'pc'), \"console\" (1 = no keyboard/mouse: the Switch, or a handheld run with GE_CONSOLE=1), \"handheld\" (1 = a small screen off the Switch: GE_HANDHELD=1; always 0 on the Switch) and \"dev\". A label can be {\"switch\": a, \"pc\": b}. Edit this file and press F5 in tools_pc/menuview to see the change."
   ],
   "tabs": [
     { "name": "Video", "items": [
@@ -125,7 +125,7 @@
         { "id": "aimrange", "key": "Input.AimRange", "label": "Aim range", "type": "choice", "show": "aimstyle == 'original'",
           "options": [ { "id": "extended", "label": "Extended", "value": 0 }, { "id": "original", "label": "Original", "value": 1 } ] },
         { "id": "aimsens", "key": "Input.PadAimLookSens", "label": "Aim sensitivity", "type": "slider", "min": 25, "max": 200, "step": 5, "suffix": "%" },
-        { "id": "aimzoom", "key": "Game.AimZoom", "label": "Aim zoom (handheld)", "type": "choice", "show": "console == 1 && aimstyle == 'centered'",
+        { "id": "aimzoom", "key": "Game.AimZoom", "label": { "switch": "Aim zoom (handheld)", "pc": "Aim zoom" }, "type": "choice", "show": "aimstyle == 'centered' && (platform == 'switch' || (console == 1 && handheld == 1))",
           "options": [ { "id": "off", "label": "Off", "value": 0 }, { "id": "x15", "label": "1.5x", "value": 1 }, { "id": "x2", "label": "2x", "value": 2 } ] },
         { "id": "aimassist", "key": "Game.AimAssist", "label": "Aim assist", "type": "choice", "show": "aimstyle == 'centered'",
           "options": [ { "id": "off", "label": "Off", "value": 0 }, { "id": "low", "label": "Low", "value": 1 }, { "id": "high", "label": "High", "value": 2 } ] },

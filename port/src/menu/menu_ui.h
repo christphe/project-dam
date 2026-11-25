@@ -27,6 +27,7 @@ void fontsBuild();
  * returns false with the reason in *err; the menu then shows it instead of the content. */
 bool setData(const char* json, size_t len, std::string* err);
 
+void setHandheld(bool handheld);   /* "handheld" in expressions: a small screen off the Switch (GE_HANDHELD, #131) */
 void setConsole(bool console);   /* "console" in expressions: no keyboard/mouse (a run-time setting, not the platform) */
 void setPadFamily(int fam);   /* the menu pad's family, 0 Xbox, 1 PlayStation, 2 Nintendo (input.c PADFAM_*): the button names and icons follow */
 void setPlatform(bool pc);   /* which defaults and which "platform ==" rules apply */
