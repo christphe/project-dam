@@ -28,6 +28,7 @@
 #include "assets/obseg/text/LmiscE.h"
 #include "game/stan.h"
 #include "game/model.h"
+#include "game/objective_status.h"
 #include <math.h>
 #include "fr.h"
 #include "boss.h"
@@ -37,7 +38,12 @@
 #include "mission_lua.h"
 #include "missions.h"
 #include "missions_priv.h"
+#include "joy.h"   /* joyGetButtonsPressedThisFrame: guard use, as the co-op revive */
 #include "saymarker.h"
+#include "portevents.h"
+#include "bondaicommands.h"   /* GAILIST_DEAD_AI: a revivable guard lying down */
+
+static int guardDown(int i);   /* a revivable guard lying on the floor: no script order reaches it */
 
 extern struct player *g_playerPointers[4];
 extern s32 g_ClockTimer;
@@ -45,6 +51,7 @@ extern s32 g_GlobalTimer;
 extern int bondinvHasInvItem(ITEM_IDS item);
 extern s32 lvlGetSelectedDifficulty(void);
 extern void end_of_mission_briefing(void);   /* file.c */
+extern s32 get_difficulty_for_objective(s32 objectiveIndex);
 
 #define KEY_LOCK_BIT 0x80000000u   /* a key bit no key has: the door stays shut for the player */
 
@@ -55,6 +62,10 @@ static u32  *s_origKey = NULL;      /* a door's own keyflags while this runtime 
 static void *s_setupKey = NULL;
 static s32   s_lastTimer = 0;
 static int   s_winSent = 0;         /* win or fail went out: the level ends once */
+static int   s_shotSub = -1;        /* the PEV_SHOT subscription (gunfire events) */
+static float *s_dmgPrev = NULL;     /* per setup prop: a guard's damage at the last tick (-1: not spawned) */
+static double *s_shotLast = NULL;   /* per shooter: the time of its last gunfire event */
+static double s_hostTime = 0;       /* seconds of mission time the host has ticked */
 
 MissionRuntime *missionsRuntime(void) { return s_rt; }
 
@@ -66,6 +77,9 @@ void missionsHostReset(void)
     }
     free(s_prop); s_prop = NULL;
     free(s_origKey); s_origKey = NULL;
+    free(s_dmgPrev); s_dmgPrev = NULL;
+    free(s_shotLast); s_shotLast = NULL;
+    if (s_shotSub >= 0) { portEventUnsubscribe(s_shotSub); s_shotSub = -1; }
     s_nprop = 0;
     s_setupKey = NULL;
     s_winSent = 0;
@@ -292,6 +306,7 @@ static int hGuardGoto(void *ud, int i, int player, int run)
     struct gotoArg a;
     (void)ud;
     if (!g || !g->Data || player < 0 || player >= getPlayerCount()) return MH_GOTO_GONE;
+    if (guardDown(i)) return MH_GOTO_BUSY;
     a.chr = chrFindByLiteralId(g->chrnum);
     a.run = run;
     a.res = MH_GOTO_GONE;
@@ -314,7 +329,7 @@ static void hGuardPose(void *ud, int i, int pose, int player)
     GuardRecord *g = guardRec(i);
     struct poseArg a;
     (void)ud;
-    if (!g || !g->Data || player < 0 || player >= getPlayerCount()) return;
+    if (!g || !g->Data || player < 0 || player >= getPlayerCount() || guardDown(i)) return;
     a.chr = chrFindByLiteralId(g->chrnum);
     a.pose = pose;
     if (!a.chr || !a.chr->prop || !a.chr->model || chrIsDead(a.chr)) return;
@@ -398,6 +413,7 @@ static int hGuardGotoProp(void *ud, int i, int target, int run)
     float n[2];
     (void)ud;
     if (!c || !p) return MH_GOTO_GONE;
+    if (guardDown(i)) return MH_GOTO_BUSY;
     if (g_SeenBondRecentlyGuardCount >= 10) return MH_GOTO_BUSY;
     /* stand in front of the prop, on the first free spot out along the way it faces (frontSpot) */
     if (padFront(p, n)) {
@@ -428,6 +444,7 @@ static int hGuardFaceProp(void *ud, int i, int target)
     PadRecord *p = padRec(pad);
     float n[2];
     int placed = 1;
+    if (guardDown(i)) return 0;
     (void)ud;
     if (!c || !p) return 1;
     if (padFront(p, n)) {
@@ -474,12 +491,18 @@ static void objectiveLinesTick(void)
 {
     const int n = missionRtObjectiveCount(s_rt), diff = (int)lvlGetSelectedDifficulty();
     int letter = 0;
+    if (missionsKeepLevelObjectives())   /* the mission's objectives come after the level's: its letters continue */
+        for (int k = 0; k < objectiveGetCount(); k++)
+            if (get_difficulty_for_objective(k) <= diff) letter++;
     for (int i = 0; i < n && i < MAX_TRACKED_OBJ; i++) {
         const int st = missionRtObjectiveStatus(s_rt, i);
         const int here = missionRtObjectiveDifficulty(s_rt, i) <= diff;
         if (st != s_objShown[i]) {
             s_objShown[i] = st;
-            if (here && st != OBJECTIVESTATUS_INCOMPLETE) {
+            /* a quiet objective (objectives.complete(id, true): a protect objective, complete while the protected one
+             * stands) shows no "completed" line, as the game's own protect objectives; a failure still shows */
+            const int quiet = st == OBJECTIVESTATUS_COMPLETE && missionRtObjectiveQuiet(s_rt, i);
+            if (here && st != OBJECTIVESTATUS_INCOMPLETE && !quiet) {
                 char buffer[100];
                 if (j_text_trigger) sprintf(buffer, "%s \x80%c ", langGet(getStringID(LMISC, MISC_STR_2C_OBJECTIVE)), letter + 0x1A);
                 else sprintf(buffer, "%s %c: ", langGet(getStringID(LMISC, MISC_STR_2C_OBJECTIVE)), letter + 0x61);
@@ -506,7 +529,7 @@ static int hGuardAimAt(void *ud, int i, int target, int fire)
 {
     ChrRecord *c = liveChr(i), *t = liveChr(target);
     (void)ud;
-    if (!c || !t) return 0;
+    if (!c || !t || guardDown(i)) return 0;
     return actor_aim_at_actor(c, fire ? 0x0004 : 0x0024 /* TARGET_CHR (| TARGET_AIM_ONLY), bondaicommands.h */, t->chrnum) != 0;
 }
 
@@ -599,10 +622,23 @@ static ObjectRecord *objRec(int i)
     }
 }
 
+/* guard:make_usable(): the guards a script made usable (guardUseTick below) */
+#define MAX_USABLE_GUARDS 8
+static struct { int prop; int used; } s_gu[MAX_USABLE_GUARDS];
+static int s_ngu;
+
 static void hPropUsable(void *ud, int i)
 {
     ObjectRecord *o = objRec(i);
     (void)ud;
+    if (guardRec(i)) {   /* a guard: the host's own use test (guardUseTick) */
+        for (int k = 0; k < s_ngu; k++) if (s_gu[k].prop == i) return;
+        if (s_ngu < MAX_USABLE_GUARDS) {
+            s_gu[s_ngu].prop = i; s_gu[s_ngu].used = 0;
+            s_ngu++;
+        }
+        return;
+    }
     if (!o || !o->prop) {
         sysLogPrintf(LOG_WARNING, "missions: make_usable: prop %d is not a spawned object", i);
         return;
@@ -614,6 +650,11 @@ static int hPropUsed(void *ud, int i)
 {
     ObjectRecord *o = objRec(i);
     (void)ud;
+    if (guardRec(i)) {
+        for (int k = 0; k < s_ngu; k++)
+            if (s_gu[k].prop == i && s_gu[k].used) { s_gu[k].used = 0; return 1; }
+        return 0;
+    }
     if (!o || !o->prop || !(o->runtime_bitflags & RUNTIMEBITFLAG_ACTIVATED)) return 0;
     o->runtime_bitflags &= ~RUNTIMEBITFLAG_ACTIVATED;
     return 1;
@@ -624,17 +665,259 @@ static const struct { const char *name; int anim, start, end; } kAnims[] = {
     { "keyboard_right_hand_tapping", ANIM_keyboard_right_hand_tapping, 0, 89 },
     { "keyboard_left_hand",          ANIM_keyboard_left_hand,          0, 79 },
     { "keyboard_right_hand2",        ANIM_keyboard_right_hand2,        0, 74 },
+    /* not in any of the game's AI lists: the whole animation (end frame -1) */
+    { "kneel_cough",                 ANIM_coughing_kneel1,             0, -1 },
+    { "kneel_cough2",                ANIM_coughing_kneel2,             0, -1 },
+    { "fall_face_down",              ANIM_death_forward_face_down_soft, 0, -1 },   /* with hold: lies on the floor, alive */
+    { "fall_face_up",                ANIM_death_backward_fall_face_up1, 0, -1 },
 };
 
-static int hGuardAnim(void *ud, int i, const char *name)
+#define ANIM_HOLD_LAST_FRAME 0x04   /* bondaicommands.h ANIM_LOOP_HOLD_LAST_FRAME: chrlvTickAnim then leaves the guard on the last frame */
+
+static int hGuardAnim(void *ud, int i, const char *name, int hold)
 {
     ChrRecord *c = liveChr(i);
     (void)ud;
-    if (!c || !name) return 0;
+    if (!c || !name || guardDown(i)) return 0;
     for (size_t k = 0; k < sizeof kAnims / sizeof kAnims[0]; k++)
         if (!strcmp(kAnims[k].name, name))
-            return check_if_able_to_then_perform_animation(c, kAnims[k].anim, kAnims[k].start, kAnims[k].end, 0, 16) != 0;
+            return check_if_able_to_then_perform_animation(c, kAnims[k].anim, kAnims[k].start, kAnims[k].end, hold ? ANIM_HOLD_LAST_FRAME : 0, 16) != 0;
     return 0;
+}
+
+/* :health() / :set_health(): a chr's damage and maxdamage (chr.c chrSetMaxDamage / chrAddHealth: health = maxdamage - damage).
+ * set_max_health writes maxdamage raw: chrSetMaxDamage's get_007_health_mod() scaling is for setup health, not for a script. */
+static ChrRecord *chrOf(int i)
+{
+    GuardRecord *g = guardRec(i);
+    return (g && g->Data) ? chrFindByLiteralId(g->chrnum) : NULL;
+}
+
+static int hGuardHealth(void *ud, int i, double *health, double *max)
+{
+    ChrRecord *c = chrOf(i);
+    (void)ud;
+    if (!c) return 0;
+    *max = c->maxdamage;
+    *health = c->maxdamage - c->damage;
+    return 1;
+}
+
+static void hGuardSetHealth(void *ud, int i, int which, double v)
+{
+    ChrRecord *c = chrOf(i);
+    (void)ud;
+    if (!c) return;
+    if (which == MH_HEALTH_MAX) c->maxdamage = (f32)v;
+    else {
+        f32 d = c->maxdamage - (f32)v;
+        c->damage = d < 0.0f ? 0.0f : d;
+    }
+}
+
+/* guard:set_revivable(): the guard goes down instead of dying, and a player revives it the way co-op revives a partner.
+ * The game's two kill paths (chraction.c: a shot, an explosion) ask missionsChrDownInsteadOfDeath first. Down: it lies on
+ * the floor (a fall animation held on its last frame), invincible (a shot only flinches it, chraction.c: no hit
+ * reaction gets it up again), not auto-aimed, its AI list parked on GAILIST_DEAD_AI so nothing else moves it, and no
+ * script order (follow, go_to, poses, animations) reaches it. A living player within REVIVE_RANGE across and
+ * REVIVE_HEIGHT up or down pressing B (Switch A on a pad) starts REVIVE_SECS; walking away or going down stops it.
+ * Revived: back on its feet with full health, its AI list back, "guard_revived" to the scripts ("guard_down" when it
+ * fell). */
+#define MAX_REVIVABLE 8
+#define REVIVE_SECS   10.0
+#define REVIVE_RANGE  120.0f
+#define REVIVE_HEIGHT 100.0f
+static struct Revivable {
+    int prop;
+    int down;          /* lying on the floor */
+    int fell;          /* went down since the last tick: "guard_down" to raise */
+    int anim;          /* the fall animation took */
+    int reviver;       /* the player reviving it, -1 */
+    double left;       /* seconds left of that revive */
+    int shown;         /* the last countdown second shown */
+    AIRecord *ailist;  /* its AI list before it went down */
+} s_rev[MAX_REVIVABLE];
+static int s_nrev;
+
+void chrStopFiring(ChrRecord *self);   /* chraction.c, not in its header */
+
+static struct Revivable *revOf(int i)
+{
+    for (int k = 0; k < s_nrev; k++) if (s_rev[k].prop == i) return &s_rev[k];
+    return NULL;
+}
+
+static int guardDown(int i)
+{
+    const struct Revivable *r = revOf(i);
+    return r && r->down;
+}
+
+static void hGuardSetRevivable(void *ud, int i, int on)
+{
+    struct Revivable *r = revOf(i);
+    (void)ud;
+    if (!guardRec(i)) return;
+    if (!on) {   /* a guard down stays down until revived: only a standing one stops being revivable */
+        if (r && !r->down) *r = s_rev[--s_nrev];
+        return;
+    }
+    if (r || s_nrev >= MAX_REVIVABLE) {
+        if (!r) sysLogPrintf(LOG_WARNING, "missions: set_revivable: at most %d revivable guards", MAX_REVIVABLE);
+        return;
+    }
+    memset(&s_rev[s_nrev], 0, sizeof s_rev[s_nrev]);
+    s_rev[s_nrev].prop = i;
+    s_rev[s_nrev].reviver = -1;
+    s_nrev++;
+}
+
+static int hGuardIsDown(void *ud, int i) { (void)ud; return guardDown(i); }
+
+int missionsChrDownInsteadOfDeath(ChrRecord *c)
+{
+    for (int k = 0; s_rt && k < s_nrev; k++) {
+        struct Revivable *r = &s_rev[k];
+        if (chrOf(r->prop) != c) continue;
+        if (!r->down) {
+            r->down = 1;
+            r->fell = 1;
+            r->anim = 0;
+            r->reviver = -1;
+            r->ailist = c->ailist;
+            sysLogPrintf(LOG_NOTE, "missions: guard %d down (revivable)", r->prop);
+        }
+        c->damage = c->maxdamage;
+        c->chrflags |= CHRFLAG_INVINCIBLE | CHRFLAG_NO_AUTOAIM;
+        c->ailist = ailistFindById(GAILIST_DEAD_AI);
+        c->aioffset = 0;
+        chrStopFiring(c);
+        return 1;
+    }
+    return 0;
+}
+
+static void reviveShow(int player, const char *text)
+{
+    char buf[48];
+    const int save = get_cur_playernum();
+    snprintf(buf, sizeof buf, "%s", text);
+    set_cur_player(player);
+    HUDMESSAGEBOTTOM(buf);
+    set_cur_player(save);
+}
+
+static void reviveEnd(struct Revivable *r)
+{
+    if (r->reviver >= 0 && r->reviver < getPlayerCount() && g_playerPointers[r->reviver])
+        g_playerPointers[r->reviver]->bondmesscnt = -1;   /* the countdown text goes */
+    r->reviver = -1;
+    r->shown = -1;
+}
+
+static int reviverNear(const ChrRecord *c, int p)
+{
+    const struct player *pl = (p >= 0 && p < getPlayerCount()) ? g_playerPointers[p] : NULL;
+    float dx, dy, dz;
+    if (!pl || !pl->prop || pl->bonddead) return 0;
+    dx = c->prop->pos.f[0] - pl->prop->pos.f[0];
+    dy = c->ground - pl->stanHeight;   /* floor to floor: a body's prop sits 25 to 80 units over its floor depending on the
+                                        * fall (108 standing), a player's 167: their positions alone put a body on the same
+                                        * floor out of reach (measured on Dam) */
+    dz = c->prop->pos.f[2] - pl->prop->pos.f[2];
+    return dx * dx + dz * dz < REVIVE_RANGE * REVIVE_RANGE && fabsf(dy) < REVIVE_HEIGHT;
+}
+
+static void reviveTick(double dt)
+{
+    const int np = getPlayerCount() < 4 ? getPlayerCount() : 4;
+    for (int k = 0; k < s_nrev; k++) {
+        struct Revivable *r = &s_rev[k];
+        ChrRecord *c = liveChr(r->prop);
+        MissionEvField f[1];
+        f[0].key = "prop"; f[0].str = NULL; f[0].num = r->prop;
+        if (r->fell) {
+            r->fell = 0;
+            missionRtRaise(s_rt, "guard_down", f, 1);
+        }
+        if (!r->down || !c) continue;
+        /* the fall: the game refuses a new animation for a moment after some actions; whatever ends it, again */
+        if (!r->anim || c->actiontype != ACT_ANIM) {
+            r->anim = check_if_able_to_then_perform_animation(c, r->prop & 1 ? ANIM_death_forward_face_down_soft
+                                                                             : ANIM_death_backward_fall_face_up1,
+                                                              0, -1, ANIM_HOLD_LAST_FRAME, 16) != 0;
+        }
+        if (dt <= 0) continue;   /* paused */
+        if (r->reviver >= 0 && !reviverNear(c, r->reviver)) {
+            reviveEnd(r);
+            for (int p = 0; p < np; p++) if (reviverNear(c, p)) { reviveShow(p, "Revive stopped"); break; }
+        }
+        if (r->reviver < 0) {
+            for (int p = 0; p < np; p++)
+                if (reviverNear(c, p) && (joyGetButtonsPressedThisFrame((s8)p, B_BUTTON) & B_BUTTON)) {
+                    r->reviver = p;
+                    r->left = REVIVE_SECS;
+                    r->shown = -1;
+                    sysLogPrintf(LOG_NOTE, "missions: guard %d: player %d reviving", r->prop, p);
+                    break;
+                }
+            if (r->reviver < 0) continue;
+        }
+        r->left -= dt;
+        if (r->left > 0) {
+            const int secs = (int)ceil(r->left);
+            if (secs != r->shown) {
+                char buf[32];
+                r->shown = secs;
+                snprintf(buf, sizeof buf, "Reviving: %d", secs);
+                reviveShow(r->reviver, buf);
+            }
+            continue;
+        }
+        /* up again: full health, its own AI list, standing facing the player who revived it */
+        {
+            struct poseArg a;
+            const int who = r->reviver;
+            reviveEnd(r);
+            r->down = 0;
+            c->damage = 0.0f;
+            c->chrflags &= ~(CHRFLAG_INVINCIBLE | CHRFLAG_NO_AUTOAIM);
+            c->ailist = r->ailist;
+            c->aioffset = 0;
+            c->sleep = 0;
+            a.chr = c;
+            a.pose = MH_POSE_STAND;
+            withPlayer(who, doPose, &a);
+            sysLogPrintf(LOG_NOTE, "missions: guard %d revived by player %d", r->prop, who);
+            missionRtRaise(s_rt, "guard_revived", f, 1);
+        }
+    }
+}
+
+/* guard:make_usable() / :was_used(). The game has no "use a chr" path (bond_interact_object ignores PROP_TYPE_CHR), so the
+ * host reads the players itself, every frame, the way co-op starts a revive (coop.c coopReviveTick): a living player within
+ * 120 units across and 100 up or down of the guard whose B button went down this frame (Switch A on a pad). */
+#define USE_RANGE  120.0f
+#define USE_HEIGHT 100.0f
+static void guardUseTick(double dt)
+{
+    const int np = getPlayerCount() < 4 ? getPlayerCount() : 4;
+    (void)dt;
+    for (int k = 0; k < s_ngu; k++) {
+        ChrRecord *c = liveChr(s_gu[k].prop);
+        if (!c) continue;
+        for (int p = 0; p < np; p++) {
+            struct player *pl = g_playerPointers[p];
+            float dx, dy, dz;
+            if (!pl || !pl->prop || pl->bonddead) continue;
+            dx = c->prop->pos.f[0] - pl->prop->pos.f[0];
+            dy = c->prop->pos.f[1] - pl->prop->pos.f[1];
+            dz = c->prop->pos.f[2] - pl->prop->pos.f[2];
+            if (dx * dx + dz * dz < USE_RANGE * USE_RANGE && fabsf(dy) < USE_HEIGHT &&
+                (joyGetButtonsPressedThisFrame((s8)p, B_BUTTON) & B_BUTTON))
+                s_gu[k].used = 1;
+        }
+    }
 }
 
 /* say(who, text): the line the AI command AI_TextPrintTop shows (chrai.c: hudmsgTopShow). It copies the string. */
@@ -744,6 +1027,106 @@ static void hFail(void *ud)
     missionRtEnd(s_rt, 0);
 }
 
+/* ---- events the host finds: the players, the alarm, a guard's damage, a shot ---------------------------------
+ * Raised through missionRtRaise and dispatched by the next missionRtTick. */
+static int   s_pDead[4], s_eventsInit, s_alarmPrev;
+static float s_pHealth[4], s_pArmor[4];
+
+/* gunfire: PEV_SHOT (portevents.h, raised by CapBeamLengthAndDecideIfRendered) runs on the game thread inside the frame;
+ * it only queues. The shooter is told by the beam: a player's own weapon beam lives in its struct player (hands[]), the beam
+ * its chr shows to other views in the player's chr; a guard's beam is in its ChrRecord (beams[2]). */
+#define MAX_GUN_EVENTS 16
+#define GUNFIRE_EVERY 0.25
+static struct { float pos[3]; int player, prop; } s_gun[MAX_GUN_EVENTS];
+static int s_ngun;
+
+static int onShot(int type, int phase, void *data, void *ctx)
+{
+    const PortEvShot *e = (const PortEvShot *)data;
+    const char *b = (const char *)e->beam;
+    int player = -1, prop = -1, key;
+    (void)type; (void)phase; (void)ctx;
+    if (!s_rt || !s_shotLast || !b) return PEV_CONTINUE;
+    for (int p = 0; p < getPlayerCount() && p < 4 && player < 0; p++) {
+        struct player *pl = g_playerPointers[p];
+        ChrRecord *c;
+        if (!pl) continue;
+        if (b >= (const char *)pl && b < (const char *)pl + sizeof *pl) player = p;
+        else if (pl->prop && (c = pl->prop->chr) && b >= (const char *)c->beams && b < (const char *)(c->beams + 2)) player = p;
+    }
+    for (int i = 0; player < 0 && i < s_nprop; i++) {
+        ChrRecord *c;
+        if (s_prop[i]->type != PROPDEF_GUARD || !(c = chrOf(i))) continue;
+        if (b >= (const char *)c->beams && b < (const char *)(c->beams + 2)) prop = i;
+    }
+    key = player >= 0 ? player : prop >= 0 ? 4 + prop : 4 + s_nprop;
+    if (s_hostTime - s_shotLast[key] < GUNFIRE_EVERY) return PEV_CONTINUE;
+    s_shotLast[key] = s_hostTime;
+    if (s_ngun < MAX_GUN_EVENTS) {
+        memcpy(s_gun[s_ngun].pos, e->from, sizeof e->from);
+        s_gun[s_ngun].player = player;
+        s_gun[s_ngun].prop = prop;
+        s_ngun++;
+    }
+    return PEV_CONTINUE;
+}
+
+static void hostEventsTick(void)
+{
+    const int np = getPlayerCount() < 4 ? getPlayerCount() : 4;
+    const int alarm = alarmIsActive() ? 1 : 0;
+    for (int p = 0; p < np; p++) {
+        struct player *pl = g_playerPointers[p];
+        int dead;
+        float health, armor;
+        MissionEvField f[3];
+        if (!pl) continue;
+        dead = pl->bonddead != 0;
+        health = pl->bondhealth;
+        armor = pl->bondarmour;
+        if (s_eventsInit) {
+            if (health < s_pHealth[p] - 1e-4f || armor < s_pArmor[p] - 1e-4f) {
+                f[0].key = "player"; f[0].str = NULL; f[0].num = p;
+                f[1].key = "health"; f[1].str = NULL; f[1].num = health;
+                f[2].key = "armor";  f[2].str = NULL; f[2].num = armor;
+                missionRtRaise(s_rt, "player_hurt", f, 3);
+            }
+            if (dead != s_pDead[p]) {
+                f[0].key = "player"; f[0].str = NULL; f[0].num = p;
+                missionRtRaise(s_rt, dead ? "player_death" : "player_revived", f, 1);
+            }
+        }
+        s_pDead[p] = dead; s_pHealth[p] = health; s_pArmor[p] = armor;
+    }
+    if (s_eventsInit && alarm && !s_alarmPrev) missionRtRaise(s_rt, "alarm", NULL, 0);
+    s_alarmPrev = alarm;
+    for (int i = 0; i < s_nprop && s_dmgPrev; i++) {
+        ChrRecord *c;
+        if (s_prop[i]->type != PROPDEF_GUARD) continue;
+        c = chrOf(i);
+        if (!c) { s_dmgPrev[i] = -1.0f; continue; }
+        if (s_eventsInit && s_dmgPrev[i] >= 0.0f && c->damage > s_dmgPrev[i] + 1e-3f) {
+            MissionEvField f[2];
+            f[0].key = "prop";   f[0].str = NULL; f[0].num = i;
+            f[1].key = "health"; f[1].str = NULL; f[1].num = c->maxdamage - c->damage;
+            missionRtRaise(s_rt, "guard_hurt", f, 2);
+        }
+        s_dmgPrev[i] = c->damage;
+    }
+    for (int k = 0; k < s_ngun; k++) {
+        MissionEvField f[5];
+        int n = 0;
+        f[n].key = "x"; f[n].str = NULL; f[n++].num = s_gun[k].pos[0];
+        f[n].key = "y"; f[n].str = NULL; f[n++].num = s_gun[k].pos[1];
+        f[n].key = "z"; f[n].str = NULL; f[n++].num = s_gun[k].pos[2];
+        if (s_gun[k].player >= 0) { f[n].key = "player"; f[n].str = NULL; f[n++].num = s_gun[k].player; }
+        if (s_gun[k].prop >= 0)   { f[n].key = "prop";   f[n].str = NULL; f[n++].num = s_gun[k].prop; }
+        missionRtRaise(s_rt, "gunfire", f, n);
+    }
+    s_ngun = 0;
+    s_eventsInit = 1;
+}
+
 /* ---- the level's props, and the runtime's life ----------------------------- */
 
 static void buildProps(void)
@@ -761,6 +1144,9 @@ static void buildProps(void)
         h = (PropDefHeaderRecord *)(((u32 *)h) + sizepropdef(h));
     }
     s_origKey = (u32 *)calloc(s_nprop ? s_nprop : 1, sizeof(u32));
+    s_dmgPrev = (float *)malloc(sizeof(float) * (s_nprop ? s_nprop : 1));
+    for (int i = 0; i < s_nprop; i++) s_dmgPrev[i] = -1.0f;
+    s_shotLast = (double *)malloc(sizeof(double) * (s_nprop + 5));
 }
 
 static void startRuntime(void)
@@ -783,7 +1169,17 @@ static void startRuntime(void)
     host.guard_keep_body = hGuardKeepBody;
     host.guard_aim_at = hGuardAimAt; host.guard_hit = hGuardHit; host.guard_sees_player = hGuardSeesPlayer;
     host.guard_near_miss = hGuardNearMiss; host.guards_near = hGuardsNear; host.guard_hits = hGuardHits;
+    host.guard_health = hGuardHealth; host.guard_set_health = hGuardSetHealth;
+    host.guard_set_revivable = hGuardSetRevivable; host.guard_is_down = hGuardIsDown;
     s_nkeepBody = 0;
+    s_ngu = 0;
+    s_nrev = 0;
+    memset(s_pDead, 0, sizeof s_pDead);
+    s_eventsInit = 0;
+    s_ngun = 0;
+    s_hostTime = 0;
+    for (int i = 0; i < s_nprop + 5; i++) s_shotLast[i] = -1e9;
+    s_shotSub = portEventSubscribe(PEV_SHOT, PEV_AFTER, 2000, onShot, NULL);
     objectiveLinesReset();
     snprintf(dir, sizeof dir, "%s", missionsDir());
     s_rt = missionRtCreate(missionsCurrent(), &host, dir, missionsModDir(), err, sizeof err);
@@ -824,6 +1220,16 @@ static void startRuntime(void)
                 c = g->Data ? chrFindByLiteralId(g->chrnum) : NULL;
                 sysLogPrintf(LOG_INFO, "missions: added guard \"%s\" prop %d chr %d: record body %d head %d; spawned body %d head %d",
                              op->name, op->setup_prop, g->chrnum, g->BodyID, g->HeadID, c ? c->bodynum : -1, c ? c->headnum : -1);
+                if (!c) {   /* the game refused it (chraction.c expand_09_characters): no floor tile at the pad, mostly */
+                    const MissionPad *p = NULL;
+                    for (int j = 0; op->pad.is_new && j < m->npads; j++)
+                        if (!strcmp(m->pads[j].id, op->pad.id)) p = &m->pads[j];
+                    if (p)
+                        sysLogPrintf(LOG_WARNING, "missions: added guard \"%s\" was NOT placed: no floor under pad \"%s\" (%.1f %.1f %.1f)? "
+                                     "Put the pad on a floor the player can walk on.", op->name, p->id, p->pos[0], p->pos[1], p->pos[2]);
+                    else
+                        sysLogPrintf(LOG_WARNING, "missions: added guard \"%s\" was NOT placed: no floor under pad %d?", op->name, op->pad.num);
+                }
             }
         }
     }
@@ -844,6 +1250,10 @@ void missionsFrameTick(void)
     dt = (double)g_ClockTimer / 60.0;
     if (dt < 0) dt = 0;
     if (dt > 0.25) dt = 0.25;
+    s_hostTime += dt;
+    hostEventsTick();
+    guardUseTick(dt);
+    reviveTick(dt);
     missionRtTick(s_rt, dt);
     keepBodiesTick();
     objectiveLinesTick();
@@ -853,5 +1263,22 @@ void missionsFrameTick(void)
 int missionsObjectivesSuccess(void)
 {
     if (!missionsActive() || !s_rt) return 0;
+    if (missionsKeepLevelObjectives() && ptrbriefingdata) {
+        /* the level's own objectives too (front.c frontCompleteAllObjectivesAliveSuccess) */
+        for (int i = 0; i < 10; i++)
+            if (ptrbriefingdata->objective[i].textid != 0
+                && lvlGetSelectedDifficulty() >= ptrbriefingdata->objective[i].enabled_difficulty
+                && get_status_of_objective(i) != OBJECTIVESTATUS_COMPLETE)
+                return 0;
+    }
+    return missionRtAllComplete(s_rt, (int)lvlGetSelectedDifficulty());
+}
+
+/* objective_status.c objectiveIsAllComplete(): the mission's own objectives of the difficulty played must be complete too,
+ * for a mission that keeps the level's objectives ("keep_level_objectives"). TRUE with no mission, or without the flag. */
+int missionsExtraObjectivesComplete(void)
+{
+    if (!missionsActive() || !s_rt || !missionsKeepLevelObjectives()) return 1;
+    if ((int)bossGetStageNum() != missionsStage()) return 1;
     return missionRtAllComplete(s_rt, (int)lvlGetSelectedDifficulty());
 }

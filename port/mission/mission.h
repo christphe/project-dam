@@ -55,6 +55,9 @@
  *   "level": "bunker1",                          solo level name, as port/src/main.c kSoloLevels (lowercase)
  *   "description": "text for the list",
  *   "briefing": "text for the briefing page",     optional
+ *   "keep_level_objectives": false,               optional: true = the level keeps its own briefing, objectives and end of
+ *                                                 mission; this mission's "objectives" (and objectives.add) come after the level's
+ *                                                 and must be complete too before the level's exit ends the mission
  *   "pads": [                                     new pads; referenced by their string id
  *     { "id": "p1", "pos": [x, y, z], "look": [x, y, z], "room": 12 }
  *   ],
@@ -263,6 +266,7 @@ typedef struct Mission {
     char level[MISSION_ID_LEN];
     char description[MISSION_TEXT_LEN];
     char briefing[2048];
+    int keep_level_objectives;      /* "keep_level_objectives": the level keeps its briefing, objectives and exit; the mission's are added after */
     MissionPad *pads;             int npads;
     MissionZone *zones;           int nzones;
     MissionGuardOp *guards;       int nguards;

@@ -7,6 +7,8 @@ sources:
   - port/src/config.c
   - port/src/input_script.c
   - port/src/coop.c
+  - port/src/missions_mods.c
+  - cmake/SwitchPort.cmake
 verified: e2fda9e2
 ---
 
@@ -46,6 +48,31 @@ state you want to look at. Commands go through [dev.py](dev-py.md).
 
 Every `GE_*` probe, with its file and status: `docs/dev/GE-ENV-PROBES.md`. `python
 tools_pc/gen_env_probes.py` reports the probes it misses and today's file:line of each one.
+
+## Mods in an nxlink build (romfs)
+
+nxlink sends one file: the NRO. To try mods on the console without copying them to the SD card, pack them
+into the NRO's romfs. The game also scans `romfs:/mods/` (Switch only, after the SD card's `mods/`: a mod of
+the same name on the SD card wins).
+
+```sh
+cd <repo>
+mkdir -p build-switch-link/romfs/mods
+# one ustar per mod, from inside its source folder (no README, no dist/)
+tar -cf build-switch-link/romfs/mods/michel.pmod -C <repos>/project-dam-mods/michel --exclude=.gitignore --exclude=README.md --exclude=dist .
+tar -cf build-switch-link/romfs/mods/formula.pmod -C docs/modding/samples/formula .
+python tools/dev.py build link        # once, if build-switch-link is not configured yet
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/src" -v project-dam-ccache:/ccache -w /src local/project-dam-build:latest \
+  sh -c 'cmake build-switch-link -DNX_ROMFS_DIR=/src/build-switch-link/romfs && cmake --build build-switch-link'
+python tools/switch/nxlink.py <switch ip> build-switch-link/ge007.aarch64.nro switch/project-dam/project-dam-test.nro \
+  build-switch-link/nx.log NX_TEST_SECS=86400
+```
+
+- The build prints `Writing .../romfs/mods/<mod>.pmod to RomFS image...` for each mod it packs.
+- Repack the `.pmod` and rebuild after every change to a mod: the romfs is baked into the NRO.
+- `NX_ROMFS_DIR` stays in `build-switch-link`'s CMake cache. Clear it (`cmake build-switch-link -DNX_ROMFS_DIR=`)
+  before a build that must not carry the mods. The release (`switch`) build never sets it.
+- Append `GE_*` arguments after the log path, as for any nxlink run (`GE_FX=0`, `GE_CFG=...`).
 
 ## Logs
 

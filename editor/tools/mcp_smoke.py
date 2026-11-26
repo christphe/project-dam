@@ -721,6 +721,13 @@ def authoring_checks(exe, export, work):
     # metadata
     err, d = s.tool("mission_set", name="Formula", briefing="Win the race.", description="A test")
     check(not err and d["name"] == "Formula" and d["briefing"] == "Win the race.", "mission_set: " + json.dumps(d))
+    check(d.get("keep_level_objectives") is False, "mission_set: keep_level_objectives defaults to false")
+    err, d = s.tool("mission_set", keep_level_objectives=True)
+    check(not err and d["keep_level_objectives"] is True, "mission_set: keep_level_objectives on: " + json.dumps(d))
+    err, d = s.tool("mission_set", keep_level_objectives="yes")
+    check(err, "mission_set: keep_level_objectives must be a boolean")
+    err, d = s.tool("mission_set", keep_level_objectives=False)
+    check(not err and d["keep_level_objectives"] is False, "mission_set: keep_level_objectives off")
     err, d = s.tool("mission_set")
     check(err, "mission_set with nothing is an error")
     err, d = s.tool("mission_set", name="x" * 600)

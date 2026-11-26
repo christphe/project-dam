@@ -59,7 +59,7 @@ void missionFree(Mission *m)
 /* ---- parse ---------------------------------------------------------------- */
 
 static const char *kKnownKeys[] = {
-    "format", "name", "level", "description", "briefing", "pads", "zones",
+    "format", "name", "level", "description", "briefing", "keep_level_objectives", "pads", "zones",
     "guards", "objects", "objectives", "scripts", "environment",
 };
 
@@ -276,6 +276,16 @@ int missionParse(const char *json, Mission *m, char *err, size_t errlen)
     copystr(m->level, sizeof(m->level), getstr(root, "level"));
     copystr(m->description, sizeof(m->description), getstr(root, "description"));
     copystr(m->briefing, sizeof(m->briefing), getstr(root, "briefing"));
+    {
+        const cJSON *k = cJSON_GetObjectItemCaseSensitive(root, "keep_level_objectives");
+        if (k && !cJSON_IsBool(k)) {
+            seterr(err, errlen, "keep_level_objectives must be true or false", NULL);
+            cJSON_Delete(root);
+            missionInit(m);
+            return 0;
+        }
+        m->keep_level_objectives = cJSON_IsTrue(k) ? 1 : 0;
+    }
 
     const cJSON *arr, *e;
     int i;
@@ -440,6 +450,7 @@ char *missionToJson(const Mission *m)
     cJSON_AddStringToObject(root, "level", m->level);
     cJSON_AddStringToObject(root, "description", m->description);
     if (m->briefing[0]) cJSON_AddStringToObject(root, "briefing", m->briefing);
+    if (m->keep_level_objectives) cJSON_AddBoolToObject(root, "keep_level_objectives", 1);
 
     cJSON *a;
     a = cJSON_AddArrayToObject(root, "pads");

@@ -179,7 +179,8 @@ fast3d OpenGL backend, so textures and colours match the game (fog is off).
   exported first. MCP `mission_open` takes `emptied: true` with `new`. The recent lists (File > Recent, the Mission tab)
   show each mission's name and level; the path is the tooltip, and paths that differ only by slash direction are one entry.
 * **Mission tab.** *General*: name, the base level (read only; red with *Load* / *Move the mission to...* when the loaded
-  level is another one), briefing. The mission's `description` is not edited (kept in the file when present).
+  level is another one), briefing, and the checkbox *Keep the level's objectives* (`keep_level_objectives` in mission.json: the
+  level's briefing, objectives and exit stay; the mission's objectives are added after them). The mission's `description` is not edited (kept in the file when present).
   *Start and test*: the play spawn (level start, or a pad picked in the view), Co-op, Play. *Objectives*: letter, text,
   lowest difficulty (Agent / Secret Agent / 00 Agent), add, remove, reorder; an objective is completed by a script or
   a zone. *Environment*: below. *Thumbnail*: *Capture the view* stores a plain 4:3 crop as the base image; Contrast and
@@ -245,7 +246,7 @@ Tools: `level_describe` (`detail`: summary, pads, props, mission, links, names),
 (`{"added": {"kind": "guard", "op": 3, "uuid": "...", "name": "..."}, "uuid": "..."}`). `level_describe` items and `script_list` (`added_props`) show the uuid and name of every added prop. Scripts and zones: `script_list` (the entries with `use`, `target`, `props` and the script's Props schema, the library, the mission's own scripts, the zone ids), `script_read {use}` (source, schema, type-checker findings), `script_write {use, text}` (a mission script; held until `mission_save`; returns the findings with line numbers), `script_copy {use, switch?}` (library or mod script -> the mission's own), `script_attach {use, target, props}` or with `index` an update (`target` = `{kind: prop, prop: N}` (an original prop) | `{kind: prop, uuid: "..."}` (a prop the mission adds) | `{kind: pad, pad: N | "id"}` | `{kind: zone, zone: "id"}` | `{kind: mission}`; `props` = `{name: number | string | boolean}`; a `Door` / `Guard` / `Prop` property is an original prop's number or an added prop's uuid string), `set_props {index, props?, unset?, replace?}`, `script_remove {index}`, `zone_add {pos, radius?, room?, id?}`, `zone_set {id, pos?, radius?, room?}`, `zone_remove {id}`. `validate` returns the type-checker findings as issues with `script` and `line`.
 
 A whole mission can be authored, checked and play-tested through these tools alone (the sample `docs/modding/samples/formula` is such a mission):
-`mission_set {name?, briefing?, description?}`; `objective_add {id, text, difficulty?}`, `objective_set {id, text?, difficulty?, new_id?, index?}`
+`mission_set {name?, briefing?, description?, keep_level_objectives?}`; `objective_add {id, text, difficulty?}`, `objective_set {id, text?, difficulty?, new_id?, index?}`
 (`index` reorders), `objective_remove {id}` (`difficulty` = the lowest difficulty, 0 Agent .. 2 00 Agent; ids are unique, one undo step each);
 `place_guard` / `place_object` take every record field of the add op by name (`head`, `health`, `reaction_time`, `bitflags`, ... for a guard; the
 header fields flat and the type's own in a sub-object, e.g. `{"type": 1, "door": {...}}`, for an object; `mission_fields.h`), `difficulties`

@@ -36,6 +36,7 @@ typedef struct Fake {
     int nsayAt;
     int failed;
     float g6z;                        /* guard 6's z (it is at x = 60) */
+    int rev6, down6;                  /* guard 6: set_revivable, lying down */
 } Fake;
 
 static void fLog(void *u, const char *l) { Fake *f = u; if (getenv("LUA_TEST_V")) printf("  [log] %s\n", l); if (f->nlog < 64) snprintf(f->logs[f->nlog++], 160, "%s", l); }
@@ -62,6 +63,8 @@ static void fSayAt(void *u, const char *who, const char *t, int kind, int index,
     if (f->nsayAt < 8) snprintf(f->saysAt[f->nsayAt++], 160, "%s|%s|%d:%d|%.0f|%.0f|%.0f", who, t, kind, index, pos[0], pos[2], range);
 }
 static void fFail(void *u) { ((Fake *)u)->failed = 1; }
+static void fRevivable(void *u, int i, int on) { if (i == 6) ((Fake *)u)->rev6 = on; }
+static int  fIsDown(void *u, int i) { return i == 6 && ((Fake *)u)->down6; }
 
 static MissionHost host(Fake *f)
 {
@@ -71,6 +74,7 @@ static MissionHost host(Fake *f)
     h.player_count = fPc; h.player_pos = fPpos; h.prop_count = fPropCount; h.prop_type = fPropType;
     h.prop_pos = fPropPos; h.door_state = fDoorState; h.door_cmd = fDoorCmd; h.guard_dead = fDead; h.win = fWin; h.difficulty = fDiff;
     h.guard_goto = fGoto; h.guard_set_ai = fSetAi; h.say = fSay; h.say_at = fSayAt; h.fail = fFail;
+    h.guard_set_revivable = fRevivable; h.guard_is_down = fIsDown;
     return h;
 }
 
@@ -212,11 +216,13 @@ int main(void)
             "wait(event('start'))\n";
         if (fp) { fputs(src, fp); fclose(fp); }
         fp = fopen("tmp_missiontest/scripts/spin.luau", "wb");
-        if (fp) { fputs("while true do end\n", fp); fclose(fp); }
+        if (fp) { fputs("wait(0)\nlocal n = 0\nfor i = 1, 3000000 do n += 1 end\nmessage('spun ' .. n)\n", fp); fclose(fp); }
+        fp = fopen("tmp_missiontest/scripts/starter.luau", "wb");
+        if (fp) { fputs("local ready = 'yes'\nfunction start() message('start ' .. ready) end\n", fp); fclose(fp); }
         fp = fopen("tmp_missiontest/scripts/bad.luau", "wb");
         if (fp) { fputs("this is not luau (\n", fp); fclose(fp); }
         fp = fopen("tmp_missiontest/scripts/escape.luau", "wb");
-        if (fp) { fputs("message(tostring(require) .. tostring(loadfile)); string.x = 1\n", fp); fclose(fp); }
+        if (fp) { fputs("message(tostring(dofile) .. tostring(loadfile)); string.x = 1\n", fp); fclose(fp); }
     }
     missionInit(&m2);
     GE_CHECK_EQ_INT(missionParse(
@@ -225,6 +231,7 @@ int main(void)
         "  { \"use\": \"bad\", \"target\": { \"kind\": \"mission\" } },\n"
         "  { \"use\": \"escape\", \"target\": { \"kind\": \"mission\" } },\n"
         "  { \"use\": \"nonexistent\", \"target\": { \"kind\": \"mission\" } },\n"
+        "  { \"use\": \"starter\", \"target\": { \"kind\": \"mission\" } },\n"
         "  { \"use\": \"probe\", \"target\": { \"kind\": \"mission\" } } ] }", &m2, err, sizeof err), 1);
     memset(&f, 0, sizeof f);
     f.nplayers = 1;
@@ -233,10 +240,12 @@ int main(void)
     rt = missionRtCreate(&m2, &h, "tmp_missiontest", NULL, err, sizeof err);
     GE_CHECK(rt != NULL);
     run(rt, 0.3);
-    GE_CHECK(hasLog(&f, "ran over its time budget"));        /* spin.luau cut off, the frame went on */
+    GE_CHECK(hasLog(&f, "this frame (budget"));             /* spin.luau over the frame budget: a warning... */
+    GE_CHECK(hasMsg(&f, "spun 3000000"));                    /* ...and it was not cut */
+    GE_CHECK(hasMsg(&f, "start yes"));                       /* start() ran once the scripts were loaded */
     GE_CHECK(hasLog(&f, "script bad#1"));                    /* the syntax error is reported */
     GE_CHECK(hasLog(&f, "not found"));
-    GE_CHECK(hasMsg(&f, "nilnil") || hasMsg(&f, "nilnilnil") || hasMsg(&f, "nil"));   /* require / loadfile are gone */
+    GE_CHECK(hasMsg(&f, "nilnil") || hasMsg(&f, "nilnilnil") || hasMsg(&f, "nil"));   /* dofile / loadfile are gone (require is the mission module loader) */
     GE_CHECK(hasLog(&f, "error") );                          /* string.x = 1: the libraries are read-only */
 
     f.doorstate = MH_DOOR_CLOSED;
@@ -448,10 +457,59 @@ int main(void)
         remove("tmp_missiontest/scripts/uuidprobe.luau");
     }
 
+    /* guard:set_revivable() / :is_down(), "guard_down" / "guard_revived"; a guard lying down gets no follow orders */
+    {
+        FILE *fp = fopen("tmp_missiontest/scripts/reviver.luau", "wb");
+        Mission m6;
+        MissionEvField ev[1];
+        int gotos;
+        if (fp) {
+            fputs("local g = guard(6)\n"
+                  "g:set_revivable()\n"
+                  "g:follow()\n"
+                  "wait(event('guard_down', { prop = 6 }))\n"
+                  "message('down ' .. tostring(g:is_down()))\n"
+                  "wait(event('guard_revived', { prop = 6 }))\n"
+                  "message('up ' .. tostring(g:is_down()))\n", fp);
+            fclose(fp);
+        }
+        missionInit(&m6);
+        GE_CHECK_EQ_INT(missionParse(
+            "{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\", \"scripts\": [\n"
+            "  { \"use\": \"reviver\", \"target\": { \"kind\": \"mission\" } } ] }", &m6, err, sizeof err), 1);
+        memset(&f, 0, sizeof f);
+        f.nplayers = 1;
+        f.ppos[0][0] = 1000;
+        h = host(&f);
+        rt = missionRtCreate(&m6, &h, "tmp_missiontest", NULL, err, sizeof err);
+        GE_CHECK(rt != NULL);
+        run(rt, 0.5);
+        GE_CHECK_EQ_INT(f.rev6, 1);
+        GE_CHECK(f.ngoto > 0);                                          /* following */
+        f.down6 = 1;
+        ev[0].key = "prop"; ev[0].str = NULL; ev[0].num = 6;
+        missionRtRaise(rt, "guard_down", ev, 1);
+        run(rt, 0.1);
+        gotos = f.ngoto;
+        f.ppos[0][0] = 3000;                                            /* the player runs off: no order while down */
+        run(rt, 3.0);
+        GE_CHECK(hasMsg(&f, "down true"));
+        GE_CHECK_EQ_INT(f.ngoto, gotos);
+        f.down6 = 0;
+        missionRtRaise(rt, "guard_revived", ev, 1);
+        run(rt, 1.5);
+        GE_CHECK(hasMsg(&f, "up false"));
+        GE_CHECK(f.ngoto > gotos);                                      /* follows again by itself */
+        missionRtDestroy(rt);
+        missionFree(&m6);
+        remove("tmp_missiontest/scripts/reviver.luau");
+    }
+
     missionFree(&m);
     missionFree(&m2);
     remove("tmp_missiontest/scripts/probe.luau");
     remove("tmp_missiontest/scripts/spin.luau");
+    remove("tmp_missiontest/scripts/starter.luau");
     remove("tmp_missiontest/scripts/bad.luau");
     remove("tmp_missiontest/scripts/escape.luau");
     return GE_TEST_END();

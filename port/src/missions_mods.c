@@ -20,6 +20,9 @@
 #include "missions_priv.h"
 #include "mission_dir.h"
 #include "mission_pkg.h"
+#ifdef __SWITCH__
+extern unsigned int romfsMountSelf(const char *name);   /* libnx romfs.h (romfsInit); <switch.h> clashes with the N64 types */
+#endif
 #include "game/front.h"   /* mission_folder_setup_entries */
 
 extern int  portEepromSelect(const char *path);   /* libultra.c */
@@ -47,14 +50,18 @@ static int s_nslots = 0;
 static void loadSlots(void);
 static void switchSave(void);
 
-static void scan(void)
+static int haveMod(const char *folder)
 {
-    char base[512];
+    for (int i = 0; i < s_nmods; i++)
+        if (!strcmp(s_mods[i].folder, folder)) return 1;
+    return 0;
+}
+
+/* The .pmod entries of one folder. A mod already found (same X of X.pmod) is skipped: the first folder scanned wins. */
+static void scanDir(const char *base)
+{
     char names[MODS_MAX * 2][64];
-    int n;
-    s_scanned = 1;
-    snprintf(base, sizeof base, "%s", sysResolvePath("$S/../mods"));
-    n = missionListDir(base, names, MODS_MAX * 2);
+    int n = missionListDir(base, names, MODS_MAX * 2);
     for (int k = 0; k < n && s_nmods < MODS_MAX; k++) {
         char path[640], err[160] = "";
         ModEntry *me = &s_mods[s_nmods];
@@ -65,6 +72,11 @@ static void scan(void)
         }
         snprintf(path, sizeof path, "%s/%s/campaign.json", base, names[k]);
         if (!pkgExists(path)) continue;
+        {
+            char folder[64];
+            snprintf(folder, sizeof folder, "%.*s", (int)(nl - 5), names[k]);
+            if (haveMod(folder)) { sysLogPrintf(LOG_INFO, "missions: %s/%s skipped: a mod %s is already installed", base, names[k], folder); continue; }
+        }
         campaignInit(&me->c);
         if (!campaignLoadFile(path, &me->c, err, sizeof err) || !campaignValidate(&me->c, err, sizeof err)) {
             sysLogPrintf(LOG_WARNING, "missions: %s: %s", path, err);
@@ -75,6 +87,21 @@ static void scan(void)
         snprintf(me->dir, sizeof me->dir, "%s/%s", base, names[k]);
         s_nmods++;
     }
+}
+
+static void scan(void)
+{
+    char base[512];
+    s_scanned = 1;
+    snprintf(base, sizeof base, "%s", sysResolvePath("$S/../mods"));
+    scanDir(base);
+#ifdef __SWITCH__
+    {   /* a test build may carry mods in its romfs (cmake -DNX_ROMFS_DIR=<dir with mods/>): the SD card's win */
+        static int s_romfs = -1;
+        if (s_romfs < 0) s_romfs = romfsMountSelf("romfs") == 0;
+        if (s_romfs) scanDir("romfs:/mods");
+    }
+#endif
     for (int i = 1; i < s_nmods; i++)               /* folder order: not the directory's */
         for (int j = i; j > 0 && strcmp(s_mods[j - 1].folder, s_mods[j].folder) > 0; j--) {
             ModEntry t = s_mods[j];

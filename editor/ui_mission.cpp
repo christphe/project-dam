@@ -104,6 +104,14 @@ static void generalSection(App &a)
     ImGui::TextUnformatted("Briefing");
     ImGui::InputTextMultiline("##brief", d.mission.briefing, sizeof d.mission.briefing, ImVec2(-1, 90));
     editDone(a);
+    bool keep = d.mission.keep_level_objectives != 0;
+    if (ImGui::Checkbox("Keep the level's objectives", &keep)) {
+        const std::string snap = d.snapshot();
+        d.mission.keep_level_objectives = keep ? 1 : 0;
+        d.commit(snap);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("The level's briefing, objectives and exit stay; the mission's objectives are added after them.");
 }
 
 // ---- Start and test (what the toolbar's Play uses) ----

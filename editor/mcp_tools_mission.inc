@@ -52,9 +52,18 @@ ToolResult toolMissionSet(Doc &d, const cJSON *a)
         if (!cJSON_IsString(v)) return fail(std::string("\"") + f.key + "\" must be a string");
         if (strlen(v->valuestring) >= f.cap) return fail(std::string("\"") + f.key + "\" is too long (at most " + std::to_string(f.cap - 1) + " bytes)");
     }
-    if (!any) return fail("give \"name\", \"briefing\" and/or \"description\"");
+    const cJSON *keep = cJSON_GetObjectItemCaseSensitive(a, "keep_level_objectives");
+    if (keep) {
+        any = true;
+        if (!cJSON_IsBool(keep)) return fail("\"keep_level_objectives\" must be true or false");
+    }
+    if (!any) return fail("give \"name\", \"briefing\", \"description\" and/or \"keep_level_objectives\"");
     const std::string snap = d.snapshot();
     bool changed = false;
+    if (keep && (cJSON_IsTrue(keep) ? 1 : 0) != d.mission.keep_level_objectives) {
+        d.mission.keep_level_objectives = cJSON_IsTrue(keep) ? 1 : 0;
+        changed = true;
+    }
     for (const F &f : fields) {
         const cJSON *v = cJSON_GetObjectItemCaseSensitive(a, f.key);
         if (!v || strcmp(f.dst, v->valuestring) == 0) continue;
@@ -66,6 +75,7 @@ ToolResult toolMissionSet(Doc &d, const cJSON *a)
     cJSON_AddStringToObject(o, "name", d.mission.name);
     cJSON_AddStringToObject(o, "briefing", d.mission.briefing);
     cJSON_AddStringToObject(o, "description", d.mission.description);
+    cJSON_AddBoolToObject(o, "keep_level_objectives", d.mission.keep_level_objectives != 0);
     return okJson(o);
 }
 

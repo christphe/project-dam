@@ -21,17 +21,28 @@ export type Pad = number | string    -- an original pad number, or the id of one
 
 -- What wait(event(...)) returns, and the fields an event filter can match.
 export type MissionEvent = {
-    name: string,             -- "start" | "end" | "pickup" | "death" | "door" | "zone" | "objective"
+    name: string,             -- "start" | "end" | "pickup" | "death" | "door" | "zone" | "objective" | "objective_failed"
+                              -- | "player_death" | "player_hurt" | "player_revived" | "gunfire" | "alarm" | "guard_hurt"
+                              -- | "guard_down" | "guard_revived"
     win: number?,             -- "end": 1 if the mission was won
     item: number?,            -- "pickup": the ITEM_IDS value
-    player: number?,          -- "pickup", "zone": 0-based player
-    prop: number?,            -- "death", "door": the setup prop number
+    player: number?,          -- "pickup", "zone", "player_*": 0-based player; "gunfire": the player who fired, if a player did
+    prop: number?,            -- "death", "door", "guard_hurt", "guard_down", "guard_revived": the setup prop number; "gunfire": the guard who fired, if a setup guard did
     state: string?,           -- "door": "open" | "closed" | "moving"
-    id: string?,              -- "zone": the zone id; "objective": the objective id
+    id: string?,              -- "zone": the zone id; "objective" / "objective_failed": the objective id
+    health: number?,          -- "player_hurt": the player's health 0..1; "guard_hurt": the guard's health in game units
+    armor: number?,           -- "player_hurt": the player's body armor 0..1 (the event fires when health or armor went down)
+    x: number?,               -- "gunfire": where the shot starts
+    y: number?,
+    z: number?,
 }
 
 export type EventFilter = { [string]: number | string | boolean }
 export type EventDescriptor = { __event: string, filter: EventFilter }
+
+-- spawn() returns a Task, on() a Connection.
+export type Task = { cancel: (self: Task) -> () }              -- a cancelled task never resumes; cancelling a finished one does nothing
+export type Connection = { off: (self: Connection) -> () }     -- unsubscribe (callbacks already running finish)
 
 -- A target: a setup prop (door, guard, object), a pad, a zone, or the mission itself.
 declare extern type Target with
@@ -68,9 +79,22 @@ declare extern type Target with
     function guards_near(self, radius: number): number   -- living guards within radius (the target itself left out)
     function hits(self): number               -- how many times the guard has been hit
     -- objects
-    function make_usable(self)                -- players can activate it (B / use), like the game's own terminals
+    function make_usable(self)                -- players can activate it (B / use), like the game's own terminals; on a GUARD:
+                                              -- a player within 120 units facing it presses B, or stands within 90 units for 1.5 s
     function was_used(self): boolean          -- true once per activation by a player since the last call
-    function play_anim(self, name: string): boolean   -- once: "keyboard_right_hand_tapping" | "keyboard_left_hand" | "keyboard_right_hand2"
+    function play_anim(self, name: string, hold: boolean?): boolean   -- once: "keyboard_right_hand_tapping" | "keyboard_left_hand" |
+                                              -- "keyboard_right_hand2" | "kneel_cough" | "kneel_cough2"; hold: the guard stays on the
+                                              -- last frame until :stand() or another order
+    function health(self): number             -- a guard's health in game units (maxdamage - damage); 0 when it is not there
+    function max_health(self): number         -- its maxdamage
+    function set_health(self, n: number)      -- damage = maxdamage - n (never below 0 damage: at most max_health)
+    function set_max_health(self, n: number)  -- maxdamage = n, as given (the 007 health modifier is NOT applied)
+    function set_revivable(self, on: boolean?)   -- goes down instead of dying ("guard_down"): lies on the floor, invincible,
+                                              -- no order reaches it; a player within 120 units pressing B revives it in 10 s
+                                              -- (walking away stops it): up with full health, "guard_revived", follows again
+    function is_down(self): boolean           -- a revivable guard lying down
+    function pos(self): (number?, number?, number?)   -- the target's world position now (a guard, player, prop, pad or zone);
+                                              -- nil, nil, nil when it has none (a guard not spawned, an original pad number)
     -- distances and presence (world units)
     function near(self, radius: number?, height: number?): boolean   -- a player within `radius` (a zone's own radius when
                                               -- omitted); with `height`: radius measured flat, and at most `height`
@@ -115,16 +139,24 @@ declare function say(who: string, text: string)         -- dialogue line at the 
 
 declare wait: ((seconds: number) -> ()) & ((ev: EventDescriptor) -> MissionEvent)   -- wait(seconds) sleeps; wait(event(...)) sleeps until it happens
 declare function event(name: string, filter: EventFilter?): EventDescriptor
+declare function clock(): number                         -- the mission time in seconds (stops while the game is paused)
+declare function spawn(fn: () -> ()): Task              -- fn runs as a new coroutine (it may wait())
+declare function on(name: string, fn: (ev: MissionEvent) -> (), filter: EventFilter?): Connection
+                                                         -- fn runs as a new coroutine on each matching event (it may wait()); an error in
+                                                         -- it is logged, not fatal
+declare function require(name: string): any             -- a module <name>.luau of the mission / mod (or the built-in library), run once, cached;
+                                                         -- name: letters, digits, _ and -. The module's top level must not wait()
 
 declare function print(...: any)                        -- to the game log
 
 declare objectives: {
     add: (id: string, text: string, difficulty: number?) -> (),
-    complete: (id: Objective) -> (),
+    complete: (id: Objective, quiet: boolean?) -> (),   -- quiet: no "completed" line, now or later (a protect objective)
     is_complete: (id: Objective) -> boolean,
     fail: (id: Objective) -> (),                        -- "Objective a: failed" on screen, shown as failed; no completing it
     is_failed: (id: Objective) -> boolean,
     all_complete: () -> boolean,                        -- of the difficulty being played
+    reset: (id: Objective) -> (),                       -- back to incomplete (not failed): complete it again later
 }
 
 declare alarm: {

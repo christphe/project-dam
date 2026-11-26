@@ -27,6 +27,9 @@ top-level `dist/` are left out of the package; a new mod gets a `.gitignore` wit
 To look inside a package: `tar -tf formula.pmod` lists it and `tar -xf formula.pmod` unpacks it. An unpacked folder named
 `formula.pmod/` placed in `mods/` works exactly like the file (handy while developing without the editor).
 
+To try mods on a Switch over nxlink without touching its SD card, pack them into the test NRO's romfs:
+[docs/wiki/testing-on-switch.md](../wiki/testing-on-switch.md) §Mods in an nxlink build.
+
 ## The Formula sample
 
 `docs/modding/samples/formula/` is a complete mod source. To play it, pack it with
@@ -109,8 +112,57 @@ Guards also have `:follow()` / `:stop()`, `:go_to(target)` / `:is_moving()`, `:f
 `:surrender()` / `:stand()`, `:aim_at(other)` / `:shoot(other)`, `:sees_player()`, `:was_shot_at()`, `:hits()`,
 `:guards_near(radius)` and `:keep_body()`; objects have `:make_usable()` / `:was_used()` (a terminal a player activates).
 
-Each script runs as a coroutine in a sandbox (no `io`, `os`, `require`; a time budget per resume), so a script waits
-instead of looping: use `wait(0.25)` in a polling loop or `wait(event(...))`.
+Each script runs as a coroutine in a sandbox (no `io`, `os`, `debug`), so a script waits instead of looping: use
+`wait(0.25)` in a polling loop or `wait(event(...))`.
+
+A script's life, like a BepInEx / Unity plugin's `Awake` then `Start`:
+
+1. **Load**: its top level runs up to its first `wait()`, `require`s included, while the level loads.
+2. **`start()`**: if the script defines a global `function start()`, the engine calls it once every script of the
+   mission is loaded and the level's guards and objects exist (it may `wait()`). Set-up goes there.
+3. **Frames**: then everything is frame time: the waits that end, the event callbacks, the spawned tasks.
+
+Time budgets (a first version: nothing is ever cut, going over one logs a warning and the script goes on): 10 s for a
+script's load, 10 s for its `start()`, 10 s for a `require`d module's top level, and 2 ms per frame for all the scripts
+together. A frame-time resume still running after 1 s is named in the log: a loop that never waits freezes the game.
+
+### Events, tasks and modules
+
+- `on(name, fn [, filter]) -> Connection` calls `fn(event)` every time a matching event is raised, on the game tick; each call
+  is a new coroutine (like `spawn`), so `fn` may `wait()`. An error in `fn` is logged, not fatal. `Connection:off()`
+  unsubscribes. `wait(event(name [, filter]))` works as before; the filter is a table of `field = value` that must all match.
+- `spawn(fn) -> Task` runs `fn` as a coroutine of its own (it may `wait()`); `Task:cancel()` stops it (a finished task: nothing).
+  `clock()` is the mission time in seconds (it stops while the game is paused).
+- `require(name)` loads the module `<name>.luau` from the mission folder, its `scripts/`, the mod's `scripts/` or the built-in
+  library, runs it once per mission in an environment of its own over the mission globals (not the script's `target` /
+  `props`), and returns what it returns (cached; `true` when it returns nothing). The name is letters, digits, `_` and `-`
+  only, so `require("jokes_" .. level)` works. A module's top level must not `wait()`; its functions may when a script calls them.
+- Events: `start`, `end {win}`, `pickup {item, player}`, `death {prop}` (a guard), `door {prop, state}`, `zone {id, player}`,
+  `objective {id}`, `objective_failed {id}`, plus the ones the game side raises each frame:
+  `player_death {player}` (a player's bond died), `player_hurt {player, health, armor}` (health or body armor went down;
+  both 0..1), `player_revived {player}` (a co-op revive), `gunfire {x, y, z, player?, prop?}` (a shot starts at x y z:
+  `player` is 0-based when a player fired, `prop` the setup prop when a setup guard did; at most one event per shooter per
+  0.25 s), `alarm {}` (the alarm went from off to on), `guard_hurt {prop, health}` (a setup guard took damage; `health` in
+  game units), `guard_down {prop}` / `guard_revived {prop}` (a revivable guard went down instead of dying / a player
+  revived it).
+- Guards: `:health()` / `:max_health()` (game units: maxdamage minus damage, maxdamage), `:set_health(n)`,
+  `:set_max_health(n)` (written as given: the 007-difficulty health modifier a setup applies is NOT applied),
+  `:set_revivable()`: when the game would kill the guard it goes down instead. It lies on the floor, invincible and not
+  auto-aimed, and no order reaches it (a `:follow()` resumes by itself once it is up). A living player within 120 units
+  pressing B revives it in 10 s, with the co-op revive's countdown (walking away stops it); it gets up with full health.
+  `:is_down()` is true while it lies there,
+  `:play_anim(name, hold)` with `"kneel_cough"` / `"kneel_cough2"` as well (`hold = true`: the guard stays on the last frame until
+  `:stand()` or another order), `:pos()`. `:make_usable()` / `:was_used()` also work on a guard: a player within 120 units
+  facing it presses the game's B button, or stands within 90 units for 1.5 s, and `:was_used()` is true once.
+  `objectives.reset(id)` puts an objective back to incomplete (not failed).
+
+### Keeping the level's objectives
+
+`mission.json` has an optional top-level `"keep_level_objectives": true` (the editor's Mission tab: *Keep the level's
+objectives*). The level then keeps its own briefing, objectives, objective HUD lines and exit: the mission's `"objectives"` (and
+`objectives.add`) are appended after the level's on the briefing and pause screens (lettering continues), and the level's exit ends
+the mission only once the mission's objectives of the difficulty played are complete too. `mission.win()` / `mission.fail()` still
+work. Without the flag the mission's objectives replace the level's, as before.
 
 ### Typed props
 
