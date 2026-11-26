@@ -1,4 +1,4 @@
-// Replays a level export through fast3d's OpenGL backend (gfx_opengl_api): the rooms and the
+// Replays a level export through ge_render's draw API (the OpenGL or the Vulkan backend): the rooms and the
 // models of the props look as they do in the game.
 #pragma once
 
@@ -12,11 +12,14 @@ struct ShaderProgram;
 
 class Scene {
 public:
-    // A GL 3.3+ context must be current. Initialises the fast3d backend.
+    // ge_render_open has run. Sets the window framebuffer's size.
     bool init(int w, int h, std::string &err);
+    // The drawable size changed.
+    void resize(int w, int h);
     // Uploads textures, meshes and shader programs of a level (nullptr unloads).
     void setLevel(const Level *lv);
-    // Draws the window background and the level into the viewport rectangle (x, y from the top).
+    // Draws the window background and the level into the viewport rectangle (x, y from the top), inside a ge_render frame
+    // the caller began (ge_render_begin_frame ... ge_render_end_frame, the GUI draws after it).
     void render(const Doc &doc, const Camera &cam, int winW, int winH, int vx, int vy, int vw, int vh, bool showRooms,
                 bool showProps);
     // Whole-frame offscreen rendering (editor_gl.h); the caller copies the frame to the window after its GUI.

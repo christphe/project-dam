@@ -1,6 +1,7 @@
 // Tools > Settings...: the game, the export cache, rendering and MCP options, recent missions. The remembered ones are
 // written to project-dam-editor-prefs.txt next to the editor (key=value lines, with the co-op toggle).
 #include "ui_app.h"
+#include "ge_render.h"
 
 namespace ed {
 
@@ -48,7 +49,16 @@ void drawSettingsWindow(App &a)
     }
 
     ImGui::SeparatorText("Rendering");
-    if (ImGui::Checkbox("draw through an offscreen frame", &a.prefOffscreen)) savePrefs(a);
+    {
+        static const char *names[] = { "OpenGL", "Vulkan" };
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::Combo("renderer", &a.prefRenderer, names, 2)) savePrefs(a);
+        ImGui::TextDisabled("Running on %s. A change applies at the next start (--renderer gl|vk wins over it).",
+                            ge_render_backend() == GE_RENDER_VULKAN ? "Vulkan" : "OpenGL");
+    }
+    ImGui::BeginDisabled(ge_render_backend() != GE_RENDER_GL);
+    if (ImGui::Checkbox("draw through an offscreen frame (OpenGL)", &a.prefOffscreen)) savePrefs(a);
+    ImGui::EndDisabled();
     ImGui::TextDisabled("Avoids half-drawn frames on some drivers. Applies at the next start.");
 
     ImGui::SeparatorText("MCP server");

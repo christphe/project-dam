@@ -4,6 +4,7 @@
 #include <cmath>
 #include <filesystem>
 #include "launch.h"
+#include "ge_render.h"
 #include "png.h"
 
 namespace ed {
@@ -359,6 +360,7 @@ void loadPrefs(App &a)
     if (a.prefsFile.empty() || !readFile(a.prefsFile, text)) return;
     a.playCoop = prefGet(text, "coop") == "1";
     if (!prefGet(text, "offscreen").empty()) a.prefOffscreen = prefGet(text, "offscreen") != "0";
+    if (!prefGet(text, "renderer").empty()) a.prefRenderer = prefGet(text, "renderer") == "vk" ? 1 : 0;
     if (!prefGet(text, "mcp").empty()) a.prefMcp = prefGet(text, "mcp") != "0";
     const int port = atoi(prefGet(text, "mcpport").c_str());
     if (port > 0 && port < 65536) a.prefMcpPort = port;
@@ -369,7 +371,7 @@ void savePrefs(App &a)
     if (a.prefsFile.empty()) return;
     FILE *f = fopen(a.prefsFile.c_str(), "wb");
     if (!f) return;
-    fprintf(f, "coop=%d\noffscreen=%d\nmcp=%d\nmcpport=%d\n", a.playCoop ? 1 : 0, a.prefOffscreen ? 1 : 0, a.prefMcp ? 1 : 0, a.prefMcpPort);
+    fprintf(f, "coop=%d\noffscreen=%d\nrenderer=%s\nmcp=%d\nmcpport=%d\n", a.playCoop ? 1 : 0, a.prefOffscreen ? 1 : 0, a.prefRenderer ? "vk" : "gl", a.prefMcp ? 1 : 0, a.prefMcpPort);
     fclose(f);
 }
 
@@ -505,13 +507,15 @@ void invalidateThumbs(App &a);
 static bool captureView(App &a, std::vector<uint8_t> &out, std::string &err)
 {
     int dw, dh, ww, wh;
-    SDL_GL_GetDrawableSize(a.win, &dw, &dh);
+    editorDrawableSize(&dw, &dh);
     SDL_GetWindowSize(a.win, &ww, &wh);
     const float sx = (float)dw / (float)std::max(ww, 1), sy = (float)dh / (float)std::max(wh, 1);
     const int vx = (int)(a.vx * sx), vy = (int)(a.vy * sy), vw = (int)(a.vw * sx), vh = (int)(a.vh * sy);
     if (vw < 16 || vh < 16) { err = "the 3D view is too small (window minimized?)"; return false; }
+    ge_render_begin_frame();
     a.scene.render(a.doc, a.cam, dw, dh, vx, vy, vw, vh, a.showRooms, a.showProps);
     if (a.scene.offscreen()) editorOffscreenPresent(dw, dh);   // the view is in the offscreen frame: bring it to the window's buffer read below
+    ge_render_end_frame();
     int cw = std::min(vw, vh * 4 / 3), ch = cw * 3 / 4;
     const int cx = vx + (vw - cw) / 2, cy = vy + (vh - ch) / 2;
     std::vector<uint8_t> src;
