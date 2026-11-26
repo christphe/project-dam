@@ -148,9 +148,9 @@ def cmd_nx_build(env, a):
     os.makedirs(gen, exist_ok=True)
     shutil.copy(DUMP, os.path.join(romfs, "sea_dump.bin"))
     sh = os.path.join(REPO, "port", "shaders")
-    common = open(os.path.join(sh, "skycommon.glsl"), encoding="utf-8").read()
-    for name in ("skyplus", "skylut"):
-        src = open(os.path.join(sh, name + ".frag.glsl"), encoding="utf-8").read().replace("#pragma skycommon", common)
+    common = open(os.path.join(sh, "sky", "common.glsl"), encoding="utf-8").read()
+    for name, file in (("skyplus", "sky.frag.glsl"), ("skylut", "lut.frag.glsl")):   # the romfs names stay the game's pack names
+        src = open(os.path.join(sh, "sky", file), encoding="utf-8").read().replace("#pragma skycommon", common)
         nl = src.index("\n")
         header = NX_HEADER if getattr(a, 'live', False) else baked_header(getattr(a, 'ini', None))
         open(os.path.join(gen, name + ".frag.glsl"), "w", encoding="utf-8", newline="\n").write(src[:nl + 1] + header + src[nl + 1:])

@@ -49,12 +49,14 @@ enum {
  * opaque: the opaque part then hides what is drawn behind it later. */
 #define SHADER_OPT_ZCUT (1 << 14)
 /* GE+ water (Switch, deko3d): GE's water combiner (unk_092E50.c), drawn by
- * water.frag.glsl instead of the combiner's own shader. */
+ * water/water.frag.glsl instead of the combiner's own shader. */
 #define SHADER_OPT_WATER (1 << 15)
 /* Effect shaders (port/include/portfx.h): the PORTFX_* kind of the draw, from
  * the game's tagged G_NOOP markers, Enhanced only. Bits 28..31: gfx_tri_state
- * clears bits 16..27 of an opaque draw's options. No pack entry carries them,
- * so these draws take the uber shader (uber.frag.glsl fxShade). */
+ * clears bits 16..27 of an opaque draw's options. Each effect combiner has its
+ * own shader in the packs (port/shaders/fx/combiners.txt, the code from
+ * port/shaders/fx/, tools_pc/dkshgen); the uber shader runs no effect, and
+ * an effect missing from the pack is not drawn (deko3d, Vulkan). */
 #define SHADER_OPT_FX_SHIFT 28
 #define SHADER_OPT_FX_MASK (15u << SHADER_OPT_FX_SHIFT)   /* bits 28..31 */
 

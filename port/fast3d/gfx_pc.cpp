@@ -4647,7 +4647,7 @@ static inline void gfx_tri_state(TriState& ts) {
         !invisible && !ts.use_modulate && !cld_surf && gfx_zcut_gate()) {
         cc_options |= (uint64_t)SHADER_OPT_ZCUT;
     }
-    /* Effect shaders (portfx.h, uber.frag.glsl fxShade): Enhanced only; GE_FX=0
+    /* Effect shaders (portfx.h, port/shaders/fx/): Enhanced only; GE_FX=0
      * keeps the game's look (before/after captures). The muzzle quad keeps
      * its own look: the flash's light is dynlights' (#111). */
     if (s_fx_kind != PORTFX_NONE && s_fx_kind != PORTFX_MUZZLE && gfx_fx_shading_on()) {
@@ -7051,7 +7051,7 @@ extern "C" void gfx_init(const GfxInitSettings *settings) {
         s_extra.fxaa = gfx_deko3d_fxaa_pass;
         s_extra.sky_stage = gfx_deko3d_skyplus_stage;
         s_extra.sky_pass = gfx_deko3d_skyplus_pass;
-        s_water_ext = true;   /* GE+ water (water.frag.glsl) */
+        s_water_ext = true;   /* GE+ water (water/water.frag.glsl) */
         s_extra.istore = gfx_deko3d_interp_store;
         s_extra.ishow = gfx_deko3d_interp_show;
         s_extra.isync = gfx_deko3d_interp_sync;

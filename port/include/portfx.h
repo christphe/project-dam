@@ -17,7 +17,6 @@
  */
 
 #define PORTFX_TAG_MAGIC 0x50460000u   /* "PF" in the high half */
-#define PORTFX_DECAL_FIRST 8           /* kinds >= this are bullet holes (4 bits in the shader id) */
 #define PORTFX_TAG_MASK  0xFFFF0000u
 
 enum {
@@ -26,21 +25,9 @@ enum {
     PORTFX_TRACER,   /* BeamRecord tracers: player, guards, autoguns */
     PORTFX_SPARK,    /* bullet impact puffs (wall / gun / hat) */
     PORTFX_BLOOD,    /* the Game.BloodOnHit body puff (puff type 2) */
-    PORTFX_IMPACT,   /* bullet-hole decals on walls and props */
+    PORTFX_IMPACT,   /* the game's bullet holes on props (the level's are clusters): port/shaders/fx/impacts.glsl fxImpact */
     PORTFX_TRACER_1P,/* the player's own tracer, drawn in the gun pass (render-replace hook only, no marker) */
-    PORTFX_CLUSTER,      /* 7: a bullet-hole cluster (fxparticles.c, fxcluster.h): uber.frag.glsl fxClusterPom */
-    /* the port's bullet holes (fxparticles.c decalDraw), one kind per material group: the game's hole
-     * texture, a cone height map lit by the sun and the dynamic lights, blended 2x-multiply over the wall */
-    PORTFX_DECAL_STONE,  /* 8: stone, tile, default */
-    PORTFX_DECAL_WOOD,
-    PORTFX_DECAL_METAL,
-    PORTFX_DECAL_DIRT,   /* dirt, mud */
-    PORTFX_DECAL_SNOW,
-    PORTFX_DECAL_GLASS,
-    PORTFX_DECAL_TILE,   /* 14 */
-    /* 15: the core layer drawn first under a hole: the material under the burst surface (cement under tile,
-     * fresh wood, bare steel, fresh stone), alpha-blended; untextured, uv and group in the vertex colour */
-    PORTFX_DECAL_CORE,
+    PORTFX_CLUSTER,      /* 7: a bullet-hole cluster (fxparticles.c, fxcluster.h): port/shaders/fx/impacts.glsl fxClusterPom */
     PORTFX_COUNT
 };
 

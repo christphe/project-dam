@@ -2,7 +2,7 @@
 // GE+ reflection sky, drawn once per frame into a small panorama (SKYLUT_W x
 // SKYLUT_H, gfx_deko3d.cpp): u = the azimuth of a direction, v = sqrt of its
 // elevation (finer near the horizon). The sea reads it (skyReflect in
-// skycommon.glsl) instead of computing the sky for every pixel of water, and
+// sky/common.glsl) instead of computing the sky for every pixel of water, and
 // a low-resolution sky changes smoothly from pixel to pixel, so reflections
 // hold still when the view moves.
 layout(location = 0) in vec2 vUV;

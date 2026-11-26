@@ -4,8 +4,8 @@
 // Each tab shows GAME (Video.Visuals Enhanced with F9 off: the game's own sprites) and PORT (F9 on: what the port
 // draws instead, port/src/fxparticles.c, plus the dynamic lights of port/src/dynlights.c), side by side or alone.
 // One fragment shader draws everything, with the uber shader's order of operations (uber.frag.glsl main): the
-// combiner (texture x shade, or the explosions' TEXEL0 x TEXEL1 x SHADE), then dynLight, then fxShade with the
-// PORTFX kind (the FXSHADE block and dynLight are read from the shader file and hot-reloaded). Blend per kind as
+// combiner (texture x shade, or the explosions' TEXEL0 x TEXEL1 x SHADE), then dynLight, then the PORTFX kind's effect
+// (port/shaders/fx/, the viewer's fxShade dispatch; dynLight from the uber shader; hot-reloaded). Blend per kind as
 // fast3d sets it (gfx_pc.cpp: SPARK and TRACER additive = blend mode 2, everything else alpha over = mode 0).
 // The scene state is a pure function of the tab's time (re-simulated from 0 each frame, 1/60 s ticks), so a
 // --shot at --t SECONDS is reproducible.
@@ -30,18 +30,17 @@ void main() {
     o = c;
 }
 )";
-static void reloadTab(const std::string& src, bool readOk) {
-    std::string shade, err;
-    const std::string dyn = readOk ? extractDynLight(src) : "";
-    if (!readOk) err = "cannot read " + g_shaderPath;
-    else if (extractBlock(src, shade, err)) {
-        const std::string fs = std::string(kDecalHead) + (dyn.empty() ? kFallbackDynLight : dyn.c_str()) + shade + kTabMain;
+static void reloadTab(const std::string& fx, const std::string& dyn, bool readOk, const std::string& readErr) {
+    std::string err;
+    if (!readOk) err = readErr;
+    else {
+        const std::string fs = std::string(kDecalHead) + (dyn.empty() ? kFallbackDynLight : dyn.c_str()) + fx + kFxDispatch + kTabMain;
         GLuint p = link(kDecalVert, fs.c_str());
         if (p) { if (g_pTab) glDeleteProgram(g_pTab); g_pTab = p; g_tabErr = dyn.empty() ? "dynLight not found: no lights" : ""; g_tabReloads++; return; }
-        err = "fxShade / dynLight did not compile (the previous version stays):\n" + g_shaderLog;
+        err = "the effect files / dynLight did not compile (the previous version stays):\n" + g_shaderLog;
     }
     g_tabErr = err; fprintf(stderr, "%s\n", err.c_str());
-    if (!g_pTab) g_pTab = link(kDecalVert, (std::string(kDecalHead) + kFallbackDynLight + kFallbackBlock + kTabMain).c_str());
+    if (!g_pTab) g_pTab = link(kDecalVert, (std::string(kDecalHead) + kFallbackDynLight + kFallbackBlock + kTabMain).c_str());   // the game side keeps working
 }
 
 // ---------------------------------------------------------------- shared tab state
@@ -525,7 +524,7 @@ static void uiTabCommon() {
     ImGui::Checkbox("wall / floor", &g_tWall); ImGui::SameLine(); ImGui::SetNextItemWidth(90); ImGui::InputInt("tex #", &g_tWallTex); if (g_tWallTex < 0) g_tWallTex = 0;
     ImGui::Checkbox("nearest texels", &g_nearest);
     ImGui::SeparatorText("Shader");
-    ImGui::TextWrapped("fxShade + dynLight from %s (reloaded %d x)", g_shaderPath.c_str(), g_tabReloads);
+    ImGui::TextWrapped("effects from %s, dynLight from the uber shader (reloaded %d x)", g_shaderPath.c_str(), g_tabReloads);
     if (!g_tabErr.empty()) ImGui::TextColored(ImVec4(1, .4f, .4f, 1), "%s", g_tabErr.c_str());
 }
 static void uiTab() {

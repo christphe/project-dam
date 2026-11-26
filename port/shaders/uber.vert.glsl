@@ -35,7 +35,7 @@ layout(location = 12) out vec4 vInput4;
 layout(location = 13) out vec4 vInput5;
 layout(location = 14) out vec4 vInput6;
 layout(location = 15) out vec4 vInput7;
-layout(location = 17) out vec3 vClip;   // clip x, y, w (water.frag.glsl: the pixel's screen position)
+layout(location = 17) out vec3 vClip;   // clip x, y, w (water/water.frag.glsl: the pixel's screen position)
 layout(location = 18) out vec3 vEye;    // eye-space position (dynamic lights, struct GfxLights)
 
 layout(std140, binding = 3) uniform Lights {

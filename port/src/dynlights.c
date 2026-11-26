@@ -253,7 +253,7 @@ static void relightFromSun(void)
     }
 }
 
-/* The relief light of the bullet holes (uber.frag.glsl fxClusterPom): a fixed light from above, 80 degrees
+/* The relief light of the bullet holes (port/shaders/fx/impacts.glsl fxClusterPom): a fixed light from above, 80 degrees
  * over the horizon in the world, so a hole's relief keeps one shading however the camera turns (the old
  * fallback was a direction in eye space, which followed the camera's pitch). Radius -2 marks it: fast3d puts
  * it in the Lights block's sun_dir without lighting the scene (count[1] stays for the real sun). */

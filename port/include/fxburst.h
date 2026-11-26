@@ -14,7 +14,7 @@
  *  - dirt / mud: dark clods and a thick brown plume;  snow: a white powder burst;  water: a splash of drops;
  *  - blood: jets of droplets along the shot (through the body) and a smaller back-spray, heavy drops that fall,
  *    a small mist only at the wound.
- * Particles are drawn untextured; the shape comes from the vertex alpha ramp and uber.frag.glsl fxShade (kind).
+ * Particles are drawn untextured; the shape comes from the vertex alpha ramp and port/shaders/fx/bursts.glsl (fxSpark, fxBlood).
  *
  * Pure C, header-only, no game state: the caller gives an allocator and its random state.
  */

@@ -77,6 +77,7 @@ struct ShaderProgram {
     DkShader vert, frag, mesh_vert;
     bool uber;
     bool water;   /* GE+ water: uber vert + water frag (SHADER_OPT_WATER) */
+    bool skip;    /* an effect (PORTFX kind) missing from the pack: not drawn, the uber shader runs no effect */
     struct DkCombinerParams params;
     struct DkLayout layout;
     uint8_t num_inputs;
@@ -432,10 +433,10 @@ std::map<std::pair<uint64_t, uint32_t>, ShaderProgram*> s_progs;
 std::map<std::pair<uint64_t, uint32_t>, bool> s_missed;
 DkShader s_uber_vert, s_uber_frag, s_fs_vert, s_fxaa_frag, s_sky_frag, s_water_frag, s_lut_frag;
 bool s_sky_ok = false, s_fxaa_ok = false, s_water_ok = false, s_lut_ok = false;
-#define SKYLUT_W 128   /* the reflection sky's panorama (skylut.frag.glsl) */
+#define SKYLUT_W 128   /* the reflection sky's panorama (sky/lut.frag.glsl) */
 #define SKYLUT_H 64
 int s_hsea_fb = -1;
-/* the far sea, baked (skyplus.frag.glsl pass 4): a panorama, redrawn only when what it shows changes */
+/* the far sea, baked (sky/sky.frag.glsl pass 4): a panorama, redrawn only when what it shows changes */
 #define SEAPANO_W 4096
 #define SEAPANO_H 512
 int s_pano_fb = -1;
@@ -448,7 +449,7 @@ float s_pano_key[8][4];   /* the sky block's members the baked sea depends on, a
 uint32_t s_pano_frame = 0;
 int s_lut_fb = -1;     /* its render target (an s_fbs entry, made on first use) */
 /* GE+ water: the sky block of the last GE+ sky pass, read by water draws
- * (fragment binding 2, water.frag.glsl); its uWave4.z = 0 until a sky pass ran
+ * (fragment binding 2, water/water.frag.glsl); its uWave4.z = 0 until a sky pass ran
  * this frame, so the water stays GE's own with Visuals = Original. */
 #define WATER_UBO_OFS 3072
 /* Dynamic lights (struct GfxLights): binding 3 of the vertex and fragment
@@ -988,9 +989,18 @@ struct ShaderProgram* dk_create_and_load_new_shader(uint64_t id0, uint32_t id1) 
         p->uber = true;
         p->vert = s_uber_vert;
         p->frag = s_uber_frag;
+        /* The uber shader is the fallback for the game's combiners only: an effect comes from the pack
+         * (port/shaders/fx/), else it is not drawn. */
+        p->skip = (id1 & SHADER_OPT_FX_MASK) != 0;
         if (!s_missed[std::make_pair(id0, id1)]) {
             s_missed[std::make_pair(id0, id1)] = true;
-            sysLogPrintf(LOG_NOTE, "DKSH miss %016llx %08x", (unsigned long long)id0, (unsigned)id1);
+            if (p->skip) {
+                sysLogPrintf(LOG_ERROR, "DKSH miss %016llx %08x: an effect missing from the pack, not drawn "
+                             "(tools_pc/cc_census_merge.py adds it to port/shaders/fx/combiners.txt)",
+                             (unsigned long long)id0, (unsigned)id1);
+            } else {
+                sysLogPrintf(LOG_NOTE, "DKSH miss %016llx %08x", (unsigned long long)id0, (unsigned)id1);
+            }
         }
     }
     s_progs[std::make_pair(id0, id1)] = p;
@@ -1296,7 +1306,7 @@ float* dk_stream_begin(size_t max_floats) {
 }
 
 void dk_draw_triangles(float buf[], size_t len, size_t ntris) {
-    if (!s_up || s_prg == nullptr || ntris == 0) return;
+    if (!s_up || s_prg == nullptr || ntris == 0 || s_prg->skip) return;
     /* what is drawn over the water (blended, or without depth) must come after the half-size water is composited */
     if (!s_wrec.empty() && !s_prg->water && (s_blend || !s_depth_test)) wfx_flush();
     prepare_draw();
@@ -1790,7 +1800,7 @@ DkHeapBlock s_sky_blk;
 int s_sky_slot = -1;
 int s_sky_gen = -1;
 
-struct DkSkyUniforms { float v[16][4]; };   /* = block Sky of skycommon.glsl (256 bytes) */
+struct DkSkyUniforms { float v[16][4]; };   /* = block Sky of sky/common.glsl (256 bytes) */
 DkImage s_wtex_img;
 DkHeapBlock s_wtex_blk;
 int s_wtex_gen = -1;

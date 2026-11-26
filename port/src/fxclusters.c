@@ -3,7 +3,7 @@
  *
  * The holes on one surface are stamped into one cluster texture with "the deepest wins" per texel
  * (port/include/fxcluster.h): a new hole never paints its rim over an older hole's pit, and there are no
- * seams. Each cluster is drawn as one quad; uber.frag.glsl fxClusterPom runs parallax occlusion over its
+ * seams. Each cluster is drawn as one quad; port/shaders/fx/impacts.glsl fxClusterPom runs parallax occlusion over its
  * fused depth and lights the relief.
  *
  * Textures go through the port's texture registry (port/include/porttex.h), by name:

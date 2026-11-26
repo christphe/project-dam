@@ -1,5 +1,5 @@
-// GE+ sky and water, shared by skyplus.frag.glsl (the sky pass, the sea of a
-// water level) and water.frag.glsl (the level's own water surfaces). Not a
+// GE+ sky and water, shared by sky/sky.frag.glsl (the sky pass, the sea of a
+// water level) and water/water.frag.glsl (the level's own water surfaces). Not a
 // shader of its own: cmake/SwitchPort.cmake pastes it where a shader has the
 // line `#pragma skycommon`, after the shader has declared:
 //   - the uniform block below's members (block `Sky`, any binding);
@@ -214,7 +214,7 @@ vec3 horizonColor(vec3 nd) {
 
 /* The sky mirrored by the water along r (normalised, r.y >= ~0.02). In the sky
  * pass (USE_SKY_LUT) it is read from the panorama drawn once per frame
- * (skylut.frag.glsl): one fetch instead of the sky's whole computation for
+ * (sky/lut.frag.glsl): one fetch instead of the sky's whole computation for
  * every pixel of sea, and a smooth, low-resolution sky. */
 vec3 skyReflect(vec3 r) {
 #ifdef USE_SKY_LUT

@@ -118,6 +118,7 @@ struct ShaderProgram {
     bool uber;
     VkShaderModule vert, frag, mesh_vert;
     bool water;   /* GE+ water on the level's own water surfaces: uber vertex shader + water.frag, the water descriptor set */
+    bool skip;    /* an effect (PORTFX kind) missing from the pack: not drawn, the uber shader runs no effect */
     struct DkCombinerParams params;
     struct DkLayout layout;
     uint8_t num_inputs;
@@ -1140,7 +1141,7 @@ void create_layouts(void) {
     VK_CHECK(vkCreateDescriptorSetLayout(s_dev, &ci, nullptr, &s_sky_set_layout));
     pl.pSetLayouts = &s_sky_set_layout;
     VK_CHECK(vkCreatePipelineLayout(s_dev, &pl, nullptr, &s_sky_pipe_layout));
-    /* the water draws (water.frag.glsl, built with the blocks moved up by 4 like the other draws': Draw 4, Comb 5; its
+    /* the water draws (water/water.frag.glsl, built with the blocks moved up by 4 like the other draws': Draw 4, Comb 5; its
      * colour-map sampler moved to 9 and its Sky block to 8, cmake/VulkanShaders.cmake): the uber vertex shader's Lights block
      * is at 7, like the other draws' */
     VkDescriptorSetLayoutBinding wb[9] = {};
@@ -2060,9 +2061,18 @@ struct ShaderProgram* vk_create_and_load_new_shader(uint64_t id0, uint32_t id1) 
         p->uber = true;
         p->vert = s_uber_vert;
         p->frag = s_uber_frag;
+        /* The uber shader is the fallback for the game's combiners only: an effect comes from the pack
+         * (port/shaders/fx/), else it is not drawn. */
+        p->skip = (id1 & SHADER_OPT_FX_MASK) != 0;
         if (!s_missed[std::make_pair(id0, id1)]) {
             s_missed[std::make_pair(id0, id1)] = true;
-            sysLogPrintf(LOG_NOTE, "SPIR-V miss %016llx %08x", (unsigned long long)id0, (unsigned)id1);
+            if (p->skip) {
+                sysLogPrintf(LOG_ERROR, "SPIR-V miss %016llx %08x: an effect missing from the pack, not drawn "
+                             "(tools_pc/cc_census_merge.py adds it to port/shaders/fx/combiners.txt)",
+                             (unsigned long long)id0, (unsigned)id1);
+            } else {
+                sysLogPrintf(LOG_NOTE, "SPIR-V miss %016llx %08x", (unsigned long long)id0, (unsigned)id1);
+            }
         }
     }
     s_progs[std::make_pair(id0, id1)] = p;
@@ -2233,7 +2243,7 @@ float* vk_stream_begin(size_t max_floats) {
 void vk_draw_triangles(float buf[], size_t len, size_t ntris) {
     float* const stream = s_stream_ptr;
     s_stream_ptr = nullptr;
-    if (ntris == 0 || !prepare_draw()) return;
+    if (ntris == 0 || (s_prg != nullptr && s_prg->skip) || !prepare_draw()) return;
     VkBuffer vb;
     VkDeviceSize off;
     if (buf != nullptr && buf == stream) {
@@ -2656,9 +2666,9 @@ struct SkyPlusDraw {
 SkyPlusDraw s_sky_ring[SKYPLUS_RING];
 unsigned s_sky_next = 0;
 int s_sky_gen = -1;
-#define SKYLUT_W 128   /* the reflection sky's panorama (skylut.frag.glsl) */
+#define SKYLUT_W 128   /* the reflection sky's panorama (sky/lut.frag.glsl) */
 #define SKYLUT_H 64
-#define SEAPANO_W 4096   /* the far sea, baked (skyplus.frag.glsl pass 4); the shader's PANO_W / PANO_H */
+#define SEAPANO_W 4096   /* the far sea, baked (sky/sky.frag.glsl pass 4); the shader's PANO_W / PANO_H */
 #define SEAPANO_H 512
 int s_wtex_gen = -1;
 int s_wmap_gen = -1;
@@ -2675,7 +2685,7 @@ void sky_reset_targets(void) {   /* the framebuffer list was cleared */
     s_pano_bakes = 0;
 }
 
-struct SkyUniforms { float v[16][4]; };   /* block Sky of skycommon.glsl (256 bytes) */
+struct SkyUniforms { float v[16][4]; };   /* block Sky of sky/common.glsl (256 bytes) */
 
 /* D578 present slots: copies of the window image, in the swapchain's format */
 struct ISlot {
