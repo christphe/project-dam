@@ -146,12 +146,18 @@ regions.
 | `linux` | `Dockerfile.build` (same image, host SDL2/GL/zlib) | `build-linux/ge007.x86_64` |
 | `windows` | `Dockerfile.windows` (Fedora 43, MinGW-w64) | `build-win/ge007.x86_64.exe` + DLLs |
 | `shell` | `Dockerfile.build` | interactive bash in the toolchain |
+| `image-local` | `Dockerfile.build` | builds the image locally (`local/project-dam-build:latest`), only to test a Dockerfile change before publishing |
 
 ```sh
-docker compose build             # once: Dockerfile.build (switch, linux, shell)
+docker compose pull              # once: the published image built from Dockerfile.build (switch, linux, shell)
 docker compose run --rm switch
 docker compose run --rm linux
 ```
+
+The image (devkitA64, libnx, portlibs, host libraries and a `uam` built from our fork, issue #141) is
+published to `ghcr.io/christphe/project-dam-build` by `.github/workflows/build-image.yml` and pinned by
+digest in `ci.yml`, `compose.yaml`, `tools/dev.py` and `tools_pc/fxview/fxview.py`; to roll a new one out
+see AGENTS.md section Build (`tools/check_build_image.py --set <ref>`).
 
 (The repository's `Dockerfile` and `docker-compose.yml` (service `ge007`) are
 upstream's N64 matching-build environment, unrelated to these. When both

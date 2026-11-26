@@ -50,6 +50,7 @@ if(_sea_kind)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/sea_pack.cmake"
     DEPENDS ${_sea_glsl} "${CMAKE_CURRENT_SOURCE_DIR}/sea_pack.cmake" "${CMAKE_SOURCE_DIR}/tools_pc/dkshgen/dkshgen.cpp"
             "${CMAKE_SOURCE_DIR}/port/ge_render/src/gfx_cc.cpp" "${CMAKE_SOURCE_DIR}/port/ge_render/src/gfx_dk_layout.h"
+            ${SEA_UAM} ${SEA_GLSLANG}   # a new compiler rebuilds the pack
     COMMENT "sea tab viewer pack (${_sea_kind})" VERBATIM)
   set(_sea_s "${CMAKE_CURRENT_SOURCE_DIR}/sea_pack.S")
   add_library(fxview_sea_pack STATIC "${_sea_s}")

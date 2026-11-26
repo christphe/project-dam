@@ -41,7 +41,7 @@ environment variables override the file.
 | `SWITCH_EMU_SD` | `switch`: its virtual SD card (default `%APPDATA%/Ryujinx/sdcard`) |
 | `N64_EMU_EXE`, `N64_ROM` | `n64`; `N64_ROM` also seeds the native builds' `data/` and is the ROM every tool reads |
 | `SEAVIEW_GXX` | `tools`: the Windows g++ the viewers build with (default: MSYS2's `C:\msys64\mingw64in\g++.exe`) |
-| `DOCKER_IMAGE` | builds (default `local/project-dam-build:latest`, from `docker compose build`) |
+| `DOCKER_IMAGE` | builds (default: the published, digest-pinned `ghcr.io/christphe/project-dam-build`, pulled on first use; `local/project-dam-build:latest` after `docker compose build image-local`) |
 
 `python tools/dev.py config` prints what it resolved.
 

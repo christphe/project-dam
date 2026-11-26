@@ -28,7 +28,7 @@ REPO = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).resolve().parent
 KEYS = {"console_ip": "SWITCH_IP", "ryujinx_exe": "SWITCH_EMU_EXE", "ryujinx_sd": "SWITCH_EMU_SD",
         "ares_exe": "N64_EMU_EXE", "ares_rom": "N64_ROM", "image": "DOCKER_IMAGE"}
-IMAGE = cfg_image = "local/project-dam-build:latest"
+IMAGE = cfg_image = "ghcr.io/christphe/project-dam-build@sha256:0000000000000000000000000000000000000000000000000000000000000000"   # the published build image (tools/check_build_image.py keeps it in sync)
 SD_DIR = "switch/project-dam"          # game folder on the SD card
 NX_DIR = "project-dam"                 # the same folder for nxlink: the netloader writes under sdmc:/switch/
 NRO = "ge007.aarch64.nro"

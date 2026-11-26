@@ -53,12 +53,14 @@ Adding an option or writing its help text: `docs/wiki/options-menu.md`.
 All three targets build in Docker. No ROM is needed to build: the ROM-asset symbols are pre-generated and the game reads the user's ROM at run time.
 
 ```sh
-docker compose build                    # once: Dockerfile.build (devkitA64 + Linux host libs)
+docker compose pull                     # once: the published build image (devkitA64 + patched uam + Linux host libs)
 docker compose run --rm switch          # -> build-switch/ge007.aarch64.nro (what CI ships)
 docker compose run --rm linux           # -> build-linux/ge007.x86_64
 docker compose build windows            # once: Dockerfile.windows (MinGW-w64)
 docker compose run --rm windows         # -> build-win/ge007.x86_64.exe + DLLs
 ```
+
+The build image is `Dockerfile.build`, published to GHCR and pinned by digest in `ci.yml`, `compose.yaml`, `tools/dev.py` and `tools_pc/fxview/fxview.py`. To change it: edit `Dockerfile.build` (test with `docker compose build image-local`), push a branch (`.github/workflows/build-image.yml` publishes it and prints the digest), then `python tools/check_build_image.py --set <ref>`.
 
 The Switch build is the reference: `.github/workflows/ci.yml`, the only workflow on this fork, builds it in the same pinned devkitA64 image, plus the Windows zip, the Linux unit tests and the generated-file checks. SD-card layout, nxlink test builds and release packaging: `docs/building.md` §Nintendo Switch.
 
