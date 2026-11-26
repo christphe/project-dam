@@ -77,6 +77,7 @@ struct ShaderProgram {
     DkShader vert, frag, mesh_vert;
     bool uber;
     bool water;   /* GE+ water: uber vert + water frag (SHADER_OPT_WATER) */
+    bool skip;    /* an effect (PORTFX kind) missing from the pack: not drawn, the uber shader runs no effect */
     struct DkCombinerParams params;
     struct DkLayout layout;
     uint8_t num_inputs;
@@ -988,9 +989,18 @@ struct ShaderProgram* dk_create_and_load_new_shader(uint64_t id0, uint32_t id1) 
         p->uber = true;
         p->vert = s_uber_vert;
         p->frag = s_uber_frag;
+        /* The uber shader is the fallback for the game's combiners only: an effect comes from the pack
+         * (port/shaders/fx/), else it is not drawn. */
+        p->skip = (id1 & SHADER_OPT_FX_MASK) != 0;
         if (!s_missed[std::make_pair(id0, id1)]) {
             s_missed[std::make_pair(id0, id1)] = true;
-            sysLogPrintf(LOG_NOTE, "DKSH miss %016llx %08x", (unsigned long long)id0, (unsigned)id1);
+            if (p->skip) {
+                sysLogPrintf(LOG_ERROR, "DKSH miss %016llx %08x: an effect missing from the pack, not drawn "
+                             "(tools_pc/cc_census_merge.py adds it to port/shaders/fx/combiners.txt)",
+                             (unsigned long long)id0, (unsigned)id1);
+            } else {
+                sysLogPrintf(LOG_NOTE, "DKSH miss %016llx %08x", (unsigned long long)id0, (unsigned)id1);
+            }
         }
     }
     s_progs[std::make_pair(id0, id1)] = p;
@@ -1296,7 +1306,7 @@ float* dk_stream_begin(size_t max_floats) {
 }
 
 void dk_draw_triangles(float buf[], size_t len, size_t ntris) {
-    if (!s_up || s_prg == nullptr || ntris == 0) return;
+    if (!s_up || s_prg == nullptr || ntris == 0 || s_prg->skip) return;
     /* what is drawn over the water (blended, or without depth) must come after the half-size water is composited */
     if (!s_wrec.empty() && !s_prg->water && (s_blend || !s_depth_test)) wfx_flush();
     prepare_draw();

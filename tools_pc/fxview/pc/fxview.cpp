@@ -1,8 +1,9 @@
 // fxview: GoldenEye's combat-effect sprites up close, ORIGINAL (as the game draws them) vs EFFECT (+ fxShade).
-// The sprites are decoded from the user's ROM at run time (modelview's decoder, pc/mv_tex.cpp); fxShade is read from
-// port/shaders/uber.frag.glsl (the "// FXSHADE BEGIN" .. "// FXSHADE END" block) and hot-reloaded on change.
+// The sprites are decoded from the user's ROM at run time (modelview's decoder, pc/mv_tex.cpp); the effect shaders are
+// read from port/shaders/fx/ (common.glsl, bullets.glsl, bursts.glsl, impacts.glsl: the files tools_pc/dkshgen pastes into
+// the game's shaders) and hot-reloaded on change.
 // UI: Dear ImGui panel on the left. Wheel = zoom, Esc quit, F12 screenshot (data/shot_NNN.png).
-// args: --repo DIR --rom FILE.z64 --shader FILE --kind tracer|laser|watchlaser|wallpuff|bloodpuff|scatter|impact
+// args: --repo DIR --rom FILE.z64 --shader DIR --kind tracer|laser|watchlaser|wallpuff|bloodpuff|scatter|impact
 //       --impact N --age F --angle F --view side|split|orig|fx --backdrop grey|dark|checker|wall --bgtex N
 //       --zoom F --fc N (frame_count) --nearest 0|1 --shot f.png --w N --h N --selftest
 #include <windows.h>
@@ -67,19 +68,23 @@ static long long findHexAfter(const std::string& text, const std::string& key) {
     return -1;
 }
 
-// ---------------------------------------------------------------- the fxShade block (single source of truth: uber.frag.glsl)
-// The block, from the BEGIN line to the end of the END line; false + err when the markers are missing.
-static bool extractBlockM(const std::string& src, const char* kBegin, const char* kEnd, std::string& block, std::string& err) {
-    const size_t b = src.find(kBegin), e = src.find(kEnd);
-    if (b == std::string::npos || e == std::string::npos || e < b) { err = std::string("the ") + kBegin + " / END markers are missing"; return false; }
-    size_t eol = src.find('\n', e); if (eol == std::string::npos) eol = src.size();
-    // #line: compile errors then name the line of uber.frag.glsl (#line sets the number of the NEXT line)
-    const int line = 1 + (int)std::count(src.begin(), src.begin() + (long)b, '\n');
-    block = "#line " + std::to_string(line) + "\n" + src.substr(b, eol - b) + "\n";
+// ---------------------------------------------------------------- the effect shaders (single source of truth: port/shaders/fx/)
+// The files tools_pc/dkshgen pastes into the game's effect shaders, in its order: common.glsl first. Each gets a
+// "#line 1 <n>" (n = its index here), so a compile error names the file and its line.
+static const char* kFxFiles[4] = { "common.glsl", "bullets.glsl", "bursts.glsl", "impacts.glsl" };
+static bool readFxSources(const std::string& dir, std::string& all, std::string& err) {
+    all.clear();
+    for (int i = 0; i < 4; i++) {
+        std::string src;
+        if (!readFile(dir + "/" + kFxFiles[i], src)) { err = "cannot read " + dir + "/" + kFxFiles[i]; return false; }
+        all += "#line 1 " + std::to_string(i) + "\n" + src + "\n";
+    }
     return true;
 }
-static bool extractBlock(const std::string& src, std::string& block, std::string& err) { return extractBlockM(src, "// FXSHADE BEGIN", "// FXSHADE END", block, err); }
-static bool extractDecalBlock(const std::string& src, std::string& block, std::string& err) { return extractBlockM(src, "// FXDECAL BEGIN", "// FXDECAL END", block, err); }
+// The viewer's own dispatch by PORTFX kind (the game calls each effect's function directly, dkshgen).
+static const char* kFxDispatch = "vec4 fxShade(vec4 c, uint kind, vec2 uv) {\n"
+    "    if (kind == 2u) return fxTracer(c);\n    if (kind == 3u) return fxSpark(c);\n"
+    "    if (kind == 4u) return fxBlood(c);\n    if (kind == 5u) return fxImpact(c, uv);\n    return c;\n}\n";
 // The uber shader's dynLight (the Enhanced per-pixel lights; it lights the wall under the holes): from "vec3 dynLight("
 // to the first "}" at the start of a line. Empty when not found.
 static std::string extractDynLight(const std::string& src) {
@@ -104,6 +109,9 @@ static const char* kSpriteHead = R"(#version 330 core
 in vec2 vUV; in vec4 vC; in vec2 vPx;
 uniform sampler2D uTex; uniform int uFx; uniform int uKind;
 uniform int frame_count;
+// what fx/impacts.glsl reads (the clusters, not drawn here)
+uniform sampler2D uTex0; uniform sampler2D uTex1;
+vec2 vTexCoord0; vec3 vEye; ivec4 lcount; vec4 lpos[16]; vec4 lcol[16]; vec4 sun_dir;
 out vec4 o;
 )";
 static const char* kSpriteMain = R"(
@@ -125,10 +133,10 @@ void main() {
 }
 )";
 
-// Decal mode: a wall in 3D, then the holes on it. The fragment shader provides what the FXDECAL block uses from the
-// uber shader, with the same names: vEye (eye space), vTexCoord0, uTex0 + texVal0, the Lights block's lcount / sun_dir /
-// sun_col / lpos / lcol (plain uniforms here), flags (0: no fog), fog_pixel, vFog, vFogW, frame_count.
-// uMode 0 = the wall or the game's own hole (TEXEL0 x SHADE, then the uber shader's dynLight), 2 = fxDecalBlend.
+// Decal mode: a wall in 3D, then the holes on it. The fragment shader provides what the effect files use from the
+// game's shaders, with the same names: vEye (eye space), vTexCoord0, uTex0 / uTex1, the Lights block's lcount / sun_dir /
+// sun_col / lpos / lcol (plain uniforms here), frame_count.
+// uMode 0 = the wall or the game's own hole (TEXEL0 x SHADE, then the uber shader's dynLight), 4 = a cluster.
 static const char* kDecalVert = R"(#version 330 core
 layout(location=0) in vec3 aP; layout(location=1) in vec2 aUV; layout(location=2) in vec4 aC;
 uniform mat4 uView; uniform mat4 uProj;
@@ -150,20 +158,10 @@ out vec4 o;
 static const char* kDecalMain = R"(
 void main() {
     texVal0 = texture(uTex0, vTexCoord0);
-    if (uMode == 2) {   // the port's hole (fxDecalPom), then dynLight like the game
-        vec4 d = fxDecalPom(uint(uKind));
-        if (uLit != 0) d.rgb = min(dynLight(d.rgb, d.rgb), vec3(1.0));
-        o = d; return;
-    }
     if (uMode == 4) {   // a cluster (fxClusterPom): fused colour and depth, then dynLight like the game
         vec4 d = fxClusterPom(vC);
         if (uLit != 0) d.rgb = min(dynLight(d.rgb, d.rgb), vec3(1.0));
         o = d; return;
-    }
-    if (uMode == 3) {   // a hole's core (fxDecalCore): uv and group in the vertex colour, then dynLight like the game
-        vec4 k = fxDecalCore(vC);
-        if (uLit != 0) k.rgb = min(dynLight(k.rgb, k.rgb), vec3(1.0));
-        o = k; return;
     }
     vec4 c = texVal0 * vC;
     if (uLit != 0) c.rgb = min(dynLight(c.rgb, texVal0.rgb), vec3(1.0));
@@ -171,7 +169,7 @@ void main() {
 }
 )";
 static const char* kFallbackDynLight = "vec3 dynLight(vec3 base, vec3 albedo) { return base; }\n";
-static const char* kFallbackDecal = "vec4 fxDecalPom(uint kind) { return texVal0; }\nvec4 fxDecalCore(vec4 c) { return vec4(0.0); }\nvec4 fxClusterPom(vec4 c) { return texVal0; }\n";
+static const char* kFallbackDecal = "vec4 fxClusterPom(vec4 c) { return texVal0; }\n";
 
 static std::string g_shaderLog;   // the last compile / link log
 static GLuint compile(GLenum t, const char* src) {
@@ -344,48 +342,50 @@ static Sprite buildSprite() {
 // ---------------------------------------------------------------- rendering
 static GLuint g_pSprite = 0, g_pBack = 0, g_vao = 0, g_vbo = 0, g_ibo = 0;
 static std::string g_shaderPath, g_shaderErr; static uint64_t g_shaderStamp = 0; static int g_reloads = 0;
+static std::string g_uberPath;   // dynLight (the Enhanced lights) is the uber shader's; g_shaderPath is the fx/ folder
 
 static GLuint g_pDecal = 0; static std::string g_decalErr; static int g_decalReloads = 0;
 
-// The decal program: FXSHADE (fxHash, fxNoise) + dynLight + FXDECAL, all from the same file.
-static void reloadDecal(const std::string& src, bool readOk) {
-    std::string shade, decal, err, e2;
-    const std::string dyn = readOk ? extractDynLight(src) : "";
-    if (!readOk) err = "cannot read " + g_shaderPath;
-    else if (!extractBlock(src, shade, err) || !extractDecalBlock(src, decal, e2)) { if (err.empty()) err = e2; }
+// The decal program: the effect files + the uber shader's dynLight.
+static void reloadDecal(const std::string& fx, const std::string& dyn, bool readOk, const std::string& readErr) {
+    std::string err;
+    if (!readOk) err = readErr;
     else {
-        const std::string fs = std::string(kDecalHead) + (dyn.empty() ? kFallbackDynLight : dyn.c_str()) + shade + decal + kDecalMain;
+        const std::string fs = std::string(kDecalHead) + (dyn.empty() ? kFallbackDynLight : dyn.c_str()) + fx + kDecalMain;
         GLuint p = link(kDecalVert, fs.c_str());
         if (p) {
             if (g_pDecal) glDeleteProgram(g_pDecal);
             g_pDecal = p; g_decalErr = dyn.empty() ? "dynLight not found in the shader: the wall is unlit" : ""; g_decalReloads++;
-            fprintf(stderr, "fxDecalBlend loaded (%d)\n", g_decalReloads); return;
+            fprintf(stderr, "impacts loaded (%d)\n", g_decalReloads); return;
         }
-        err = "fxDecalBlend did not compile (the previous version stays):\n" + g_shaderLog;
+        err = "the effect files did not compile (the previous version stays):\n" + g_shaderLog;
     }
     g_decalErr = err; fprintf(stderr, "%s\n", err.c_str());
     if (!g_pDecal) {   // the original side keeps working
-        std::string sh, e3; if (!readOk || !extractBlock(src, sh, e3)) sh = kFallbackBlock;
-        g_pDecal = link(kDecalVert, (std::string(kDecalHead) + kFallbackDynLight + sh + kFallbackDecal + kDecalMain).c_str());
-        if (!g_pDecal) g_pDecal = link(kDecalVert, (std::string(kDecalHead) + kFallbackDynLight + kFallbackBlock + kFallbackDecal + kDecalMain).c_str());
+        g_pDecal = link(kDecalVert, (std::string(kDecalHead) + kFallbackDynLight + kFallbackDecal + kDecalMain).c_str());
     }
 }
 
-static void reloadTab(const std::string& src, bool readOk);   // fx_tabs.inc
+static void reloadTab(const std::string& fx, const std::string& dyn, bool readOk, const std::string& readErr);   // fx_tabs.inc
+static uint64_t fxStamp() {   // the newest of the effect files
+    uint64_t st = 0;
+    for (const char* f : kFxFiles) st = std::max(st, fileStamp(g_shaderPath + "/" + f));
+    return st;
+}
 static void reloadShader(bool force) {
-    const uint64_t st = fileStamp(g_shaderPath);
+    const uint64_t st = fxStamp();
     if (!force && st == g_shaderStamp) return;
     g_shaderStamp = st;
-    std::string src, block, err;
-    const bool readOk = readFile(g_shaderPath, src);
-    reloadDecal(src, readOk);
-    reloadTab(src, readOk);
-    if (!readOk) err = "cannot read " + g_shaderPath;
-    else if (extractBlock(src, block, err)) {
-        const std::string fs = std::string(kSpriteHead) + block + kSpriteMain;
+    std::string fx, uber, err;
+    const bool readOk = readFxSources(g_shaderPath, fx, err);
+    const std::string dyn = readFile(g_uberPath, uber) ? extractDynLight(uber) : "";
+    reloadDecal(fx, dyn, readOk, err);
+    reloadTab(fx, dyn, readOk, err);
+    if (readOk) {
+        const std::string fs = std::string(kSpriteHead) + fx + kFxDispatch + kSpriteMain;
         GLuint p = link(kVert, fs.c_str());
-        if (p) { if (g_pSprite) glDeleteProgram(g_pSprite); g_pSprite = p; g_shaderErr.clear(); g_reloads++; fprintf(stderr, "fxShade loaded (%d)\n", g_reloads); return; }
-        err = "fxShade did not compile (the previous version stays):\n" + g_shaderLog;
+        if (p) { if (g_pSprite) glDeleteProgram(g_pSprite); g_pSprite = p; g_shaderErr.clear(); g_reloads++; fprintf(stderr, "effects loaded (%d)\n", g_reloads); return; }
+        err = "the effect files did not compile (the previous version stays):\n" + g_shaderLog;
     }
     g_shaderErr = err; fprintf(stderr, "%s\n", err.c_str());
     if (!g_pSprite) g_pSprite = link(kVert, (std::string(kSpriteHead) + kFallbackBlock + kSpriteMain).c_str());   // keep the original side working
@@ -449,10 +449,9 @@ static void drawPane(const Sprite& s, int x0, int y0, int w, int h, bool fx, int
 struct PaneRect { int x, y, w, h; bool fx; int vx = 0, vy = 0, vw = 0, vh = 0; };   // v*: the 3D viewport (top-left), decal mode
 static std::vector<PaneRect> g_panes;   // in top-left pixel coordinates, for the labels
 static int g_splitPx = 0;
-static bool g_cluster = true;           // decal mode, port pane: the holes fused into one cluster texture (prototype)
 static float g_cDensity = 0.0f;         // the cluster colour's texels per wall texel (0 = its full resolution)
 static float g_cDepthRes = 0.5f;        // the cluster depth's resolution, a fraction of its full one (the shape stays readable)
-static int g_mode = 0;                  // 0 sprites, 1 decal (bullet holes on a lit wall, fxDecalBlend)
+static int g_mode = 0;                  // 0 sprites, 1 decal (bullet holes on a lit wall: the game's vs the clusters)
 static void renderDecal(int x, int y, int w, int h, int H);
 static void renderTab(int x, int y, int w, int h, int H);   // fx_tabs.inc: muzzle, tracer, burst, explosion (g_mode >= 2)
 static std::string tabCaption();
@@ -494,12 +493,12 @@ static void drawLabels(const std::string& caption) {
         dl->AddText(ImVec2((float)p.x + 10, yb), IM_COL32(230, 230, 230, 255), caption.c_str());
     }
     const std::string& er = g_mode == 1 ? g_decalErr : g_shaderErr;
-    if (!er.empty()) dl->AddText(ImVec2((float)(g_panes.empty() ? 10 : g_panes.back().x + 10), 40), IM_COL32(255, 80, 80, 255), g_mode == 1 ? "fxDecalBlend error: see the panel" : "fxShade error: see the panel");
+    if (!er.empty()) dl->AddText(ImVec2((float)(g_panes.empty() ? 10 : g_panes.back().x + 10), 40), IM_COL32(255, 80, 80, 255), g_mode == 1 ? "impacts error: see the panel" : "effects error: see the panel");
 }
 
 // ---------------------------------------------------------------- decal mode: the port's bullet holes on a lit wall
 // Materials: the game's hit type (assets/images.def HIT_*, src/game/tex.c *_impact_types) -> the port's decal group
-// (port/src/fxparticles.c decalKind: PORTFX_DECAL_* = 8 + group) and the impact types the game picks from.
+// and the impact types the game picks from.
 enum { HIT_DEFAULT = 0, HIT_STONE, HIT_WOOD, HIT_METAL, HIT_GLASS, HIT_WATER, HIT_SNOW, HIT_DIRT, HIT_MUD, HIT_TILE, HIT_METALOBJ, HIT_CHR, HIT_GLASS_XLU };
 static const char* kHitNames[] = { "HIT_DEFAULT", "HIT_STONE", "HIT_WOOD", "HIT_METAL", "HIT_GLASS", "HIT_WATER", "HIT_SNOW", "HIT_DIRT", "HIT_MUD", "HIT_TILE", "HIT_METALOBJ", "HIT_CHR", "HIT_GLASS_XLU" };
 struct DecalMat { const char* key; const char* name; int hit; int group; int ntypes; int types[3]; int wallTex; };
@@ -727,7 +726,7 @@ static void drawCluster(const std::vector<Hole>& hs, const ImpactType& it, int g
     glDisable(GL_BLEND);
 }
 
-// one pane: the wall, then the holes (fx: fxDecalBlend with the 2x-multiply blend; else the game's draw)
+// one pane: the wall, then the holes (fx: one cluster, fx/impacts.glsl fxClusterPom; else the game's draw)
 static void drawDecalPane(int x0, int y0, int w, int h, bool fx, int clipX0, int clipX1) {
     glViewport(x0, y0, w, h);
     glEnable(GL_SCISSOR_TEST); glScissor(clipX0, y0, clipX1 - clipX0, h);
@@ -754,7 +753,7 @@ static void drawDecalPane(int x0, int y0, int w, int h, bool fx, int clipX0, int
     std::vector<V3> v; std::vector<uint16_t> idx;
     std::vector<Hole> hs = holeLayout(g_holes, g_hseed, holeSize());
     for (Hole& hh : hs) hh.ang = 0.0f;   // never turned, like the game's (fxparticles.c decalAdd)
-    if (fx && g_cluster) {   // the cluster prototype
+    if (fx) {   // the port: the holes fused into one cluster (port/src/fxclusters.c)
         drawCluster(hs, it, curMat().group);
         glDisable(GL_SCISSOR_TEST);
         return;
@@ -766,63 +765,18 @@ static void drawDecalPane(int x0, int y0, int w, int h, bool fx, int clipX0, int
         const float T[2] = { cs * hw, sn * hw }, B[2] = { -sn * hh, cs * hh };
         static const float cn[4][2] = { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } };
         const uint16_t b = (uint16_t)v.size();
-        // the port: only where this hole is the deepest (fxparticles.c decalCell: cones, the smallest
-        // distance / radius wins; the frontier cuts the segment between centres in the ratio of the radii)
-        std::vector<std::array<float, 2>> poly = { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } };
-        if (fx) {
-            const float ri = 0.5f * (hw + hh);
-            for (size_t j = 0; j < hs.size() && poly.size() >= 3; j++) {
-                if (j == hidx) continue;
-                const float rj = 0.5f * (it.w * hs[j].k + it.h * hs[j].k);
-                const float ex = hs[j].x - H.x, ey = hs[j].y - H.y, dist = sqrtf(ex * ex + ey * ey);
-                if (dist > ri + rj) continue;
-                if (dist < 1e-3f) { if (j > hidx) poly.clear(); continue; }
-                const float a = hw * ex / dist, bb = hh * ey / dist, m = dist * ri / (ri + rj);
-                std::vector<std::array<float, 2>> out;
-                for (size_t q = 0; q < poly.size(); q++) {
-                    const auto& P = poly[q]; const auto& Q = poly[(q + 1) % poly.size()];
-                    const float dp = a * P[0] + bb * P[1] - m, dq = a * Q[0] + bb * Q[1] - m;
-                    if (dp <= 0) out.push_back(P);
-                    if ((dp < 0 && dq > 0) || (dp > 0 && dq < 0)) { const float t = dp / (dp - dq); out.push_back({ P[0] + (Q[0] - P[0]) * t, P[1] + (Q[1] - P[1]) * t }); }
-                }
-                poly = out;
-            }
-        }
+        const std::vector<std::array<float, 2>> poly = { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } };
         for (const auto& c : poly) {
             float col[3] = { 1, 1, 1 };
-            if (!fx) impactVertexColour(it.app, vseed, col);   // the game's colours
+            impactVertexColour(it.app, vseed, col);   // the game's colours
             v.push_back({ H.x + T[0] * c[0] + B[0] * c[1], H.y + T[1] * c[0] + B[1] * c[1], 0.4f, c[0] * 0.5f + 0.5f, c[1] * 0.5f + 0.5f, col[0], col[1], col[2], 1 });
         }
         for (size_t k = 1; k + 1 < poly.size(); k++) for (size_t i : { (size_t)0, k, k + 1 }) idx.push_back((uint16_t)(b + i));
     }
     glEnable(GL_BLEND);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
-    const int grp = curMat().group;
-    if (false) {   // the core layer (fxparticles.c decalCores) is off
-        std::vector<V3> cv; std::vector<uint16_t> ci;
-        for (size_t hi = 0; hi < hs.size(); hi++) {
-            const Hole& Hh = hs[hi];
-            const float cs = cosf(Hh.ang), sn = sinf(Hh.ang), hw = it.w * Hh.k, hh = it.h * Hh.k;
-            const float T[2] = { cs * hw, sn * hw }, B[2] = { -sn * hh, cs * hh };
-            static const float cn[4][2] = { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } };
-            const float code = (float)(grp * 16 + (int)(hi * 5 % 16)) / 255.0f;
-            const uint16_t b = (uint16_t)cv.size();
-            for (int k = 0; k < 4; k++)
-                cv.push_back({ Hh.x + T[0] * cn[k][0] + B[0] * cn[k][1], Hh.y + T[1] * cn[k][0] + B[1] * cn[k][1], 0.4f, 0, 0,
-                               cn[k][0] > 0 ? 1.0f : 0.0f, cn[k][1] > 0 ? 1.0f : 0.0f, code, 1 });
-            for (uint16_t i : { 0, 1, 2, 0, 2, 3 }) ci.push_back((uint16_t)(b + i));
-        }
-        glUniform1i(glGetUniformLocation(g_pDecal, "uMode"), 3);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        drawV3(cv, ci);
-    }
-    if (fx) {   // fast3d blend mode 3: src = DST_COLOR, dst = SRC_COLOR -> 2 x wall x factor
-        glUniform1i(glGetUniformLocation(g_pDecal, "uMode"), 2); glUniform1i(glGetUniformLocation(g_pDecal, "uKind"), grp == 6 ? 14 : 8 + grp);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    } else {    // G_RM_ZB_XLU_DECAL: src alpha over
-        glUniform1i(glGetUniformLocation(g_pDecal, "uMode"), 0);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    }
+    glUniform1i(glGetUniformLocation(g_pDecal, "uMode"), 0);   // the game's holes: G_RM_ZB_XLU_DECAL, src alpha over
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     drawV3(v, idx);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDisable(GL_BLEND); glDisable(GL_SCISSOR_TEST);
@@ -879,9 +833,9 @@ static std::string decalCaption() {
     const int type = decalType(), wt = wallTex();
     const ImgEntry* img = tableEntry("impactimages", type);
     char b[400];
-    snprintf(b, sizeof b, "%s -> group %d (%s), kind %d | impact type %d (tex %u, %gx%g) x%d | wall tex %d %s | sun %s az %.0f el %.0f | flash %s (%.0f,%.0f,%.0f) r %.0f",
-             curMat().name, curMat().group, kGroupNames[curMat().group], 8 + curMat().group, type, img ? img->index : 0, kImpactTypes[type].w * 2, kImpactTypes[type].h * 2, g_holes,
-             wt, wt < (int)g_texInfo.size() ? g_texInfo[(size_t)wt].name.c_str() : "?", g_sunOn ? "on" : "off (fxDecalBlend: eye-space 'from above')", g_sunAz, g_sunEl,
+    snprintf(b, sizeof b, "%s -> group %d (%s) | impact type %d (tex %u, %gx%g) x%d | wall tex %d %s | sun %s az %.0f el %.0f | flash %s (%.0f,%.0f,%.0f) r %.0f",
+             curMat().name, curMat().group, kGroupNames[curMat().group], type, img ? img->index : 0, kImpactTypes[type].w * 2, kImpactTypes[type].h * 2, g_holes,
+             wt, wt < (int)g_texInfo.size() ? g_texInfo[(size_t)wt].name.c_str() : "?", g_sunOn ? "on" : "off (the relief light: from above)", g_sunAz, g_sunEl,
              g_ptOn ? "on" : "off", g_ptX, g_ptY, g_ptH, g_ptR);
     return b;
 }
@@ -915,7 +869,7 @@ static void uiDecal() {
         for (int i = 0; i < kNMats; i++) if (ImGui::Selectable(kMats[i].name, g_mat == i)) { g_mat = i; g_dtype = -1; g_wallTex = -1; }
         ImGui::EndCombo();
     }
-    ImGui::Text("decal group %d (%s), kind %d", curMat().group, kGroupNames[curMat().group], 8 + curMat().group);
+    ImGui::Text("decal group %d (%s)", curMat().group, kGroupNames[curMat().group]);
     {
         std::string ts; for (int i = 0; i < curMat().ntypes; i++) ts += (i ? ", " : "") + std::to_string(curMat().types[i]);
         ImGui::Text("game impact type(s): %s", ts.c_str());
@@ -956,7 +910,7 @@ static void uiDecal() {
     if (g_view == VIEW_SPLIT) ImGui::SliderFloat("split at", &g_split, 0.0f, 1.0f);
     if (g_view == 4) { ImGui::InputInt("page", &g_sheetPage); if (g_sheetPage < 0) g_sheetPage = 0; }
     ImGui::Checkbox("nearest texels (off = bilinear)", &g_nearest);
-    ImGui::SeparatorText("fxDecalBlend");
+    ImGui::SeparatorText("port/shaders/fx/");
     ImGui::TextWrapped("%s (reloaded %d x)", g_shaderPath.c_str(), g_decalReloads);
     if (ImGui::Button("reload now")) reloadShader(true);
     if (!g_decalErr.empty()) ImGui::TextColored(ImVec4(1, .4f, .4f, 1), "%s", g_decalErr.c_str());
@@ -1017,7 +971,6 @@ static void setKey(const std::string& k, const std::string& v) {
     else if (k == "texel") g_texel = (float)atof(v.c_str());
     else if (k == "wallshade") g_wallShade = (float)atof(v.c_str());
     else if (k == "walllit") g_wallLit = atoi(v.c_str()) != 0;
-    else if (k == "cluster") g_cluster = atoi(v.c_str()) != 0;
     else if (k == "cdensity") g_cDensity = (float)atof(v.c_str());
     else if (k == "cdepth") g_cDepthRes = (float)atof(v.c_str());
     else if (k == "page") g_sheetPage = atoi(v.c_str());
@@ -1108,7 +1061,6 @@ static void uiPanel(int H) {
     ImGui::RadioButton("original", &g_view, VIEW_ORIG); ImGui::SameLine(); ImGui::RadioButton("effect", &g_view, VIEW_FX);
     if (g_view == VIEW_SPLIT) ImGui::SliderFloat("split at", &g_split, 0.0f, 1.0f);
     ImGui::SliderFloat("zoom", &g_zoom, 0.1f, 4.0f, "%.2f");
-    ImGui::Checkbox("cluster: fused holes (prototype)", &g_cluster);
     ImGui::SliderFloat("cluster texels / wall texel", &g_cDensity, 0.0f, 4.0f, g_cDensity <= 0.0f ? "full" : "%.2f");
     ImGui::SliderFloat("cluster depth res (x full)", &g_cDepthRes, 0.125f, 1.0f, "%.3f");
     ImGui::Checkbox("nearest texels (off = bilinear)", &g_nearest);
@@ -1169,19 +1121,17 @@ static LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 // ---------------------------------------------------------------- selftest (no ROM, no GL)
 static int selftest(const std::string& repo) {
     int fail = mv_tex_selftest() + fx_tex_selftest();
-    // the block extraction: markers found, the block holds fxShade, and a file without markers is refused
+    // the effect files: all four read, each family's function in them
     std::string blk, err;
-    if (!extractBlock("a\n// FXSHADE BEGIN x\nvec4 fxShade(vec4 c, uint k, vec2 uv) { return c; }\n// FXSHADE END\nb\n", blk, err) || blk.find("fxShade") == std::string::npos || blk.find("b\n") != std::string::npos) { fprintf(stderr, "selftest FAIL block extraction\n"); fail++; }
-    if (extractBlock("no markers", blk, err)) { fprintf(stderr, "selftest FAIL markers missing not detected\n"); fail++; }
     if (!repo.empty()) {
-        std::string src;
-        if (!readFile(repo + "/port/shaders/uber.frag.glsl", src) || !extractBlock(src, blk, err) || blk.find("vec4 fxShade(") == std::string::npos) { fprintf(stderr, "selftest FAIL uber.frag.glsl has no usable FXSHADE block\n"); fail++; }
+        if (!readFxSources(repo + "/port/shaders/fx", blk, err)) { fprintf(stderr, "selftest FAIL %s\n", err.c_str()); fail++; }
+        else for (const char* fn : { "float fxHash(", "vec4 fxTracer(", "vec4 fxSpark(", "vec4 fxBlood(", "vec4 fxImpact(", "vec4 fxClusterPom(" })
+            if (blk.find(fn) == std::string::npos) { fprintf(stderr, "selftest FAIL port/shaders/fx/ has no %s\n", fn); fail++; }
     }
-    // decal mode: the FXDECAL block and dynLight are found in the real shader, images.def gives the hit types, the layout is stable
+    // decal mode: dynLight is found in the uber shader, images.def gives the hit types, the layout is stable
     if (!repo.empty()) {
         std::string src, d; std::vector<TexInfo> ti;
-        if (!readFile(repo + "/port/shaders/uber.frag.glsl", src) || !extractDecalBlock(src, blk, err) || blk.find("vec4 fxDecalPom(") == std::string::npos) { fprintf(stderr, "selftest FAIL uber.frag.glsl has no usable FXDECAL block\n"); fail++; }
-        if (extractDynLight(src).find("return c;") == std::string::npos) { fprintf(stderr, "selftest FAIL dynLight not found in uber.frag.glsl\n"); fail++; }
+        if (!readFile(repo + "/port/shaders/uber.frag.glsl", src) || extractDynLight(src).find("return c;") == std::string::npos) { fprintf(stderr, "selftest FAIL dynLight not found in uber.frag.glsl\n"); fail++; }
         if (!readFile(repo + "/assets/images.def", d) || !parseImagesDef(d, ti)) { fprintf(stderr, "selftest FAIL assets/images.def not parsed\n"); fail++; }
         else {
             if (ti.size() < 2600 || ti[20].name != "GRAVELGREY" || ti[20].hit != HIT_DIRT || ti[33].hit != HIT_WOOD) { fprintf(stderr, "selftest FAIL images.def numbering / hit types\n"); fail++; }
@@ -1224,7 +1174,8 @@ int main(int argc, char** argv) {
     }
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--selftest")) return selftest(repo);
     g_repo = repo;
-    g_shaderPath = repo + "/port/shaders/uber.frag.glsl";
+    g_shaderPath = repo + "/port/shaders/fx";
+    g_uberPath = repo + "/port/shaders/uber.frag.glsl";
     {   // the blood colour the port sets (Game.BloodOnHit)
         std::string s;
         if (readFile(repo + "/port/src/switch/nxgame.c", s)) {

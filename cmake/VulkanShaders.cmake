@@ -107,13 +107,15 @@ macro(vulkan_shaders target)
   find_program(VK_HOST_CXX NAMES c++ g++ HINTS /usr/bin REQUIRED NO_CMAKE_FIND_ROOT_PATH)
   set(_vk_pack "${CMAKE_BINARY_DIR}/ge007_spv.bin")
   file(GLOB _vk_glsl "${CMAKE_SOURCE_DIR}/port/shaders/*.glsl")
+  file(GLOB _fx_glsl CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/fx/*.glsl")
   add_custom_command(OUTPUT "${_vk_pack}"
     COMMAND "${CMAKE_COMMAND}" -DVK_PACK_RUN=ON
             "-DVK_SRC=${CMAKE_SOURCE_DIR}" "-DVK_OUT=${CMAKE_BINARY_DIR}/spv"
             "-DVK_LIST=${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt"
             "-DVK_PACK=${_vk_pack}" "-DVK_GLSLANG=${VK_GLSLANG}" "-DVK_HOST_CXX=${VK_HOST_CXX}"
             -P "${CMAKE_SOURCE_DIR}/cmake/VulkanShaders.cmake"
-    DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt" ${_vk_glsl}
+    DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt" "${CMAKE_SOURCE_DIR}/port/shaders/fx/combiners.txt"
+            ${_fx_glsl} ${_vk_glsl}
             "${CMAKE_SOURCE_DIR}/tools_pc/dkshgen/dkshgen.cpp"
             "${CMAKE_SOURCE_DIR}/port/fast3d/gfx_cc.cpp"
             "${CMAKE_SOURCE_DIR}/port/fast3d/gfx_cc.h"

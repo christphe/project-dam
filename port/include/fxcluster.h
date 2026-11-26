@@ -5,7 +5,7 @@
  *
  * A hole template is generated per material and variant: a depth map (0 = the wall's surface, 1 = the
  * deepest) and a pattern (RGBA; A = coverage) with the pit's occlusion baked in but no directional light
- * (the shader lights the relief: uber.frag.glsl fxClusterPom). The pattern is a grey multiplier around 1
+ * (the shader lights the relief: port/shaders/fx/impacts.glsl fxClusterPom). The pattern is a grey multiplier around 1
  * (noise, wood fibres, the pit's darkness): the stamp multiplies it by the hole's base colour, the average
  * of the wall's texture under it, a little lighter (the same material, crushed). Metal is the exception: its
  * crown of bare steel keeps its own colour (the paint went, the metal under it is not the paint's colour).

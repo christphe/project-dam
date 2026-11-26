@@ -4647,7 +4647,7 @@ static inline void gfx_tri_state(TriState& ts) {
         !invisible && !ts.use_modulate && !cld_surf && gfx_zcut_gate()) {
         cc_options |= (uint64_t)SHADER_OPT_ZCUT;
     }
-    /* Effect shaders (portfx.h, uber.frag.glsl fxShade): Enhanced only; GE_FX=0
+    /* Effect shaders (portfx.h, port/shaders/fx/): Enhanced only; GE_FX=0
      * keeps the game's look (before/after captures). The muzzle quad keeps
      * its own look: the flash's light is dynlights' (#111). */
     if (s_fx_kind != PORTFX_NONE && s_fx_kind != PORTFX_MUZZLE && gfx_fx_shading_on()) {

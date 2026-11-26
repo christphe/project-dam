@@ -6,10 +6,10 @@ game draws it) next to **EFFECT** (the same, then `fxShade`), and writes before/
 usable for this: the runs are not reproducible and the sprites are a few pixels.
 
 - **Single source of truth.** `fxShade` and its helpers are read at run time from
-  `port/shaders/uber.frag.glsl`, between the lines `// FXSHADE BEGIN` and `// FXSHADE END`, and **hot-reloaded**
+  `port/shaders/fx.glsl`, between the lines `// FXSHADE BEGIN` and `// FXSHADE END`, and **hot-reloaded**
   when the file changes (polled every 0.3 s). Tuning = editing that block with the viewer open. A block that does not
   compile keeps the previous version on screen and shows the compiler log in the panel, with line numbers of
-  `uber.frag.glsl` (a `#line` is inserted). The viewer provides `uniform int frame_count;` (the game's per-frame counter;
+  `fx.glsl` (a `#line` is inserted). The viewer provides `uniform int frame_count;` (the game's per-frame counter;
   it advances at 60 per second while "animate frame_count" is on, `--fc N` fixes it).
 - **The sprites come from your own ROM at run time.** The image tables are read from the `Globalimagetable` segment
   (ROM address from `port/src/romassets_<r>.s`, table offsets from `src/game/image_bank.c`), the textures decoded with
@@ -86,7 +86,7 @@ the pane (the relative size between effects is not kept); the zoom scales that.
 ## Decal mode: the port's bullet holes (`fxDecalBlend`)
 
 The level's bullet holes are drawn by `port/src/fxparticles.c` (`decalDraw`) and shaded by `fxDecalBlend` in
-`uber.frag.glsl` (between `// FXDECAL BEGIN` and `// FXDECAL END`). The result is a factor for a 2x-multiply blend
+`port/shaders/fx.glsl` (between `// FXDECAL BEGIN` and `// FXDECAL END`). The result is a factor for a 2x-multiply blend
 over the wall. Decal mode draws this in 3D: a wall (the plane z = 0) with a real level texture, the game's hole
 texture on it, lit by a movable sun and a movable point light (a muzzle flash). **GAME** on the left is the hole
 as the game draws it: `impactimages[type]` times the vertex colour by `g_ImpactTypes[type].unk1`, alpha over.

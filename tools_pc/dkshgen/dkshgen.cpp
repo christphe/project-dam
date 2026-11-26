@@ -2,7 +2,16 @@
  *
  *   dkshgen glsl <combiners.txt> <outdir>
  *       writes cc_<id0>_<id1>.vert.glsl / .frag.glsl for every pair of the list
- *       (deko3d-flavoured GLSL 460) and <outdir>/list.txt naming them.
+ *       and of fx/combiners.txt next to it (deko3d-flavoured GLSL 460), and
+ *       <outdir>/list.txt naming them.
+ *
+ * Two lists, sorted by what draws: combiners.txt holds the game's combiners
+ * (the census, tools_pc/cc_census_merge.py), fx/combiners.txt the port's
+ * effects (ids with a PORTFX_* kind in SHADER_OPT_FX_MASK). An effect id gets
+ * fx/common.glsl and its family's file (fx/bullets.glsl, bursts.glsl,
+ * impacts.glsl) and calls its effect's function: the uber shader is only the
+ * fallback for the game's combiners and runs no effect. An id in the wrong
+ * list, or an effect kind with no shader here, is an error.
  *   dkshgen pack <outfile> <listfile>
  *       listfile lines: "<id0 hex> <id1 hex> <vert.dksh|-> <frag.dksh|->";
  *       writes the pack described in port/fast3d/gfx_dk_layout.h.
@@ -163,7 +172,24 @@ static const char* LIGHTS_FN =
     "}\n";
 
 /* Combiner GLSL (deko3d): see gfx_opengl_gen_shader_src. */
-static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool mesh = false) {
+/* The effect sources (port/shaders/fx/): common.glsl, then one file per family. */
+struct FxSources {
+    std::string common, bullets, bursts, impacts;
+};
+
+/* An effect kind's family file and its call: "" = no shader for that kind. */
+static const std::string& fx_family(const FxSources& fx, unsigned kind) {
+    static const std::string none;
+    switch (kind) {
+        case 2: return fx.bullets;                 /* PORTFX_TRACER: fxTracer */
+        case 3: case 4: return fx.bursts;          /* PORTFX_SPARK, PORTFX_BLOOD: fxSpark, fxBlood */
+        case 5: case 7: return fx.impacts;         /* PORTFX_IMPACT, PORTFX_CLUSTER: fxImpact, fxClusterPom */
+    }
+    return none;
+}
+
+/* fx: the effect sources, used when f.fx_kind is set. */
+static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool mesh = false, const FxSources* fx = nullptr) {
     s_bad = false;
     /* D986: perspective-correct shade and fog on the Switch. The D540
      * screen-affine shade left a dark patch that follows the view on the
@@ -171,6 +197,21 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
     const char* shadeq = "";
     const char* fogq = shadeq;               /* per-vertex fog rides with the shade (D543) */
     const int nin = f.opt_alpha ? 4 : 3;
+    /* Effects (port/shaders/fx/): 2..5 reshape the combined colour (fxTracer, fxSpark, fxBlood, fxImpact); 7 is a
+     * bullet-hole cluster (fxClusterPom over the fused colour and depth, uTex0 / uTex1), whose colour replaces the
+     * combiner's; it takes its vertex colour from the first input (SHADE). */
+    const unsigned fxk = f.fx_kind;
+    std::string fx_code;
+    if (fxk != 0) {
+        const std::string fam = fx ? fx_family(*fx, fxk) : std::string();
+        if (fam.empty()) {
+            fprintf(stderr, "dkshgen: no effect shader for PORTFX kind %u (port/shaders/fx/)\n", fxk);
+            return false;
+        }
+        if (fxk == 7u && f.num_inputs < 1) return false;                     /* the cluster's vertex colour */
+        if ((fxk == 5u || fxk == 7u) && !f.used_textures[0]) return false;   /* fx/impacts.glsl reads vTexCoord0 */
+        fx_code = fx->common + fam;
+    }
 
     vs = "#version 460\n";
     vs += fmt("layout(location = %d) in vec4 aVtxPos;\n", DK_ATTR_POS);
@@ -262,8 +303,9 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
     for (int i = 0; i < f.num_inputs; i++) {
         fs += fmt("layout(location = %d) %sin vec%d vInput%d;\n", DK_ATTR_IN1 + i, shadeq, nin, i + 1);
     }
-    if (f.used_textures[0]) fs += "layout(binding = 0) uniform sampler2D uTex0;\n";
-    if (f.used_textures[1]) fs += "layout(binding = 1) uniform sampler2D uTex1;\n";
+    const bool fx_impacts = fxk == 5u || fxk == 7u;   /* fx/impacts.glsl: the clusters read uTex0 / uTex1 */
+    if (f.used_textures[0] || fx_impacts) fs += "layout(binding = 0) uniform sampler2D uTex0;\n";
+    if (f.used_textures[1] || fx_impacts) fs += "layout(binding = 1) uniform sampler2D uTex1;\n";
     fs += "layout(std140, binding = 0) uniform Draw {\n"
           "    int frame_count;\n"
           "    float noise_scale;\n"
@@ -307,6 +349,7 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
     fs += LIGHTS_BLOCK;
     fs += fmt("layout(location = %d) in vec3 vEye;\n", DK_VAR_EYE);
     fs += LIGHTS_FN;
+    fs += fx_code;
     fs += "void main() {\n";
     for (int i = 0; i < f.num_inputs; i++) {
         fs += fmt("    vec%d cInput%d = clamp(vInput%d, 0.0, 1.0);\n", nin, i + 1, i + 1);
@@ -374,6 +417,27 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
               "    vec3 new_texel = vGrayscaleColor.rgb * intensity;\n"
               "    texel.rgb = mix(texel.rgb, new_texel, vGrayscaleColor.a);\n";
     }
+    if (fxk == 7u) {
+        /* the cluster's own colour replaces the combiner's: lit and fogged like the game's surfaces */
+        fs += nin == 4 ? "    vec4 fxVc = cInput1;\n" : "    vec4 fxVc = vec4(cInput1, 1.0);\n";
+        fs += "    vec4 fxD = fxClusterPom(fxVc);\n"
+              "    fxD.a *= fxVc.a;\n"   /* the game's fade (the oldest holes of a prop) */
+              "    fxD.rgb = min(dynLight(fxD.rgb, fxD.rgb), vec3(1.0));\n";
+        if (f.opt_fog) fs += "    fxD.rgb = mix(fxD.rgb, vFog.rgb, fogA);\n";
+        fs += "    outColor = fxD;\n"
+              "    return;\n";
+    } else if (fxk != 0) {
+        std::string call;
+        switch (fxk) {
+            case 2: call = "fxTracer(%s)"; break;
+            case 3: call = "fxSpark(%s)"; break;
+            case 4: call = "fxBlood(%s)"; break;
+            default: call = std::string("fxImpact(%s, ") + (f.used_textures[0] ? "vTexCoord0" : "vec2(0.5)") + ")"; break;
+        }
+        const size_t at = call.find("%s");
+        if (f.opt_alpha) fs += "    texel = " + call.replace(at, 2, "texel") + ";\n";
+        else fs += "    texel = " + call.replace(at, 2, "vec4(texel, 1.0)") + ".rgb;\n";
+    }
     if (f.opt_alpha) {
         if (f.opt_alpha_threshold) fs += "    if (texel.a < 8.0 / 256.0) discard;\n";
         if (f.opt_invisible) fs += "    texel.a = 0.0;\n";
@@ -429,9 +493,56 @@ static bool write_file(const std::string& path, const std::string& s) {
     return true;
 }
 
+static bool read_text(const std::string& path, std::string& out) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    char buf[4096];
+    size_t n;
+    out.clear();
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
+    fclose(f);
+    return true;
+}
+
 static int cmd_glsl(const char* list, const char* outdir) {
-    std::vector<std::pair<uint64_t, uint32_t>> ids;
+    std::vector<std::pair<uint64_t, uint32_t>> ids, fx_ids;
     if (!read_list(list, ids)) return 1;
+    std::string dir = list;
+    const size_t cut = dir.find_last_of("/\\");
+    dir = cut == std::string::npos ? std::string(".") : dir.substr(0, cut);
+    const std::string fx_dir = dir + "/fx", fx_list = fx_dir + "/combiners.txt";
+    FxSources fx;
+    if (!read_list(fx_list.c_str(), fx_ids)) return 1;
+    if (!fx_ids.empty()) {
+        const std::pair<const char*, std::string*> files[4] = {
+            { "common.glsl", &fx.common }, { "bullets.glsl", &fx.bullets }, { "bursts.glsl", &fx.bursts }, { "impacts.glsl", &fx.impacts } };
+        for (const auto& fl : files) {
+            const std::string path = fx_dir + "/" + fl.first;
+            if (!read_text(path, *fl.second)) {
+                fprintf(stderr, "dkshgen: cannot read %s\n", path.c_str());
+                return 1;
+            }
+            *fl.second = "// ---- " + std::string("fx/") + fl.first + "\n" + *fl.second;
+        }
+    }
+    int misfiled = 0;
+    for (auto& id : ids) {
+        if (id.second & SHADER_OPT_FX_MASK) {
+            fprintf(stderr, "dkshgen: 0x%016llx 0x%08x is an effect (PORTFX kind %u): it belongs in %s\n",
+                    (unsigned long long)id.first, id.second, (id.second & SHADER_OPT_FX_MASK) >> SHADER_OPT_FX_SHIFT, fx_list.c_str());
+            misfiled++;
+        }
+    }
+    for (auto& id : fx_ids) {
+        if ((id.second & SHADER_OPT_FX_MASK) == 0) {
+            fprintf(stderr, "dkshgen: 0x%016llx 0x%08x carries no effect kind: it belongs in %s\n",
+                    (unsigned long long)id.first, id.second, list);
+            misfiled++;
+        }
+    }
+    if (misfiled) return 1;
+    const size_t n_game = ids.size();
+    ids.insert(ids.end(), fx_ids.begin(), fx_ids.end());
     std::string names;
     int skipped = 0;
     for (auto& id : ids) {
@@ -439,7 +550,12 @@ static int cmd_glsl(const char* list, const char* outdir) {
         memset(&f, 0, sizeof f);
         gfx_cc_get_features(id.first, id.second, &f);
         std::string vs, fs, mesh_vs;
-        if (!gen_combiner(f, vs, fs) || !gen_combiner(f, mesh_vs, fs, true)) {
+        const bool is_fx = (id.second & SHADER_OPT_FX_MASK) != 0;
+        if (!gen_combiner(f, vs, fs, false, &fx) || !gen_combiner(f, mesh_vs, fs, true, &fx)) {
+            if (is_fx) {   /* an effect is never left to the uber shader */
+                fprintf(stderr, "dkshgen: effect 0x%016llx 0x%08x cannot be generated\n", (unsigned long long)id.first, id.second);
+                return 1;
+            }
             fprintf(stderr, "dkshgen: 0x%016llx 0x%08x uses a source GL has no GLSL for; left to the uber-shader\n",
                     (unsigned long long)id.first, id.second);
             skipped++;
@@ -452,7 +568,7 @@ static int cmd_glsl(const char* list, const char* outdir) {
         names += fmt("%016llx %08x %s\n", (unsigned long long)id.first, id.second, base.c_str());
     }
     if (!write_file(std::string(outdir) + "/list.txt", names)) return 1;
-    printf("dkshgen: %d combiners written, %d skipped\n", (int)(ids.size() - skipped), skipped);
+    printf("dkshgen: %d combiners written (%d effects), %d skipped\n", (int)(ids.size() - skipped), (int)(ids.size() - n_game), skipped);
     return 0;
 }
 

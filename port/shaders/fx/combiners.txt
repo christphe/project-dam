@@ -1,0 +1,11 @@
+# The port's effect combiners (ids with a PORTFX_* kind, SHADER_OPT_FX_MASK), for the deko3d and Vulkan shader packs.
+# tools_pc/dkshgen gives each its own shader: fx/common.glsl, then its family's file (bullets, bursts, impacts).
+# Merged from GE_CCLOG=1 / DKSH miss log lines by tools_pc/cc_census_merge.py.
+0x0000000001080108 0x30000001
+0x0000000001080108 0x50000001
+0x0000000010001000 0x20000001
+0x0000000010001000 0x30000001
+0x0000000010001000 0x40004001
+0x00000000180a180a 0x70000c01
+0x020d020d818a818a 0x20000011
+0x020d020d818a818a 0x50004011

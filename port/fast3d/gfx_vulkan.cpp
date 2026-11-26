@@ -118,6 +118,7 @@ struct ShaderProgram {
     bool uber;
     VkShaderModule vert, frag, mesh_vert;
     bool water;   /* GE+ water on the level's own water surfaces: uber vertex shader + water.frag, the water descriptor set */
+    bool skip;    /* an effect (PORTFX kind) missing from the pack: not drawn, the uber shader runs no effect */
     struct DkCombinerParams params;
     struct DkLayout layout;
     uint8_t num_inputs;
@@ -2060,9 +2061,18 @@ struct ShaderProgram* vk_create_and_load_new_shader(uint64_t id0, uint32_t id1) 
         p->uber = true;
         p->vert = s_uber_vert;
         p->frag = s_uber_frag;
+        /* The uber shader is the fallback for the game's combiners only: an effect comes from the pack
+         * (port/shaders/fx/), else it is not drawn. */
+        p->skip = (id1 & SHADER_OPT_FX_MASK) != 0;
         if (!s_missed[std::make_pair(id0, id1)]) {
             s_missed[std::make_pair(id0, id1)] = true;
-            sysLogPrintf(LOG_NOTE, "SPIR-V miss %016llx %08x", (unsigned long long)id0, (unsigned)id1);
+            if (p->skip) {
+                sysLogPrintf(LOG_ERROR, "SPIR-V miss %016llx %08x: an effect missing from the pack, not drawn "
+                             "(tools_pc/cc_census_merge.py adds it to port/shaders/fx/combiners.txt)",
+                             (unsigned long long)id0, (unsigned)id1);
+            } else {
+                sysLogPrintf(LOG_NOTE, "SPIR-V miss %016llx %08x", (unsigned long long)id0, (unsigned)id1);
+            }
         }
     }
     s_progs[std::make_pair(id0, id1)] = p;
@@ -2233,7 +2243,7 @@ float* vk_stream_begin(size_t max_floats) {
 void vk_draw_triangles(float buf[], size_t len, size_t ntris) {
     float* const stream = s_stream_ptr;
     s_stream_ptr = nullptr;
-    if (ntris == 0 || !prepare_draw()) return;
+    if (ntris == 0 || (s_prg != nullptr && s_prg->skip) || !prepare_draw()) return;
     VkBuffer vb;
     VkDeviceSize off;
     if (buf != nullptr && buf == stream) {

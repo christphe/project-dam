@@ -5,7 +5,7 @@
         viewer options go through: --shot FILE.png (renders one image, writes it, exits; waits for it) --w N --h N
         --rom FILE.z64 --kind tracer|laser|watchlaser|wallpuff|bloodpuff|scatter|impact --impact 0..19 --age TICKS
         --angle RAD --view side|split|orig|fx --backdrop grey|dark|checker|wall --bgtex N --zoom F --fc N --nearest 0|1
-        --tracerlen F --shader FILE (default: <repo>/port/shaders/uber.frag.glsl)
+        --tracerlen F --shader FILE (default: <repo>/port/shaders/fx.glsl)
   python tools_pc/fxview/fxview.py selftest              texture formats, the FXSHADE block, the puff frame stepping; no ROM
   python tools_pc/fxview/fxview.py shots --out DIR [--backdrop grey|dark|checker|wall] [--bgtex N] [--fc N]
         one side-by-side PNG per effect (puffs: several animation frames) plus DIR/index.html
@@ -15,7 +15,7 @@
   the viewer's tabs: pc --mode decal|muzzle|tracer|burst|explosion|sprite [--t SECONDS --tshow game|port|side ...]
         (muzzle flashes, tracers, blood / smoke / debris bursts and explosions, game vs port FX: see README.md)
 
-fxShade is read from uber.frag.glsl (between "// FXSHADE BEGIN" and "// FXSHADE END") and hot-reloaded when the file
+fxShade is read from port/shaders/fx.glsl (between "// FXSHADE BEGIN" and "// FXSHADE END") and hot-reloaded when the file
 changes: tuning = editing that file with the viewer open. The Windows g++ comes from FXVIEW_GXX, MODELVIEW_GXX or
 SEAVIEW_GXX (environment or <repo>/.env). The sprites are decoded from your own ROM at run time: --rom, else FXVIEW_ROM,
 else MODELVIEW_ROM, else N64_ROM, else a game data/ folder (build-win/data/...). Settings: tools_pc/fxview/data/fxview.ini (git

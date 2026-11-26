@@ -112,9 +112,9 @@ struct DkMeshUniforms {
 /* Uniform block `Comb` (std140, binding 1, fragment stage) of the uber-shader.
  * sel[c][k]: cycle c, channel k (0 rgb, 1 alpha), four 8-bit sources a, b, c, d
  * (SHADER_* of gfx_cc.h) at bits 0, 8, 16, 24. flags: DK_CF_* below. pad
- * (the shader's flags2): color_alpha_same per cycle (bits 0, 1; informational),
- * the effect kind at DK_CP_FX_SHIFT (4 bits, PORTFX_*, uber.frag.glsl fxShade / fxDecalBlend). */
-#define DK_CP_FX_SHIFT 8
+ * (the shader's flags2): color_alpha_same per cycle (bits 0, 1; informational).
+ * The uber-shader runs no effect: an effect combiner has its own shader in the
+ * pack (port/shaders/fx/, tools_pc/dkshgen). */
 struct DkCombinerParams {
     uint32_t sel[2][2];
     uint32_t flags;
@@ -177,7 +177,6 @@ static inline void dk_combiner_params(const struct CCFeatures* f, struct DkCombi
     if (f->opt_a2c) out->flags |= DK_CF_A2C;
     if (f->opt_zcut) out->flags |= DK_CF_ZCUT;
     out->flags |= ((uint32_t)f->num_inputs & 7u) << DK_CF_NUM_INPUTS_SHIFT;
-    out->pad |= ((uint32_t)f->fx_kind & 15u) << DK_CP_FX_SHIFT;
 }
 
 /* Source i (0 a, 1 b, 2 c, 3 d) of cycle c, channel k. */
