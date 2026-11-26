@@ -5,21 +5,25 @@
 #include <cstring>
 
 #include "editor_gl.h"
-#include "gfx_opengl.h"
-#include "gfx_rendering_api.h"
+#include "ge_render.h"
 
-static GfxRenderingAPI *api() { return &gfx_opengl_api; }
+static GfxRenderingAPI *api() { return ge_render_api(); }
 
 bool Scene::init(int w, int h, std::string &err)
 {
-    GfxRenderingAPI *a = api();
-    a->init();
-    a->update_framebuffer_parameters(0, (uint32_t)w, (uint32_t)h, 1, false, true, true, false);
+    GfxRenderingAPI *a = api();   // ge_render_open has initialised the backend
+    resize(w, h);
     a->set_texture_filter(FILTER_LINEAR);
     a->set_mipmap_filter(MIPMAP_LINEAR);
     m_inited = true;
     (void)err;
     return true;
+}
+
+void Scene::resize(int w, int h)
+{
+    api()->update_framebuffer_parameters(0, (uint32_t)w, (uint32_t)h, 1, false, true, true, false);
+    api()->on_resize();
 }
 
 void Scene::setLevel(const Level *lv)
@@ -110,7 +114,7 @@ void Scene::render(const Doc &doc, const Camera &cam, int winW, int winH, int vx
 {
     GfxRenderingAPI *a = api();
     m_drawn = 0;
-    a->start_frame();
+    m_cur = nullptr;   // the GUI and the clear load programs of their own between two renders
     a->start_draw_to_framebuffer(0, 1.0f);
     if (m_offscreen) editorOffscreenBind(winW, winH);   // see editor_gl.h
     editorGlClear(winW, winH, 0.10f, 0.11f, 0.13f);
@@ -136,7 +140,7 @@ void Scene::render(const Doc &doc, const Camera &cam, int winW, int winH, int vx
             const Mat4 place = itemPlacement(doc, it);
             for (int run : m_runsOfOwner[(size_t)it.owner]) drawRun(run, vp, place);
         }
-    a->end_frame();
+    if (m_cur) { a->unload_shader(m_cur); m_cur = nullptr; }
     editorGlScissorOff();
 }
 
@@ -147,7 +151,8 @@ bool Scene::renderOwner(int owner, int winW, int winH, int size, std::vector<uin
     if (!oi.valid || m_runsOfOwner[(size_t)owner].empty() || size > winW || size > winH) return false;
     GfxRenderingAPI *a = api();
     m_drawn = 0;
-    a->start_frame();
+    m_cur = nullptr;
+    ge_render_begin_frame();   // between two frames of the main loop: its own
     a->start_draw_to_framebuffer(0, 1.0f);
     if (m_offscreen) editorOffscreenBind(winW, winH);
     editorGlClear(winW, winH, 0.16f, 0.17f, 0.20f);
@@ -166,7 +171,8 @@ bool Scene::renderOwner(int owner, int winW, int winH, int size, std::vector<uin
     cam.zfar = dist + radius * 3.0f;
     const Mat4 vp = mat4Mul(cam.proj(1.0f), cam.view());
     for (int run : m_runsOfOwner[(size_t)owner]) drawRun(run, vp, mat4Identity());
-    a->end_frame();
+    if (m_cur) { a->unload_shader(m_cur); m_cur = nullptr; }
+    ge_render_end_frame();
     editorGlScissorOff();
     return editorGlReadFrame(m_offscreen, winH, 0, winH - size, size, size, rgba);
 }

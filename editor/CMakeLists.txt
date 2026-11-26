@@ -1,28 +1,15 @@
 # project-dam-editor: the mission editor (issues #100-#102). Owned by the editor track.
 # Not built for the Switch (the root CMakeLists adds this directory only off the Switch).
 #
-# Three parts:
-#  - ge_editor_f3d: fast3d's OpenGL backend (gfx_opengl.cpp + gfx_cc.cpp + glad), compiled
-#    exactly as the game compiles it (it includes <PR/gbi.h> and the port headers), plus the
-#    symbols it expects from the rest of the game (fast3d_stubs.cpp). Untouched port/fast3d/.
+# Two parts:
 #  - project-dam-editor: the editor itself, plain C++17 with clean include dirs (like ge_volk and
-#    ge_mission: no port/shim, include/ or src/ shadow headers, no forced versioninfo.h).
+#    ge_mission: no port/shim, include/ or src/ shadow headers, no forced versioninfo.h). It draws through the
+#    ge_render library (port/ge_render, issue #142, phase 4 = #146): the library opens the window and the backend
+#    (OpenGL or Vulkan), the level and the GUI (editor/imgui_render_ge.cpp) are drawn through its draw API.
 #  - editor/tools/make_test_rec: writes a synthetic level export (no ROM data) for development.
 set(ED_DIR "${CMAKE_SOURCE_DIR}/editor")
-set(F3D_DIR "${CMAKE_SOURCE_DIR}/port/ge_render")   # the renderer library (issue #142): gfx_opengl.cpp, gfx_cc.cpp, glad and the core
+set(F3D_DIR "${CMAKE_SOURCE_DIR}/port/ge_render")   # the renderer library's public headers: ge_render.h, gfx_cc.h, glad
 set(IMGUI_DIR "${CMAKE_SOURCE_DIR}/port/third_party/imgui")
-
-# ---- fast3d GL backend ---------------------------------------------------------------------
-add_library(ge_editor_f3d OBJECT
-  "${F3D_DIR}/src/gfx_opengl.cpp"
-  "${F3D_DIR}/src/gfx_cc.cpp"
-  "${F3D_DIR}/src/ge_core.cpp"   # the renderer's config, callbacks and their defaults (no backend, no window)
-  "${F3D_DIR}/include/glad/glad.c"
-  "${ED_DIR}/fast3d_stubs.cpp"
-  "${CMAKE_SOURCE_DIR}/port/src/gpuprobe.c"   # the first-launch GPU benchmark's pure decision, called by gfx_opengl.cpp
-)
-target_include_directories(ge_editor_f3d PRIVATE "${F3D_DIR}/include" "${F3D_DIR}/src")
-target_link_libraries(ge_editor_f3d PRIVATE ${LIBS})   # SDL2 / GL usage requirements only (an object library is not linked)
 
 # ---- Luau Analysis (the type checker), editor only ------------------------------------------
 # port/third_party/luau/Analysis + Config at the same Luau version as the VM / Compiler / Ast that ge_mission builds.
@@ -47,17 +34,15 @@ target_link_libraries(ge_luau_analysis PUBLIC ge_mission)   # Ast / Common / VM 
 
 # ---- the editor ----------------------------------------------------------------------------
 file(GLOB ED_SRC CONFIGURE_DEPENDS "${ED_DIR}/*.cpp")
-list(FILTER ED_SRC EXCLUDE REGEX "/fast3d_stubs[.]cpp$")
 file(GLOB ED_IMGUI CONFIGURE_DEPENDS "${IMGUI_DIR}/*.cpp")
 set(ED_TEXTEDIT "${ED_DIR}/third_party/ImGuiColorTextEdit/TextEditor.cpp")   # ImGuiColorTextEdit (the Luau code editor widget)
 set(ED_BACKENDS
-  "${ED_DIR}/third_party/imgui_backends/imgui_impl_sdl2.cpp"
-  "${ED_DIR}/third_party/imgui_backends/imgui_impl_opengl3.cpp")
+  "${ED_DIR}/third_party/imgui_backends/imgui_impl_sdl2.cpp")   # the renderer side is imgui_render_ge.cpp (through ge_render)
 # The decomp's include/math.h is not on this target's include path, but keep the game's
 # trick for the vendored core anyway: harmless with the system headers.
 set_source_files_properties(${ED_IMGUI} PROPERTIES COMPILE_OPTIONS "-include;cmath")
 
-add_executable(project-dam-editor ${ED_SRC} ${ED_IMGUI} ${ED_BACKENDS} ${ED_TEXTEDIT} $<TARGET_OBJECTS:ge_editor_f3d>)
+add_executable(project-dam-editor ${ED_SRC} ${ED_IMGUI} ${ED_BACKENDS} ${ED_TEXTEDIT})
 set_property(TARGET project-dam-editor PROPERTY CXX_STANDARD 17)
 # Clean include dirs: SDL2 only comes from the root's SYSTEM include (re-added below).
 set_property(TARGET project-dam-editor PROPERTY INCLUDE_DIRECTORIES
@@ -79,7 +64,7 @@ set_property(TARGET project-dam-editor PROPERTY COMPILE_DEFINITIONS "")
 if(WIN32)
   target_link_libraries(project-dam-editor PRIVATE ws2_32)
 endif()
-target_link_libraries(project-dam-editor PRIVATE ge_luau_analysis ge_mission ${LIBS})
+target_link_libraries(project-dam-editor PRIVATE ge_luau_analysis ge_mission ge_render ${LIBS})
 if(WIN32)
   target_link_libraries(project-dam-editor PRIVATE comdlg32)   # the Open / Save file dialogs (filedialog.cpp)
   # Explorer/taskbar icon (tools_pc/make_icon.py); the window icon is editor_icon.h. Stays a console program (--help,

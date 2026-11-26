@@ -46,7 +46,6 @@ struct App {
     Scene scene;
     Camera cam;
     SDL_Window *win = nullptr;
-    SDL_GLContext gl = nullptr;
 
     enum Tool { T_SELECT, T_GUARD, T_OBJECT, T_MOVE, T_ZONE } tool = T_SELECT;
     bool showRooms = true, showProps = true, showPads = true, showMPads = true, showPortals = false, showStan = false;
@@ -111,7 +110,8 @@ struct App {
     int forceTab = -1;                 // right panel: select this tab next frame (0 Selection, 1 Mission, 2 Mod), -1 none
     char sceneFilter[64] = "";         // Scene panel filter
     // persisted in project-dam-editor-prefs.txt (next to coop): applied at the next start
-    bool prefOffscreen = true;         // draw through a whole offscreen frame (editor_gl.h)
+    bool prefOffscreen = true;         // draw through a whole offscreen frame (editor_gl.h; OpenGL only)
+    int prefRenderer = 0;              // 0 OpenGL, 1 Vulkan (ge_render backend; applies at the next start, --renderer wins)
     bool prefMcp = true;               // start the MCP HTTP server
     int prefMcpPort = 8765;
     // Settings > re-export all cached levels: the queue runs one export after another in the background

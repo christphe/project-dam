@@ -245,6 +245,8 @@ def cmd_editor(a):
         args += ["--mod", str(Path(a.mod).resolve())]
     if a.mission:
         args += ["--mission", str(Path(a.mission).resolve())]
+    if a.renderer:
+        args += ["--renderer", a.renderer]
     args += list(a.args)
     print("+", exe, " ".join(args), flush=True)
     p = subprocess.Popen([str(exe)] + args, cwd=str(exe.parent))
@@ -384,6 +386,7 @@ def main():
                    help="open a solo level (exported by the game the first time). " + LEVELS_HELP)
     p.add_argument("--mod", help="mod folder (mods/<mod>) to open")
     p.add_argument("--mission", help="mission.json to open (its level comes with it)")
+    p.add_argument("--renderer", choices=["gl", "vk"], help="the editor's ge_render backend: OpenGL or Vulkan (default: the Settings choice, OpenGL)")
     p.add_argument("args", nargs="*", help="extra editor args (see project-dam-editor --help)")
     p.set_defaults(fn=cmd_editor)
 
