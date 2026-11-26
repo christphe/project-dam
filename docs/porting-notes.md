@@ -2215,3 +2215,18 @@ To get model-space vertices plus a model -> world matrix for every room, take th
 - **A tool's GUI combiner must be in the pack** (`SPIR-V miss 0000000001090108 00000001` in the log otherwise: the GUI runs on the uber-shader, correct but slower). `texel0 * shade` with alpha is now in `port/shaders/combiners.txt`.
 - **Read-back on Vulkan is a present.** `ge_render_dump_window` arms the next present to write a PPM; a host that needs pixels synchronously (thumbnails, a screenshot) ends its frame, arms the dump, presents, and reads the file (top-down already; GL's `glReadPixels` is bottom-up). The thumbnail frame is shown for one refresh. The editor's whole-frame offscreen blit is raw GL, so it stays GL-only.
 - **`gfx_cc.h` needs C++20** (`operator<=>`): a C++17 host cannot include it, and uses the one flag it needs (`SHADER_OPT_ALPHA` = bit 0) as a constant.
+
+## D76. A tool that shares the game's sky code: a pure core file, glslang `--sub` for tool-only blocks, and two traps of the .ini parser (sea tab, #145)
+
+- To let a tool fill the game's `PortSkyPlus` with the game's own code, the pure part of `skyplus.c` moved to `port/src/skyplus_core.c` (no game headers: the level numbers are `SPC_*`, asserted equal to `LEVELID_*` in `skyplus.c`). The move must keep the order of the float operations: the game's pixels are the check.
+- Tool-only shader variants (`#ifdef VIEWER`) do not belong in the game's packs. Build them into a pack of the game's own format (`tools_pc/fxview/sea/sea_pack.cmake`) and swap the backend's modules at run time (`ge_render_viewer_enable`). A Vulkan layout needs the extra binding declared up front (the Viewer block at GLSL binding 8 lands on 13 in the sky set and 12 in the water set after `--sub 5` / `--sub 4`); an unused binding costs nothing.
+- A settings name may contain `=` (`Bake from (0 = no bake)`): split a `name=value` line at the last `=`. seaview split at the first and silently ignored that value in its own `.ini`.
+- GL permits one `GL_TIME_ELAPSED` query at a time (no nesting; not with `GE_PERFSTAT`); Vulkan timestamps need the pool reset in the same submission, before the frame's commands (the `pre` buffer).
+
+## D77. A Switch tool NRO run in Ryubing: argc can be 0, and the half-size sky composite is wrong there (sea tab, #145)
+
+- **An emulator's homebrew loader can start an NRO with `argc == 0` (and `argv` null).** `std::vector<std::string>(argv + 1, argv + argc)` is then a huge negative range: `std::length_error`, `std::terminate`, `exit`, with no message (Ryubing shows only `ServiceAm Exit`, after a run of `GetThreadName: Unknown ThreadType` lines, and the window stays on "Loading"). A host builds its argument vector with `for (i = 1; i < argc; i++)`. `ge_render_hello` never parsed arguments, which is why it ran there and `seatab_host` did not.
+- **Which NRO is on the SD:** `cmake --build build-switch --target <tool>` builds the ELF only; the NRO is the separate target `<tool>_nro`. A test run of a stale NRO costs a cycle.
+- **Guest `printf`/`fopen` go nowhere in Ryubing.** `svcOutputDebugString` shows as `KernelSvc OutputDebugString` lines in its log; a file under `sdmc:/` is the only log that survives. `freopen(path, "w", stderr)` sends every library `fprintf(stderr, ...)` there; keep stdout for nxlink.
+- **Ryubing draws deko3d's half-size sky composite wrong** (an enlarged sea, no horizon: `docs/dev/shaders-sea.md` open items). A tool that must look right there runs the sky at full size: `ge_render_tool_sky_div(1)` (the game's default of 2 is untouched).
+- A worn or XInput-mapped stick reports a small constant (`973, 214` of 32767 here): a fly camera needs a dead zone, or it drifts.

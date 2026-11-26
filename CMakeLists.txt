@@ -1079,6 +1079,7 @@ if(GE_TOOLS)
   endif()
   target_link_libraries(ge_render_imgui ge_imgui ge_render)
   add_subdirectory(tools_pc/ge_render_hello)
+  add_subdirectory(tools_pc/fxview/sea)   # the sky/sea module fxview's sea mode links
   add_subdirectory(tools_pc/fxview)
 endif()
 # The mission editor (editor/): its own executable, never on the Switch.

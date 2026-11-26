@@ -1,6 +1,7 @@
 #ifndef GFX_OPENGL_H
 #define GFX_OPENGL_H
 
+#include <stddef.h>
 #include "gfx_rendering_api.h"
 
 extern struct GfxRenderingAPI gfx_opengl_api;
@@ -34,6 +35,15 @@ void gfx_opengl_skyplus_pass(int slot);
 void gfx_opengl_interp_sync(void);
 void gfx_opengl_frame_count_rewind(void);
 void gfx_opengl_perf_report(double frames);
+
+/* Tool-only (ge_render_tool.h): GPU timers and the viewer variants of the GE+ sky and water shaders. */
+struct GeRenderViewer;
+void gfx_opengl_gpu_timer_begin(int id);
+void gfx_opengl_gpu_timer_end(int id);
+double gfx_opengl_gpu_timer_ms(int id);
+bool gfx_opengl_viewer_enable(const void* pack, size_t size);
+void gfx_opengl_viewer_set(const struct GeRenderViewer* v);
+void gfx_opengl_viewer_disable(void);
 
 #ifdef __cplusplus
 }
