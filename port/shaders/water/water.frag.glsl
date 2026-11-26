@@ -116,7 +116,7 @@ layout(location = 0) out vec4 outColor;
 
 #ifdef WATER_FAR
 /* deko3d's half-size water pass only (cmake/SwitchPort.cmake defines WATER_FAR for that pack entry; Vulkan and GL never do):
- * beyond the near distance the waves come from the far sea baked by skyplus.frag.glsl (pass 4, the same panorama as Frigate's
+ * beyond the near distance the waves come from the far sea baked by sky/sky.frag.glsl (pass 4, the same panorama as Frigate's
  * sea, baked for a fixed eye height over a fake plane; uWater4.w is that plane). */
 layout(binding = 5) uniform sampler2D uSeaPano;   /* rgb = the reflection + glints weighted, a = the reflection's weight (body 0) */
 #define uBakeX uC1_.w   /* where (and how high over the fake plane) the panorama was baked from; > 0 once it is settled */
@@ -124,7 +124,7 @@ layout(binding = 5) uniform sampler2D uSeaPano;   /* rgb = the reflection + glin
 #define uBakeH uC3_.w
 #define WATER_NEAR_Z0 600.0    /* the live water gives way to the baked one between these depths along the view */
 #define WATER_NEAR_Z1 6000.0
-#define WATER_PANO_MAX 0.8     /* skyplus.frag.glsl panoMax */
+#define WATER_PANO_MAX 0.8     /* sky/sky.frag.glsl panoMax */
 #endif
 
 #pragma skycommon
@@ -172,7 +172,7 @@ void main() {
 #ifdef WATER_BODY
     /* deko3d's half-resolution water (#79): the main pass draws only the body colour (GE's draw: no waves, no reflection); the
      * same draws are replayed at half size by the full variant of this shader (no define) and drawn over this colour by
-     * watercomp.frag.glsl. Where that fails (a silhouette, the pass off) this is what shows. cmake/SwitchPort.cmake adds the
+     * water/comp.frag.glsl. Where that fails (a silhouette, the pass off) this is what shows. cmake/SwitchPort.cmake adds the
      * define after the #version line of the pack entry DK_PACK_WATERBODY. */
     if (uWave4.z > 0.5) {
         bool mapOn = uWX2.x > 0.5;
@@ -222,7 +222,7 @@ void main() {
         }
         if (kf > 0.0) {
             /* the panorama was baked from another eye over a fake plane (uBake*): the point under this pixel is looked up as the
-             * baked eye saw it, as the far sea does (skyplus.frag.glsl); the point is on this water's own surface, the plane is
+             * baked eye saw it, as the far sea does (sky/sky.frag.glsl); the point is on this water's own surface, the plane is
              * the fake one: a fixed height, which shows nowhere far away */
             vec3 rd = normalize(vec3(p.x - uBakeX, -uBakeH, p.z - uBakeZ));
             float pu = atan(rd.x, rd.z) / 6.2831853 + 0.5, pv = min(sqrt(max(-rd.y, 0.0)) / WATER_PANO_MAX, 1.0);

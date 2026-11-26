@@ -1141,7 +1141,7 @@ void create_layouts(void) {
     VK_CHECK(vkCreateDescriptorSetLayout(s_dev, &ci, nullptr, &s_sky_set_layout));
     pl.pSetLayouts = &s_sky_set_layout;
     VK_CHECK(vkCreatePipelineLayout(s_dev, &pl, nullptr, &s_sky_pipe_layout));
-    /* the water draws (water.frag.glsl, built with the blocks moved up by 4 like the other draws': Draw 4, Comb 5; its
+    /* the water draws (water/water.frag.glsl, built with the blocks moved up by 4 like the other draws': Draw 4, Comb 5; its
      * colour-map sampler moved to 9 and its Sky block to 8, cmake/VulkanShaders.cmake): the uber vertex shader's Lights block
      * is at 7, like the other draws' */
     VkDescriptorSetLayoutBinding wb[9] = {};
@@ -2666,9 +2666,9 @@ struct SkyPlusDraw {
 SkyPlusDraw s_sky_ring[SKYPLUS_RING];
 unsigned s_sky_next = 0;
 int s_sky_gen = -1;
-#define SKYLUT_W 128   /* the reflection sky's panorama (skylut.frag.glsl) */
+#define SKYLUT_W 128   /* the reflection sky's panorama (sky/lut.frag.glsl) */
 #define SKYLUT_H 64
-#define SEAPANO_W 4096   /* the far sea, baked (skyplus.frag.glsl pass 4); the shader's PANO_W / PANO_H */
+#define SEAPANO_W 4096   /* the far sea, baked (sky/sky.frag.glsl pass 4); the shader's PANO_W / PANO_H */
 #define SEAPANO_H 512
 int s_wtex_gen = -1;
 int s_wmap_gen = -1;
@@ -2685,7 +2685,7 @@ void sky_reset_targets(void) {   /* the framebuffer list was cleared */
     s_pano_bakes = 0;
 }
 
-struct SkyUniforms { float v[16][4]; };   /* block Sky of skycommon.glsl (256 bytes) */
+struct SkyUniforms { float v[16][4]; };   /* block Sky of sky/common.glsl (256 bytes) */
 
 /* D578 present slots: copies of the window image, in the swapchain's format */
 struct ISlot {

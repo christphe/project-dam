@@ -37,7 +37,7 @@ and so does the console NRO that embeds it.
 ## Water surface mode (PC viewer, issue #79)
 
 Draws the level's own water (Dam, Caverns, Complex) the way the game does: a large horizontal plane under the sky, shaded by
-`port/shaders/water.frag.glsl` (the viewer has its own small vertex shader that provides the locations `water.frag` reads:
+`port/shaders/water/water.frag.glsl` (the viewer has its own small vertex shader that provides the locations `water.frag` reads:
 `vTexCoord0/1`, `vFog`, `vFogW`, `vInput1` = PRIM_LOD_FRAC, `vInput2` = SHADE, `vClip`). The sky and its reflection come from the same
 passes as the Sea mode (the capture's sky, the sky LUT at binding 2); the Frigate sea is off. Block `Sky` is bound at 2 with the four
 level-water vec4s (`uWX0..uWX2`: deep colour + patch size, light colour + reflectLit, map ready + water-only), `Draw` at 0, `Comb` at 1
@@ -62,10 +62,10 @@ level-water vec4s (`uWX0..uWX2`: deep colour + patch size, light colour + reflec
 ### Half resolution and the test scene
 
 Menu **Water** > "Half resolution" (`--half 0|1`, `.ini` `__half`) draws the water the way the Switch (deko3d) path does, with the game's
-own shader files: (1) the main pass draws the water with `water.frag.glsl` + `#define WATER_BODY` (the cheap body colour), depth written;
+own shader files: (1) the main pass draws the water with `water/water.frag.glsl` + `#define WATER_BODY` (the cheap body colour), depth written;
 (2) the same water draws are replayed into a half-size RGBA8 target (linear, clamp, cleared to 0, own half-size depth) with the full
-`water.frag.glsl`; (3) they are replayed once more at full size with `watercomp.frag.glsl`, alpha-blended over the scene, depth test
-LEQUAL against the scene depth with writes off. Off = one full-size `water.frag.glsl` pass. Menu **Debug view** (`--dbgview
+`water/water.frag.glsl`; (3) they are replayed once more at full size with `water/comp.frag.glsl`, alpha-blended over the scene, depth test
+LEQUAL against the scene depth with writes off. Off = one full-size `water/water.frag.glsl` pass. Menu **Debug view** (`--dbgview
 final|fx|mask|cheap`): the final image, the half-size target as the composite reads it, a mask of step 3 (green = the half-size colour
 is used, red = `watercomp` discards, the cheap body stays), or the cheap body only (step 1).
 
@@ -103,6 +103,6 @@ D-pad left/right sky variant (live build only), L/R load x1-x64, Minus render sc
 
 ## How the editable values reach the shaders
 
-`PRM(i, default)` in `skycommon.glsl` is the constant `default` in the game and `uPrv[i]` (block `Viewer`,
+`PRM(i, default)` in `sky/common.glsl` is the constant `default` in the game and `uPrv[i]` (block `Viewer`,
 binding 1) in the viewers. A value found good in the viewer becomes the new constant in the shader.
 The settings table lives in `pc/seaview.cpp` (`kPar`); `seaview.py` reads it to translate an `.ini`.

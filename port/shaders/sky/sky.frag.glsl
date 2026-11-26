@@ -4,12 +4,12 @@
 // gfx_deko3d.cpp). The position in the viewport comes from the fullscreen
 // vertex shader (vUV = GL's (gl_FragCoord.xy - uVP.xy) / uVP.zw), never from
 // gl_FragCoord, whose orientation differs between targets / Ryujinx / hardware.
-// The sky itself and the water lighting are in skycommon.glsl. On a water
+// The sky itself and the water lighting are in sky/common.glsl. On a water
 // level (uWave4.y) the sea is drawn here too, under the horizon.
 layout(location = 0) in vec2 vUV;
 layout(binding = 0) uniform sampler2D uCloudTex;
 layout(binding = 1) uniform sampler2D uWaveTex;
-layout(binding = 2) uniform sampler2D uSkyLut;   /* the reflection sky, drawn once per frame (skylut.frag.glsl) */
+layout(binding = 2) uniform sampler2D uSkyLut;   /* the reflection sky, drawn once per frame (sky/lut.frag.glsl) */
 #define USE_SKY_LUT
 layout(std140, binding = 0) uniform Sky {
     vec4 uVP;
@@ -71,7 +71,7 @@ void main() {
         gLite = true;   /* no reflection of the sky out there: the horizon's colour only */
         vec3 bn = waterNormal(bp, bt);
         if (uWave4.w > 0.5) {
-            /* the far sea of the level's own water surfaces (water.frag.glsl, WATER_FAR): baked without a body, so each surface
+            /* the far sea of the level's own water surfaces (water/water.frag.glsl, WATER_FAR): baked without a body, so each surface
              * puts its own (the patch map) under it. waterShade is linear in the body, body * (1 - w) + the reflection and
              * glints: rgb = the latter (body 0), a = the reflection's weight w (1 - the response to a body of 1) */
             vec3 c0 = waterShade(bd, bn, vec3(0.0), bt), c1 = waterShade(bd, bn, vec3(1.0), bt);

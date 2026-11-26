@@ -367,7 +367,7 @@ static void append_formula(char* buf, size_t* len, uint8_t c[2][4], bool do_sing
 }
 
 /* GE+ sky and sea, and the water of the level's own water surfaces: the Switch's shaders (gl_skyplus_glsl, gl_skylut_glsl,
- * gl_water_glsl), embedded by CMake with skycommon.glsl pasted in. */
+ * gl_water_glsl), embedded by CMake with sky/common.glsl pasted in. */
 #include "gl_sky_src.inc"
 static bool s_water_gl = false;   /* desktop GL 4.6: the water surfaces are drawn with gl_water_glsl (set by skyplus2_init) */
 static GLuint s_wat_ubo, s_sp2_wmap;   /* the Sky block (binding 2) of the water draws, and the colour map (unit 4) */
@@ -469,7 +469,7 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
         vs_len += sprintf(vs_buf + vs_len, "uniform vec4 uMeshEnvMask[%d];\n", GFX_MESH_MAX_INPUTS);
     }
     if (water) {
-        append_line(vs_buf, &vs_len, "OUTPUT vec3 vClip;");   /* water.frag.glsl: the pixel's screen position */
+        append_line(vs_buf, &vs_len, "OUTPUT vec3 vClip;");   /* water/water.frag.glsl: the pixel's screen position */
     }
     append_line(vs_buf, &vs_len, "void main() {");
     if (mesh) {
@@ -813,7 +813,7 @@ static void gfx_opengl_compile_program(uint64_t shader_id0, uint32_t shader_id1,
     struct CCFeatures cc_features = { 0 };
     gfx_cc_get_features(shader_id0, shader_id1, &cc_features);
 
-    /* GE+ water on the level's own water surfaces (SHADER_OPT_WATER): water.frag.glsl instead of the generated fragment shader.
+    /* GE+ water on the level's own water surfaces (SHADER_OPT_WATER): water/water.frag.glsl instead of the generated fragment shader.
      * If it does not build, the generated one is used (GE's own water). */
     bool water = (shader_id1 & SHADER_OPT_WATER) && s_water_gl && cc_features.used_textures[0] && cc_features.used_textures[1] &&
                  cc_features.num_inputs >= 2;
@@ -2660,7 +2660,7 @@ void main() {
 }
 
 /* GE+ sky and sea on GL (the passes of gfx_deko3d_skyplus_pass / gfx_vulkan_skyplus_pass). The shaders are the Switch's own
- * (port/shaders/skyplus.frag.glsl, skylut.frag.glsl, skycommon.glsl pasted in; embedded by CMake as gl_sky_src.inc), which
+ * (port/shaders/sky/sky.frag.glsl, sky/lut.frag.glsl, sky/common.glsl pasted in; embedded by CMake as gl_sky_src.inc), which
  * need GLSL 4.60: on an older or ES context this path stays off and the older single-pass shader above draws the sky (no sea).
  * The Sky block is a uniform buffer at binding 0; the five textures sit on units 3..7 (the game's tile sampling uses 0 and 1).
  * Off-screen targets are drawn y-flipped (uFlipY) so that they are stored top row first, as the shaders read them. */

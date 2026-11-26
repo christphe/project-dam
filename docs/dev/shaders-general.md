@@ -7,9 +7,9 @@ Everything here was learned the hard way on issue #38 (Scenery (Enhanced) on wat
 ## How the shaders are built and run
 
 - Shaders are GLSL compiled **offline by uam** (`cmake/SwitchPort.cmake`) into a pack the backend loads. There is no runtime compiler.
-- `skycommon.glsl` is not a shader: cmake pastes it at the `#pragma skycommon` line of `skyplus`, `water` (Dam's own water) and `skylut`. Every function in it is compiled three times, and a global it declares exists in all three. A change that makes sense for the sky pass can break `water.frag.glsl`, which has no view rays (`uC0..uC3` are zero there) and no sea panorama.
+- `sky/common.glsl` is not a shader: cmake pastes it at the `#pragma skycommon` line of `skyplus`, `water` (Dam's own water) and `skylut`. Every function in it is compiled three times, and a global it declares exists in all three. A change that makes sense for the sky pass can break `water/water.frag.glsl`, which has no view rays (`uC0..uC3` are zero there) and no sea panorama.
 - The sky pass is a fullscreen triangle (`fullscreen.vert.glsl`). It runs several times per frame with different `uPass` values (`uC0_.w`); see the sea and sky notes.
-- Uniforms: `block Sky`, 16 vec4 (256 bytes), pushed by `draw_fullscreen` at UBO binding 0 and, for the water draws, at binding 2. The members are listed at the top of `skycommon.glsl` and mirrored in `struct DkSkyUniforms`.
+- Uniforms: `block Sky`, 16 vec4 (256 bytes), pushed by `draw_fullscreen` at UBO binding 0 and, for the water draws, at binding 2. The members are listed at the top of `sky/common.glsl` and mirrored in `struct DkSkyUniforms`.
   Any new member needs both sides and the three shaders that declare the block.
 - Fragment UBO bindings 0, 1, 2 are the ones known to work. Binding 1 is the uber shader's per-draw params slot: anything pushed there is overwritten by the next draw, which is fine for a pass that draws immediately after the push. **A new binding (3) was tried and never shown to work; do not add one without a minimal test first.**
 

@@ -1,6 +1,6 @@
 # The GE+ sky
 
-Read [shaders-general.md](shaders-general.md) first. Code: `port/shaders/skycommon.glsl` (`skyColor`, `horizonColor`, `skyReflect`, `skyRay`), `skyplus.frag.glsl` (the pass), `skylut.frag.glsl` (the reflection panorama), `port/src/skyplus.c` and `port/include/skyplus.h` (what the game hands the shader), `port/fast3d/gfx_deko3d.cpp` (the pass driver).
+Read [shaders-general.md](shaders-general.md) first. Code: `port/shaders/sky/common.glsl` (`skyColor`, `horizonColor`, `skyReflect`, `skyRay`), `sky/sky.frag.glsl` (the pass), `sky/lut.frag.glsl` (the reflection panorama), `port/src/skyplus.c` and `port/include/skyplus.h` (what the game hands the shader), `port/fast3d/gfx_deko3d.cpp` (the pass driver).
 
 Status: this note records how the sky works today and what was measured while working on the sea. The sky itself was **not** the subject of issue #38 and was not reworked; items marked *not investigated* are open.
 
@@ -21,7 +21,7 @@ A fullscreen pass drawn behind the level. Every pixel casts a ray (`skyRay(u, v)
 
 ## The reflection panorama
 
-`skylut.frag.glsl` draws the sky once per frame into a **128 x 64** panorama (`u` = azimuth, `v` = sqrt of the elevation, finer near the horizon). The sea reads it (`skyReflect`) instead of evaluating the sky for each pixel of water. In that mode (`gReflect = true`) `skyColor`:
+`sky/lut.frag.glsl` draws the sky once per frame into a **128 x 64** panorama (`u` = azimuth, `v` = sqrt of the elevation, finer near the horizon). The sea reads it (`skyReflect`) instead of evaluating the sky for each pixel of water. In that mode (`gReflect = true`) `skyColor`:
 
 - uses **GE's cloud layer only** (layer 1);
 - holds **still** (no scrolling offset): a scrolling reflection slid the background sideways;
@@ -52,5 +52,5 @@ Whole frame 4.4-4.6 ms; skipping `skyColor` above the horizon saved about **1.2 
 
 - **Black band above the gun / at the horizon** on the console: the reduced-width sea target was larger than the region read, so a sub-rectangle read returned unwritten (black) texels. Fixed by making the target the viewport's exact size and having above-horizon pixels write the horizon colour (see the sea note). Fixed in the Ryujinx build; **not yet confirmed on the console**.
 - A pixel that is under the horizon must not early-return: Ryujinx ran the cloud code below the horizon anyway, giving clouds with negative shade (saturated blue) or the previous frame. The code picks the colour at a single write at the end.
-- `skycommon.glsl` is compiled into three shaders; `water.frag.glsl` (Dam) has no view rays. Anything that uses `uC0..uC3` or `uEye` must degrade safely there.
+- `sky/common.glsl` is compiled into three shaders; `water/water.frag.glsl` (Dam) has no view rays. Anything that uses `uC0..uC3` or `uEye` must degrade safely there.
 - Render targets read by a later pass need the `1.0 - y` read (general note, trap 3).

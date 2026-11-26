@@ -433,10 +433,10 @@ std::map<std::pair<uint64_t, uint32_t>, ShaderProgram*> s_progs;
 std::map<std::pair<uint64_t, uint32_t>, bool> s_missed;
 DkShader s_uber_vert, s_uber_frag, s_fs_vert, s_fxaa_frag, s_sky_frag, s_water_frag, s_lut_frag;
 bool s_sky_ok = false, s_fxaa_ok = false, s_water_ok = false, s_lut_ok = false;
-#define SKYLUT_W 128   /* the reflection sky's panorama (skylut.frag.glsl) */
+#define SKYLUT_W 128   /* the reflection sky's panorama (sky/lut.frag.glsl) */
 #define SKYLUT_H 64
 int s_hsea_fb = -1;
-/* the far sea, baked (skyplus.frag.glsl pass 4): a panorama, redrawn only when what it shows changes */
+/* the far sea, baked (sky/sky.frag.glsl pass 4): a panorama, redrawn only when what it shows changes */
 #define SEAPANO_W 4096
 #define SEAPANO_H 512
 int s_pano_fb = -1;
@@ -449,7 +449,7 @@ float s_pano_key[8][4];   /* the sky block's members the baked sea depends on, a
 uint32_t s_pano_frame = 0;
 int s_lut_fb = -1;     /* its render target (an s_fbs entry, made on first use) */
 /* GE+ water: the sky block of the last GE+ sky pass, read by water draws
- * (fragment binding 2, water.frag.glsl); its uWave4.z = 0 until a sky pass ran
+ * (fragment binding 2, water/water.frag.glsl); its uWave4.z = 0 until a sky pass ran
  * this frame, so the water stays GE's own with Visuals = Original. */
 #define WATER_UBO_OFS 3072
 /* Dynamic lights (struct GfxLights): binding 3 of the vertex and fragment
@@ -1800,7 +1800,7 @@ DkHeapBlock s_sky_blk;
 int s_sky_slot = -1;
 int s_sky_gen = -1;
 
-struct DkSkyUniforms { float v[16][4]; };   /* = block Sky of skycommon.glsl (256 bytes) */
+struct DkSkyUniforms { float v[16][4]; };   /* = block Sky of sky/common.glsl (256 bytes) */
 DkImage s_wtex_img;
 DkHeapBlock s_wtex_blk;
 int s_wtex_gen = -1;

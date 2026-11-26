@@ -3,7 +3,7 @@
 // 0-9 mode (uWave4.w), Z/X select playground param (uPlay.xyzw), ,/. change it, R reload shaders, P screenshot, Esc quit.
 // args: --shot f.tga|f.png --yaw d --pitch d --time t --mode n|sea|water --half n --sway 1 --play a,b,c,d --dump file --shaders dir --w n --h n
 //       --level dam|caverns|complex --cam x,y,z,yaw,pitch --wtex file.png|tga (see README: Water surface mode)
-// F12: screenshot (png, numbered). Menus Mode / Level / Water: the "Water surface" mode draws a level-water plane with water.frag.glsl.
+// F12: screenshot (png, numbered). Menus Mode / Level / Water: the "Water surface" mode draws a level-water plane with water/water.frag.glsl.
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
@@ -76,7 +76,7 @@ static GLuint buildSrc(const char* vs, const std::string& fsrc) {
     GLint ok = 0; glGetProgramiv(p, GL_LINK_STATUS, &ok); return ok ? p : 0;
 }
 static GLuint build(const char* vs, const char* fs) {
-    std::string common = readfile(gShDir + "skycommon.glsl");
+    std::string common = readfile(gShDir + "sky/common.glsl");
     std::string v = readfile(gShDir + vs), f = readfile(gShDir + fs);
     size_t k = f.find("#pragma skycommon"); if (k != std::string::npos) f.replace(k, 17, common);
     for (size_t y; (y = f.find("vec2(f.x, 1.0 - f.y)")) != std::string::npos;) f.replace(y, 20, "vec2(f.x, f.y)");
@@ -90,7 +90,7 @@ static GLuint build(const char* vs, const char* fs) {
     return p;
 }
 /* The water plane's vertex shader: stands in for uber.vert.glsl (the game's draws arrive transformed; here the camera of the sky's
- * corner rays does it) and provides the locations water.frag.glsl reads: vTexCoord0/1, vFog, vFogW, vInput1 = PRIM_LOD_FRAC,
+ * corner rays does it) and provides the locations water/water.frag.glsl reads: vTexCoord0/1, vFog, vFogW, vInput1 = PRIM_LOD_FRAC,
  * vInput2 = SHADE, vClip. A grid denser near the eye (the fog is per vertex). */
 static const char* kWaterVert = R"(#version 460
 layout(location = 0) in vec2 aG;
@@ -149,31 +149,31 @@ layout(binding = 0) uniform sampler2D uHalf;
 layout(location = 0) out vec4 o;
 void main() { vec4 h = texture(uHalf, vUV); o = vec4(h.a > 0.05 ? h.rgb / h.a : vec3(0.08, 0.0, 0.08), 1.0); }
 )";
-/* water.frag.glsl with skycommon pasted in and the viewer's variant block (binding 5: water.frag owns 0..4).
+/* water/water.frag.glsl with skycommon pasted in and the viewer's variant block (binding 5: water.frag owns 0..4).
  * variant 0: the file as is = the full shading (one full-res pass, and the FX pass of the half-res pipeline),
  * variant 1: #define WATER_BODY = the cheap body (step 1 of the half-res pipeline); the game's own define. */
 static GLuint buildWater(int variant = 0) {
-    std::string common = readfile(gShDir + "skycommon.glsl"), f = readfile(gShDir + "water.frag.glsl");
+    std::string common = readfile(gShDir + "sky/common.glsl"), f = readfile(gShDir + "water/water.frag.glsl");
     size_t k = f.find("#pragma skycommon"); if (k != std::string::npos) f.replace(k, 17, common);
     std::string hdr = "#define VIEWER\nuniform vec4 uPlay;\nlayout(std140, binding = 5) uniform Viewer { ivec4 uVarv; vec4 uPrv[6]; };\n#define uSeaVar uVarv.x\n#define uSkyVar uVarv.y\n";
-    if (variant == 1) { if (f.find("WATER_BODY") == std::string::npos) { fprintf(stderr, "water.frag.glsl has no WATER_BODY variant\n"); return 0; } hdr += "#define WATER_BODY\n"; }
+    if (variant == 1) { if (f.find("WATER_BODY") == std::string::npos) { fprintf(stderr, "water/water.frag.glsl has no WATER_BODY variant\n"); return 0; } hdr += "#define WATER_BODY\n"; }
     size_t nl = f.find('\n'); f.insert(nl + 1, hdr);
-    GLuint a = compile(GL_VERTEX_SHADER, kWaterVert, "water vertex"), b = compile(GL_FRAGMENT_SHADER, f, variant == 1 ? "water.frag.glsl (WATER_BODY)" : "water.frag.glsl"); if (!a || !b) return 0;
+    GLuint a = compile(GL_VERTEX_SHADER, kWaterVert, "water vertex"), b = compile(GL_FRAGMENT_SHADER, f, variant == 1 ? "water/water.frag.glsl (WATER_BODY)" : "water/water.frag.glsl"); if (!a || !b) return 0;
     GLuint p = glCreateProgram(); glAttachShader(p, a); glAttachShader(p, b); glLinkProgram(p);
     GLint ok = 0; glGetProgramiv(p, GL_LINK_STATUS, &ok);
     if (!ok) { char log[8192]; glGetProgramInfoLog(p, sizeof log, 0, log); fprintf(stderr, "LINK water:\n%s\n", log); return 0; }
     return p;
 }
-/* watercomp.frag.glsl (the game's step-3 composite) on the viewer's water vertex shader. mask: debug view 2, the file patched so that a
+/* water/comp.frag.glsl (the game's step-3 composite) on the viewer's water vertex shader. mask: debug view 2, the file patched so that a
  * pixel that passes the depth test is green where the half-size colour is used and red where the shader discards (the cheap body stays) */
 static GLuint buildComp(bool mask) {
-    std::string f = readfile(gShDir + "watercomp.frag.glsl"); if (f.empty()) { fprintf(stderr, "no watercomp.frag.glsl\n"); return 0; }
+    std::string f = readfile(gShDir + "water/comp.frag.glsl"); if (f.empty()) { fprintf(stderr, "no water/comp.frag.glsl\n"); return 0; }
     if (mask) {
         auto patch = [&](const char* a, const char* b) { size_t q = f.find(a); if (q == std::string::npos) { fprintf(stderr, "mask patch: %s not found\n", a); return; } f.replace(q, strlen(a), b); };
         patch("if (a < 0.05) discard;", "if (a < 0.05) { outColor = vec4(1.0, 0.0, 0.0, 1.0); return; }");
         patch("outColor = vec4(clamp(h.rgb / a, 0.0, 1.0), smoothstep(0.3, 0.85, a));", "outColor = vec4(0.0, 1.0, 0.0, smoothstep(0.3, 0.85, a));");
     }
-    GLuint a = compile(GL_VERTEX_SHADER, kWaterVert, "water vertex"), b = compile(GL_FRAGMENT_SHADER, f, "watercomp.frag.glsl"); if (!a || !b) return 0;
+    GLuint a = compile(GL_VERTEX_SHADER, kWaterVert, "water vertex"), b = compile(GL_FRAGMENT_SHADER, f, "water/comp.frag.glsl"); if (!a || !b) return 0;
     GLuint p = glCreateProgram(); glAttachShader(p, a); glAttachShader(p, b); glLinkProgram(p);
     GLint ok = 0; glGetProgramiv(p, GL_LINK_STATUS, &ok);
     if (!ok) { char log[8192]; glGetProgramInfoLog(p, sizeof log, 0, log); fprintf(stderr, "LINK watercomp:\n%s\n", log); return 0; }
@@ -585,7 +585,7 @@ int main(int argc, char** argv) {
     GLuint tHH[2] = {0,0}, fHH[2] = {0,0}; GLuint taaUbo; glGenBuffers(1, &taaUbo); glBindBuffer(GL_UNIFORM_BUFFER, taaUbo); glBufferData(GL_UNIFORM_BUFFER, 96, 0, GL_DYNAMIC_DRAW);
     GLuint pRes = buildSrc("fullscreen.vert.glsl", kResolve); if (!pRes) return 3;
     GLuint q[2]; glGenQueries(2, q); bool qv[2] = { false, false }; double gpums = 0;
-    GLuint pSky = build("fullscreen.vert.glsl", "skyplus.frag.glsl"), pLut = build("fullscreen.vert.glsl", "skylut.frag.glsl");
+    GLuint pSky = build("fullscreen.vert.glsl", "sky/sky.frag.glsl"), pLut = build("fullscreen.vert.glsl", "sky/lut.frag.glsl");
     if (!pSky || !pLut) return 2;
     /* ---- the water surface mode: program, grid, uniform blocks (Draw 0, Comb 1, Sky 2 + the 4 vec4s of the level water), textures ---- */
     GLuint pWater = buildWater(0), pWBody = buildWater(1), pComp = buildComp(false), pMask = buildComp(true); if (!pWater || !pWBody || !pComp || !pMask) fprintf(stderr, "water program failed: Water surface mode disabled\n");
@@ -612,7 +612,7 @@ int main(int argc, char** argv) {
     tHalfFx = tex2d(W / 2, H / 2, 0, false, false, 1);   /* linear, clamp */
     glGenFramebuffers(1, &fHalfFx); glBindFramebuffer(GL_FRAMEBUFFER, fHalfFx); glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tHalfFx, 0);
     glGenRenderbuffers(1, &rbHalf); glBindRenderbuffer(GL_RENDERBUFFER, rbHalf); glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, W / 2, H / 2); glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbHalf);
-    glGenBuffers(1, &uboC); glBindBuffer(GL_UNIFORM_BUFFER, uboC); glBufferData(GL_UNIFORM_BUFFER, 32, 0, GL_DYNAMIC_DRAW);   /* block Comp of watercomp.frag.glsl */
+    glGenBuffers(1, &uboC); glBindBuffer(GL_UNIFORM_BUFFER, uboC); glBufferData(GL_UNIFORM_BUFFER, 32, 0, GL_DYNAMIC_DRAW);   /* block Comp of water/comp.frag.glsl */
     GLuint pScene, pHalfDbg;
     {   /* the test scene's and the debug view's programs */
         GLuint a = compile(GL_VERTEX_SHADER, kSceneVert, "scene vert"), b = compile(GL_FRAGMENT_SHADER, kSceneFrag, "scene frag"); pScene = glCreateProgram(); glAttachShader(pScene, a); glAttachShader(pScene, b); glLinkProgram(pScene);
@@ -658,7 +658,7 @@ int main(int argc, char** argv) {
         if (kdown['H']) hdiv = hdiv == 1 ? 2 : (hdiv == 2 ? 4 : 1);
         for (int d = 0; d < 10; d++) if (kdown['0' + d]) mode = d;
         if (kdown['X']) sel = (sel + 1) & 3;
-        if (kdown['R']) { GLuint a = build("fullscreen.vert.glsl", "skyplus.frag.glsl"), b = build("fullscreen.vert.glsl", "skylut.frag.glsl"), c = buildWater(0); if (a && b) { pSky = a; pLut = b; fprintf(stderr, "reloaded\n"); } if (c) { pWater = c; GLuint c1 = buildWater(1), c2 = buildComp(false), c3 = buildComp(true); if (c1) pWBody = c1; if (c2) pComp = c2; if (c3) pMask = c3; } }
+        if (kdown['R']) { GLuint a = build("fullscreen.vert.glsl", "sky/sky.frag.glsl"), b = build("fullscreen.vert.glsl", "sky/lut.frag.glsl"), c = buildWater(0); if (a && b) { pSky = a; pLut = b; fprintf(stderr, "reloaded\n"); } if (c) { pWater = c; GLuint c1 = buildWater(1), c2 = buildComp(false), c3 = buildComp(true); if (c1) pWBody = c1; if (c2) pComp = c2; if (c3) pMask = c3; } }
         if (g_wtexDirty) { loadWater(); g_wtexDirty = false; }
         float step = (float)dt * (keys[VK_SHIFT] ? 5.f : 1.f);
         if (keys[VK_OEM_COMMA]) play[sel] -= step;
@@ -773,7 +773,7 @@ int main(int argc, char** argv) {
             glBlitFramebuffer(0, 0, SW, SH, 0, 0, W, H, GL_COLOR_BUFFER_BIT, GL_LINEAR);
         }
         GLuint fShow = fScene;   /* what is shown and saved */
-        if (g_mode == 1 && pWater && tWSrc) {   /* the level's water over the sky, drawn with water.frag.glsl */
+        if (g_mode == 1 && pWater && tWSrc) {   /* the level's water over the sky, drawn with water/water.frag.glsl */
             auto W_ = [&](int k) { return g_val[WATER0 + k]; };   /* the kind-3 block of kPar, in order */
             const bool noSky = W_(7) > 0.5f, half = g_half && g_dbg != 3 && pComp && pMask && pWBody;
             glBindFramebuffer(GL_FRAMEBUFFER, fScene); glViewport(0, 0, W, H);

@@ -28,10 +28,13 @@ ${_uo}${_ue}")
   _dk_uam(frag "${DK_SRC}/port/shaders/uber.frag.glsl" "${DK_OUT}/glsl/uber.frag.dksh")
   _dk_uam(vert "${DK_SRC}/port/shaders/fullscreen.vert.glsl" "${DK_OUT}/glsl/fullscreen.vert.dksh")
   _dk_uam(frag "${DK_SRC}/port/shaders/fxaa.frag.glsl" "${DK_OUT}/glsl/fxaa.frag.dksh")
-  # GE+ sky and water share skycommon.glsl, pasted at their `#pragma skycommon` line
-  file(READ "${DK_SRC}/port/shaders/skycommon.glsl" _skycommon)
+  # GE+ sky and water share sky/common.glsl, pasted at their `#pragma skycommon` line; the outputs keep the pack names
+  file(READ "${DK_SRC}/port/shaders/sky/common.glsl" _skycommon)
+  set(_src_skyplus sky/sky)
+  set(_src_skylut sky/lut)
+  set(_src_water water/water)
   foreach(_sc skyplus water skylut)
-    file(READ "${DK_SRC}/port/shaders/${_sc}.frag.glsl" _scsrc)
+    file(READ "${DK_SRC}/port/shaders/${_src_${_sc}}.frag.glsl" _scsrc)
     if(_sc STREQUAL "water")
       # the full (half-size pass) variant reads the far sea baked for the level's water surfaces (#79); Vulkan / GL never define it
       string(REPLACE "#version 460" "#version 460\n#define WATER_FAR" _scsrc "${_scsrc}")
@@ -40,14 +43,14 @@ ${_uo}${_ue}")
     file(WRITE "${DK_OUT}/glsl/${_sc}.frag.glsl" "${_scsrc}")
     _dk_uam(frag "${DK_OUT}/glsl/${_sc}.frag.glsl" "${DK_OUT}/glsl/${_sc}.frag.dksh")
   endforeach()
-  # GE+ water at half resolution (#79): the cheap body variant of water.frag.glsl (#define WATER_BODY after its #version line,
-  # the same file, no fork) and the composite that draws the half-size result over it
-  file(READ "${DK_SRC}/port/shaders/water.frag.glsl" _wbsrc)
+  # GE+ water at half resolution (#79): the cheap body variant of water/water.frag.glsl (#define WATER_BODY after its #version
+  # line, the same file, no fork) and the composite (water/comp.frag.glsl) that draws the half-size result over it
+  file(READ "${DK_SRC}/port/shaders/water/water.frag.glsl" _wbsrc)
   string(REPLACE "#version 460" "#version 460\n#define WATER_BODY" _wbsrc "${_wbsrc}")
   string(REPLACE "#pragma skycommon" "${_skycommon}" _wbsrc "${_wbsrc}")
   file(WRITE "${DK_OUT}/glsl/waterbody.frag.glsl" "${_wbsrc}")
   _dk_uam(frag "${DK_OUT}/glsl/waterbody.frag.glsl" "${DK_OUT}/glsl/waterbody.frag.dksh")
-  _dk_uam(frag "${DK_SRC}/port/shaders/watercomp.frag.glsl" "${DK_OUT}/glsl/watercomp.frag.dksh")
+  _dk_uam(frag "${DK_SRC}/port/shaders/water/comp.frag.glsl" "${DK_OUT}/glsl/watercomp.frag.dksh")
   string(APPEND _pack "0 1 ${DK_OUT}/glsl/uber.vert.dksh ${DK_OUT}/glsl/uber.frag.dksh -
 ")
   string(APPEND _pack "0 2 ${DK_OUT}/glsl/fullscreen.vert.dksh - -
@@ -166,8 +169,7 @@ macro(switch_deko3d_shaders target)
     find_program(DK_UAM uam HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
     find_program(DK_HOST_CXX NAMES c++ g++ HINTS /usr/bin REQUIRED NO_CMAKE_FIND_ROOT_PATH)
     set(_dk_pack "${CMAKE_BINARY_DIR}/ge007_dksh.bin")
-    file(GLOB _dk_glsl CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/*.glsl")
-    file(GLOB _fx_glsl CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/fx/*.glsl")
+    file(GLOB_RECURSE _dk_glsl CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/*.glsl")
     add_custom_command(OUTPUT "${_dk_pack}"
       COMMAND "${CMAKE_COMMAND}" -DDK_PACK_RUN=ON
               "-DDK_SRC=${CMAKE_SOURCE_DIR}" "-DDK_OUT=${CMAKE_BINARY_DIR}/dksh"
@@ -175,7 +177,7 @@ macro(switch_deko3d_shaders target)
               "-DDK_PACK=${_dk_pack}" "-DDK_UAM=${DK_UAM}" "-DDK_HOST_CXX=${DK_HOST_CXX}"
               -P "${CMAKE_SOURCE_DIR}/cmake/SwitchPort.cmake"
       DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt" "${CMAKE_SOURCE_DIR}/port/shaders/fx/combiners.txt"
-            ${_fx_glsl} ${_dk_glsl}
+            ${_dk_glsl}
               "${CMAKE_SOURCE_DIR}/tools_pc/dkshgen/dkshgen.cpp"
               "${CMAKE_SOURCE_DIR}/port/fast3d/gfx_cc.cpp"
               "${CMAKE_SOURCE_DIR}/port/fast3d/gfx_cc.h"

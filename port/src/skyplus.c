@@ -143,7 +143,7 @@ static int skyPlusTexture(s32 imageId)
 static unsigned char s_wtex[SKYPLUS_WTEX_W * SKYPLUS_WTEX_H * 4];
 static int s_wtexGen;
 static int s_wtexOk = -1;   /* -1 = not made yet */
-#define WTEX_SLOPE_K 6.0f   /* slope scale in G, B (skycommon.glsl texSlopeAt decodes it) */
+#define WTEX_SLOPE_K 6.0f   /* slope scale in G, B (sky/common.glsl texSlopeAt decodes it) */
 
 static float wnoiseLattice(int x, int y, int n)
 {
