@@ -5,7 +5,7 @@
  * stays the default). Implements GfxRenderingAPI with gfx_opengl.cpp's call
  * order and state semantics; the structure (frames in flight, external
  * present through SDL) follows gfx_deko3d.cpp. The window is an SDL2 Vulkan
- * window (gfx_sdl_set_vulkan_window); the swapchain belongs to the backend. */
+ * window (GE_WINDOW_VULKAN, ge_window.h); the swapchain belongs to the backend. */
 
 #include <stdint.h>
 #include <stdbool.h>

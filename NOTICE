@@ -20,9 +20,11 @@ Third-party code vendored into the port layer keeps its own license:
 
   * port/fast3d/  - software RSP adapted from the Perfect Dark port /
     libultraship / sm64-port lineage; see port/fast3d/LICENSE.txt.
-  * port/fast3d/glad/ - generated OpenGL loader (glad), public domain / MIT.
-  * port/fast3d/volk/ - Vulkan meta-loader (volk 1.4.304), MIT,
-    Copyright (c) 2018-2024 Arseny Kapoulkine; see port/fast3d/volk/LICENSE.md.
+  * port/ge_render/ - the renderer library split out of fast3d (issue #142): the backends keep the fast3d license,
+    see port/ge_render/LICENSE.txt.
+  * port/ge_render/include/glad/ - generated OpenGL loader (glad), public domain / MIT.
+  * port/ge_render/src/volk/ - Vulkan meta-loader (volk 1.4.304), MIT,
+    Copyright (c) 2018-2024 Arseny Kapoulkine; see port/ge_render/src/volk/LICENSE.md.
   * port/third_party/cjson/ - JSON parser (cJSON 1.7.18), MIT,
     Copyright (c) 2009-2017 Dave Gamble and cJSON contributors; see
     port/third_party/cjson/LICENSE.

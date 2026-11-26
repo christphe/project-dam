@@ -574,8 +574,8 @@ endif()
 list(APPEND LIBS "${ZLIB_LIBRARY}")
 endif()
 
-# Issue #44: Vulkan backend (port/fast3d/gfx_vulkan.cpp, selected at run time
-# with GE_RENDERER=vk). Headers only: volk (port/fast3d/volk/) loads the
+# Issue #44: Vulkan backend (port/ge_render/src/gfx_vulkan.cpp, selected at run time
+# with GE_RENDERER=vk). Headers only: volk (port/ge_render/src/volk/) loads the
 # Vulkan loader at run time, so the binary does not link it and still starts
 # with GL where no Vulkan driver exists. Off on the Switch (deko3d) and when
 # the Vulkan headers are missing.
@@ -657,6 +657,7 @@ if(NOT EXTRA_LIBRARIES)
   endif()
 endif()
 list(APPEND LIBS "${EXTRA_LIBRARIES}")
+set(GE_RENDER_SYS_LIBS ${LIBS})   # SDL2, GL and the C++ runtime: what the renderer library links (before the game libraries join LIBS)
 
 # ----------------------------------------------------------------------------
 # Sources
@@ -667,8 +668,9 @@ file(GLOB_RECURSE SRC_PORT_CXX CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/src/*
 # Dear ImGui (MIT, vendored): the menu's widget layer. Core files only; the port draws it through
 # port/src/menu/imgui_gbi.cpp (no ImGui platform or renderer backend is used in the game).
 file(GLOB SRC_IMGUI CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/third_party/imgui/*.cpp")
-file(GLOB_RECURSE SRC_FAST3D CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/fast3d/*.cpp"
-                               "${CMAKE_SOURCE_DIR}/port/fast3d/glad/*.c")
+# fast3d: only the N64 -> renderer translation (gfx_pc, gfx_frame, the display-list mesh cache) and the game's
+# first-launch GPU benchmark. The renderer itself is the ge_render library below (issue #142).
+file(GLOB_RECURSE SRC_FAST3D CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/fast3d/*.cpp")
 
 # Generated absolute ROM asset symbols for this region (see
 # scripts/gen_romassets.py). Defines every obseg/ramrom/music label and the
@@ -993,6 +995,34 @@ if(GE_SWITCH)
 endif()
 list(APPEND LIBS ge_imgui)   # a static library, so the CTest binaries (GE_CORE_LIBS) link it too
 
+# ge_render (issue #142): the renderer library. The backends (deko3d on the Switch, Vulkan, OpenGL), the combiner ->
+# shader generator, the shader packs (cmake/SwitchPort.cmake, cmake/VulkanShaders.cmake build them from port/shaders/),
+# the window and the static-mesh API. It knows no game: the game (port/fast3d, port/src/video.c) and the tools
+# (tools_pc/ge_render_hello) link it and talk to it through port/ge_render/include/ge_render.h. Compiled with the game's
+# directory-wide options and include paths, like the game itself (the backends still read <PR/gbi.h> for the RDP constants).
+set(GE_RENDER_DIR "${CMAKE_SOURCE_DIR}/port/ge_render")
+file(GLOB SRC_GE_RENDER CONFIGURE_DEPENDS "${GE_RENDER_DIR}/src/*.cpp")
+add_library(ge_render STATIC ${SRC_GE_RENDER} "${GE_RENDER_DIR}/include/glad/glad.c")
+target_include_directories(ge_render PUBLIC "${GE_RENDER_DIR}/include" PRIVATE "${GE_RENDER_DIR}/src")
+if(GE_SWITCH)
+  # same as ge_imgui: the toolchain compiles a library -fPIC, the executable it used to be part of -fPIE
+  set_property(TARGET ge_render PROPERTY POSITION_INDEPENDENT_CODE OFF)
+  target_compile_options(ge_render PRIVATE -fPIE)
+endif()
+target_link_libraries(ge_render ${GE_RENDER_SYS_LIBS})   # the library's own link requirements
+if(GE_VULKAN)
+  # volk is plain host C: its own target, without the decomp's shadow headers (port/shim, include/) or the
+  # forced versioninfo.h.
+  add_library(ge_volk STATIC "${GE_RENDER_DIR}/src/volk/volk.c")
+  set_property(TARGET ge_volk PROPERTY INCLUDE_DIRECTORIES "${VULKAN_HEADERS_DIR}")
+  set_property(TARGET ge_volk PROPERTY COMPILE_OPTIONS "")
+  target_link_libraries(ge_render ge_volk ${CMAKE_DL_LIBS})
+  include("${CMAKE_SOURCE_DIR}/cmake/VulkanShaders.cmake")
+  vulkan_shaders(ge_render)   # SPIR-V shader pack (dkshgen + glslangValidator)
+endif()
+switch_deko3d_shaders(ge_render)   # project-dam hook (D973): deko3d shader pack (no-op off Switch)
+list(INSERT LIBS 0 ge_render)   # what the game and the CTest binaries (GE_CORE_LIBS) link
+
 set(GE_CORE_LIBS ${LIBS} ${GE_GAME_LINK_FLAGS})   # what a binary containing the core objects links
 if(GE_SWITCH)
   add_executable(ge007 ${SRC})
@@ -1008,22 +1038,10 @@ else()
   add_executable(ge007 ${SRC_MAIN} $<TARGET_OBJECTS:ge007_core>)
   target_link_libraries(ge007 ${LIBS} ${GE_GAME_LINK_FLAGS})
 endif()
-if(GE_VULKAN)
-  # volk is plain host C: its own target, without the decomp's shadow headers
-  # (port/shim, include/) or the forced versioninfo.h.
-  add_library(ge_volk STATIC "${CMAKE_SOURCE_DIR}/port/fast3d/volk/volk.c")
-  set_property(TARGET ge_volk PROPERTY INCLUDE_DIRECTORIES "${VULKAN_HEADERS_DIR}")
-  set_property(TARGET ge_volk PROPERTY COMPILE_OPTIONS "")
-  target_link_libraries(ge007 ge_volk ${CMAKE_DL_LIBS})
-  include("${CMAKE_SOURCE_DIR}/cmake/VulkanShaders.cmake")
-  vulkan_shaders(ge007)   # SPIR-V shader pack (dkshgen + glslangValidator)
-  list(APPEND GE_CORE_LIBS ge_volk ${CMAKE_DL_LIBS} ge_vkpack)
-endif()
 target_link_libraries(ge007 ge_mission)   # port/mission/mission.cmake
 list(APPEND GE_CORE_LIBS ge_mission)
 set_target_properties(ge007 PROPERTIES OUTPUT_NAME "${BIN_NAME}")
 switch_package(ge007)   # goldeneye-nx hook: .nro (no-op off Switch)
-switch_deko3d_shaders(ge007)   # project-dam hook (D973): deko3d shader pack (no-op off Switch)
 if(WIN32)
   set_target_properties(ge007 PROPERTIES WIN32_EXECUTABLE TRUE)
   # Explorer/taskbar icon: the original crosshair mark (cmake/icon/ge007.rc,
@@ -1042,6 +1060,12 @@ option(GE007_ROM_TESTS "Also build the tests that need a ROM (run with GE007_ROM
 if(GE007_BUILD_TESTS AND NOT GE_SWITCH)
   enable_testing()
   add_subdirectory(tests)
+endif()
+# The renderer's tools (tools_pc/ge_render_hello, later fxview): hosts of ge_render with no game in them. On the Switch the
+# hello host is an NRO next to the game's.
+option(GE_TOOLS "Build the ge_render tools (tools_pc/ge_render_hello)" OFF)
+if(GE_TOOLS)
+  add_subdirectory(tools_pc/ge_render_hello)
 endif()
 # The mission editor (editor/): its own executable, never on the Switch.
 if(NOT GE_SWITCH)

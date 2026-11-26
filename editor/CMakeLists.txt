@@ -9,17 +9,19 @@
 #    ge_mission: no port/shim, include/ or src/ shadow headers, no forced versioninfo.h).
 #  - editor/tools/make_test_rec: writes a synthetic level export (no ROM data) for development.
 set(ED_DIR "${CMAKE_SOURCE_DIR}/editor")
-set(F3D_DIR "${CMAKE_SOURCE_DIR}/port/fast3d")
+set(F3D_DIR "${CMAKE_SOURCE_DIR}/port/ge_render")   # the renderer library (issue #142): gfx_opengl.cpp, gfx_cc.cpp, glad and the core
 set(IMGUI_DIR "${CMAKE_SOURCE_DIR}/port/third_party/imgui")
 
 # ---- fast3d GL backend ---------------------------------------------------------------------
 add_library(ge_editor_f3d OBJECT
-  "${F3D_DIR}/gfx_opengl.cpp"
-  "${F3D_DIR}/gfx_cc.cpp"
-  "${F3D_DIR}/glad/glad.c"
+  "${F3D_DIR}/src/gfx_opengl.cpp"
+  "${F3D_DIR}/src/gfx_cc.cpp"
+  "${F3D_DIR}/src/ge_core.cpp"   # the renderer's config, callbacks and their defaults (no backend, no window)
+  "${F3D_DIR}/include/glad/glad.c"
   "${ED_DIR}/fast3d_stubs.cpp"
   "${CMAKE_SOURCE_DIR}/port/src/gpuprobe.c"   # the first-launch GPU benchmark's pure decision, called by gfx_opengl.cpp
 )
+target_include_directories(ge_editor_f3d PRIVATE "${F3D_DIR}/include" "${F3D_DIR}/src")
 target_link_libraries(ge_editor_f3d PRIVATE ${LIBS})   # SDL2 / GL usage requirements only (an object library is not linked)
 
 # ---- Luau Analysis (the type checker), editor only ------------------------------------------
@@ -65,7 +67,7 @@ set_property(TARGET project-dam-editor PROPERTY INCLUDE_DIRECTORIES
   "${ED_DIR}/third_party/ImGuiColorTextEdit"
   "${ED_LUAU}/Analysis/include" "${ED_LUAU}/Config/include" "${ED_LUAU}/Ast/include" "${ED_LUAU}/Common/include"
   "${IMGUI_DIR}"
-  "${F3D_DIR}"
+  "${F3D_DIR}/include"
   "${CMAKE_SOURCE_DIR}/port/mission"
   "${CMAKE_SOURCE_DIR}/port/levelrec"
   "${CMAKE_SOURCE_DIR}/port/third_party/cjson")

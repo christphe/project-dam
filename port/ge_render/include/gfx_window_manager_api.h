@@ -4,18 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-struct GfxWindowInitSettings {
-    const char *title;
-    uint32_t width;
-    uint32_t height;
-    int32_t x;
-    int32_t y;
-    bool fullscreen;
-    bool fullscreen_is_exclusive;
-    bool maximized;
-    bool centered;
-    bool allow_hidpi;
-};
+#include "ge_render_cfg.h"   /* struct GfxWindowInitSettings */
+
 
 struct GfxWindowManagerAPI {
     void (*init)(const struct GfxWindowInitSettings *settings);

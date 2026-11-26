@@ -1,6 +1,6 @@
 # The GE+ sea (water levels: Frigate, and the sea of Dam / Caverns / Complex)
 
-Issue #38. Read [shaders-general.md](shaders-general.md) first. Code: `port/shaders/sky/common.glsl` (`waterNormal`, `waterShade`, `waveLayers`, `texWaves`), `sky/sky.frag.glsl` (the passes), `port/fast3d/gfx_deko3d.cpp` (the sky pass driver), `port/src/skyplus.c` (the wave texture, per-level settings).
+Issue #38. Read [shaders-general.md](shaders-general.md) first. Code: `port/shaders/sky/common.glsl` (`waterNormal`, `waterShade`, `waveLayers`, `texWaves`), `sky/sky.frag.glsl` (the passes), `port/ge_render/src/gfx_deko3d.cpp` (the sky pass driver), `port/src/skyplus.c` (the wave texture, per-level settings).
 
 ## What it is
 

@@ -25,11 +25,14 @@ void gfx_opengl_interp_show(int slot);
  * src_fb_id and draws it, anti-aliased, to the default framebuffer. */
 void gfx_opengl_fxaa_pass(int src_fb_id);
 
-/* First-launch GPU mini-benchmark (port/src/gpuprobe.h): fills run->skyMs / msaaMs / a2cDeltaMs / choice by drawing off screen at
- * run->w x run->h (and showing each phase on the window when run->visible). Unmeasured values come back as GPUPROBE_UNMEASURED.
- * Returns 1 if anything was measured. Main thread with the context, right after gfx_init. */
-struct GpuProbeRun;
-int gfx_opengl_gpuprobe(struct GpuProbeRun* run);
+/* GE+ sky pass and the rest of the passes outside the draw vtable (GeRenderPasses, ge_render.h). */
+struct PortSkyPlus;
+int gfx_opengl_skyplus_stage(const struct PortSkyPlus* p, const int vp[4], float aspA, float aspB);
+void gfx_opengl_skyplus_pass(int slot);
+void gfx_opengl_interp_sync(void);
+void gfx_opengl_frame_count_rewind(void);
+void gfx_opengl_perf_report(double frames);
+
 #ifdef __cplusplus
 }
 #endif

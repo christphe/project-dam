@@ -60,7 +60,7 @@ static uint32_t s_fx_tris[PORTFX_COUNT];
 #include "gfx_rendering_api.h"
 #include "gfx_screen_config.h"
 #include "gfx_frame.h"   /* D968: decoder -> frame -> replay */
-#include "gfx_opengl.h"   /* gfx_opengl_fxaa_pass: the GL-only build (no Vulkan, not the Switch) names them directly */
+#include "ge_render.h"   /* the renderer library: backends, window, config */
 
 uintptr_t gfxFramebuffer;
 
@@ -105,11 +105,8 @@ struct NormalColor {
     };
 };
 
-/* D540: set by the GL backend at init. gfx_rdp_affine: RDP-style
- * screen-affine shade colour. gfx_fog_vertex: 1 = per-vertex RSP fog
- * (default, D543), 0 = the D540 exact per-pixel fog (Video.PerPixelFog). */
-int gfx_rdp_affine = 0;
-int gfx_fog_vertex = 0;
+/* D540: ge_render_cfg.rdp_affine (set by the backend at init): RDP-style screen-affine shade colour.
+ * ge_render_cfg.fog_vertex: 1 = per-vertex RSP fog (default, D543), 0 = the D540 exact per-pixel fog (Video.PerPixelFog). */
 
 struct LoadedVertex {
     float x, y, z, w;
@@ -279,7 +276,6 @@ static struct GfxDimensions gfx_prev_dimensions;
 struct XYWidthHeight gfx_current_game_window_viewport;
 struct XYWidthHeight gfx_current_native_viewport;
 float gfx_current_native_aspect = 4.f / 3.f;
-bool gfx_framebuffers_enabled = true;
 bool gfx_detail_textures_enabled = true;
 
 static bool game_renders_to_framebuffer;
@@ -373,8 +369,7 @@ extern "C" void gfx_get_output_rect(int32_t *outX, int32_t *outY, int32_t *outW,
 }
 
 uint32_t gfx_msaa_level = 1;
-bool gfx_fxaa_on = false;   /* Video.FXAA, set by video.c */
-#define GFX_FXAA (gfx_fxaa_on)
+#define GFX_FXAA (ge_render_cfg.fxaa_on)   /* Video.FXAA, set by video.c */
 #ifdef __SWITCH__
 uint32_t gfx_msaa_docked = 1;
 uint32_t gfx_msaa_handheld = 1;
@@ -439,54 +434,17 @@ struct TickTexTimer {   /* D583 SLOW line: time inside import_texture (all exits
  * sampler did not, (noshader) a shader change did not end one either. State that
  * always ends a batch (depth/blend/viewport/scissor/target) is compared in all. */
 static uint64_t s_wm_now = 0, s_wm_notex = 0, s_wm_same = 0, s_wm_nosh = 0;
-extern "C" {
-void gfx_opengl_perf_report(double frames);
-void gfx_opengl_interp_sync(void);
-void gfx_opengl_frame_count_rewind(void);
-}
-
-/* D973: the passes outside the rendering API (FXAA, GE+ sky, D578 present
- * slots, frame-counter rewind, PERFSTAT) belong to the backend: on the Switch
- * the table is pointed at the deko3d ones in gfx_init when that backend is in
- * use (the Switch default; GE_RENDERER=gl keeps GL); elsewhere they are the GL ones. */
-#if defined(__SWITCH__) || defined(GE_VULKAN)
-#ifdef __SWITCH__
-#include "gfx_deko3d.h"
-#endif
-#ifdef GE_VULKAN
-#include "gfx_vulkan.h"   /* issue #44 */
-#endif
-static struct {
-    void (*fxaa)(int);
-    int (*sky_stage)(const PortSkyPlus*, const int[4], float, float);
-    void (*sky_pass)(int);
-    void (*istore)(int, uint32_t, uint32_t);
-    void (*ishow)(int);
-    void (*isync)(void);
-    void (*rewind)(void);
-    void (*perf)(double);
-} s_extra = {
-              gfx_opengl_fxaa_pass,
-              gfx_opengl_skyplus_stage, gfx_opengl_skyplus_pass, gfx_opengl_interp_store,
-              gfx_opengl_interp_show, gfx_opengl_interp_sync, gfx_opengl_frame_count_rewind, gfx_opengl_perf_report };
-#define GFX_X_FXAA s_extra.fxaa
-#define GFX_X_SKY_STAGE s_extra.sky_stage
-#define GFX_X_SKY_PASS s_extra.sky_pass
-#define GFX_X_ISTORE s_extra.istore
-#define GFX_X_ISHOW s_extra.ishow
-#define GFX_X_ISYNC s_extra.isync
-#define GFX_X_REWIND s_extra.rewind
-#define GFX_X_PERF s_extra.perf
-#else
-#define GFX_X_FXAA gfx_opengl_fxaa_pass
-#define GFX_X_SKY_STAGE gfx_opengl_skyplus_stage
-#define GFX_X_SKY_PASS gfx_opengl_skyplus_pass
-#define GFX_X_ISTORE gfx_opengl_interp_store
-#define GFX_X_ISHOW gfx_opengl_interp_show
-#define GFX_X_ISYNC gfx_opengl_interp_sync
-#define GFX_X_REWIND gfx_opengl_frame_count_rewind
-#define GFX_X_PERF gfx_opengl_perf_report
-#endif
+/* D973: the passes outside the rendering API (FXAA, GE+ sky, D578 present slots, frame-counter rewind, PERFSTAT)
+ * belong to the backend in use: ge_render hands them out as one table (ge_render_passes), the deko3d ones on the
+ * Switch by default, the Vulkan ones (issue #44) or the GL ones. */
+#define GFX_X_FXAA ge_render_passes()->fxaa
+#define GFX_X_SKY_STAGE ge_render_passes()->sky_stage
+#define GFX_X_SKY_PASS ge_render_passes()->sky_pass
+#define GFX_X_ISTORE ge_render_passes()->interp_store
+#define GFX_X_ISHOW ge_render_passes()->interp_show
+#define GFX_X_ISYNC ge_render_passes()->interp_sync
+#define GFX_X_REWIND ge_render_passes()->frame_count_rewind
+#define GFX_X_PERF ge_render_passes()->perf_report
 
 static int gfx_perfstat_on(void);
 
@@ -4138,7 +4096,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
              * flipped the sign, so a corner crossing behind the player
              * jumped no-fog <-> full-fog and big ground triangles popped
              * one at a time (Deck playtest). */
-            if (!gfx_fog_vertex && winv < 0.0f) {
+            if (!ge_render_cfg.fog_vertex && winv < 0.0f) {
                 winv = std::numeric_limits<int16_t>::max();
             }
 
@@ -4149,11 +4107,11 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
              * Video.PerPixelFog (D540): the GPU gets fog * w (z*mul + w*off,
              * linear in clip space) and the shader divides by w -- exact
              * per-pixel fog. The D503 full-fog snap is opt-in (GE_FOGSNAP=1). */
-            d->fog_n = gfx_fog_vertex ? d->fog
+            d->fog_n = ge_render_cfg.fog_vertex ? d->fog
                                       : d->z * rsp.fog_mul + d->w * rsp.fog_offset;
         } else {
             d->fog = rdp.fog_color.a;
-            d->fog_n = gfx_fog_vertex ? d->fog : d->fog * d->w;
+            d->fog_n = ge_render_cfg.fog_vertex ? d->fog : d->fog * d->w;
         }
 
         d->color.a = vcn->a; // can be required for SHADE_ALPHA even if fog is enabled
@@ -4438,7 +4396,6 @@ static inline bool gfx_tri_reject(struct LoadedVertex* v1, struct LoadedVertex* 
  * N64 blend. Not for decals (depth offset), prim-depth draws, modulate or
  * invisible blends, surfaces without a depth test, or alpha that does not
  * come from a texture. */
-extern "C" int portDisplayFixes;   /* port/src/video.c: Video.Visuals >= Fixed (D982) */
 extern "C" int portVisuals;        /* port/src/video.c: 2 = Enhanced */
 
 /* Effect shaders (portfx.h): Video.Visuals = Enhanced, and GE_FX=0 not set.
@@ -4462,7 +4419,7 @@ static int gfx_a2c_gate(void) {
      * clears it on a GPU where A2C costs frames, port/src/gpuprobe.h) and Video.Visuals decide */
     static const int env = [] { const char* e = getenv("GE_A2C"); return e && (e[0] == '0' || e[0] == '1') ? e[0] - '0' : -1; }();
     const int want = env >= 0 ? env : gfx_a2c_user;
-    return portDisplayFixes && gfx_msaa_level > 1 && want ? 1 : 0;
+    return ge_render_cfg.display_fixes && gfx_msaa_level > 1 && want ? 1 : 0;
 }
 
 /* Bit (1 << G_ACMUX_x) for every alpha source the combiner's alpha formula
@@ -4543,7 +4500,7 @@ static bool gfx_a2c_draw(bool depth_test, bool depth_update, bool depth_compare,
  * the run (A/B). Needs no MSAA. */
 static int gfx_zcut_gate(void) {
     static const int off = [] { const char* e = getenv("GE_ZCUT"); return e && e[0] == '0'; }();
-    return portDisplayFixes && !off ? 1 : 0;
+    return ge_render_cfg.display_fixes && !off ? 1 : 0;
 }
 
 static inline void gfx_tri_state(TriState& ts) {
@@ -5036,7 +4993,7 @@ static inline int gfx_tri_nearclip(struct LoadedVertex* const v_arr[3], bool is_
                             float fw = o->w;
                             if (fabsf(fw) < 0.001f) fw = 0.001f;
                             float winv = 1.0f / fw;
-                            if (!gfx_fog_vertex && winv < 0.0f) winv = std::numeric_limits<int16_t>::max();
+                            if (!ge_render_cfg.fog_vertex && winv < 0.0f) winv = std::numeric_limits<int16_t>::max();
                             /* D579: the cut is now at w = eps, in front of
                              * which z/w can sit below -1; clamp to the
                              * near-plane value so D553's static haze at
@@ -5049,7 +5006,7 @@ static inline int gfx_tri_nearclip(struct LoadedVertex* const v_arr[3], bool is_
                     } else {
                         o->fog = (uint8_t)clampf(floorf(a->fog + ((float)b->fog - (float)a->fog) * t + 0.5f), 0.f, 255.f);
                     }
-                    if (gfx_fog_vertex) o->fog_n = o->fog; // as gfx_sp_vertex
+                    if (ge_render_cfg.fog_vertex) o->fog_n = o->fog; // as gfx_sp_vertex
                     poly[n_poly++] = o;
                 }
             }
@@ -6555,7 +6512,7 @@ static void gfx_sp_vertex_float(size_t n_vertices, size_t dest_index, const Port
         d->z = z;
         d->w = w;
         d->fog = rdp.fog_color.a;
-        d->fog_n = gfx_fog_vertex ? d->fog : d->fog * w;
+        d->fog_n = ge_render_cfg.fog_vertex ? d->fog : d->fog * w;
     }
 }
 
@@ -7045,36 +7002,12 @@ extern "C" void gfx_get_dimensions(uint32_t* width, uint32_t* height, int32_t* p
 }
 
 extern "C" void gfx_init(const GfxInitSettings *settings) {
-    gfx_wapi = settings->wapi;
-#ifdef __SWITCH__
-    if (settings->rapi == &gfx_deko3d_api) {   /* D973 */
-        s_extra.fxaa = gfx_deko3d_fxaa_pass;
-        s_extra.sky_stage = gfx_deko3d_skyplus_stage;
-        s_extra.sky_pass = gfx_deko3d_skyplus_pass;
-        s_water_ext = true;   /* GE+ water (water/water.frag.glsl) */
-        s_extra.istore = gfx_deko3d_interp_store;
-        s_extra.ishow = gfx_deko3d_interp_show;
-        s_extra.isync = gfx_deko3d_interp_sync;
-        s_extra.rewind = gfx_deko3d_frame_count_rewind;
-        s_extra.perf = gfx_deko3d_perf_report;
-    }
-#endif
-#ifdef GE_VULKAN
-    if (settings->rapi == &gfx_vulkan_api) {   /* issue #44 */
-        s_extra.fxaa = gfx_vulkan_fxaa_pass;
-        s_extra.sky_stage = gfx_vulkan_skyplus_stage;
-        s_extra.sky_pass = gfx_vulkan_skyplus_pass;
-        s_extra.istore = gfx_vulkan_interp_store;
-        s_extra.ishow = gfx_vulkan_interp_show;
-        s_extra.isync = gfx_vulkan_interp_sync;
-        s_extra.rewind = gfx_vulkan_frame_count_rewind;
-        s_extra.perf = gfx_vulkan_perf_report;
-    }
-#endif
-    gfx_rapi = gfx_frame_install(settings->rapi);   /* D968: the decoder talks to the frame recorder */
+    /* The window and the backend exist already (ge_render_open, the host's call): the translator talks to them. */
+    gfx_wapi = ge_render_window();
+    s_water_ext = ge_render_passes()->water_ext;   /* GE+ water (water/water.frag.glsl) */
+    gfx_rapi = gfx_frame_install(ge_render_api());   /* D968: the decoder talks to the frame recorder */
     gfx_frame_set_wapi(gfx_wapi);                   /* D969: the replay thread pumps events and swaps */
-    gfx_wapi->init(&settings->window_settings);
-    gfx_rapi->init();
+    gfx_rapi->init();                               /* the recorder's side of the init (the backend is up) */
     gfx_rapi->update_framebuffer_parameters(0, settings->window_settings.width, settings->window_settings.height, 1, false, true, true, true);
     gfx_current_dimensions.internal_mul = 1;
     gfx_current_game_window_viewport.width = gfx_current_dimensions.width = settings->window_settings.width;
@@ -7089,7 +7022,7 @@ extern "C" void gfx_init(const GfxInitSettings *settings) {
     gfx_rapi->start_draw_to_framebuffer(game_framebuffer_msaa_resolved, 1.0f);
     gfx_rapi->clear_framebuffer(true, true);
 
-    if (gfx_msaa_level > 1 && !gfx_framebuffers_enabled) {
+    if (gfx_msaa_level > 1 && !ge_render_cfg.framebuffers_enabled) {
         sysLogPrintf(LOG_WARNING, "F3D: MSAA set to %d, but framebuffers are not available; disabling", gfx_msaa_level);
         gfx_msaa_level = 1;
     }
@@ -7144,7 +7077,7 @@ extern "C" void gfx_start_frame(void) {
 #ifdef __SWITCH__
     /* project-dam: the MSAA level comes from the menu, live (handheld too);
      * the framebuffers below are rebuilt when it changes. */
-    gfx_msaa_level = gfx_framebuffers_enabled ? (nxIsHandheld() ? gfx_msaa_handheld : gfx_msaa_docked) : 1;
+    gfx_msaa_level = ge_render_cfg.framebuffers_enabled ? (nxIsHandheld() ? gfx_msaa_handheld : gfx_msaa_docked) : 1;
 #endif
 
     gfx_current_dimensions = gfx_current_window_dimensions;
@@ -7206,7 +7139,7 @@ extern "C" void gfx_start_frame(void) {
 
     bool different_size = gfx_current_dimensions.width != gfx_current_game_window_viewport.width ||
                           gfx_current_dimensions.height != gfx_current_game_window_viewport.height;
-    if (gfx_framebuffers_enabled && (different_size || gfx_msaa_level > 1 || (GFX_FXAA && gfx_framebuffers_enabled))) {
+    if (ge_render_cfg.framebuffers_enabled && (different_size || gfx_msaa_level > 1 || (GFX_FXAA && ge_render_cfg.framebuffers_enabled))) {
         game_renders_to_framebuffer = true;
         if (different_size) {
             gfx_rapi->update_framebuffer_parameters(game_framebuffer, gfx_current_dimensions.width,
@@ -7223,7 +7156,7 @@ extern "C" void gfx_start_frame(void) {
             gfx_rapi->update_framebuffer_parameters(game_framebuffer_msaa_resolved, gfx_current_dimensions.width,
                                                     gfx_current_dimensions.height, 1, false, false, false, false);
         }
-        else if (gfx_msaa_level > 1 && gfx_fxaa_on) {
+        else if (gfx_msaa_level > 1 && ge_render_cfg.fxaa_on) {
             /* project-dam: window-sized single-sample target the MSAA image is
              * resolved into before the FXAA pass (gfx_frame_body). */
             gfx_rapi->update_framebuffer_parameters(game_framebuffer_msaa_resolved, gfx_current_window_dimensions.width,
@@ -7535,7 +7468,7 @@ static void gfx_frame_body(Gfx* commands, bool emit_overlay, Gfx** overlay_io, u
                 gfx_rapi->resolve_msaa_color_buffer(game_framebuffer_msaa_resolved, game_framebuffer);
                 gfxFramebuffer = (uintptr_t)gfx_rapi->get_framebuffer_texture_id(game_framebuffer_msaa_resolved);
             } else {
-                if (gfx_fxaa_on) {
+                if (ge_render_cfg.fxaa_on) {
                     /* project-dam: FXAA reads a single-sample texture, so resolve
                      * into one first, then draw it to the window anti-aliased. */
                     gfx_rapi->resolve_msaa_color_buffer(game_framebuffer_msaa_resolved, game_framebuffer);
@@ -7545,7 +7478,7 @@ static void gfx_frame_body(Gfx* commands, bool emit_overlay, Gfx** overlay_io, u
                 }
             }
         } else {
-            if (gfx_fxaa_on) {
+            if (ge_render_cfg.fxaa_on) {
                 gfx_frame_call(GFX_X_FXAA, game_framebuffer);   /* project-dam: FXAA without MSAA */
             } else
             gfxFramebuffer = (uintptr_t)gfx_rapi->get_framebuffer_texture_id(game_framebuffer);
@@ -7666,10 +7599,6 @@ extern "C" void gfx_end_frame(void) {
 
 /* ---- D578: frame interpolation entry points (render worker only) ---- */
 
-extern "C" void gfx_opengl_interp_store(int slot, uint32_t width, uint32_t height);
-extern "C" void gfx_opengl_interp_show(int slot);
-extern "C" void gfx_opengl_frame_count_rewind(void);
-extern "C" void gfx_opengl_interp_sync(void);
 
 /* The emulated RSP/RDP state at the start of a game frame, restored before
  * every further pass so each pass starts exactly where a single render of
@@ -8129,13 +8058,13 @@ extern "C" void reset_texture_state() {
 
 /* D982: Video.Visuals >= Fixed switches the fog form live. The CPU vertex fog
  * (fog_n), the GL shader source and the mesh cache key all depend on
- * gfx_fog_vertex, so drop the shaders and baked meshes like a texture
+ * ge_render_cfg.fog_vertex, so drop the shaders and baked meshes like a texture
  * filter change does (render thread, between frames). deko3d reads it at
  * the next shader bind. */
 extern "C" void gfx_set_fog_pixel(int on) {
     const int vtx = !on;
-    if (vtx == gfx_fog_vertex) return;
-    gfx_fog_vertex = vtx;
+    if (vtx == ge_render_cfg.fog_vertex) return;
+    ge_render_cfg.fog_vertex = vtx;
     reset_texture_state();
 }
 

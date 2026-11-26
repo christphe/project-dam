@@ -93,23 +93,15 @@
 #define ZMODE_XLU 0x800
 #define ZMODE_DEC 0xc00
 
-#include "system.h"
+#include "ge_internal.h"
 #include "gfx_cc.h"
 #include "gfx_rendering_api.h"
 #include "gfx_vulkan.h"
-#include "gfx_sdl.h"
+#include "ge_window.h"
 #include "gfx_dk_layout.h"
 #include "gfx_dk_heap.h"
-#include "skyplus.h"
+#include "ge_render_sky.h"
 
-extern bool gfx_framebuffers_enabled;           /* gfx_pc.cpp */
-extern int gfx_rdp_affine;                      /* gfx_pc.cpp (D540) */
-extern int gfx_fog_vertex;                      /* gfx_pc.cpp (D543) */
-extern "C" int portDisplayFixes;                /* port/src/video.c (D982) */
-extern "C" int portPerPixelFog;                /* port/src/video.c: Video.PerPixelFog */
-extern "C" int gfx_skyplus_half;                /* gfx_opengl.cpp: Video.SkyScale, 1 = half-size final pass */
-extern "C" volatile int gfx_skyplus_sea;        /* gfx_opengl.cpp: 1 = skyplus.c may give the water levels the sea */
-extern "C" volatile int gfx_skyplus_failed;     /* gfx_opengl.cpp: 1 = skyplus.c draws GE's own sky */
 extern "C" const uint8_t ge007_spv_pack[], ge007_spv_pack_end[];   /* gfx_vk_pack.S */
 
 struct ShaderProgram {
@@ -137,7 +129,7 @@ const VkDeviceSize UBO_COMB_OFF = 256;   /* Comb after Draw in one uniform alloc
     do {                                                                                    \
         VkResult r_ = (call);                                                               \
         if (r_ != VK_SUCCESS) {                                                             \
-            sysFatalError("Vulkan: %s failed (VkResult %d)\n%s:%d", #call, (int)r_,         \
+            ge_fatal("Vulkan: %s failed (VkResult %d)\n%s:%d", #call, (int)r_,         \
                           __FILE__, __LINE__);                                              \
         }                                                                                   \
     } while (0)
@@ -239,12 +231,12 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBitsEXT s
     const char* msg = data && data->pMessage ? data->pMessage : "(null)";
     if (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
         s_validation_errors++;
-        if (s_validation_errors <= 64) sysLogPrintf(LOG_ERROR, "VK validation: %s", msg);
+        if (s_validation_errors <= 64) ge_log(GE_LOG_ERROR, "VK validation: %s", msg);
     } else if (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
         s_validation_warnings++;
-        if (s_validation_warnings <= 64) sysLogPrintf(LOG_WARNING, "VK validation: %s", msg);
+        if (s_validation_warnings <= 64) ge_log(GE_LOG_WARNING, "VK validation: %s", msg);
     } else {
-        sysLogPrintf(LOG_NOTE, "VK: %s", msg);
+        ge_log(GE_LOG_NOTE, "VK: %s", msg);
     }
     return VK_FALSE;
 }
@@ -285,12 +277,12 @@ bool has_device_ext(VkPhysicalDevice pd, const char* name) {
 bool load_loader(void) {
     if (!s_loader_ok) {
         if (volkInitialize() != VK_SUCCESS) {
-            sysLogPrintf(LOG_WARNING, "VK: no Vulkan loader found");
+            ge_log(GE_LOG_WARNING, "VK: no Vulkan loader found");
             return false;
         }
         if (volkGetInstanceVersion() < VK_API_VERSION_1_3) {
             const uint32_t v = volkGetInstanceVersion();
-            sysLogPrintf(LOG_WARNING, "VK: loader is Vulkan %u.%u, 1.3 needed", VK_API_VERSION_MAJOR(v),
+            ge_log(GE_LOG_WARNING, "VK: loader is Vulkan %u.%u, 1.3 needed", VK_API_VERSION_MAJOR(v),
                          VK_API_VERSION_MINOR(v));
             return false;
         }
@@ -344,7 +336,7 @@ VkPhysicalDevice pick_device(VkInstance inst, VkSurfaceKHR surface, uint32_t* qf
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(v[i], &props);
         if (surface != VK_NULL_HANDLE) {
-            sysLogPrintf(LOG_NOTE, "VK: device %u: %s (Vulkan %u.%u.%u)%s", i, props.deviceName,
+            ge_log(GE_LOG_NOTE, "VK: device %u: %s (Vulkan %u.%u.%u)%s", i, props.deviceName,
                          VK_API_VERSION_MAJOR(props.apiVersion), VK_API_VERSION_MINOR(props.apiVersion),
                          VK_API_VERSION_PATCH(props.apiVersion), fam < 0 ? " - not usable" : "");
         }
@@ -364,10 +356,10 @@ void create_instance(bool with_window) {
     std::vector<const char*> exts;
     std::vector<const char*> layers;
     if (with_window) {
-        SDL_Window* w = (SDL_Window*)gfx_sdl_get_sdl_window();
+        SDL_Window* w = (SDL_Window*)ge_window_sdl_window();
         unsigned int n = 0;
         if (!SDL_Vulkan_GetInstanceExtensions(w, &n, nullptr)) {
-            sysFatalError("Vulkan: SDL_Vulkan_GetInstanceExtensions failed:\n%s", SDL_GetError());
+            ge_fatal("Vulkan: SDL_Vulkan_GetInstanceExtensions failed:\n%s", SDL_GetError());
         }
         exts.resize(n);
         SDL_Vulkan_GetInstanceExtensions(w, &n, exts.data());
@@ -386,7 +378,7 @@ void create_instance(bool with_window) {
             exts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
             validate = true;
         }
-        sysLogPrintf(LOG_NOTE, "VK: validation layer %s", validate ? "on (GE_VKVALIDATE=0 turns it off)"
+        ge_log(GE_LOG_NOTE, "VK: validation layer %s", validate ? "on (GE_VKVALIDATE=0 turns it off)"
                                                          : want ? "not installed (Vulkan SDK)" : "off (GE_VKVALIDATE=0)");
     }
 
@@ -418,7 +410,7 @@ void create_instance(bool with_window) {
     if (r != VK_SUCCESS && validate) {
         /* The layer's manifest was found but its DLL did not load (missing
          * dependency, broken build): run without validation rather than die. */
-        sysLogPrintf(LOG_WARNING, "VK: instance with the validation layer failed (VkResult %d); retrying without it", (int)r);
+        ge_log(GE_LOG_WARNING, "VK: instance with the validation layer failed (VkResult %d); retrying without it", (int)r);
         validate = false;
         layers.clear();
         exts.pop_back();   /* VK_EXT_debug_utils, pushed last */
@@ -504,7 +496,7 @@ void create_device(void) {
     s_max_tex = props.limits.maxImageDimension2D;
     s_sample_counts = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts;
     vkGetPhysicalDeviceMemoryProperties(s_phys, &s_memprops);
-    sysLogPrintf(LOG_NOTE, "VK: depth clip control %s, mirror-clamp %s, depth clamp %s, anisotropy up to %.0fx",
+    ge_log(GE_LOG_NOTE, "VK: depth clip control %s, mirror-clamp %s, depth clamp %s, anisotropy up to %.0fx",
                  s_clip_control ? "on (GL clip z)" : "off (0..1 clip z from the CPU)", s_mirror_clamp ? "on" : "off",
                  s_depth_clamp ? "on" : "off", s_max_aniso);
 }
@@ -529,13 +521,13 @@ HostChunk make_host_chunk(VkDeviceSize size, VkBufferUsageFlags usage) {
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(s_dev, c.buf, &req);
     const uint32_t mt = find_memtype(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (mt == UINT32_MAX) sysFatalError("Vulkan: no host-visible coherent memory");
+    if (mt == UINT32_MAX) ge_fatal("Vulkan: no host-visible coherent memory");
     VkMemoryAllocateInfo ai = {};
     ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     ai.allocationSize = req.size;
     ai.memoryTypeIndex = mt;
     if (vkAllocateMemory(s_dev, &ai, nullptr, &c.mem) != VK_SUCCESS) {
-        sysFatalError("Vulkan: could not allocate %u KiB of host memory", (unsigned)(size >> 10));
+        ge_fatal("Vulkan: could not allocate %u KiB of host memory", (unsigned)(size >> 10));
     }
     VK_CHECK(vkBindBufferMemory(s_dev, c.buf, c.mem, 0));
     void* p = nullptr;
@@ -601,7 +593,7 @@ bool create_image(Img* out, VkFormat fmt, uint32_t w, uint32_t h, uint32_t level
         ai.memoryTypeIndex = mt;
         VkDeviceMemory m = VK_NULL_HANDLE;
         if (vkAllocateMemory(s_dev, &ai, nullptr, &m) != VK_SUCCESS) {
-            sysFatalError("Vulkan: could not allocate %u MiB of image memory", (unsigned)(ai.allocationSize >> 20));
+            ge_fatal("Vulkan: could not allocate %u MiB of image memory", (unsigned)(ai.allocationSize >> 20));
         }
         hp.mem.push_back(m);
     }
@@ -785,7 +777,7 @@ void pick_depth_format(void) {
 
 void window_drawable_size(uint32_t* w, uint32_t* h) {
     int iw = 0, ih = 0;
-    SDL_Window* win = (SDL_Window*)gfx_sdl_get_sdl_window();
+    SDL_Window* win = (SDL_Window*)ge_window_sdl_window();
     if (win) SDL_Vulkan_GetDrawableSize(win, &iw, &ih);
     *w = iw > 0 ? (uint32_t)iw : 0;
     *h = ih > 0 ? (uint32_t)ih : 0;
@@ -897,13 +889,13 @@ bool create_swapchain(void) {
     destroy_image_later(s_win_depth);
     if (!create_image(&s_win_depth, s_depth_fmt, ext.width, ext.height, 1, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
                       VK_SAMPLE_COUNT_1_BIT, s_depth_aspect)) {
-        sysFatalError("Vulkan: could not create the %ux%u window depth buffer", ext.width, ext.height);
+        ge_fatal("Vulkan: could not create the %ux%u window depth buffer", ext.width, ext.height);
     }
     s_win_depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     s_sc_extent = ext;
     s_sc_dirty = false;
     static const char* const mode_names[] = { "IMMEDIATE", "MAILBOX", "FIFO", "FIFO_RELAXED" };
-    sysLogPrintf(LOG_NOTE, "VK: swapchain %ux%u, %u images, format %d, %s, depth format %d", ext.width, ext.height, n,
+    ge_log(GE_LOG_NOTE, "VK: swapchain %ux%u, %u images, format %d, %s, depth format %d", ext.width, ext.height, n,
                  (int)s_sc_format, (int)s_sc_mode < 4 ? mode_names[s_sc_mode] : "?", (int)s_depth_fmt);
     return true;
 }
@@ -991,7 +983,7 @@ VkShaderModule pack_module(int entry, int stage) {
 void load_pack(void) {
     const uint8_t* p = ge007_spv_pack;
     if ((size_t)(ge007_spv_pack_end - p) < 16 || memcmp(p, DK_PACK_MAGIC, 8) != 0) {
-        sysFatalError("Vulkan: SPIR-V shader pack missing or corrupt");
+        ge_fatal("Vulkan: SPIR-V shader pack missing or corrupt");
     }
     memcpy(&s_pack_count, p + 8, 4);
     s_pack = (const DkPackEntry*)(p + 16);
@@ -999,7 +991,7 @@ void load_pack(void) {
     s_uber_vert = pack_module(uber, 0);
     s_uber_frag = pack_module(uber, 1);
     if (s_uber_vert == VK_NULL_HANDLE || s_uber_frag == VK_NULL_HANDLE) {
-        sysFatalError("Vulkan: uber-shader missing from the SPIR-V shader pack");
+        ge_fatal("Vulkan: uber-shader missing from the SPIR-V shader pack");
     }
     s_fs_vert = pack_module(pack_find(0, DK_PACK_FULLSCREEN), 0);
     s_fxaa_frag = pack_module(pack_find(0, DK_PACK_FXAA), 1);
@@ -1007,12 +999,12 @@ void load_pack(void) {
     s_lut_frag = pack_module(pack_find(0, DK_PACK_SKYLUT), 1);
     s_water_frag = pack_module(pack_find(0, DK_PACK_WATER), 1);
     if (!s_fs_vert || !s_fxaa_frag || !s_sky_frag) {
-        sysLogPrintf(LOG_WARNING, "VK: post-pass shaders missing from the pack (FXAA %d, GE+ sky %d)",
+        ge_log(GE_LOG_WARNING, "VK: post-pass shaders missing from the pack (FXAA %d, GE+ sky %d)",
                      s_fs_vert && s_fxaa_frag, s_fs_vert && s_sky_frag);
     }
     int combiners = 0;
     for (uint32_t i = 0; i < s_pack_count; i++) combiners += (s_pack[i].id0 != 0 || s_pack[i].id1 >= DK_PACK_NAMED_MAX);
-    sysLogPrintf(LOG_NOTE, "VK: shader pack: %d combiners + uber, %u KiB of SPIR-V", combiners,
+    ge_log(GE_LOG_NOTE, "VK: shader pack: %d combiners + uber, %u KiB of SPIR-V", combiners,
                  (unsigned)((ge007_spv_pack_end - p) >> 10));
 }
 
@@ -1030,7 +1022,7 @@ VkPipelineCache s_pipe_cache = VK_NULL_HANDLE;
  * file from another GPU or driver is simply ignored; GE_NOSHADERWARM=1 skips it
  * as it does the GL shader list. */
 std::string pipeline_cache_path(void) {
-    return sysResolvePath("$S/ge007.vkcache");
+    return ge_resolve_path("$S/ge007.vkcache");
 }
 
 void pipeline_cache_load(void) {
@@ -1052,7 +1044,7 @@ void pipeline_cache_load(void) {
     pc.initialDataSize = blob.size();
     pc.pInitialData = blob.empty() ? nullptr : blob.data();
     VK_CHECK(vkCreatePipelineCache(s_dev, &pc, nullptr, &s_pipe_cache));
-    sysLogPrintf(LOG_NOTE, "VK: pipeline cache, %u KiB read from disk", (unsigned)(blob.size() >> 10));
+    ge_log(GE_LOG_NOTE, "VK: pipeline cache, %u KiB read from disk", (unsigned)(blob.size() >> 10));
 }
 
 /* Write the cache back (to a temporary file first, so a crash never leaves half a cache). */
@@ -1077,7 +1069,7 @@ void pipeline_cache_save(void) {
 #endif
         return;
     }
-    sysLogPrintf(LOG_NOTE, "VK: pipeline cache, %u KiB written", (unsigned)(n >> 10));
+    ge_log(GE_LOG_NOTE, "VK: pipeline cache, %u KiB written", (unsigned)(n >> 10));
 }
 
 /* vkCreateGraphicsPipelines through the cache, timed for the park log */
@@ -1637,7 +1629,7 @@ void build_fb_images(Fb& f) {
     }
     f.l_color = f.l_ms = f.l_depth = VK_IMAGE_LAYOUT_UNDEFINED;
     if (!ok) {
-        sysLogPrintf(LOG_ERROR, "VK: framebuffer %ux%u x%u: could not create its images", f.w, f.h, f.msaa);
+        ge_log(GE_LOG_ERROR, "VK: framebuffer %ux%u x%u: could not create its images", f.w, f.h, f.msaa);
         destroy_fb_images(f);
         return;
     }
@@ -2016,7 +2008,7 @@ void vk_load_shader_with(struct ShaderProgram* p, uint32_t fc, float noise, bool
     s_prg = p;
     s_uni.frame_count = (int32_t)fc;
     s_uni.noise_scale = noise;
-    s_uni.fog_pixel = gfx_fog_vertex ? 0 : 1;   /* D982: follows a live change */
+    s_uni.fog_pixel = ge_render_cfg.fog_vertex ? 0 : 1;   /* D982: follows a live change */
     /* GL compiles the three-point code only while that mode is on */
     s_uni.three_point0 = (tpf0 && s_filter == FILTER_THREE_POINT) ? 1 : 0;
     s_uni.three_point1 = (tpf1 && s_filter == FILTER_THREE_POINT) ? 1 : 0;
@@ -2043,7 +2035,7 @@ struct ShaderProgram* vk_create_and_load_new_shader(uint64_t id0, uint32_t id1) 
     p->mesh_vert = VK_NULL_HANDLE;
     p->water = false;
     const int e = (id1 & SHADER_OPT_WATER) && s_water_frag ? -1 : pack_find(id0, id1);
-    if ((id1 & SHADER_OPT_WATER) && s_water_frag && gfx_water_surfaces) {
+    if ((id1 & SHADER_OPT_WATER) && s_water_frag && ge_render_cfg.water_surfaces) {
         p->uber = true;   /* the uber vertex shader, every attribute (a missing one reads the constant zero) */
         p->water = true;
         p->vert = s_uber_vert;
@@ -2067,11 +2059,11 @@ struct ShaderProgram* vk_create_and_load_new_shader(uint64_t id0, uint32_t id1) 
         if (!s_missed[std::make_pair(id0, id1)]) {
             s_missed[std::make_pair(id0, id1)] = true;
             if (p->skip) {
-                sysLogPrintf(LOG_ERROR, "SPIR-V miss %016llx %08x: an effect missing from the pack, not drawn "
+                ge_log(GE_LOG_ERROR, "SPIR-V miss %016llx %08x: an effect missing from the pack, not drawn "
                              "(tools_pc/cc_census_merge.py adds it to port/shaders/fx/combiners.txt)",
                              (unsigned long long)id0, (unsigned)id1);
             } else {
-                sysLogPrintf(LOG_NOTE, "SPIR-V miss %016llx %08x", (unsigned long long)id0, (unsigned)id1);
+                ge_log(GE_LOG_NOTE, "SPIR-V miss %016llx %08x", (unsigned long long)id0, (unsigned)id1);
             }
         }
     }
@@ -2166,7 +2158,7 @@ void vk_upload_texture(const uint8_t* rgba, uint32_t width, uint32_t height, boo
     if (t.has_img) destroy_image_later(t.img);
     t.has_img = false;
     if (!upload_image(&t.img, data, s_offs, width, height, levels, total)) {
-        sysLogPrintf(LOG_ERROR, "VK: texture %ux%u: could not create the image", width, height);
+        ge_log(GE_LOG_ERROR, "VK: texture %ux%u: could not create the image", width, height);
         return;
     }
     t.has_img = true;
@@ -2265,36 +2257,36 @@ void vk_draw_triangles(float buf[], size_t len, size_t ntris) {
 
 void vk_init(void) {
     if (s_up) return;
-    if (!load_loader()) sysFatalError("Vulkan: no usable Vulkan loader (GE_RENDERER=vk)");
+    if (!load_loader()) ge_fatal("Vulkan: no usable Vulkan loader (GE_RENDERER=vk)");
     create_instance(true);
-    SDL_Window* w = (SDL_Window*)gfx_sdl_get_sdl_window();
+    SDL_Window* w = (SDL_Window*)ge_window_sdl_window();
     if (!SDL_Vulkan_CreateSurface(w, s_instance, &s_surface)) {
-        sysFatalError("Vulkan: SDL_Vulkan_CreateSurface failed:\n%s", SDL_GetError());
+        ge_fatal("Vulkan: SDL_Vulkan_CreateSurface failed:\n%s", SDL_GetError());
     }
     s_phys = pick_device(s_instance, s_surface, &s_qfam);
     if (s_phys == VK_NULL_HANDLE) {
-        sysFatalError("Vulkan: no device with Vulkan 1.3, dynamic rendering and push descriptors presents to this window");
+        ge_fatal("Vulkan: no device with Vulkan 1.3, dynamic rendering and push descriptors presents to this window");
     }
     {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(s_phys, &props);
         snprintf(s_renderer_str, sizeof s_renderer_str, "%s (Vulkan)", props.deviceName);
-        sysLogPrintf(LOG_NOTE, "VK: using %s, driver %08x, queue family %u", props.deviceName, props.driverVersion, s_qfam);
+        ge_log(GE_LOG_NOTE, "VK: using %s, driver %08x, queue family %u", props.deviceName, props.driverVersion, s_qfam);
     }
     create_device();
     pick_depth_format();
     create_frames();
     create_layouts();
     load_pack();
-    gfx_skyplus_sea = s_sky_frag && s_lut_frag && s_fs_vert ? 1 : 0;
-    gfx_water_surfaces = s_water_frag && s_sky_frag && s_fs_vert ? 1 : 0;   /* skyplus.c: the level's own water surfaces get the GE+ water */
-    sysLogPrintf(LOG_NOTE, "GE+ water surfaces: %s (vulkan)", gfx_water_surfaces ? "on" : "off");
+    ge_render_cfg.skyplus_sea = s_sky_frag && s_lut_frag && s_fs_vert ? 1 : 0;
+    ge_render_cfg.water_surfaces = s_water_frag && s_sky_frag && s_fs_vert ? 1 : 0;   /* skyplus.c: the level's own water surfaces get the GE+ water */
+    ge_log(GE_LOG_NOTE, "GE+ water surfaces: %s (vulkan)", ge_render_cfg.water_surfaces ? "on" : "off");
     s_up = true;
 
-    gfx_rdp_affine = 0;   /* D986: the pack is built with perspective-correct shade */
+    ge_render_cfg.rdp_affine = 0;   /* D986: the pack is built with perspective-correct shade */
     {   /* fog: the pack carries both forms; Draw.fog_pixel picks one (gfx_deko3d.cpp dk_init) */
-        gfx_fog_vertex = !portPerPixelFog;
-        s_uni.fog_pixel = gfx_fog_vertex ? 0 : 1;
+        ge_render_cfg.fog_vertex = !ge_render_cfg.per_pixel_fog;
+        s_uni.fog_pixel = ge_render_cfg.fog_vertex ? 0 : 1;
     }
     s_uni.noise_scale = 1.0f;
     s_zero = make_host_chunk(256, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
@@ -2302,7 +2294,7 @@ void vk_init(void) {
     {
         static const uint8_t black[4] = { 0, 0, 0, 255 };
         std::vector<uint32_t> offs(1, 0);
-        if (!upload_image(&s_dummy, black, offs, 1, 1, 1, 4)) sysFatalError("Vulkan: could not create the dummy texture");
+        if (!upload_image(&s_dummy, black, offs, 1, 1, 1, 4)) ge_fatal("Vulkan: could not create the dummy texture");
     }
     create_swapchain();
     s_fbs.resize(1);   /* fb 0 = the window, as gfx_opengl_init */
@@ -2324,7 +2316,7 @@ int vk_create_framebuffer(void) {
     Fb& f = s_fbs[i];
     f.smp = SmpKey{ VK_FILTER_LINEAR, VK_FILTER_LINEAR, MIP_NONE, VK_SAMPLER_ADDRESS_MODE_REPEAT,
                     VK_SAMPLER_ADDRESS_MODE_REPEAT, 1 };
-    if (s_up && gfx_framebuffers_enabled) build_fb_images(f);   /* 1x1 until sized, as GL */
+    if (s_up && ge_render_cfg.framebuffers_enabled) build_fb_images(f);   /* 1x1 until sized, as GL */
     return i;
 }
 
@@ -2336,8 +2328,8 @@ void vk_update_framebuffer_parameters(int fb_id, uint32_t width, uint32_t height
     Fb& f = s_fbs[fb_id];
     width = width < 1 ? 1 : width;
     height = height < 1 ? 1 : height;
-    if (!gfx_framebuffers_enabled) has_depth_buffer = false;
-    if (fb_id != 0 && gfx_framebuffers_enabled) {
+    if (!ge_render_cfg.framebuffers_enabled) has_depth_buffer = false;
+    if (fb_id != 0 && ge_render_cfg.framebuffers_enabled) {
         const bool depth_missing = has_depth_buffer && !f.has_depth_img;
         if (f.w != width || f.h != height || f.msaa != msaa_level || depth_missing || !f.created) {
             if (s_render_fb == fb_id) end_rendering();
@@ -2358,7 +2350,7 @@ void vk_update_framebuffer_parameters(int fb_id, uint32_t width, uint32_t height
 }
 
 bool vk_start_draw_to_framebuffer(int fb_id, float noise_scale) {
-    if (gfx_framebuffers_enabled && fb_id < (int)s_fbs.size()) {
+    if (ge_render_cfg.framebuffers_enabled && fb_id < (int)s_fbs.size()) {
         if (noise_scale != 0.0f) s_noise_scale = 1.0f / noise_scale;
         if (fb_id != s_cur_fb) {
             s_vp_dirty = s_sc_dirty_rect = s_depth_dirty = s_desc_dirty = true;   /* the old target may be sampled now */
@@ -2494,7 +2486,7 @@ void blit_gl(int fb_src, int sx0, int sy0, int sx1, int sy1, int fb_dst, int dx0
 
 void vk_copy_framebuffer(int fb_dst, int fb_src, int left, int top, bool flip_y, bool use_back) {
     (void)use_back;   /* the image being drawn is read (GL: GL_BACK) */
-    if (!s_up || !gfx_framebuffers_enabled || fb_dst >= (int)s_fbs.size() || fb_src >= (int)s_fbs.size()) return;
+    if (!s_up || !ge_render_cfg.framebuffers_enabled || fb_dst >= (int)s_fbs.size() || fb_src >= (int)s_fbs.size()) return;
     const int dw = (int)fb_width(fb_dst), dh = (int)fb_height(fb_dst);
     int sx0, sy0, sx1, sy1;
     if (left >= 0 && top >= 0) {
@@ -2509,7 +2501,7 @@ void vk_copy_framebuffer(int fb_dst, int fb_src, int left, int top, bool flip_y,
 }
 
 void vk_resolve_msaa_color_buffer(int fb_target, int fb_source) {
-    if (!s_up || !gfx_framebuffers_enabled || fb_source <= 0 || fb_source >= (int)s_fbs.size() ||
+    if (!s_up || !ge_render_cfg.framebuffers_enabled || fb_source <= 0 || fb_source >= (int)s_fbs.size() ||
         fb_target >= (int)s_fbs.size()) {
         return;
     }
@@ -2777,14 +2769,14 @@ bool gfx_vulkan_probe(void) {
     }
     VkInstance inst = VK_NULL_HANDLE;
     if (vkCreateInstance(&ci, nullptr, &inst) != VK_SUCCESS) {
-        sysLogPrintf(LOG_WARNING, "VK: vkCreateInstance failed");
+        ge_log(GE_LOG_WARNING, "VK: vkCreateInstance failed");
         return false;
     }
     volkLoadInstanceOnly(inst);
     uint32_t qfam = 0;
     const bool ok = pick_device(inst, VK_NULL_HANDLE, &qfam) != VK_NULL_HANDLE;
     vkDestroyInstance(inst, nullptr);
-    if (!ok) sysLogPrintf(LOG_WARNING, "VK: no device with Vulkan 1.3, dynamic rendering, synchronization2 and push descriptors");
+    if (!ok) ge_log(GE_LOG_WARNING, "VK: no device with Vulkan 1.3, dynamic rendering, synchronization2 and push descriptors");
     return ok;
 }
 
@@ -2985,7 +2977,7 @@ void gfx_vulkan_park(void) {
     vkDestroyInstance(s_instance, nullptr);
     s_instance = VK_NULL_HANDLE;
     s_up = false;
-    sysLogPrintf(LOG_NOTE, "VK: backend parked (device idle, everything destroyed); %llu pipelines built in %.0f ms "
+    ge_log(GE_LOG_NOTE, "VK: backend parked (device idle, everything destroyed); %llu pipelines built in %.0f ms "
                  "(longest %.1f ms); %llu mesh draws; validation: %d error(s), %d warning(s)", (unsigned long long)s_st_pipelines,
                  s_st_pipe_ms, s_st_pipe_ms_max,
                  (unsigned long long)s_st_mesh_total, s_validation_errors, s_validation_warnings);
@@ -2994,7 +2986,7 @@ void gfx_vulkan_park(void) {
 /* FXAA (gfx_opengl_fxaa_pass, gfx_deko3d_fxaa_pass): src_fb_id's colour
  * drawn into the window at its own size, anti-aliased. */
 void gfx_vulkan_fxaa_pass(int src_fb_id) {
-    if (!s_up || s_parked || !s_fxaa_frag || !s_fs_vert || !gfx_framebuffers_enabled || src_fb_id <= 0 ||
+    if (!s_up || s_parked || !s_fxaa_frag || !s_fs_vert || !ge_render_cfg.framebuffers_enabled || src_fb_id <= 0 ||
         src_fb_id >= (int)s_fbs.size()) {
         return;
     }
@@ -3085,7 +3077,7 @@ int sky_target(int* id, int w, int h, SmpKey smp) {
 void gfx_vulkan_skyplus_pass(int slot) {
     if (!s_up || s_parked || slot < 0 || slot >= SKYPLUS_RING) return;
     if (!s_sky_frag || !s_fs_vert) {
-        gfx_skyplus_failed = 1;   /* skyplus.c draws GE's sky from the next frame on */
+        ge_render_cfg.skyplus_failed = 1;   /* skyplus.c draws GE's sky from the next frame on */
         return;
     }
     const SkyPlusDraw& d = s_sky_ring[slot];
@@ -3205,7 +3197,7 @@ void gfx_vulkan_skyplus_pass(int slot) {
 
     /* the reflection sky, once per pass, into its small panorama; the sea reads it */
     bool lut = false;
-    if (sea && s_lut_frag && gfx_framebuffers_enabled) {
+    if (sea && s_lut_frag && ge_render_cfg.framebuffers_enabled) {
         const int fb = sky_target(&s_lut_fb, SKYLUT_W, SKYLUT_H, fb_wrapx);
         if (fb >= 0) {
             into(s_lut_frag, fb, SKYLUT_W, SKYLUT_H);
@@ -3261,8 +3253,8 @@ void gfx_vulkan_skyplus_pass(int slot) {
     /* the sea at half width: its heavy per-pixel work (the waves) runs on half the pixels into a small target, the sky pass then
      * reads it bilinearly. With the half-scale final pass it is halved on both axes too (it feeds a half-size image). */
     /* Video.SkyScale: 1 half, 2 quarter (the composite samples in normalized coordinates, so any divisor works) */
-    const int skyDiv = gfx_skyplus_half >= 2 ? 4 : 2;
-    const bool reduce = gfx_skyplus_half && d.vp[2] / skyDiv >= 16 && d.vp[3] / skyDiv >= 16;
+    const int skyDiv = ge_render_cfg.skyplus_half >= 2 ? 4 : 2;
+    const bool reduce = ge_render_cfg.skyplus_half && d.vp[2] / skyDiv >= 16 && d.vp[3] / skyDiv >= 16;
     if (sea && lut && d.vp[2] / 2 >= 16) {
         const int sdiv = reduce ? skyDiv : 1;
         const int hw = d.vp[2] / sdiv / 2, hh = d.vp[3] / sdiv;

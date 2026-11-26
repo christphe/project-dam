@@ -20,10 +20,9 @@ struct GfxDimensions {
     float aspect_ratio;
 };
 
+/* The window and the backend are ge_render's (ge_render_open, before gfx_init): gfx_init takes the translator's side. */
 struct GfxInitSettings {
-    struct GfxWindowManagerAPI *wapi;
-    struct GfxRenderingAPI *rapi;
-    struct GfxWindowInitSettings window_settings;
+    struct GfxWindowInitSettings window_settings;   /* the size the window was asked for (the first framebuffer's) */
 };
 
 extern struct GfxDimensions gfx_current_window_dimensions; // The dimensions of the window
@@ -32,8 +31,6 @@ extern struct GfxDimensions
 extern struct XYWidthHeight
     gfx_current_game_window_viewport; // The area of the window the game is drawn to, (0, 0) is top-left corner
 extern uint32_t gfx_msaa_level;
-/* project-dam: FXAA post pass (Video.FXAA), live from the menu. */
-extern bool gfx_fxaa_on;
 #ifdef __SWITCH__
 /* project-dam: the user's MSAA level; gfx_start_frame copies it into
  * gfx_msaa_level each frame so menu edits apply live. */
@@ -42,7 +39,6 @@ extern uint32_t gfx_msaa_handheld;   /* level used while handheld */
 #endif
 extern struct XYWidthHeight gfx_current_native_viewport; // The internal/native video mode of the game
 extern float gfx_current_native_aspect; // The aspect ratio of the above mode
-extern bool gfx_framebuffers_enabled;
 extern bool gfx_detail_textures_enabled;
 
 void gfx_init(const struct GfxInitSettings *settings);

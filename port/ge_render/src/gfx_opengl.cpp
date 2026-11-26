@@ -24,10 +24,9 @@
 
 #include "gfx_cc.h"
 #include "gfx_rendering_api.h"
-#include "gfx_pc.h"
-#include "skyplus.h"   /* GE+ sky pass */
-#include "bootfont.h"   /* the first-launch GPU benchmark shows its phases with the boot screen font */
-#include "../src/gpuprobe.h"   /* the decision half; port/src is not on the include path */
+#include "ge_internal.h"
+#include "ge_render_sky.h"
+#include "ge_render_gl.h"   /* GE+ sky pass */
 
 /* D578 L3: the glad (GL 1.0 base) header lacks this token. */
 #ifndef GL_CLEAR_COLOR
@@ -85,10 +84,6 @@ static int gl_glsl_version = 130;
 static char gl_glsl_version_str[16] = "130";
 static GLenum gl_mirror_clamp = GL_MIRROR_CLAMP_TO_EDGE;
 static bool gl_es = false;
-extern int gfx_rdp_affine;   /* D540: defined in gfx_pc.cpp */
-extern int gfx_fog_vertex;   /* D540: defined in gfx_pc.cpp */
-extern "C" int portDisplayFixes; /* port/src/video.c: Video.Visuals >= Fixed (D982) */
-extern "C" int portPerPixelFog;                /* port/src/video.c: Video.PerPixelFog */
 static bool gl_core_profile = false;
 
 static int gfx_opengl_get_max_texture_size() {
@@ -198,6 +193,17 @@ static void gfx_opengl_set_a2c(bool on) {
     if (on) glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     else glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     s_a2c_on = on;
+}
+
+/* The GL state a host that draws raw GL on this context needs to restore and to write GLSL for (the game's
+ * first-launch GPU benchmark, port/fast3d/gfx_glprobe.cpp). */
+extern "C" void ge_render_gl_info(int* es, const char** glsl_version_str, int* a2c_on) {
+    *es = gl_es ? 1 : 0;
+    *glsl_version_str = gl_glsl_version_str;
+    *a2c_on = s_a2c_on ? 1 : 0;
+}
+extern "C" void ge_render_gl_set_a2c(int on) {
+    gfx_opengl_set_a2c(on != 0);
 }
 
 static void gfx_opengl_load_shader(struct ShaderProgram* new_prg) {
@@ -377,12 +383,12 @@ static GLuint s_wat_ubo, s_sp2_wmap;   /* the Sky block (binding 2) of the water
 static std::string gfx_opengl_water_fs(const struct CCFeatures& f) {
     const char* nl = strchr(gl_water_glsl, '\n');   /* the first line is `#version 460`, written here */
     std::string s = "#version 460\n#define GE_GL 1\n";
-    const char* shadeq = gfx_rdp_affine ? "noperspective" : "";
+    const char* shadeq = ge_render_cfg.rdp_affine ? "noperspective" : "";
     if (f.opt_fog) s += "#define WATER_FOG 1\n";
-    if (!gfx_fog_vertex) s += "#define WATER_PIXEL_FOG 1\n";
+    if (!ge_render_cfg.fog_vertex) s += "#define WATER_PIXEL_FOG 1\n";
     if (current_filter_mode == FILTER_THREE_POINT) s += "#define WATER_TPF 1\n";
     s += std::string("#define WATER_SHADEQ ") + shadeq + "\n";
-    s += std::string("#define WATER_FOGQ ") + (gfx_fog_vertex ? shadeq : "") + "\n";
+    s += std::string("#define WATER_FOGQ ") + (ge_render_cfg.fog_vertex ? shadeq : "") + "\n";
     s += f.opt_alpha ? "#define WATER_IVEC vec4\n" : "#define WATER_IVEC vec3\n";
     s += nl ? nl + 1 : gl_water_glsl;
     return s;
@@ -437,8 +443,8 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
      * interpolates screen-affine (it rides in shade alpha), so it shares the
      * shade qualifier. Video.PerPixelFog (D540 per-pixel) needs a perspective
      * attribute: it carries fog * w, divided by w in the shader. */
-    const char *shadeq = gfx_rdp_affine ? "noperspective " : "";
-    const char *fogq = gfx_fog_vertex ? shadeq : "";
+    const char *shadeq = ge_render_cfg.rdp_affine ? "noperspective " : "";
+    const char *fogq = ge_render_cfg.fog_vertex ? shadeq : "";
     if (cc_features.opt_fog) {
         append_line(vs_buf, &vs_len, "INPUT vec4 aFog;");
         vs_len += sprintf(vs_buf + vs_len, "%sOUTPUT vec4 vFog;\n", fogq);
@@ -490,7 +496,7 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
     if (cc_features.opt_fog) {
         if (mesh) {
             append_line(vs_buf, &vs_len, "    float fw = abs(mp.w) < 0.001 ? 0.001 : mp.w;");
-            append_line(vs_buf, &vs_len, gfx_fog_vertex
+            append_line(vs_buf, &vs_len, ge_render_cfg.fog_vertex
                 ? "    vFog = vec4(uMeshFogColor.rgb, uMeshFog.z > 0.5 ? floor(clamp(mp.z / fw * uMeshFog.x + uMeshFog.y, 0.0, 255.0)) / 255.0 : uMeshFogColor.a);"
                 : "    vFog = vec4(uMeshFogColor.rgb, uMeshFog.z > 0.5 ? (mp.z * uMeshFog.x + mp.w * uMeshFog.y) / 255.0 : uMeshFogColor.a * mp.w);");   /* fog * w */
         } else {
@@ -720,7 +726,7 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
         /* D543 default: vFog.a is the per-vertex RSP value, used as-is
          * (N64). Video.PerPixelFog (D540): vFog.a = fog * w, divided by w here =
          * exact per-pixel fog from the pixel's own depth. */
-        append_line(fs_buf, &fs_len, gfx_fog_vertex ? "    float fogA = clamp(vFog.a, 0.0, 1.0);"
+        append_line(fs_buf, &fs_len, ge_render_cfg.fog_vertex ? "    float fogA = clamp(vFog.a, 0.0, 1.0);"
                                                     : "    float fogA = clamp(vFog.a * gl_FragCoord.w, 0.0, 1.0);");
         /* D540: the D503 snap is OFF by default -- its hard 97% edge swept
          * across the ground in tile-shaped chunks as the player walked
@@ -838,7 +844,7 @@ retry:
     if (!success && water) {
         char log[1024] = "";
         glGetShaderInfoLog(vertex_shader, sizeof log, NULL, log);
-        sysLogPrintf(LOG_ERROR, "GL: GE+ water vertex shader (%016llx %x): %s", (unsigned long long)shader_id0, shader_id1, log);
+        ge_log(GE_LOG_ERROR, "GL: GE+ water vertex shader (%016llx %x): %s", (unsigned long long)shader_id0, shader_id1, log);
         glDeleteShader(vertex_shader);
         water = false;
         goto retry;
@@ -848,8 +854,8 @@ retry:
         glGetShaderiv(vertex_shader, GL_INFO_LOG_LENGTH, &max_length);
         char error_log[1024];
         glGetShaderInfoLog(vertex_shader, max_length, &max_length, &error_log[0]);
-        sysLogPrintf(LOG_ERROR, "Failed to compile this vertex shader (ID %llx, %x):\n%s", shader_id0, shader_id1, vs_buf);
-        sysFatalError("Vertex shader compilation failed:\n%s", error_log);
+        ge_log(GE_LOG_ERROR, "Failed to compile this vertex shader (ID %llx, %x):\n%s", shader_id0, shader_id1, vs_buf);
+        ge_fatal("Vertex shader compilation failed:\n%s", error_log);
     }
 
     GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
@@ -859,7 +865,7 @@ retry:
     if (!success && water) {
         char log[2048] = "";
         glGetShaderInfoLog(fragment_shader, sizeof log, NULL, log);
-        sysLogPrintf(LOG_ERROR, "GL: GE+ water fragment shader (%016llx %x): %s", (unsigned long long)shader_id0, shader_id1, log);
+        ge_log(GE_LOG_ERROR, "GL: GE+ water fragment shader (%016llx %x): %s", (unsigned long long)shader_id0, shader_id1, log);
         glDeleteShader(vertex_shader);
         glDeleteShader(fragment_shader);
         water = false;
@@ -870,8 +876,8 @@ retry:
         glGetShaderiv(fragment_shader, GL_INFO_LOG_LENGTH, &max_length);
         char error_log[1024];
         glGetShaderInfoLog(fragment_shader, max_length, &max_length, &error_log[0]);
-        sysLogPrintf(LOG_ERROR, "Failed to compile this fragment shader (ID %llx, %x):\n%s", shader_id0, shader_id1, fs_buf);
-        sysFatalError("Fragment shader compilation failed:\n%s", error_log);
+        ge_log(GE_LOG_ERROR, "Failed to compile this fragment shader (ID %llx, %x):\n%s", shader_id0, shader_id1, fs_buf);
+        ge_fatal("Fragment shader compilation failed:\n%s", error_log);
     }
 
     GLuint shader_program = glCreateProgram();
@@ -884,7 +890,7 @@ retry:
         if (!linked) {
             char log[2048] = "";
             glGetProgramInfoLog(shader_program, sizeof log, NULL, log);
-            sysLogPrintf(LOG_ERROR, "GL: GE+ water program link (%016llx %x): %s", (unsigned long long)shader_id0, shader_id1, log);
+            ge_log(GE_LOG_ERROR, "GL: GE+ water program link (%016llx %x): %s", (unsigned long long)shader_id0, shader_id1, log);
             glDeleteProgram(shader_program);
             glDeleteShader(vertex_shader);
             glDeleteShader(fragment_shader);
@@ -1354,7 +1360,7 @@ static void gfx_opengl_stream_wait(unsigned sec) {
         s_stream_waits++;
         s_stream_wait_ns += gl_now_ns() - t0;
         if (r == GL_TIMEOUT_EXPIRED || r == GL_WAIT_FAILED) {
-            sysLogPrintf(LOG_WARNING, "GL: vertex ring fence wait gave up (0x%x); continuing", (unsigned)r);
+            ge_log(GE_LOG_WARNING, "GL: vertex ring fence wait gave up (0x%x); continuing", (unsigned)r);
         }
     }
     glDeleteSync(f);
@@ -1432,7 +1438,7 @@ static void gfx_opengl_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_
             if (perf) t0 = gl_now_ns();
             float* dst = gfx_opengl_stream_begin(buf_vbo_len);
             if (dst == NULL) {
-                sysLogPrintf(LOG_WARNING, "GL: vertex ring cannot hold a %u byte batch; dropped", (unsigned)bytes);
+                ge_log(GE_LOG_WARNING, "GL: vertex ring cannot hold a %u byte batch; dropped", (unsigned)bytes);
                 return;
             }
             memcpy(dst, buf_vbo, bytes);
@@ -1469,7 +1475,7 @@ static void gfx_opengl_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_
             return;
         }
         /* Mapping failed: per-batch uploads from now on. */
-        sysLogPrintf(LOG_WARNING, "GL: vertex ring map failed (0x%x); per-batch uploads", glGetError());
+        ge_log(GE_LOG_WARNING, "GL: vertex ring map failed (0x%x); per-batch uploads", glGetError());
         s_vbo_ring = 0;
     }
 #endif
@@ -1598,7 +1604,7 @@ extern "C" void gfx_opengl_perf_report(double frames) {
     if (s_mesh_draws) {
         fprintf(stderr, "PERFSTAT glmesh: draws=%.1f/f verts=%.0f/f time=%.2fms/f\n", s_mesh_draws / frames,
                 s_mesh_verts / frames, s_mesh_draw_ns / 1.0e6 / frames);
-        sysLogPrintf(LOG_NOTE, "PERFSTAT glmesh: draws=%.1f/f verts=%.0f/f time=%.2fms/f", s_mesh_draws / frames,
+        ge_log(GE_LOG_NOTE, "PERFSTAT glmesh: draws=%.1f/f verts=%.0f/f time=%.2fms/f", s_mesh_draws / frames,
                      s_mesh_verts / frames, s_mesh_draw_ns / 1.0e6 / frames);
     }
     s_mesh_draws = s_mesh_verts = s_mesh_draw_ns = 0;
@@ -1657,11 +1663,11 @@ static void gfx_opengl_log_caps(void) {
     const char* sd = gl_cap_str("GL_ARB_shader_draw_parameters", 4, 6);
     const char* bi = gl_cap_str("GL_ARB_base_instance", 4, 2);
     const char* vb = gl_cap_str("GL_ARB_vertex_attrib_binding", 4, 3);
-    sysLogPrintf(LOG_NOTE, "GL caps: %s | %s", version ? version : "?", renderer ? renderer : "?");
-    sysLogPrintf(LOG_NOTE,
+    ge_log(GE_LOG_NOTE, "GL caps: %s | %s", version ? version : "?", renderer ? renderer : "?");
+    ge_log(GE_LOG_NOTE,
                  "GL caps: buffer_storage=%s bindless_texture=%s multi_draw_indirect=%s shader_draw_parameters=%s base_instance=%s vertex_attrib_binding=%s",
                  bs, bl, md, sd, bi, vb);
-    sysLogPrintf(LOG_NOTE, "GL caps: MAX_ARRAY_TEXTURE_LAYERS=%d MAX_TEXTURE_IMAGE_UNITS=%d", (int)layers, (int)units);
+    ge_log(GE_LOG_NOTE, "GL caps: MAX_ARRAY_TEXTURE_LAYERS=%d MAX_TEXTURE_IMAGE_UNITS=%d", (int)layers, (int)units);
     if (getenv("GE_PERFSTAT") != NULL) {
         fprintf(stderr, "PERFSTAT glcaps: %s | %s | buffer_storage=%s bindless=%s multi_draw_indirect=%s shader_draw_parameters=%s base_instance=%s vertex_attrib_binding=%s | array layers=%d texture units=%d\n",
                 version ? version : "?", renderer ? renderer : "?", bs, bl, md, sd, bi, vb, (int)layers, (int)units);
@@ -1693,7 +1699,7 @@ static void gfx_opengl_stream_init(void) {
         bufferStorage = (ge_glBufferStorage_t)SDL_GL_GetProcAddress("glBufferStorage");
     }
     if (bufferStorage == NULL || glMapBufferRange == NULL || glFenceSync == NULL || glClientWaitSync == NULL) {
-        sysLogPrintf(LOG_NOTE, "GL: GE_GLSTREAM: ARB_buffer_storage unavailable, using the per-batch vertex upload");
+        ge_log(GE_LOG_NOTE, "GL: GE_GLSTREAM: ARB_buffer_storage unavailable, using the per-batch vertex upload");
         s_stream_wanted = false;
         return;
     }
@@ -1706,7 +1712,7 @@ static void gfx_opengl_stream_init(void) {
     void* map = glGetError() == GL_NO_ERROR ? glMapBufferRange(GL_ARRAY_BUFFER, 0, (GLsizeiptr)total, flags) : NULL;
     glBindBuffer(GL_ARRAY_BUFFER, opengl_vbo);
     if (map == NULL || glGetError() != GL_NO_ERROR) {
-        sysLogPrintf(LOG_WARNING, "GL: GE_GLSTREAM: persistent map of %u MiB failed, using the per-batch vertex upload",
+        ge_log(GE_LOG_WARNING, "GL: GE_GLSTREAM: persistent map of %u MiB failed, using the per-batch vertex upload",
                      (unsigned)(total >> 20));
         glDeleteBuffers(1, &s_stream_buf);
         s_stream_buf = 0;
@@ -1716,7 +1722,7 @@ static void gfx_opengl_stream_init(void) {
     s_stream_map = (uint8_t*)map;
     s_stream_avail = true;
     s_stream_active = true;
-    sysLogPrintf(LOG_NOTE, "GL: vertex stream: persistent coherent ring, %d x %u KiB, ACTIVE; layout VAOs", STREAM_SECTIONS,
+    ge_log(GE_LOG_NOTE, "GL: vertex stream: persistent coherent ring, %d x %u KiB, ACTIVE; layout VAOs", STREAM_SECTIONS,
                  (unsigned)(s_stream_sec_size >> 10));
 }
 
@@ -1730,7 +1736,7 @@ typedef void (APIENTRY *DEBUGPROC)(GLenum source,
     const void *userParam);
 
 static void APIENTRY gl_debug(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar *msg, const void *p) {
-    sysLogPrintf(LOG_WARNING, "GL: (%05x) %s", id, msg);
+    ge_log(GE_LOG_WARNING, "GL: (%05x) %s", id, msg);
 }
 
 static void gfx_opengl_enable_debug(void) {
@@ -1803,13 +1809,13 @@ static void gfx_opengl_log_info(void) {
     const char *renderer = (const char *)glGetString(GL_RENDERER);
     snprintf(gl_renderer_str, sizeof(gl_renderer_str), "%s", renderer ? renderer : "");
     const char *glsl_version = (const char *)glGetString(GL_SHADING_LANGUAGE_VERSION);
-    sysLogPrintf(LOG_NOTE, "GL: version: %s", version ? version : "unknown");
-    sysLogPrintf(LOG_NOTE, "GL: vendor: %s", vendor ? vendor : "unknown");
-    sysLogPrintf(LOG_NOTE, "GL: renderer: %s", renderer ? renderer : "unknown");
-    sysLogPrintf(LOG_NOTE, "GL: GLSL version: %s", glsl_version ? glsl_version : "unknown");
-    sysLogPrintf(LOG_NOTE, "GL: ARB_framebuffer_object: %s", gfx_opengl_supports_framebuffers() ? "yes" : "no");
-    sysLogPrintf(LOG_NOTE, "GL: ARB_depth_clamp: %s", GLAD_GL_ARB_depth_clamp ? "yes" : "no");
-    sysLogPrintf(LOG_NOTE, "GL: ARB_texture_mirror_clamp_to_edge: %s", GLAD_GL_ARB_texture_mirror_clamp_to_edge ? "yes" : "no");
+    ge_log(GE_LOG_NOTE, "GL: version: %s", version ? version : "unknown");
+    ge_log(GE_LOG_NOTE, "GL: vendor: %s", vendor ? vendor : "unknown");
+    ge_log(GE_LOG_NOTE, "GL: renderer: %s", renderer ? renderer : "unknown");
+    ge_log(GE_LOG_NOTE, "GL: GLSL version: %s", glsl_version ? glsl_version : "unknown");
+    ge_log(GE_LOG_NOTE, "GL: ARB_framebuffer_object: %s", gfx_opengl_supports_framebuffers() ? "yes" : "no");
+    ge_log(GE_LOG_NOTE, "GL: ARB_depth_clamp: %s", GLAD_GL_ARB_depth_clamp ? "yes" : "no");
+    ge_log(GE_LOG_NOTE, "GL: ARB_texture_mirror_clamp_to_edge: %s", GLAD_GL_ARB_texture_mirror_clamp_to_edge ? "yes" : "no");
 }
 
 static void *gl_load_proc(const char *name) {
@@ -1829,7 +1835,7 @@ static void *gl_load_proc(const char *name) {
         }
     }
 
-    sysLogPrintf(LOG_ERROR, "GL: could not find function: %s", name);
+    ge_log(GE_LOG_ERROR, "GL: could not find function: %s", name);
 
     return NULL;
 }
@@ -1870,7 +1876,7 @@ static void gfx_opengl_init_extensions(void) {
 static void skyplus2_init(void);
 static void gfx_opengl_init(void) {
     if (!gladLoadGLLoader(gl_load_proc) || glGetString == NULL || glEnable == NULL) {
-        sysFatalError("Could not load OpenGL.\nReported SDL error: %s", SDL_GetError());
+        ge_fatal("Could not load OpenGL.\nReported SDL error: %s", SDL_GetError());
     }
 
     // check if we're using ES or core, which have more limited feature sets
@@ -1886,7 +1892,7 @@ static void gfx_opengl_init(void) {
         snprintf(gl_renderer_str, sizeof(gl_renderer_str), "%s", renderer ? renderer : "");
     }
 
-    if (sysArgCheck("--debug-gl")) {
+    if (ge_arg_check("--debug-gl")) {
         gfx_opengl_enable_debug();
         // dump version info as early as possible
         gfx_opengl_log_info();
@@ -1894,20 +1900,20 @@ static void gfx_opengl_init(void) {
 
     if (GLVersion.major < 2 || (GLVersion.major == 2 && GLVersion.minor < 1)) {
         const char *ver = (const char *)glGetString(GL_VERSION);
-        sysFatalError("Could not load OpenGL 2.1.\nReported version: %d.%d (%s)",
+        ge_fatal("Could not load OpenGL 2.1.\nReported version: %d.%d (%s)",
             GLVersion.major, GLVersion.minor, ver ? ver : "unknown");
     }
 
     if (!gfx_opengl_supports_shaders()) {
-        sysLogPrintf(LOG_WARNING, "GL: GLSL 1.30 may be unsupported");
+        ge_log(GE_LOG_WARNING, "GL: GLSL 1.30 may be unsupported");
         // maybe replace this with sysFatalError, though the GLSL compiler will cause that later anyway
     }
 
-    if (!gfx_framebuffers_enabled) {
-        sysLogPrintf(LOG_WARNING, "GL: framebuffer effects disabled by user");
+    if (!ge_render_cfg.framebuffers_enabled) {
+        ge_log(GE_LOG_WARNING, "GL: framebuffer effects disabled by user");
     } else if (!gfx_opengl_supports_framebuffers()) {
-        sysLogPrintf(LOG_WARNING, "GL: GL_ARB_framebuffer_object unsupported, framebuffer effects disabled");
-        gfx_framebuffers_enabled = false;
+        ge_log(GE_LOG_WARNING, "GL: GL_ARB_framebuffer_object unsupported, framebuffer effects disabled");
+        ge_render_cfg.framebuffers_enabled = false;
     }
 
     if ((GLVersion.major < 4 || GLVersion.minor < 4) && !GLAD_GL_ARB_texture_mirror_clamp_to_edge) {
@@ -1935,7 +1941,7 @@ static void gfx_opengl_init(void) {
         }
         snprintf(gl_glsl_version_str, sizeof(gl_glsl_version_str), "%d core", gl_glsl_version);
     }
-    sysLogPrintf(LOG_NOTE, "GL: using GLSL version %s", gl_glsl_version_str);
+    ge_log(GE_LOG_NOTE, "GL: using GLSL version %s", gl_glsl_version_str);
 
     /* D540: the RDP interpolates shade colour affinely in screen space; the
      * GPU default is perspective-correct, which squeezed the sky's horizon
@@ -1947,12 +1953,12 @@ static void gfx_opengl_init(void) {
      * RSP. */
     {
         const char *sp = getenv("GE_SHADEPERSP");
-        gfx_rdp_affine = (!gl_es && gl_glsl_version >= 130 && !(sp && sp[0] == '1')) ? 1 : 0;
+        ge_render_cfg.rdp_affine = (!gl_es && gl_glsl_version >= 130 && !(sp && sp[0] == '1')) ? 1 : 0;
         /* D543: per-vertex RSP fog unless Video.PerPixelFog is on. */
-        gfx_fog_vertex = !portPerPixelFog;
+        ge_render_cfg.fog_vertex = !ge_render_cfg.per_pixel_fog;
     }
-    sysLogPrintf(LOG_NOTE, "GL: shade %s, fog %s", gfx_rdp_affine ? "affine (RDP)" : "perspective",
-                 gfx_fog_vertex ? "per-vertex" : "per-pixel");
+    ge_log(GE_LOG_NOTE, "GL: shade %s, fog %s", ge_render_cfg.rdp_affine ? "affine (RDP)" : "perspective",
+                 ge_render_cfg.fog_vertex ? "per-vertex" : "per-pixel");
 
     glGenBuffers(1, &opengl_vbo);
     glBindBuffer(GL_ARRAY_BUFFER, opengl_vbo);
@@ -1963,14 +1969,14 @@ static void gfx_opengl_init(void) {
         if (s_vbo_ring) {
             glBufferData(GL_ARRAY_BUFFER, VBO_RING_SIZE, NULL, GL_STREAM_DRAW);
         }
-        sysLogPrintf(LOG_NOTE, "GL: vertex upload %s",
+        ge_log(GE_LOG_NOTE, "GL: vertex upload %s",
                      s_vbo_ring ? "ring (8 MiB, unsynchronized maps)" : "per batch (glBufferData)");
     }
 #endif
 
     if (gl_core_profile || gl_es) {
         // warn user that funny things can happen
-        sysLogPrintf(LOG_WARNING, "GL: using core profile or ES, watch out for errors");
+        ge_log(GE_LOG_WARNING, "GL: using core profile or ES, watch out for errors");
         // core/es will explode if we don't use a VAO for our VBO
         glGenVertexArrays(1, &opengl_vao);
         glBindVertexArray(opengl_vao);
@@ -2085,7 +2091,7 @@ extern "C" bool gfx_opengl_dump_bound_fbo(uint32_t width, uint32_t height, const
     glReadPixels(0, 0, (GLsizei)width, (GLsizei)height, GL_RGB, GL_UNSIGNED_BYTE, pixels);
     {
         GLenum e = glGetError();
-        if (e) sysLogPrintf(LOG_WARNING, "dump_bound_fbo: glReadPixels err 0x%x (%ux%u)", (unsigned)e, width, height);
+        if (e) ge_log(GE_LOG_WARNING, "dump_bound_fbo: glReadPixels err 0x%x (%ux%u)", (unsigned)e, width, height);
     }
     FILE* f = fopen(path, "wb");
     if (!f) { free(pixels); return false; }
@@ -2188,7 +2194,7 @@ static int gfx_opengl_create_framebuffer() {
     glBindTexture(GL_TEXTURE_2D, 0);
     framebuffers[i].clrbuf = clrbuf;
 
-    if (!gfx_framebuffers_enabled) {
+    if (!ge_render_cfg.framebuffers_enabled) {
         return i;
     }
 
@@ -2232,7 +2238,7 @@ static void gfx_opengl_update_framebuffer_parameters(int fb_id, uint32_t width, 
         }
     }
 
-    if (gfx_framebuffers_enabled) {
+    if (ge_render_cfg.framebuffers_enabled) {
         glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo);
 
         if (fb_id != 0) {
@@ -2279,7 +2285,7 @@ static void gfx_opengl_update_framebuffer_parameters(int fb_id, uint32_t width, 
 }
 
 bool gfx_opengl_start_draw_to_framebuffer(int fb_id, float noise_scale) {
-    if (gfx_framebuffers_enabled && fb_id < (int)framebuffers.size()) {
+    if (ge_render_cfg.framebuffers_enabled && fb_id < (int)framebuffers.size()) {
         Framebuffer& fb = framebuffers[fb_id];
         if (noise_scale != 0.0f) {
             current_noise_scale = 1.0f / noise_scale;
@@ -2348,7 +2354,7 @@ static GLuint s_fxaa_prog, s_fxaa_vao;
 static GLint s_fxaa_loc_tex = -1, s_fxaa_loc_inv = -1;
 
 extern "C" void gfx_opengl_fxaa_pass(int src_fb_id) {
-    if (!gfx_framebuffers_enabled || src_fb_id <= 0 || src_fb_id >= (int)framebuffers.size()) {
+    if (!ge_render_cfg.framebuffers_enabled || src_fb_id <= 0 || src_fb_id >= (int)framebuffers.size()) {
         return;
     }
     Framebuffer& src = framebuffers[src_fb_id];
@@ -2414,7 +2420,7 @@ void main() {
         char log[512] = "";
         glGetProgramiv(s_fxaa_prog, GL_LINK_STATUS, &ok);
         glGetProgramInfoLog(s_fxaa_prog, sizeof log, NULL, log);
-        sysLogPrintf(ok ? LOG_NOTE : LOG_ERROR, "GL: FXAA program link=%d %s", ok, log);
+        ge_log(ok ? GE_LOG_NOTE : GE_LOG_ERROR, "GL: FXAA program link=%d %s", ok, log);
         glDeleteShader(v);
         glDeleteShader(f);
         s_fxaa_loc_tex = glGetUniformLocation(s_fxaa_prog, "uTex");
@@ -2423,7 +2429,7 @@ void main() {
         if (!ok) {
             /* no FXAA program: turn the pass off so the next frames take the plain
              * present path, instead of drawing nothing to the window for good */
-            gfx_fxaa_on = false;
+            ge_render_cfg.fxaa_on = false;
             return;
         }
     }
@@ -2485,7 +2491,6 @@ static SkyPlusDraw s_skyplus_ring[SKYPLUS_RING];
 static unsigned s_skyplus_next;
 static GLuint s_skyplus_prog, s_skyplus_vao, s_skyplus_tex;
 static int s_skyplus_tex_gen = -1;
-extern "C" { volatile int gfx_skyplus_failed = 0; volatile int gfx_skyplus_sea = 0; int gfx_skyplus_half = 0; volatile int gfx_water_surfaces = 0; }
 enum { SPL_VP, SPL_ASP, SPL_C0, SPL_C1, SPL_C2, SPL_C3, SPL_EYE, SPL_CLOUDY, SPL_SKY, SPL_CLOUD, SPL_OFS,
        SPL_GAIN, SPL_TEXSCALE, SPL_SUNDIR, SPL_SUNCOL, SPL_SUNGLOW, SPL_MOONDIR, SPL_NIGHT, SPL_TEX, SPL_COUNT };
 static GLint s_sp_loc[SPL_COUNT];
@@ -2632,7 +2637,7 @@ void main() {
     glGetShaderiv(f, GL_COMPILE_STATUS, &okf);
     if (!okf) {
         glGetShaderInfoLog(f, sizeof log, NULL, log);
-        sysLogPrintf(LOG_ERROR, "GL: SkyPlus fragment shader: %s", log);
+        ge_log(GE_LOG_ERROR, "GL: SkyPlus fragment shader: %s", log);
     }
     s_skyplus_prog = glCreateProgram();
     glAttachShader(s_skyplus_prog, v);
@@ -2641,7 +2646,7 @@ void main() {
     GLint ok = 0;
     glGetProgramiv(s_skyplus_prog, GL_LINK_STATUS, &ok);
     glGetProgramInfoLog(s_skyplus_prog, sizeof log, NULL, log);
-    sysLogPrintf(ok ? LOG_NOTE : LOG_ERROR, "GL: SkyPlus program link=%d %s", ok, log);
+    ge_log(ok ? GE_LOG_NOTE : GE_LOG_ERROR, "GL: SkyPlus program link=%d %s", ok, log);
     glDeleteShader(v);
     glDeleteShader(f);
     if (!ok) {
@@ -2695,7 +2700,7 @@ static GLuint sp2_compile(const char* vs_src, const char* fs_src, const char* wh
     glGetShaderiv(f, GL_COMPILE_STATUS, &okf);
     if (!okf) {
         glGetShaderInfoLog(f, sizeof log, NULL, log);
-        sysLogPrintf(LOG_ERROR, "GL: GE+ %s fragment shader: %s", what, log);
+        ge_log(GE_LOG_ERROR, "GL: GE+ %s fragment shader: %s", what, log);
     }
     GLuint p = glCreateProgram();
     glAttachShader(p, v);
@@ -2705,7 +2710,7 @@ static GLuint sp2_compile(const char* vs_src, const char* fs_src, const char* wh
     glGetProgramiv(p, GL_LINK_STATUS, &ok);
     if (!ok) {
         glGetProgramInfoLog(p, sizeof log, NULL, log);
-        sysLogPrintf(LOG_ERROR, "GL: GE+ %s program link: %s", what, log);
+        ge_log(GE_LOG_ERROR, "GL: GE+ %s program link: %s", what, log);
     }
     glDeleteShader(v);
     glDeleteShader(f);
@@ -2729,7 +2734,7 @@ static void sp2_samplers(GLuint prog) {
  * the first level frame). */
 static void skyplus2_init(void) {
     if (gl_es || GLVersion.major < 4 || (GLVersion.major == 4 && GLVersion.minor < 6)) {
-        sysLogPrintf(LOG_NOTE, "GL: GE+ sea needs desktop GL 4.6 (have %d.%d%s): sky without sea", GLVersion.major,
+        ge_log(GE_LOG_NOTE, "GL: GE+ sea needs desktop GL 4.6 (have %d.%d%s): sky without sea", GLVersion.major,
                      GLVersion.minor, gl_es ? " ES" : "");
         return;
     }
@@ -2768,8 +2773,8 @@ void main() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glBindTexture(GL_TEXTURE_2D, (GLuint)prev_tex);
     s_sp2_ok = true;
-    gfx_skyplus_sea = 1;
-    sysLogPrintf(LOG_NOTE, "GL: GE+ sky and sea on (GLSL 4.60)");
+    ge_render_cfg.skyplus_sea = 1;
+    ge_log(GE_LOG_NOTE, "GL: GE+ sky and sea on (GLSL 4.60)");
     /* the water of the level's own water surfaces: its Sky block lives at uniform binding 2 for good, its textures at units 2..4 */
     {
         static const float zero[WATER_UBO_BYTES / 4] = {};
@@ -2778,8 +2783,8 @@ void main() {
         glBufferData(GL_UNIFORM_BUFFER, WATER_UBO_BYTES, zero, GL_DYNAMIC_DRAW);
         glGenTextures(1, &s_sp2_wmap);
         s_water_gl = true;
-        gfx_water_surfaces = 1;
-        sysLogPrintf(LOG_NOTE, "GE+ water surfaces: on (opengl)");
+        ge_render_cfg.water_surfaces = 1;
+        ge_log(GE_LOG_NOTE, "GE+ water surfaces: on (opengl)");
     }
 }
 
@@ -2806,7 +2811,7 @@ static bool sp2_target(Sp2Target& t, int w, int h, GLint wrapS) {
     glBindTexture(GL_TEXTURE_2D, (GLuint)prev_tex);
     t.w = w;
     t.h = h;
-    if (!ok) sysLogPrintf(LOG_ERROR, "GL: GE+ sky target %dx%d incomplete", w, h);
+    if (!ok) ge_log(GE_LOG_ERROR, "GL: GE+ sky target %dx%d incomplete", w, h);
     return ok;
 }
 
@@ -3036,8 +3041,8 @@ static void skyplus2_pass(const SkyPlusDraw& d) {
         slot[4] = s_sp2_pano.tex;
     }
     /* Video.SkyScale: 1 half, 2 quarter. Pass 5 samples the reduced target in normalized coordinates, so any divisor works. */
-    const int skyDiv = gfx_skyplus_half >= 2 ? 4 : 2;
-    const bool reduce = gfx_skyplus_half && d.vp[2] / skyDiv >= 16 && d.vp[3] / skyDiv >= 16;
+    const int skyDiv = ge_render_cfg.skyplus_half >= 2 ? 4 : 2;
+    const bool reduce = ge_render_cfg.skyplus_half && d.vp[2] / skyDiv >= 16 && d.vp[3] / skyDiv >= 16;
     if (sea && lut && d.vp[2] / 2 >= 16) {
         const int sdiv = reduce ? skyDiv : 1;
         if (sp2_target(s_sp2_hsea, d.vp[2] / sdiv / 2, d.vp[3] / sdiv, GL_CLAMP_TO_EDGE)) {
@@ -3101,7 +3106,7 @@ static bool skyr_target(int w, int h) {
     const bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     s_skyr_w = w;
     s_skyr_h = h;
-    if (!ok) sysLogPrintf(LOG_WARNING, "GL: reduced sky target %dx%d incomplete; full-size sky", w, h);
+    if (!ok) ge_log(GE_LOG_WARNING, "GL: reduced sky target %dx%d incomplete; full-size sky", w, h);
     return ok;
 }
 
@@ -3137,7 +3142,7 @@ void main() { o = vec4(texture(uTex, (gl_FragCoord.xy - uVP.xy) / uVP.zw).rgb, 1
     glDeleteShader(v);
     glDeleteShader(f);
     if (!ok) {
-        sysLogPrintf(LOG_WARNING, "GL: reduced sky composite program failed to link; full-size sky");
+        ge_log(GE_LOG_WARNING, "GL: reduced sky composite program failed to link; full-size sky");
         glDeleteProgram(pr);
         return false;
     }
@@ -3154,7 +3159,7 @@ extern "C" void gfx_opengl_skyplus_pass(int slot) {
     }
     if (!s_skyplus_prog && !skyplus_build()) {
         failed = true;
-        gfx_skyplus_failed = 1;   /* skyplus.c draws GE's sky from the next frame on */
+        ge_render_cfg.skyplus_failed = 1;   /* skyplus.c draws GE's sky from the next frame on */
         return;
     }
     const SkyPlusDraw& d = s_skyplus_ring[slot];
@@ -3196,7 +3201,7 @@ extern "C" void gfx_opengl_skyplus_pass(int slot) {
     }
 
     int sv[4] = { d.vp[0], d.vp[1], d.vp[2], d.vp[3] };   /* where the sky program draws */
-    const int skyDiv = gfx_skyplus_half >= 2 ? 4 : (gfx_skyplus_half == 1 ? 2 : 1);
+    const int skyDiv = ge_render_cfg.skyplus_half >= 2 ? 4 : (ge_render_cfg.skyplus_half == 1 ? 2 : 1);
     bool reduce = skyDiv > 1 && d.vp[2] / skyDiv >= 16 && d.vp[3] / skyDiv >= 16;
     if (reduce && !s_skyr_prog && !skyr_build_comp()) reduce = false;
     glDisable(GL_DEPTH_TEST);
@@ -3267,581 +3272,8 @@ extern "C" void gfx_opengl_skyplus_pass(int slot) {
     if (!prev_scissor) glDisable(GL_SCISSOR_TEST);
 }
 
-/* First-launch GPU mini-benchmark (port/src/gpuprobe.h decides from these numbers; video.c applies them once per ini).
- * Everything is drawn off screen into targets of the window's size, so nothing shows; the context is the main
- * thread's (called right after gfx_init, before the replay thread takes it over) and the GL state is put back.
- *  - sky: the real GE+ sky program (ES / non-sp2 path) at full, half and quarter size, the reduced sizes through
- *    the same sky target + composite the game uses. Wall clock around glFinish: the GPU timer query is unreliable
- *    while a nested FBO is active (measured on the Mali-G31).
- *  - A2C: a stack of alpha cut-out layers through an MSAA target, alpha-to-coverage against the plain blend.
- *  - MSAA: a synthetic opaque fill (two layers of jittered, depth-intersecting triangles, ~4k tris, ALU shading) into a 1x / 2x / 4x
- *    target at the window size, with the resolve blit the game's MSAA path does; the three are run back to back and the median of
- *    the per-round differences over 1x is the level's cost. A2C is then timed at the MSAA level that will be chosen.
- * A ~120 ms warm-up of full-size sky draws first lets the DVFS governor ramp the clocks, as the game's first frames do.
- * Visible (run->visible): after each phase, never inside a timed region, the off-screen result is blitted to the window with a
- * text panel (phase + ms) and presented; the time spent there is not counted against the deadline. A summary is held at the end.
- * Total budget < 1 s of work (a deadline skips what is left on a very slow GPU). Returns 1 if anything was measured. */
-#define GPUPROBE_WARMUP_MS    120
-#define GPUPROBE_DEADLINE_MS  900
-#define GPUPROBE_A2C_LAYERS   4
-
-static GLuint gp_compile(const char* vs_body, const char* fs_body, const char* defines) {
-    /* The probe's shaders are written for GLSL 300 es (in/out, gl_InstanceID). Desktop: 330 core, as the FXAA pass --
-     * the game's own desktop version is often 130 (a "3.0 compat" context), where gl_InstanceID does not exist and
-     * the MSAA fill program failed to compile, silently leaving MSAA unmeasured on PC. */
-    char head[128];
-    if (gl_es) {
-        snprintf(head, sizeof head, "#version %s\nprecision highp float;\n%s", gl_glsl_version_str, defines);
-    } else {
-        snprintf(head, sizeof head, "#version 330 core\n%s", defines);
-    }
-    const char* vsrc[2] = { head, vs_body };
-    const char* fsrc[2] = { head, fs_body };
-    GLuint v = glCreateShader(GL_VERTEX_SHADER), f = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(v, 2, vsrc, NULL);
-    glCompileShader(v);
-    glShaderSource(f, 2, fsrc, NULL);
-    glCompileShader(f);
-    GLuint pr = glCreateProgram();
-    glAttachShader(pr, v);
-    glAttachShader(pr, f);
-    glLinkProgram(pr);
-    GLint ok = 0;
-    glGetProgramiv(pr, GL_LINK_STATUS, &ok);
-    glDeleteShader(v);
-    glDeleteShader(f);
-    if (!ok) {
-        glDeleteProgram(pr);
-        return 0;
-    }
-    return pr;
-}
-
-extern "C" int gfx_opengl_gpuprobe(GpuProbeRun* run) {
-    const int w = run->w, h = run->h, msaa = run->msaa;
-    float* skyMs = run->skyMs;
-    float* msaaMs = run->msaaMs;
-    for (int i = 0; i < 3; i++) skyMs[i] = msaaMs[i] = GPUPROBE_UNMEASURED;
-    run->a2cDeltaMs = GPUPROBE_UNMEASURED;
-    run->choice.skyScale = run->choice.a2c = run->choice.msaa = -1;
-    if (w < 64 || h < 64) return 0;
-    while (glGetError() != GL_NO_ERROR) {}
-    const bool vis = run->visible && run->present;
-
-    /* the state this touches */
-    GLint prev_fbo = 0, prev_rfbo = 0, prev_prog = 0, prev_vao = 0, prev_unit = 0, prev_tex0 = 0, prev_tex7 = 0, prev_vp[4], prev_sc[4], prev_rb = 0;
-    GLint prev_dfunc = GL_LESS, prev_bf[4] = { GL_ONE, GL_ZERO, GL_ONE, GL_ZERO };
-    const GLboolean prev_depth = glIsEnabled(GL_DEPTH_TEST), prev_blend = glIsEnabled(GL_BLEND),
-                    prev_cull = glIsEnabled(GL_CULL_FACE), prev_scissor = glIsEnabled(GL_SCISSOR_TEST);
-    GLboolean prev_cm[4], prev_dm = GL_TRUE;
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_rfbo);
-    glGetIntegerv(GL_RENDERBUFFER_BINDING, &prev_rb);
-    glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_unit);
-    glGetIntegerv(GL_VIEWPORT, prev_vp);
-    glGetIntegerv(GL_SCISSOR_BOX, prev_sc);
-    glGetIntegerv(GL_DEPTH_FUNC, &prev_dfunc);
-    glGetIntegerv(GL_BLEND_SRC_RGB, &prev_bf[0]);
-    glGetIntegerv(GL_BLEND_DST_RGB, &prev_bf[1]);
-    glGetIntegerv(GL_BLEND_SRC_ALPHA, &prev_bf[2]);
-    glGetIntegerv(GL_BLEND_DST_ALPHA, &prev_bf[3]);
-    glGetBooleanv(GL_COLOR_WRITEMASK, prev_cm);
-    glGetBooleanv(GL_DEPTH_WRITEMASK, &prev_dm);
-    glActiveTexture(GL_TEXTURE0);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex0);
-    glActiveTexture(GL_TEXTURE0 + 7);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex7);
-    const bool prev_a2c = s_a2c_on;
-    gfx_opengl_set_a2c(false);
-
-    const uint64_t t0 = gl_now_ns();
-    double shownMs = 0.0;   /* wall time spent presenting / holding: not work, not against the deadline */
-    double compileMs = 0.0; /* shader compiles: driver time that varies run to run and is no measure of the GPU; not against the deadline either */
-    auto elapsed_ms = [&]() { return (double)(gl_now_ns() - t0) / 1.0e6 - shownMs - compileMs; };
-    int measured = 0;
-    double tCompiled = 0.0, tSky = 0.0, tMsaa = 0.0;
-
-    GLuint dstFbo = 0, dstTex = 0, redFbo = 0, redTex = 0, noiseTex = 0, a2cProg = 0, a2cProgB = 0, msFbo = 0, msColor = 0, msDepth = 0,
-           fillProg = 0, fillFbo[3] = { 0, 0, 0 }, fillColor[3] = { 0, 0, 0 }, fillDepth[3] = { 0, 0, 0 }, txTex = 0, txFbo = 0;
-    glGenTextures(1, &dstTex);
-    glBindTexture(GL_TEXTURE_2D, dstTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glGenFramebuffers(1, &dstFbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, dstFbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dstTex, 0);
-    const bool dstOk = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-
-    glDisable(GL_DEPTH_TEST);
-    glDepthMask(GL_FALSE);
-    glDisable(GL_BLEND);
-    glDisable(GL_CULL_FACE);
-    glEnable(GL_SCISSOR_TEST);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-
-    /* ---- the visible part: a panel of text over the off-screen picture, presented ---- */
-    enum { PW = 336, PH = 160, MAXL = 8 };
-    char lines[MAXL][40];
-    int nlines = 0;
-    const char* title = "Measuring the GPU...";
-    auto add_line = [&](const char* fmt, double v) {
-        if (nlines < MAXL) { snprintf(lines[nlines], sizeof lines[0], fmt, v); nlines++; }
-    };
-    auto show = [&](int holdMs) {
-        if (!vis || !dstOk) return;
-        const uint64_t a = gl_now_ns();
-        const int ph = std::min((int)PH, 50 + nlines * 16 + 8);   /* the panel is as tall as its lines */
-        std::vector<uint32_t> px((size_t)PW * ph, 0xFF24160Au);   /* ABGR: dark blue */
-        auto rect = [&](int x, int y, int rw, int rh, uint32_t c) {
-            for (int yy = y; yy < y + rh; yy++) for (int xx = x; xx < x + rw; xx++)
-                if (xx >= 0 && xx < PW && yy >= 0 && yy < ph) px[(size_t)(ph - 1 - yy) * PW + xx] = c;   /* texture row 0 is the bottom */
-        };
-        auto text = [&](int x, int y, const char* t, uint32_t c) {
-            for (; *t; t++, x += BOOTFONT_W) {
-                const unsigned char ch = (unsigned char)*t;
-                if (ch < 32 || ch > 126) continue;
-                for (int row = 0; row < BOOTFONT_H; row++) for (int col = 0; col < BOOTFONT_W; col++)
-                    if (kBootFont[ch - 32][row] & (0x80 >> col)) rect(x + col, y + row, 1, 1, c);
-            }
-        };
-        const uint32_t gold = 0xFF50CDFFu, white = 0xFFF5EBE6u;   /* ABGR */
-        rect(0, 0, PW, 2, gold); rect(0, ph - 2, PW, 2, gold); rect(0, 0, 2, ph, gold); rect(PW - 2, 0, 2, ph, gold);
-        text((PW - (int)strlen(title) * BOOTFONT_W) / 2, 10, title, gold);
-        rect(16, 32, PW - 32, 1, gold);
-        for (int i = 0; i < nlines; i++) text(16, 42 + i * 16, lines[i], white);
-        GLint prevUnit = 0;
-        glGetIntegerv(GL_ACTIVE_TEXTURE, &prevUnit);
-        glActiveTexture(GL_TEXTURE0);
-        if (!txTex) {
-            glGenTextures(1, &txTex);
-            glBindTexture(GL_TEXTURE_2D, txTex);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, PW, PH, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glGenFramebuffers(1, &txFbo);
-            glBindFramebuffer(GL_FRAMEBUFFER, txFbo);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, txTex, 0);
-        } else {
-            glBindTexture(GL_TEXTURE_2D, txTex);
-        }
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, PW, ph, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-        glDisable(GL_SCISSOR_TEST);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, dstFbo);
-        glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        const int sc = w >= 2 * PW ? 2 : 1, dx = (w - PW * sc) / 2, dy = (h - ph * sc) / 2;
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, txFbo);
-        glBlitFramebuffer(0, 0, PW, ph, dx, dy, dx + PW * sc, dy + ph * sc, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        glEnable(GL_SCISSOR_TEST);
-        glActiveTexture((GLenum)prevUnit);
-        run->present();
-        SDL_PumpEvents();
-        if (holdMs > 0) SDL_Delay((Uint32)holdMs);
-        glBindFramebuffer(GL_FRAMEBUFFER, dstFbo);
-        shownMs += (double)(gl_now_ns() - a) / 1.0e6;
-    };
-    if (dstOk) {   /* something on screen at once: the shader compile below takes a moment */
-        glClearColor(0.02f, 0.03f, 0.08f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        show(0);
-    }
-
-    /* ---- the sky (not the sp2 path: its shaders differ, and a GL 4.6 desktop GPU is not the target) ---- */
-    const uint64_t tc0 = gl_now_ns();
-    const bool skyOk = dstOk && !s_sp2_ok && (s_skyplus_prog || skyplus_build()) && (s_skyr_prog || skyr_build_comp());
-    compileMs += (double)(gl_now_ns() - tc0) / 1.0e6;
-    tCompiled = elapsed_ms();
-    if (skyOk) {
-        static unsigned char noise[64 * 64];
-        unsigned s = 12345u;
-        for (int i = 0; i < 64 * 64; i++) { s = s * 1664525u + 1013904223u; noise[i] = (unsigned char)(s >> 24); }
-        glGenTextures(1, &noiseTex);
-        glBindTexture(GL_TEXTURE_2D, noiseTex);
-        GLint prev_align = 4;
-        glGetIntegerv(GL_UNPACK_ALIGNMENT, &prev_align);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 64, 64, 0, GL_RED, GL_UNSIGNED_BYTE, noise);
-        glGenerateMipmap(GL_TEXTURE_2D);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, prev_align);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        glGenTextures(1, &redTex);
-        glGenFramebuffers(1, &redFbo);
-
-        /* a daytime sky looking slightly up: clouds, sun and haze all on the path */
-        glUseProgram(s_skyplus_prog);
-        const float sunDir[3] = { 0.3f, 0.7f, 0.65f }, one3[3] = { 1.0f, 1.0f, 1.0f }, skyCol[3] = { 0.55f, 0.72f, 0.95f },
-                    eye[3] = { 0.0f, 0.0f, 0.0f }, moon3[3] = { 0.0f, -1.0f, 0.0f };
-        const float c0[3] = { -1.0f, 0.7f, 1.0f }, c1[3] = { 1.0f, 0.7f, 1.0f }, c2[3] = { -1.0f, -0.25f, 1.0f }, c3[3] = { 1.0f, -0.25f, 1.0f };
-        const float ofs[6] = { 0.0f, 0.0f, 3.0f, 5.0f, 7.0f, 2.0f };
-        glUniform2f(s_sp_loc[SPL_ASP], 1.0f, 0.0f);
-        glUniform3fv(s_sp_loc[SPL_C0], 1, c0);
-        glUniform3fv(s_sp_loc[SPL_C1], 1, c1);
-        glUniform3fv(s_sp_loc[SPL_C2], 1, c2);
-        glUniform3fv(s_sp_loc[SPL_C3], 1, c3);
-        glUniform3fv(s_sp_loc[SPL_EYE], 1, eye);
-        glUniform1f(s_sp_loc[SPL_CLOUDY], 1500.0f);
-        glUniform3fv(s_sp_loc[SPL_SKY], 1, skyCol);
-        glUniform3fv(s_sp_loc[SPL_CLOUD], 1, one3);
-        glUniform2fv(s_sp_loc[SPL_OFS], 3, ofs);
-        glUniform1f(s_sp_loc[SPL_GAIN], 1.0f);
-        glUniform1f(s_sp_loc[SPL_TEXSCALE], 1.0f);
-        glUniform3fv(s_sp_loc[SPL_SUNDIR], 1, sunDir);
-        glUniform3fv(s_sp_loc[SPL_SUNCOL], 1, one3);
-        glUniform1f(s_sp_loc[SPL_SUNGLOW], 1.0f);
-        glUniform3fv(s_sp_loc[SPL_MOONDIR], 1, moon3);
-        glUniform1f(s_sp_loc[SPL_NIGHT], 0.0f);
-        glUniform1i(s_sp_loc[SPL_TEX], 7);
-        glBindVertexArray(s_skyplus_vao);
-        glActiveTexture(GL_TEXTURE0 + 7);
-
-        int redW = 0, redH = 0;
-        /* one sky draw at Video.SkyScale `sc` into the window-sized target, the way gfx_opengl_skyplus_pass does it */
-        auto sky_draw = [&](int sc) {
-            const int div = sc >= 2 ? 4 : (sc == 1 ? 2 : 1);
-            int sw = w, sh = h;
-            if (div > 1) {
-                sw = w / div; sh = h / div;
-                if (redW != sw || redH != sh) {
-                    glBindTexture(GL_TEXTURE_2D, redTex);
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, sw, sh, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                    glBindFramebuffer(GL_FRAMEBUFFER, redFbo);
-                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, redTex, 0);
-                    redW = sw; redH = sh;
-                }
-                glBindFramebuffer(GL_FRAMEBUFFER, redFbo);
-            } else {
-                glBindFramebuffer(GL_FRAMEBUFFER, dstFbo);
-            }
-            glBindTexture(GL_TEXTURE_2D, noiseTex);
-            glViewport(0, 0, sw, sh);
-            glScissor(0, 0, sw, sh);
-            glUseProgram(s_skyplus_prog);
-            glUniform4f(s_sp_loc[SPL_VP], 0.0f, 0.0f, (float)sw, (float)sh);
-            glDrawArrays(GL_TRIANGLES, 0, 3);
-            if (div > 1) {
-                glBindFramebuffer(GL_FRAMEBUFFER, dstFbo);
-                glViewport(0, 0, w, h);
-                glScissor(0, 0, w, h);
-                glBindTexture(GL_TEXTURE_2D, redTex);
-                glUseProgram(s_skyr_prog);
-                glUniform1i((GLint)s_skyr_loc_tex, 7);
-                glUniform4f((GLint)s_skyr_loc_vp, 0.0f, 0.0f, (float)w, (float)h);
-                glDrawArrays(GL_TRIANGLES, 0, 3);
-            }
-        };
-
-        const double warmEnd = elapsed_ms() + GPUPROBE_WARMUP_MS;   /* after the shader compile, which is not load */
-        while (elapsed_ms() < warmEnd) {   /* DVFS ramp: real full-size sky work */
-            sky_draw(0);
-            glFinish();
-        }
-        for (int sc = 0; sc < 3; sc++) {
-            if (elapsed_ms() > GPUPROBE_DEADLINE_MS) break;
-            double best = 1.0e9, spent = 0.0;
-            for (int rep = 0; rep < (sc == 0 ? 2 : 4); rep++) {   /* min over a few draws: a stray stall is not the sky's cost (full size: the warm-up was its first draws) */
-                const uint64_t a = gl_now_ns();
-                sky_draw(sc);
-                glFinish();
-                const double d = (double)(gl_now_ns() - a) / 1.0e6;
-                spent += d;
-                if (rep == 0 && sc > 0) {   /* the first draw after a size change builds its target: untimed */
-                    if (d > 120.0) { best = d; break; }
-                    continue;
-                }
-                if (d < best) best = d;
-                if (rep >= 1 && spent > 150.0) break;
-            }
-            skyMs[sc] = (float)best;
-            measured = 1;
-            add_line(sc == 0 ? "Sky full    %5.1f ms" : sc == 1 ? "Sky half    %5.1f ms" : "Sky quarter %5.1f ms", best);
-            show(0);
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, dstFbo);
-    }
-    tSky = elapsed_ms();
-
-    /* ---- MSAA: what 2x / 4x cost over 1x on a synthetic fill, resolve included ---- */
-    GLint maxSamples = 0;
-    glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
-    if (dstOk && msaa >= 2 && maxSamples >= 2 && elapsed_ms() < GPUPROBE_DEADLINE_MS) {
-        static const char* vs = R"GLSL(
-uniform float uZ;
-uniform vec2 uGrid;
-out vec3 vCol;
-float hsh(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
-void main() {
-    int cols = int(uGrid.x);
-    int cx = gl_InstanceID % cols, cy = gl_InstanceID / cols;
-    int v = gl_VertexID;
-    vec2 c = (v == 1) ? vec2(1.0, 0.0) : ((v == 2 || v == 4) ? vec2(1.0, 1.0) : ((v == 5) ? vec2(0.0, 1.0) : vec2(0.0, 0.0)));
-    vec2 lp = vec2(float(cx), float(cy)) + c;
-    vec2 j = vec2(hsh(lp), hsh(lp + 7.3)) - 0.5;
-    vec2 p = (lp + j * 0.8) / uGrid * 2.0 - 1.0;
-    float z = uZ + (hsh(lp + 3.1) - 0.5) * 0.4;   /* tilted, so layers cut through each other: many edges */
-    vCol = vec3(hsh(vec2(float(cx), float(cy))), hsh(vec2(float(cy), float(cx)) + 1.7), 0.5 + 0.5 * z);
-    gl_Position = vec4(p, z, 1.0);
-}
-)GLSL";
-        static const char* fs = R"GLSL(
-in vec3 vCol;
-out vec4 o;
-void main() {
-    vec2 p = gl_FragCoord.xy;
-    float t = 0.5 + 0.5 * sin(p.x * 0.09) * sin(p.y * 0.07);
-    vec3 c = vCol * (0.55 + 0.45 * t);
-    c = mix(c, c * c, 0.5 * t) + 0.08 * vec3(sin(p.x * 0.31 + c.r * 6.0), sin(p.y * 0.27 + c.g * 6.0), 0.0);
-    o = vec4(c, 1.0);
-}
-)GLSL";
-        const uint64_t tf0 = gl_now_ns();
-        fillProg = gp_compile(vs, fs, "");
-        compileMs += (double)(gl_now_ns() - tf0) / 1.0e6;
-        if (!s_skyplus_vao) glGenVertexArrays(1, &s_skyplus_vao);
-        const int lvl[3] = { 1, 2, 4 };
-        bool lvlOk[3] = { false, false, false };
-        for (int i = 0; i < 3; i++) {
-            if (lvl[i] > msaa || lvl[i] > maxSamples) continue;
-            glGenRenderbuffers(1, &fillDepth[i]);
-            glBindRenderbuffer(GL_RENDERBUFFER, fillDepth[i]);
-            glGenFramebuffers(1, &fillFbo[i]);
-            glBindFramebuffer(GL_FRAMEBUFFER, fillFbo[i]);
-            if (i == 0) {   /* 1x draws straight into the texture, as the game does without MSAA */
-                glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dstTex, 0);
-            } else {
-                glRenderbufferStorageMultisample(GL_RENDERBUFFER, lvl[i], GL_DEPTH_COMPONENT24, w, h);
-                glGenRenderbuffers(1, &fillColor[i]);
-                glBindRenderbuffer(GL_RENDERBUFFER, fillColor[i]);
-                glRenderbufferStorageMultisample(GL_RENDERBUFFER, lvl[i], GL_RGBA8, w, h);
-                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, fillColor[i]);
-            }
-            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fillDepth[i]);
-            lvlOk[i] = glGetError() == GL_NO_ERROR && glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-        }
-        if (fillProg && lvlOk[0] && glGetError() == GL_NO_ERROR) {
-            const GLint locZ = glGetUniformLocation(fillProg, "uZ"), locG = glGetUniformLocation(fillProg, "uGrid");
-            const int cols = 40, rows = 27;
-            glBindVertexArray(s_skyplus_vao);
-            glViewport(0, 0, w, h);
-            glScissor(0, 0, w, h);
-            glEnable(GL_DEPTH_TEST);
-            glDepthFunc(GL_LESS);
-            glDepthMask(GL_TRUE);
-            glDisable(GL_BLEND);
-            glUseProgram(fillProg);
-            glUniform2f(locG, (float)cols, (float)rows);
-            auto fill = [&](int i) {
-                const uint64_t a = gl_now_ns();
-                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fillFbo[i]);
-                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-                for (int l = 0; l < 2; l++) {
-                    glUniform1f(locZ, 0.5f - 0.25f * (float)l);
-                    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, cols * rows);
-                }
-                if (i > 0) {   /* the MSAA resolve the game does too */
-                    glBindFramebuffer(GL_READ_FRAMEBUFFER, fillFbo[i]);
-                    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dstFbo);
-                    glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-                }
-                glFinish();
-                return (double)(gl_now_ns() - a) / 1.0e6;
-            };
-            for (int i = 0; i < 3; i++) if (lvlOk[i]) fill(i);   /* first of each untimed: target setup, clocks */
-            double t1[3], dl[3][3];
-            int nr = 0;
-            for (int rep = 0; rep < 2 && elapsed_ms() < GPUPROBE_DEADLINE_MS; rep++) {   /* two rounds: min of the two differences */
-                t1[nr] = fill(0);
-                for (int i = 1; i < 3; i++) dl[i][nr] = lvlOk[i] ? fill(i) - t1[nr] : 0.0;
-                nr++;
-            }
-            if (nr > 0) {
-                auto median = [&](const double* v) {
-                    double t[3];
-                    for (int i = 0; i < nr; i++) t[i] = v[i];
-                    for (int i = 1; i < nr; i++) for (int j = i; j > 0 && t[j] < t[j - 1]; j--) { const double x = t[j]; t[j] = t[j - 1]; t[j - 1] = x; }
-                    return t[(nr - 1) / 2];   /* lower median: the smaller of two */
-                };
-                const double base = median(t1);
-                msaaMs[0] = (float)base;
-                for (int i = 1; i < 3; i++) if (lvlOk[i]) msaaMs[i] = (float)(base + median(dl[i]));
-                measured = 1;
-                for (int i = 1; i < 3; i++) if (lvlOk[i]) add_line(i == 1 ? "MSAA 2x   %+5.1f ms" : "MSAA 4x   %+5.1f ms", (double)(msaaMs[i] - msaaMs[0]));
-                show(0);
-            }
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, dstFbo);
-    }
-    tMsaa = elapsed_ms();
-
-    /* ---- alpha-to-coverage against the blend, through an MSAA target, at the level that will be chosen ---- */
-    const int pick = gpuProbeMsaaPick(msaaMs, msaa, run->frameMs);
-    int samples = pick >= 2 ? pick : (msaa > 1 ? msaa : 2);   /* 1x picked: A2C is moot for now, timed at 2x for a later raise */
-    if (samples > maxSamples) samples = maxSamples;
-    if (dstOk && samples >= 2 && elapsed_ms() < GPUPROBE_DEADLINE_MS) {
-        static const char* vs = R"GLSL(
-uniform float uZ;
-void main() {
-    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
-    gl_Position = vec4(p * 2.0 - 1.0, uZ, 1.0);
-}
-)GLSL";
-        /* mostly 0 or 1 with thin soft edges: what a filtered cut-out texture (foliage, fences) gives */
-        static const char* fs = R"GLSL(
-uniform float uLayer;
-out vec4 o;
-void main() {
-    vec2 p = gl_FragCoord.xy;
-    float t = 0.5 + 0.5 * sin(p.x * 0.11 + uLayer) * sin(p.y * 0.09 - uLayer * 1.7);
-    float a = smoothstep(0.42, 0.58, t);
-#ifdef A2C
-    /* what the game's A2C cut-out shader does (SHADER_OPT_A2C): a derivative-sharpened edge and a discard, which on a
-     * tiler costs early depth rejection; the blend variant has neither */
-    a = clamp((a - 0.5) / max(fwidth(a), 1.0 / 1024.0) + 0.5, 0.0, 1.0);
-    if (a < 1.0 / 256.0) discard;
-#endif
-    o = vec4(0.25, 0.55, 0.2, a);
-}
-)GLSL";
-        const uint64_t ta0 = gl_now_ns();
-        a2cProg = gp_compile(vs, fs, "#define A2C 1\n");
-        a2cProgB = gp_compile(vs, fs, "");
-        compileMs += (double)(gl_now_ns() - ta0) / 1.0e6;
-        if (!s_skyplus_vao) glGenVertexArrays(1, &s_skyplus_vao);   /* core profile needs a VAO bound for any draw */
-        glGenRenderbuffers(1, &msColor);
-        glGenRenderbuffers(1, &msDepth);
-        glBindRenderbuffer(GL_RENDERBUFFER, msColor);
-        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_RGBA8, w, h);
-        glBindRenderbuffer(GL_RENDERBUFFER, msDepth);
-        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH_COMPONENT24, w, h);
-        glGenFramebuffers(1, &msFbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, msFbo);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, msColor);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, msDepth);
-        if (a2cProg && a2cProgB && glGetError() == GL_NO_ERROR && glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
-            const GLint locZ[2] = { glGetUniformLocation(a2cProgB, "uZ"), glGetUniformLocation(a2cProg, "uZ") },
-                        locL[2] = { glGetUniformLocation(a2cProgB, "uLayer"), glGetUniformLocation(a2cProg, "uLayer") };
-            glBindVertexArray(s_skyplus_vao);
-            glViewport(0, 0, w, h);
-            glScissor(0, 0, w, h);
-            glEnable(GL_DEPTH_TEST);
-            glDepthFunc(GL_LESS);
-            glDepthMask(GL_TRUE);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            auto a2cRun = [&](bool a2c) {
-                const uint64_t a = gl_now_ns();
-                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, msFbo);
-                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-                glUseProgram(a2c ? a2cProg : a2cProgB);
-                if (a2c) { glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE); glDisable(GL_BLEND); }
-                else { glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE); glEnable(GL_BLEND); }
-                for (int l = 0; l < GPUPROBE_A2C_LAYERS; l++) {   /* far to near: every layer passes the depth test */
-                    glUniform1f(locZ[a2c], 0.9f - 0.15f * (float)l);
-                    glUniform1f(locL[a2c], (float)l);
-                    glDrawArrays(GL_TRIANGLES, 0, 3);
-                }
-                glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-                glDisable(GL_BLEND);
-                glBindFramebuffer(GL_READ_FRAMEBUFFER, msFbo);
-                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dstFbo);
-                glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);   /* the MSAA resolve the game does too */
-                glFinish();
-                return (double)(gl_now_ns() - a) / 1.0e6;
-            };
-            a2cRun(false);
-            a2cRun(true);   /* first of each untimed: shader and target setup */
-            /* The GPU clock steps between runs (the governor), so the two variants are compared back to back and the
-             * median (lower, with two pairs) of the per-pair differences is taken: a min over each variant separately mixes two clocks. */
-            double d[3];
-            int nd = 0;
-            for (int rep = 0; rep < 2 && elapsed_ms() < GPUPROBE_DEADLINE_MS; rep++) {   /* two pairs: the smaller difference (a stall only inflates) */
-                const double bl = a2cRun(false), ac = a2cRun(true);
-                d[nd++] = ac - bl;
-            }
-            if (nd > 0) {
-                for (int i = 1; i < nd; i++) for (int j = i; j > 0 && d[j] < d[j - 1]; j--) { const double t = d[j]; d[j] = d[j - 1]; d[j - 1] = t; }
-                run->a2cDeltaMs = (float)d[(nd - 1) / 2];
-                measured = 1;
-                add_line("A2C       %+5.1f ms", (double)run->a2cDeltaMs);
-                show(0);
-            }
-        }
-    }
-
-    run->choice = gpuProbeDecide(skyMs, msaaMs, msaa, run->a2cDeltaMs, run->frameMs);
-    if (vis) {   /* the summary, held so it can be read */
-        static const char* skyName[3] = { "full", "half", "quarter" };
-        const GpuProbeChoice& c = run->choice;
-        title = "GPU measured";
-        nlines = 0;
-        snprintf(lines[nlines++], sizeof lines[0], "Sky:  %s", c.skyScale >= 0 ? skyName[c.skyScale] : "kept");
-        if (c.msaa >= 0) snprintf(lines[nlines++], sizeof lines[0], "MSAA: %dx", c.msaa);
-        else snprintf(lines[nlines++], sizeof lines[0], "MSAA: kept");
-        snprintf(lines[nlines++], sizeof lines[0], "A2C:  %s", c.a2c < 0 ? "kept" : c.a2c ? "on" : "off");
-        show(run->holdMs);
-    }
-
-    /* ---- clean up and put the state back ---- */
-    glFinish();
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    if (dstFbo) glDeleteFramebuffers(1, &dstFbo);
-    if (redFbo) glDeleteFramebuffers(1, &redFbo);
-    if (msFbo) glDeleteFramebuffers(1, &msFbo);
-    if (dstTex) glDeleteTextures(1, &dstTex);
-    if (redTex) glDeleteTextures(1, &redTex);
-    if (noiseTex) glDeleteTextures(1, &noiseTex);
-    for (int i = 0; i < 3; i++) {
-        if (fillFbo[i]) glDeleteFramebuffers(1, &fillFbo[i]);
-        if (fillColor[i]) glDeleteRenderbuffers(1, &fillColor[i]);
-        if (fillDepth[i]) glDeleteRenderbuffers(1, &fillDepth[i]);
-    }
-    if (fillProg) glDeleteProgram(fillProg);
-    if (txFbo) glDeleteFramebuffers(1, &txFbo);
-    if (txTex) glDeleteTextures(1, &txTex);
-    if (msColor) glDeleteRenderbuffers(1, &msColor);
-    if (msDepth) glDeleteRenderbuffers(1, &msDepth);
-    if (a2cProg) glDeleteProgram(a2cProg);
-    if (a2cProgB) glDeleteProgram(a2cProgB);
-    glActiveTexture(GL_TEXTURE0 + 7);
-    glBindTexture(GL_TEXTURE_2D, (GLuint)prev_tex7);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, (GLuint)prev_tex0);
-    glActiveTexture((GLenum)prev_unit);
-    glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)prev_rb);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)prev_fbo);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prev_rfbo);
-    glBindVertexArray((GLuint)prev_vao);
-    glUseProgram((GLuint)prev_prog);
-    gfx_opengl_set_a2c(prev_a2c);
-    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
-    glScissor(prev_sc[0], prev_sc[1], prev_sc[2], prev_sc[3]);
-    glColorMask(prev_cm[0], prev_cm[1], prev_cm[2], prev_cm[3]);
-    glDepthMask(prev_dm);
-    glDepthFunc((GLenum)prev_dfunc);
-    glBlendFuncSeparate((GLenum)prev_bf[0], (GLenum)prev_bf[1], (GLenum)prev_bf[2], (GLenum)prev_bf[3]);
-    if (prev_depth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
-    if (prev_blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
-    if (prev_cull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
-    if (prev_scissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
-    while (glGetError() != GL_NO_ERROR) {}
-    sysLogPrintf(LOG_NOTE, "gpuprobe: measured in %.0f ms of work (excl. shader compiles; shaders ready at %.0f, sky done at %.0f, msaa done at %.0f); %.0f ms wall incl. %.0f ms %s",
-                 elapsed_ms(), tCompiled, tSky, tMsaa, (double)(gl_now_ns() - t0) / 1.0e6, shownMs, vis ? "on screen" : "(hidden)");
-    return measured;
-}
-
 void gfx_opengl_resolve_msaa_color_buffer(int fb_id_target, int fb_id_source) {
-    if (!gfx_framebuffers_enabled) {
+    if (!ge_render_cfg.framebuffers_enabled) {
         return;
     }
 
@@ -3870,7 +3302,7 @@ void gfx_opengl_select_texture_fb(int fb_id) {
 }
 
 void gfx_opengl_copy_framebuffer(int fb_dst, int fb_src, int left, int top, bool flip_y, bool use_back) {
-    if (!gfx_framebuffers_enabled || fb_dst >= (int)framebuffers.size() || fb_src >= (int)framebuffers.size()) {
+    if (!ge_render_cfg.framebuffers_enabled || fb_dst >= (int)framebuffers.size() || fb_src >= (int)framebuffers.size()) {
         return;
     }
 
@@ -3993,3 +3425,15 @@ struct GfxRenderingAPI gfx_opengl_api = {
     gfx_opengl_mesh_draw,
     nullptr,   /* mesh_supported: every program */
 };
+
+extern "C" void ge_render_gl_sky_bench(GeGlSkyBench* out) {
+    out->sp2_ok = s_sp2_ok ? 1 : 0;
+    out->sky_prog = s_skyplus_prog;
+    out->sky_vao = s_skyplus_vao;
+    for (int i = 0; i < GE_GL_SPL_COUNT; i++) out->loc[i] = s_sp_loc[i];
+    out->skyr_prog = s_skyr_prog;
+    out->skyr_loc_tex = s_skyr_loc_tex;
+    out->skyr_loc_vp = s_skyr_loc_vp;
+    out->build_sky = [](void) -> int { return skyplus_build() ? 1 : 0; };
+    out->build_composite = [](void) -> int { return skyr_build_comp() ? 1 : 0; };
+}

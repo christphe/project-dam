@@ -4,7 +4,7 @@
 /* D973: deko3d rendering backend for the Switch (the default; GE_RENDERER=gl selects GL).
  * Implements GfxRenderingAPI and replays GfxFrame exactly as the GL backend
  * does; the window side (swapchain on the default nwindow) belongs to the
- * backend, SDL keeps input/audio/events (gfx_sdl_set_external_present). */
+ * backend, SDL keeps input/audio/events (ge_render_open attaches the present hooks, GE_WINDOW_NONE). */
 
 #include <stdint.h>
 #include <stdbool.h>

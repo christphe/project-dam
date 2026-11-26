@@ -3,16 +3,10 @@
 #include <SDL.h>
 #include <time.h>
 
-#include "platform.h"
-#include "system.h"
-
+#include "ge_internal.h"
+#include "ge_window.h"
 #include "gfx_window_manager_api.h"
 #include "gfx_screen_config.h"
-#include "input.h"
-#include "console.h"
-#ifdef __SWITCH__
-#include "audio.h"   /* D959: audioNotifyDeviceRemoved */
-#endif
 #include "ge007_icon.h"
 #if defined(__APPLE__)
 #include <OpenGL/OpenGL.h>   /* D952: CGL swap interval */
@@ -20,11 +14,6 @@
 #ifdef GE_VULKAN
 #include <SDL_vulkan.h>   /* issue #44 */
 #endif
-
-extern "C" void videoRequestQuit(const char *why);   // port/src/video.c (D344)
-extern "C" void inputRequestRescan(void);   // port/src/input.c (D450)
-extern "C" void inputNoteButtonDown(SDL_JoystickID which, int button, Uint32 ts);   // port/src/input.c (D961)
-extern "C" void inputNoteAxis(SDL_JoystickID which, int axis, int value, Uint32 ts);   // port/src/input.c (D961)
 
 static SDL_Window* wnd;
 static SDL_GLContext ctx;
@@ -54,7 +43,7 @@ static bool gfx_sdl_apply_swap_interval(int interval) {
     {
         GLint back = -1;
         CGLGetParameter(cgl, kCGLCPSwapInterval, &back);
-        sysLogPrintf(LOG_INFO, "SDL: swap interval %d via CGL (read back %d)", (int)v, (int)back);
+        ge_log(GE_LOG_INFO, "SDL: swap interval %d via CGL (read back %d)", (int)v, (int)back);
     }
     return true;
 }
@@ -153,48 +142,30 @@ static int primary_display_index() {
     return 0;
 }
 
-#ifdef __SWITCH__
-extern "C" int nxIsHandheld(void);   /* project-dam: port/src/switch/nxmem.c */
-#endif
-
-#if defined(__SWITCH__) || defined(GE_VULKAN)
-/* D973: deko3d mode (the Switch default; GE_RENDERER=gl selects GL). The rendering backend owns the
- * swapchain on the default nwindow; SDL keeps input, audio and the event pump
- * but creates no window and no GL context.
- * Issue #44: the Vulkan backend (GE_RENDERER=vk) uses the same hooks; SDL then
- * creates a Vulkan window (gfx_sdl_set_vulkan_window) and no GL context. */
-static void (*s_ext_present)(void) = NULL;
-static void (*s_ext_dims)(uint32_t*, uint32_t*) = NULL;
-static void (*s_ext_park)(void) = NULL;
-static void (*s_ext_interval)(int) = NULL;
+/* D973: deko3d mode (the Switch default; GE_RENDERER=gl selects GL): the rendering backend owns the swapchain
+ * on the default nwindow; SDL keeps input, audio and the event pump but creates no window and no GL context
+ * (GE_WINDOW_NONE). Issue #44: the Vulkan backend uses the same hooks, with an SDL Vulkan window and no GL
+ * context (GE_WINDOW_VULKAN). ge_render_open attaches the mode with the backend (ge_window_attach). */
+static enum GeWindowMode s_mode = GE_WINDOW_GL;
+static struct GeWindowExternal s_ext;
+static bool s_has_ext = false;
 static int s_ext_swap_interval = 1;
 
-extern "C" void gfx_sdl_set_external_present(void (*present)(void), void (*dims)(uint32_t*, uint32_t*), void (*park)(void)) {
-    s_ext_present = present;
-    s_ext_dims = dims;
-    s_ext_park = park;
+extern "C" void ge_window_attach(enum GeWindowMode mode, const struct GeWindowExternal *ext) {
+    s_mode = mode;
+    s_has_ext = ext != NULL;
+    if (ext) s_ext = *ext;
 }
 
-extern "C" void gfx_sdl_set_external_swap_interval(void (*set_interval)(int)) {
-    s_ext_interval = set_interval;
-}
-#endif
-
-#ifdef GE_VULKAN
-static bool s_vk_window = false;
-extern "C" void gfx_sdl_set_vulkan_window(bool on) {
-    s_vk_window = on;
-}
-extern "C" void* gfx_sdl_get_sdl_window(void) {
+extern "C" void *ge_window_sdl_window(void) {
     return (void*)wnd;
 }
-#endif
 
 /* Drawable size in pixels: the GL one, or the Vulkan one for a Vulkan window
  * (issue #44; SDL_GL_GetDrawableSize knows only GL windows). */
 static void drawable_size(int *w, int *h) {
 #ifdef GE_VULKAN
-    if (s_vk_window) {
+    if (s_mode == GE_WINDOW_VULKAN) {
         SDL_Vulkan_GetDrawableSize(wnd, w, h);
         return;
     }
@@ -205,7 +176,7 @@ static void drawable_size(int *w, int *h) {
 static void create_gl_window(const char *title, int posX, int posY, Uint32 flags) {
     // ideally we need 3.0 compat
     // if that doesn't work, try 3.2 core in case we're on mac, 2.1 compat as a last resort
-    static u32 glver[][3] = {
+    static uint32_t glver[][3] = {
         { 0, 0, 0                                    }, // for command line override
         { 3, 0, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY }, // 3.0: default, has all the features required
         { 4, 1, SDL_GL_CONTEXT_PROFILE_CORE          }, // 4.1core: macs only have core profile and this is the latest
@@ -214,9 +185,9 @@ static void create_gl_window(const char *title, int posX, int posY, Uint32 flags
         { 2, 1, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY }, // 2.1: absolute last resort, will still require GLSL130 as an extension
     };
 
-    u32 verstart = 1;
-    const u32 verend = sizeof(glver) / sizeof(*glver);
-    const char *verstr = sysArgGetString("--gl-version");
+    uint32_t verstart = 1;
+    const uint32_t verend = sizeof(glver) / sizeof(*glver);
+    const char *verstr = ge_arg_get_string("--gl-version");
     if (verstr && *verstr) {
         // user override
         glver[0][2] = strstr(verstr, "core") ? SDL_GL_CONTEXT_PROFILE_CORE :
@@ -229,9 +200,9 @@ static void create_gl_window(const char *title, int posX, int posY, Uint32 flags
     }
 
     ctx = NULL;
-    u32 vmin = 0, vmaj = 0, vprof = SDL_GL_CONTEXT_PROFILE_COMPATIBILITY;
+    uint32_t vmin = 0, vmaj = 0, vprof = SDL_GL_CONTEXT_PROFILE_COMPATIBILITY;
     const char *vprofstr = "";
-    for (u32 i = verstart; i < verend && !ctx; ++i) {
+    for (uint32_t i = verstart; i < verend && !ctx; ++i) {
         vmaj = glver[i][0];
         vmin = glver[i][1];
         vprof = glver[i][2];
@@ -244,13 +215,13 @@ static void create_gl_window(const char *title, int posX, int posY, Uint32 flags
 
         wnd = SDL_CreateWindow(title, posX, posY, window_width, window_height, flags);
         if (!wnd) {
-            sysLogPrintf(LOG_WARNING, "SDL: could not open SDL window for GL%d.%d%s:\n%s", vmaj, vmin, vprofstr, SDL_GetError());
+            ge_log(GE_LOG_WARNING, "SDL: could not open SDL window for GL%d.%d%s:\n%s", vmaj, vmin, vprofstr, SDL_GetError());
             continue;
         }
 
         ctx = SDL_GL_CreateContext(wnd);
         if (!ctx) {
-            sysLogPrintf(LOG_WARNING, "SDL: could not create GL%d.%d%s context: %s", vmaj, vmin, vprofstr, SDL_GetError());
+            ge_log(GE_LOG_WARNING, "SDL: could not create GL%d.%d%s context: %s", vmaj, vmin, vprofstr, SDL_GetError());
             SDL_DestroyWindow(wnd);
             wnd = nullptr;
         }
@@ -266,7 +237,7 @@ static void create_gl_window(const char *title, int posX, int posY, Uint32 flags
             const char *ver = getString ? (const char *)getString(0x1F02 /* GL_VERSION */) : NULL;
             int gmaj = 0, gmin = 0;
             if (ver && sscanf(ver, "%d.%d", &gmaj, &gmin) == 2 && (gmaj < 3 || (gmaj == 3 && gmin < 3))) {
-                sysLogPrintf(LOG_NOTE, "SDL: GL%d.%d%s context is GL %d.%d (\"%s\"), below the 3.3 the desktop path needs; trying the next one",
+                ge_log(GE_LOG_NOTE, "SDL: GL%d.%d%s context is GL %d.%d (\"%s\"), below the 3.3 the desktop path needs; trying the next one",
                              vmaj, vmin, vprofstr, gmaj, gmin, ver);
                 SDL_GL_DeleteContext(ctx);
                 ctx = nullptr;
@@ -278,9 +249,9 @@ static void create_gl_window(const char *title, int posX, int posY, Uint32 flags
     }
 
     if (!wnd || !ctx) {
-        sysFatalError("Could not open SDL window with an OpenGL context of any supported version:\n%s", SDL_GetError());
+        ge_fatal("Could not open SDL window with an OpenGL context of any supported version:\n%s", SDL_GetError());
     } else {
-        sysLogPrintf(LOG_NOTE, "SDL: created GL%d.%d%s context", vmaj, vmin, vprofstr);
+        ge_log(GE_LOG_NOTE, "SDL: created GL%d.%d%s context", vmaj, vmin, vprofstr);
     }
 
     SDL_GL_MakeCurrent(wnd, ctx);
@@ -291,7 +262,7 @@ static void create_gl_window(const char *title, int posX, int posY, Uint32 flags
         SDL_GetWindowSize(wnd, &ww, &wh);
         SDL_GL_GetDrawableSize(wnd, &dw, &dh);
         SDL_GetCurrentDisplayMode(0, &dm);
-        sysLogPrintf(LOG_NOTE, "SDL(switch): requested %dx%d, window %dx%d, drawable %dx%d, display %dx%d",
+        ge_log(GE_LOG_NOTE, "SDL(switch): requested %dx%d, window %dx%d, drawable %dx%d, display %dx%d",
                      window_width, window_height, ww, wh, dw, dh, dm.w, dm.h);
     }
 #endif
@@ -303,7 +274,7 @@ static void create_gl_window(const char *title, int posX, int posY, Uint32 flags
 }
 
 #ifdef GE_VULKAN
-extern "C" int gfx_sdl_gl_usable(void) {
+extern "C" int ge_window_gl_usable(void) {
     static const int vers[][3] = {   /* the same tries as create_gl_window, minus the 2.1 last resort */
         { 3, 0, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY }, { 4, 1, SDL_GL_CONTEXT_PROFILE_CORE },
         { 3, 2, SDL_GL_CONTEXT_PROFILE_CORE }, { 3, 0, SDL_GL_CONTEXT_PROFILE_ES },
@@ -328,9 +299,9 @@ static void create_vk_window(const char *title, int posX, int posY, Uint32 flags
     flags = (flags & ~(Uint32)SDL_WINDOW_OPENGL) | SDL_WINDOW_VULKAN;
     wnd = SDL_CreateWindow(title, posX, posY, window_width, window_height, flags);
     if (!wnd) {
-        sysFatalError("Could not open an SDL window for Vulkan:\n%s", SDL_GetError());
+        ge_fatal("Could not open an SDL window for Vulkan:\n%s", SDL_GetError());
     }
-    sysLogPrintf(LOG_NOTE, "SDL: created Vulkan window");
+    ge_log(GE_LOG_NOTE, "SDL: created Vulkan window");
 }
 #endif
 
@@ -359,24 +330,22 @@ static void gfx_sdl_init(const struct GfxWindowInitSettings *set) {
     SDL_SetHint("SDL_ENABLE_SCREEN_KEYBOARD", "0");
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        sysFatalError("Could not init SDL:\n%s", SDL_GetError());
+        ge_fatal("Could not init SDL:\n%s", SDL_GetError());
     }
-#ifdef __SWITCH__
-    if (s_ext_present) {
+    if (s_mode == GE_WINDOW_NONE) {
         /* D973: no window, no GL context: the deko3d backend presents */
-        if (s_ext_dims) {
+        if (s_ext.dims) {
             uint32_t w = 0, h = 0;
-            s_ext_dims(&w, &h);
+            s_ext.dims(&w, &h);
             window_width = (int)w;
             window_height = (int)h;
         }
         maximized_state = false;
         fullscreen_state = true;
         qpc_freq = SDL_GetPerformanceFrequency();
-        sysLogPrintf(LOG_NOTE, "SDL(switch): external present (deko3d), no SDL window");
+        ge_log(GE_LOG_NOTE, "SDL(switch): external present (deko3d), no SDL window");
         return;
     }
-#endif
 
     // Auto window size: a width/height <= 0 means "pick a sensible default from
     // the desktop" rather than the 640x480 native res. Fit a 4:3 window into
@@ -388,7 +357,7 @@ static void gfx_sdl_init(const struct GfxWindowInitSettings *set) {
     // the panel is 1280x720 and the GPU runs at about half the docked clock:
     // rendering 1080p there cost up to 35 ms of GPU per frame on hardware.
     {
-        if (nxIsHandheld()) {
+        if (ge_is_handheld()) {
             window_width = 1280;
             window_height = 720;
         } else {
@@ -402,7 +371,7 @@ static void gfx_sdl_init(const struct GfxWindowInitSettings *set) {
     // e.g. an arm64 handheld on muOS, fbdev + libmali): the window IS the panel.
     // Without this the 85%/4:3 auto size clamps to 640x480 and the picture is
     // pillarboxed on the 720x480 panel. Always the full desktop size, always fullscreen.
-    if (portIsConsole()) {
+    if (ge_is_console()) {
         SDL_DisplayMode dm;
         if (SDL_GetDesktopDisplayMode(primary_display_index(), &dm) == 0 && dm.w > 0 && dm.h > 0) {
             window_width = dm.w;
@@ -411,7 +380,7 @@ static void gfx_sdl_init(const struct GfxWindowInitSettings *set) {
             window_width = 720;
             window_height = 480;
         }
-        sysLogPrintf(LOG_INFO, "SDL(console): window = panel %dx%d, fullscreen", window_width, window_height);
+        ge_log(GE_LOG_INFO, "SDL(console): window = panel %dx%d, fullscreen", window_width, window_height);
     }
 #endif
     if (window_width <= 0 || window_height <= 0) {
@@ -423,13 +392,13 @@ static void gfx_sdl_init(const struct GfxWindowInitSettings *set) {
             else                     { window_width = maxw; window_height = maxw * 3 / 4; }
         }
         if (window_width < 640 || window_height < 480) { window_width = 640; window_height = 480; }
-        sysLogPrintf(LOG_INFO, "SDL: auto window size %dx%d", window_width, window_height);
+        ge_log(GE_LOG_INFO, "SDL: auto window size %dx%d", window_width, window_height);
     }
 
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    if (sysArgCheck("--debug-gl")) {
+    if (ge_arg_check("--debug-gl")) {
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_DEBUG_FLAG);
     }
 
@@ -463,7 +432,7 @@ static void gfx_sdl_init(const struct GfxWindowInitSettings *set) {
     // if fullscreen was requested, start the window in fullscreen right away
     bool want_fullscreen = set->fullscreen;
 #ifndef __SWITCH__
-    if (portIsConsole()) want_fullscreen = true;   // the window is the panel
+    if (ge_is_console()) want_fullscreen = true;   // the window is the panel
 #endif
     if (want_fullscreen) {
         flags |= fullscreen_flag;
@@ -493,7 +462,7 @@ static void gfx_sdl_init(const struct GfxWindowInitSettings *set) {
 #endif
 
 #ifdef GE_VULKAN
-    if (s_vk_window) {   /* issue #44: the Vulkan backend owns the swapchain */
+    if (s_mode == GE_WINDOW_VULKAN) {   /* issue #44: the Vulkan backend owns the swapchain */
         create_vk_window(set->title, posX, posY, flags);
     } else
 #endif
@@ -521,7 +490,7 @@ static void gfx_sdl_init(const struct GfxWindowInitSettings *set) {
             SDL_SetWindowIcon(wnd, icon);
             SDL_FreeSurface(icon);
         } else {
-            sysLogPrintf(LOG_NOTE, "SDL: could not create the window icon surface: %s", SDL_GetError());
+            ge_log(GE_LOG_NOTE, "SDL: could not create the window icon surface: %s", SDL_GetError());
         }
     }
 
@@ -617,14 +586,12 @@ static void gfx_sdl_set_dimensions(uint32_t width, uint32_t height, int32_t posX
 }
 
 static void gfx_sdl_get_dimensions(uint32_t* width, uint32_t* height, int32_t* posX, int32_t* posY) {
-#if defined(__SWITCH__) || defined(GE_VULKAN)
-    if (s_ext_dims) {   /* D973 */
-        s_ext_dims(width, height);
+    if (s_has_ext && s_ext.dims) {   /* D973 */
+        s_ext.dims(width, height);
         *posX = 0;
         *posY = 0;
         return;
     }
-#endif
     SDL_GL_GetDrawableSize(wnd, static_cast<int*>((void*)width), static_cast<int*>((void*)height));
     SDL_GetWindowPosition(wnd, static_cast<int*>(posX), static_cast<int*>(posY));
 }
@@ -636,6 +603,13 @@ static void gfx_sdl_handle_events(void) {
      * render thread must not call SDL_PollEvent on macOS. */
     return;
 #else
+    const GeRenderCallbacks *cb = ge_callbacks();
+    if (cb->is_handheld && cb->on_dock_change) {
+        static int s_last_handheld = -1;
+        const int hh = cb->is_handheld() ? 1 : 0;
+        if (s_last_handheld >= 0 && hh != s_last_handheld) cb->on_dock_change(hh);
+        s_last_handheld = hh;
+    }
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
@@ -643,50 +617,38 @@ static void gfx_sdl_handle_events(void) {
                 if (event.key.keysym.sym == SDLK_RETURN && (event.key.keysym.mod & KMOD_ALT)) {
                     // alt-enter received, switch fullscreen state
                     set_fullscreen(!fullscreen_state, true);
-                } else if (event.key.keysym.sym == SDLK_F4 && (event.key.keysym.mod & KMOD_ALT)) {
-                    // D145: Alt+F4 quits; bare ESC no longer does (it is the
-                    // menu "back" key -- see port/src/video.c / input.c).
-                    // D344: request, don't exit(): this is the render thread,
-                    // mid-frame. It parks at the frame's end; the host exits.
-                    videoRequestQuit("Alt+F4 (render pump)");
-                } else if (event.key.keysym.sym == SDLK_ESCAPE && !event.key.repeat) {
-                    // WI-1: this render-thread pump and port/src/video.c's
-                    // host-thread pump both drain the same SDL queue, so either
-                    // one can be the loop that dequeues a given ESC keydown.
-                    // Handle it here too or click-to-lock's ESC-to-free races
-                    // (and usually loses to this loop, which runs every frame).
-                    inputReleaseCapture();
+                } else if (cb->on_key_down) {
+                    // D145/D344: Alt+F4 quits, ESC releases the mouse capture (WI-1): the host's call (both
+                    // pumps, this one and the host thread's, drain the same SDL queue, so either dequeues a keydown).
+                    cb->on_key_down((int)event.key.keysym.sym, (int)event.key.keysym.mod, event.key.repeat);
                 }
                 break;
+            case SDL_TEXTINPUT:
+                if (cb->on_text) cb->on_text(event.text.text);
+                break;
             case SDL_MOUSEBUTTONDOWN:
-                inputNotifyClick();   // WI-1: (re)lock in click-to-lock mode
+                if (cb->on_mouse_button_down) cb->on_mouse_button_down(event.button.button);   // WI-1: (re)lock in click-to-lock mode
                 break;
             case SDL_MOUSEWHEEL:
-                inputPostWheel(event.wheel.y);   // weapon cycle
+                if (cb->on_mouse_wheel) cb->on_mouse_wheel(event.wheel.y);   // weapon cycle
                 break;
             case SDL_CONTROLLERBUTTONDOWN:      // D961: GE_PRESSLATCH, a tap between two pad samples
-                inputNoteButtonDown(event.cbutton.which, event.cbutton.button, event.cbutton.timestamp);
+                if (cb->on_pad_button_down) cb->on_pad_button_down((int)event.cbutton.which, event.cbutton.button, event.cbutton.timestamp);
                 break;
             case SDL_CONTROLLERAXISMOTION:
-                inputNoteAxis(event.caxis.which, event.caxis.axis, event.caxis.value, event.caxis.timestamp);
+                if (cb->on_pad_axis) cb->on_pad_axis((int)event.caxis.which, event.caxis.axis, event.caxis.value, event.caxis.timestamp);
                 break;
-            case SDL_CONTROLLERDEVICEADDED:     // D450: this pump and video.c's drain the same
-            case SDL_CONTROLLERDEVICEREMOVED:   // SDL queue; request a rescan, never rescan here
-                inputRequestRescan();
+            case SDL_CONTROLLERDEVICEADDED:     // D450: this pump and the host's drain the same
+            case SDL_CONTROLLERDEVICEREMOVED:   // SDL queue; the host requests a rescan, never rescans here
+                if (cb->on_pad_device_change) cb->on_pad_device_change();
                 break;
-#ifdef __SWITCH__
             case SDL_AUDIODEVICEREMOVED:   // D959: the host thread no longer polls SDL here
-                if (!event.adevice.iscapture) audioNotifyDeviceRemoved(event.adevice.which);
+                if (!event.adevice.iscapture && cb->on_audio_device_removed) cb->on_audio_device_removed(event.adevice.which);
                 break;
-#endif
             case SDL_WINDOWEVENT:
                 if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
                     drawable_size(&window_width, &window_height);
-#ifdef __SWITCH__
-                    sysLogPrintf(LOG_INFO, "SDL: window size changed -> %dx%d (drawable %dx%d, handheld=%d)",
-                                 event.window.data1, event.window.data2, window_width, window_height,
-                                 nxIsHandheld());
-#endif
+                    if (cb->on_resize) cb->on_resize(window_width, window_height);
                     if (!fullscreen_state) {
                         maximized_state = SDL_GetWindowFlags(wnd) & SDL_WINDOW_MAXIMIZED ? true : false;
                     }
@@ -694,15 +656,15 @@ static void gfx_sdl_handle_events(void) {
                            event.window.windowID == SDL_GetWindowID(wnd)) {
                     // We listen specifically for main window close because closing main window
                     // on macOS does not trigger SDL_Quit.
-                    videoRequestQuit("window closed (render pump)");   // D344
+                    if (cb->on_quit) cb->on_quit("window closed (render pump)");   // D344
                 } else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
-                    inputSetMouseGrab(0);   // free + show cursor on alt-tab (also handled by video.c's pump; whichever dequeues it)
+                    if (cb->on_focus) cb->on_focus(0);   // free + show cursor on alt-tab (also handled by the host's pump; whichever dequeues it)
                 } else if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
-                    inputSetMouseGrab(1);
+                    if (cb->on_focus) cb->on_focus(1);
                 }
                 break;
             case SDL_QUIT:
-                videoRequestQuit("quit event (render pump)");   // D344
+                if (cb->on_quit) cb->on_quit("quit event (render pump)");   // D344
                 break;
         }
     }
@@ -712,7 +674,7 @@ static void gfx_sdl_handle_events(void) {
 /* The window/context are created on the host main thread, but the game's
  * scheduler thread (shedThread) does all rendering. Make the context current
  * there before each frame. extern "C": called from C (port/src/video.c). */
-extern "C" void gfx_sdl_make_context_current(void) {
+extern "C" void ge_window_make_context_current(void) {
     if (wnd && ctx) {
         /* Note: SDL2's MakeCurrent return value is unreliable on this MinGW
          * toolchain (ABI artifact), so we don't branch on it. A genuine bind
@@ -725,13 +687,11 @@ extern "C" void gfx_sdl_make_context_current(void) {
 /* D344: called on the render thread when a quit was requested, at a frame
  * boundary: wait for the GPU to drain everything this process queued, then
  * unbind the context, so process teardown never lands inside the driver. */
-extern "C" void gfx_sdl_park_for_exit(void) {
-#if defined(__SWITCH__) || defined(GE_VULKAN)
-    if (s_ext_present) {   /* D973: queue idle, swapchain destroyed (replay thread) */
-        if (s_ext_park) s_ext_park();
+extern "C" void ge_window_park_for_exit(void) {
+    if (s_has_ext) {   /* D973: queue idle, swapchain destroyed (replay thread) */
+        if (s_ext.park) s_ext.park();
         return;
     }
-#endif
     if (ctx && SDL_GL_GetCurrentContext() == ctx) {
         typedef void (SDLCALL *FinishFn)(void);   // = APIENTRY on Windows
         FinishFn finish = (FinishFn)SDL_GL_GetProcAddress("glFinish");
@@ -749,7 +709,7 @@ extern "C" void gfx_sdl_park_for_exit(void) {
  * destroyed by the kernel inside process teardown (DXGPROCESS::Destroy ->
  * DXGCONTEXT::DestroyContext -> VidSchTerminateHwQueue), which is exactly
  * where the 0x119 bugcheck of 2026-10-10 fired (minidump, HAGS on). */
-extern "C" void gfx_sdl_teardown_for_exit(void) {
+extern "C" void ge_window_teardown_for_exit(void) {
     if (ctx) {
         SDL_GL_MakeCurrent(NULL, NULL);   // host never holds it after init; harmless
         SDL_GL_DeleteContext(ctx);
@@ -766,7 +726,7 @@ extern "C" void gfx_sdl_teardown_for_exit(void) {
  * still holds it, wglMakeContextCurrent fails with "The requested resource is
  * in use" (SDL2 reports this via SDL_GetError). The host thread must release
  * after init so the game's scheduler thread can bind it per frame. */
-extern "C" void gfx_sdl_release_context(void) {
+extern "C" void ge_window_release_context(void) {
     if (ctx) {
         SDL_GL_MakeCurrent(NULL, NULL);
     }
@@ -779,18 +739,18 @@ extern "C" void gfx_sdl_release_context(void) {
  * (SDL video calls belong there) and read by the render thread. 0 = unknown. */
 static SDL_atomic_t s_refresh_hz;
 
-extern "C" void gfx_sdl_poll_refresh_rate(void) {
+extern "C" void ge_window_poll_refresh_rate(void) {
     SDL_DisplayMode mode;
     const int idx = wnd ? SDL_GetWindowDisplayIndex(wnd) : -1;
     const int hz = (idx >= 0 && SDL_GetCurrentDisplayMode(idx, &mode) == 0) ? mode.refresh_rate : 0;
     SDL_AtomicSet(&s_refresh_hz, hz);
 }
 
-extern "C" int gfx_sdl_get_refresh_rate(void) {
+extern "C" int ge_window_get_refresh_rate(void) {
     return SDL_AtomicGet(&s_refresh_hz);
 }
 
-extern "C" void gfx_sdl_update_cached_size(void) {
+extern "C" void ge_window_update_cached_size(void) {
     if (wnd) {
         drawable_size(&window_width, &window_height);
     }
@@ -813,17 +773,17 @@ static inline void sync_framerate_with_timer(void) {
     // We want to exit a bit early, so we can busy-wait the rest to never miss the deadline
     left -= 15000UL;
     if (left > 0) {
-        /* D250: `left` is in 100ns units (qpc_to_100ns); sysSleep() takes
+        /* D250: `left` is in 100ns units (qpc_to_100ns); ge_sleep_us() takes
          * microseconds. Passing it unconverted slept ~10x too long every
          * time this branch fired (e.g. an intended 2ms sleep became a real
          * ~20ms one), silently eating the rest of the frame budget whenever
          * per-frame work left little slack -- a resolution/GPU-independent
          * frame-pacing bug, not a real render cost. */
-        sysSleep((uint32_t)(left / 10));
+        ge_sleep_us((uint32_t)(left / 10));
     }
 
     do {
-        sysCpuRelax();
+        ge_cpu_relax();
         t = qpc_to_100ns(SDL_GetPerformanceCounter());
     } while ((int64_t)t < next);
 
@@ -841,21 +801,19 @@ static inline void sync_framerate_with_timer(void) {
  * buffer, immediately before the swap. video.c uses it for GE_PCDUMP /
  * screenshots: reading the back buffer AFTER SDL_GL_SwapWindow is undefined
  * on buffer-exchange drivers (Mesa, WSLg) and yields a black capture. */
-extern "C" void (*gfx_pre_swap_hook)(void) = NULL;
+extern "C" void (*ge_window_pre_present)(void) = NULL;
 
 static void gfx_sdl_swap_buffers_begin(void) {
     if (target_fps) {
         sync_framerate_with_timer();
     }
-    if (gfx_pre_swap_hook) {
-        gfx_pre_swap_hook();
+    if (ge_window_pre_present) {
+        ge_window_pre_present();
     }
-#if defined(__SWITCH__) || defined(GE_VULKAN)
-    if (s_ext_present) {   /* D973 */
-        s_ext_present();
+    if (s_has_ext) {   /* D973 */
+        s_ext.present();
         return;
     }
-#endif
     SDL_GL_SwapWindow(wnd);
 }
 
@@ -878,7 +836,7 @@ static void gfx_sdl_set_target_fps(int fps) {
      * presentation. Until pacing is moved off that thread, refuse caps low
      * enough to be user-visible as a slowdown: treat 1..29 as uncapped. */
     if (fps > 0 && fps < 30) {
-        sysLogPrintf(LOG_WARNING, "gfx_sdl: ignoring FpsCap=%d (< 30 throttles the sim); running uncapped", fps);
+        ge_log(GE_LOG_WARNING, "gfx_sdl: ignoring FpsCap=%d (< 30 throttles the sim); running uncapped", fps);
         fps = 0;
     }
     target_fps = fps;
@@ -897,9 +855,7 @@ static void gfx_sdl_set_window_title(const char *title) {
 }
 
 static int gfx_sdl_get_swap_interval(void) {
-#if defined(__SWITCH__) || defined(GE_VULKAN)
-    if (s_ext_present) return s_ext_swap_interval;   /* D973 */
-#endif
+    if (s_has_ext) return s_ext_swap_interval;   /* D973 */
 #if defined(__APPLE__)
     return s_cglSwapInterval;   /* D952 */
 #else
@@ -908,14 +864,12 @@ static int gfx_sdl_get_swap_interval(void) {
 }
 
 static bool gfx_sdl_set_swap_interval(int interval) {
-#if defined(__SWITCH__) || defined(GE_VULKAN)
-    if (s_ext_present) {   /* D973: the deko3d swapchain's interval */
+    if (s_has_ext) {   /* D973: the deko3d swapchain's interval */
         s_ext_swap_interval = interval;
-        if (s_ext_interval) s_ext_interval(interval);
+        if (s_ext.set_interval) s_ext.set_interval(interval);
         vsync_enabled = interval != 0;
         return true;
     }
-#endif
 #if defined(__APPLE__)
     const bool success = gfx_sdl_apply_swap_interval(interval);   /* D952 */
 #else
@@ -923,7 +877,7 @@ static bool gfx_sdl_set_swap_interval(int interval) {
 #endif
     vsync_enabled = success && (interval != 0);
     if (!success) {
-        sysLogPrintf(LOG_WARNING, "SDL: failed to set vsync %d: %s", interval, SDL_GetError());
+        ge_log(GE_LOG_WARNING, "SDL: failed to set vsync %d: %s", interval, SDL_GetError());
     }
     return success;
 }
@@ -955,7 +909,7 @@ int gfx_sdl_get_num_display_modes(void) {
     return SDL_GetNumDisplayModes(display_in_use);
 }
 
-struct GfxWindowManagerAPI gfx_sdl = {
+struct GfxWindowManagerAPI ge_window_sdl = {
     gfx_sdl_init,
     gfx_sdl_close,
     gfx_sdl_get_display_mode,

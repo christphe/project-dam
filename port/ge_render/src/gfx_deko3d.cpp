@@ -56,21 +56,14 @@ extern "C" void* nwindowGetDefault(void);
 #define ZMODE_XLU 0x800
 #define ZMODE_DEC 0xc00
 
-#include "system.h"
+#include "ge_internal.h"
 #include "gfx_cc.h"
 #include "gfx_rendering_api.h"
 #include "gfx_deko3d.h"
 #include "gfx_dk_layout.h"
 #include "gfx_dk_heap.h"
-#include "skyplus.h"
+#include "ge_render_sky.h"
 
-extern bool gfx_framebuffers_enabled;   /* gfx_pc.cpp */
-extern int gfx_rdp_affine;              /* gfx_pc.cpp (D540) */
-extern int gfx_fog_vertex;              /* gfx_pc.cpp (D543) */
-extern "C" int portDisplayFixes;       /* port/src/video.c: Video.Visuals >= Fixed (D982) */
-extern "C" int portPerPixelFog;                /* port/src/video.c: Video.PerPixelFog */
-extern "C" volatile int gfx_skyplus_failed;   /* gfx_opengl.cpp */
-extern "C" int nxIsHandheld(void);      /* port/src/switch/nxmem.c */
 extern "C" const uint8_t ge007_dksh_pack[], ge007_dksh_pack_end[];
 
 struct ShaderProgram {
@@ -148,7 +141,7 @@ int s_dbg_logged = 0;
 void dk_debug(void*, const char* context, DkResult result, const char* message) {
     if (s_dbg_logged < 64) {
         s_dbg_logged++;
-        sysLogPrintf(LOG_ERROR, "DK: deko3d error %d in %s: %s", (int)result, context ? context : "?", message ? message : "");
+        ge_log(GE_LOG_ERROR, "DK: deko3d error %d in %s: %s", (int)result, context ? context : "?", message ? message : "");
     }
 }
 
@@ -160,7 +153,7 @@ Block make_block(uint32_t size, uint32_t flags) {
     m.flags = flags;
     b.mb = dkMemBlockCreate(&m);
     if (b.mb == nullptr) {
-        sysFatalError("deko3d: could not allocate %u KiB of GPU memory", (unsigned)(size >> 10));
+        ge_fatal("deko3d: could not allocate %u KiB of GPU memory", (unsigned)(size >> 10));
     }
     b.cpu = (flags & DkMemBlockFlags_CpuAccessMask) ? (uint8_t*)dkMemBlockGetCpuAddr(b.mb) : nullptr;
     b.gpu = dkMemBlockGetGpuAddr(b.mb);
@@ -199,7 +192,7 @@ void give_cmd_memory(void) {
 
 void cmd_add_mem(void*, DkCmdBuf, size_t min_req) {
     if (min_req + CMD_SLACK > CMD_SLICE) {
-        sysFatalError("deko3d: command of %u bytes", (unsigned)min_req);
+        ge_fatal("deko3d: command of %u bytes", (unsigned)min_req);
     }
     give_cmd_memory();
 }
@@ -283,7 +276,7 @@ int sampler_slot(const SmpKey& k) {
     if (it != s_smp_slots.end()) return it->second;
     int slot = (int)s_smp_slots.size();
     if (slot >= (int)NUM_SMP_DESC) {
-        sysLogPrintf(LOG_WARNING, "DK: sampler descriptors exhausted; reusing slot 0");
+        ge_log(GE_LOG_WARNING, "DK: sampler descriptors exhausted; reusing slot 0");
         return 0;
     }
     DkSampler s;
@@ -344,7 +337,7 @@ int write_img_desc(const DkImage* img, bool alpha_one) {
         retire();
         slot = s_imgSlots.take();
         if (slot < 0) {
-            sysLogPrintf(LOG_ERROR, "DK: image descriptors exhausted");
+            ge_log(GE_LOG_ERROR, "DK: image descriptors exhausted");
             return s_dummy_slot;
         }
     }
@@ -536,7 +529,7 @@ bool pack_shader(int entry, int stage, DkShader* out) {
 void load_pack(void) {
     const uint8_t* p = ge007_dksh_pack;
     if ((size_t)(ge007_dksh_pack_end - p) < 16 || memcmp(p, DK_PACK_MAGIC, 8) != 0) {
-        sysFatalError("deko3d: shader pack missing or corrupt");
+        ge_fatal("deko3d: shader pack missing or corrupt");
     }
     memcpy(&s_pack_count, p + 8, 4);
     s_pack = (const DkPackEntry*)(p + 16);
@@ -568,31 +561,31 @@ void load_pack(void) {
     }
     const int uber = pack_find(0, DK_PACK_UBER);
     if (!pack_shader(uber, 0, &s_uber_vert) || !pack_shader(uber, 1, &s_uber_frag)) {
-        sysFatalError("deko3d: uber-shader missing from the shader pack");
+        ge_fatal("deko3d: uber-shader missing from the shader pack");
     }
     const bool fs = pack_shader(pack_find(0, DK_PACK_FULLSCREEN), 0, &s_fs_vert);
     s_fxaa_ok = fs && pack_shader(pack_find(0, DK_PACK_FXAA), 1, &s_fxaa_frag);
     s_sky_ok = fs && pack_shader(pack_find(0, DK_PACK_SKYPLUS), 1, &s_sky_frag);
     s_water_ok = pack_shader(pack_find(0, DK_PACK_WATER), 1, &s_water_frag);
-    gfx_water_surfaces = s_water_ok ? 1 : 0;   /* skyplus.c: the level's own water surfaces get the GE+ water */
+    ge_render_cfg.water_surfaces = s_water_ok ? 1 : 0;   /* skyplus.c: the level's own water surfaces get the GE+ water */
     {
         const char* e = getenv("GE_WATERHALF");
         s_wfx_env = (e != nullptr && e[0] == '0') ? 0 : 1;
         s_wfx_pack_ok = s_wfx_env && s_water_ok && pack_shader(pack_find(0, DK_PACK_WATERBODY), 1, &s_wbody_frag) &&
                         pack_shader(pack_find(0, DK_PACK_WATERCOMP), 1, &s_wcomp_frag);
-        sysLogPrintf(LOG_NOTE, "DK: GE+ water at half resolution: %s", s_wfx_pack_ok ? "available (GE_WATERHALF=0 turns it off)"
+        ge_log(GE_LOG_NOTE, "DK: GE+ water at half resolution: %s", s_wfx_pack_ok ? "available (GE_WATERHALF=0 turns it off)"
                      : s_wfx_env ? "off (the shader pack lacks the variants)" : "off (GE_WATERHALF=0)");
     }
     s_lut_ok = fs && pack_shader(pack_find(0, DK_PACK_SKYLUT), 1, &s_lut_frag);
     int combiners = 0;
     for (uint32_t i = 0; i < s_pack_count; i++) combiners += (s_pack[i].id0 != 0 || s_pack[i].id1 >= DK_PACK_NAMED_MAX);
-    sysLogPrintf(LOG_NOTE, "DK: shader pack: %d combiners + uber, %u KiB of code", combiners, (unsigned)(total >> 10));
+    ge_log(GE_LOG_NOTE, "DK: shader pack: %d combiners + uber, %u KiB of code", combiners, (unsigned)(total >> 10));
 }
 
 /* ---------------- window ---------------- */
 
 void create_window(void) {
-    s_handheld = nxIsHandheld() != 0;
+    s_handheld = ge_is_handheld() != 0;
     s_win_w = s_handheld ? 1280 : 1920;
     s_win_h = s_handheld ? 720 : 1080;
     DkImageLayoutMaker lm;
@@ -624,13 +617,13 @@ void create_window(void) {
     DkSwapchainMaker sm;
     dkSwapchainMakerDefaults(&sm, s_dev, nwindowGetDefault(), imgs, NUM_SWAP);
     s_swapchain = dkSwapchainCreate(&sm);
-    if (s_swapchain == nullptr) sysFatalError("deko3d: could not create the swapchain");
+    if (s_swapchain == nullptr) ge_fatal("deko3d: could not create the swapchain");
     dkSwapchainSetSwapInterval(s_swapchain, (uint32_t)s_swap_interval);
     s_dims_w = s_win_w;
     s_dims_h = s_win_h;
     s_acq = -1;
     s_target_dirty = true;
-    sysLogPrintf(LOG_NOTE, "DK: swapchain %ux%u (%s)", s_win_w, s_win_h, s_handheld ? "handheld" : "docked");
+    ge_log(GE_LOG_NOTE, "DK: swapchain %ux%u (%s)", s_win_w, s_win_h, s_handheld ? "handheld" : "docked");
 }
 
 void destroy_window(void) {
@@ -909,7 +902,7 @@ void acquired_hook(void) {
 }
 
 void check_dock(void) {
-    const bool hh = nxIsHandheld() != 0;
+    const bool hh = ge_is_handheld() != 0;
     if (hh == s_handheld) return;
     if (s_cmd_pending) submit();
     dkQueueWaitIdle(s_queue);
@@ -933,7 +926,7 @@ void dk_load_shader_with(struct ShaderProgram* p, uint32_t fc, float noise, bool
     s_prg = p;
     s_uni.frame_count = (int32_t)fc;
     s_uni.noise_scale = noise;
-    s_uni.fog_pixel = gfx_fog_vertex ? 0 : 1;   /* D982: follows a live change */
+    s_uni.fog_pixel = ge_render_cfg.fog_vertex ? 0 : 1;   /* D982: follows a live change */
     /* GL compiles the three-point code only while that mode is on */
     s_uni.three_point0 = (tpf0 && s_filter == FILTER_THREE_POINT) ? 1 : 0;
     s_uni.three_point1 = (tpf1 && s_filter == FILTER_THREE_POINT) ? 1 : 0;
@@ -995,11 +988,11 @@ struct ShaderProgram* dk_create_and_load_new_shader(uint64_t id0, uint32_t id1) 
         if (!s_missed[std::make_pair(id0, id1)]) {
             s_missed[std::make_pair(id0, id1)] = true;
             if (p->skip) {
-                sysLogPrintf(LOG_ERROR, "DKSH miss %016llx %08x: an effect missing from the pack, not drawn "
+                ge_log(GE_LOG_ERROR, "DKSH miss %016llx %08x: an effect missing from the pack, not drawn "
                              "(tools_pc/cc_census_merge.py adds it to port/shaders/fx/combiners.txt)",
                              (unsigned long long)id0, (unsigned)id1);
             } else {
-                sysLogPrintf(LOG_NOTE, "DKSH miss %016llx %08x", (unsigned long long)id0, (unsigned)id1);
+                ge_log(GE_LOG_NOTE, "DKSH miss %016llx %08x", (unsigned long long)id0, (unsigned)id1);
             }
         }
     }
@@ -1166,7 +1159,7 @@ void dk_upload_texture(const uint8_t* rgba, uint32_t width, uint32_t height, boo
     if (t.has_img) free_image(t.blk, t.slot);
     t.has_img = false;
     if (!upload_image(&t.img, &t.blk, DkImageFormat_RGBA8_Unorm, 4, data, s_offs, width, height, levels, total)) {
-        sysLogPrintf(LOG_ERROR, "DK: texture %ux%u: out of image memory", width, height);
+        ge_log(GE_LOG_ERROR, "DK: texture %ux%u: out of image memory", width, height);
         return;
     }
     t.slot = write_img_desc(&t.img, false);
@@ -1424,23 +1417,23 @@ void dk_init(void) {
     {
         const char *sp = getenv("GE_SHADEPERSP");
         if (sp && sp[0] == '1') {
-            sysLogPrintf(LOG_WARNING, "DK: GE_SHADEPERSP ignored under deko3d (shade is perspective-correct, D986)");
+            ge_log(GE_LOG_WARNING, "DK: GE_SHADEPERSP ignored under deko3d (shade is perspective-correct, D986)");
         }
-        if (getenv("GE_FOGSNAP")) sysLogPrintf(LOG_WARNING, "DK: GE_FOGSNAP ignored under deko3d");
+        if (getenv("GE_FOGSNAP")) ge_log(GE_LOG_WARNING, "DK: GE_FOGSNAP ignored under deko3d");
     }
     {
         const char* e = getenv("GE_DKSUBMIT");
         s_submit_every = e ? (uint32_t)atoi(e) : 64;
-        sysLogPrintf(LOG_NOTE, "DK: submit every %u draws (GE_DKSUBMIT; 0 = once per frame)", s_submit_every);
+        ge_log(GE_LOG_NOTE, "DK: submit every %u draws (GE_DKSUBMIT; 0 = once per frame)", s_submit_every);
     }
-    gfx_rdp_affine = 0;   /* D986: the pack is built with perspective-correct shade */
+    ge_render_cfg.rdp_affine = 0;   /* D986: the pack is built with perspective-correct shade */
     /* Fog: the pack carries both forms (vFog.a per vertex, vFogW = fog * w);
      * Draw.fog_pixel picks one (set at each shader bind, so a live change of
      * Video.PerPixelFog lands at once, D982). */
     {
-        gfx_fog_vertex = !portPerPixelFog;
-        s_uni.fog_pixel = gfx_fog_vertex ? 0 : 1;
-        sysLogPrintf(LOG_NOTE, "DK: fog %s", gfx_fog_vertex ? "per-vertex (N64)" : "per-pixel");
+        ge_render_cfg.fog_vertex = !ge_render_cfg.per_pixel_fog;
+        s_uni.fog_pixel = ge_render_cfg.fog_vertex ? 0 : 1;
+        ge_log(GE_LOG_NOTE, "DK: fog %s", ge_render_cfg.fog_vertex ? "per-vertex (N64)" : "per-pixel");
     }
 
     DkDeviceMaker dm;
@@ -1448,7 +1441,7 @@ void dk_init(void) {
     dm.cbDebug = dk_debug;
     dm.flags = DkDeviceFlags_OriginUpperLeft | DkDeviceFlags_DepthMinusOneToOne;
     s_dev = dkDeviceCreate(&dm);
-    if (s_dev == nullptr) sysFatalError("deko3d: could not create the device");
+    if (s_dev == nullptr) ge_fatal("deko3d: could not create the device");
 
     DkQueueMaker qm;
     dkQueueMakerDefaults(&qm, s_dev);
@@ -1456,7 +1449,7 @@ void dk_init(void) {
     qm.commandMemorySize = 4 * DK_QUEUE_MIN_CMDMEM_SIZE;
     qm.flushThreshold = DK_QUEUE_MIN_CMDMEM_SIZE / 2;
     s_queue = dkQueueCreate(&qm);
-    if (s_queue == nullptr) sysFatalError("deko3d: could not create the queue");
+    if (s_queue == nullptr) ge_fatal("deko3d: could not create the queue");
 
     DkCmdBufMaker cm;
     dkCmdBufMakerDefaults(&cm, s_dev);
@@ -1504,7 +1497,7 @@ void dk_init(void) {
     create_window();
     s_fbs.resize(1);   /* fb 0 = the window */
     submit();
-    sysLogPrintf(LOG_NOTE, "DK: deko3d backend ready (device origin upper-left, depth -1..1, GL memory layout on every target)");
+    ge_log(GE_LOG_NOTE, "DK: deko3d backend ready (device origin upper-left, depth -1..1, GL memory layout on every target)");
 }
 
 void dk_on_resize(void) {}
@@ -1595,7 +1588,7 @@ void build_fb_images(Fb& f) {
         f.has_depth_img = ok;
     }
     if (!ok) {
-        sysLogPrintf(LOG_ERROR, "DK: framebuffer %ux%u x%u: out of image memory", f.w, f.h, f.msaa);
+        ge_log(GE_LOG_ERROR, "DK: framebuffer %ux%u x%u: out of image memory", f.w, f.h, f.msaa);
         return;
     }
     f.color_slot = write_img_desc(&f.color, true);
@@ -1620,8 +1613,8 @@ void dk_update_framebuffer_parameters(int fb_id, uint32_t width, uint32_t height
     width = width < 1 ? 1 : width;
     height = height < 1 ? 1 : height;
     if (msaa_level > 8) msaa_level = 8;   /* the GPU's maximum */
-    if (!gfx_framebuffers_enabled) has_depth_buffer = false;
-    if (fb_id != 0 && gfx_framebuffers_enabled) {
+    if (!ge_render_cfg.framebuffers_enabled) has_depth_buffer = false;
+    if (fb_id != 0 && ge_render_cfg.framebuffers_enabled) {
         const bool depth_missing = has_depth_buffer && !f.has_depth_img;
         if (f.w != width || f.h != height || f.msaa != msaa_level || depth_missing || !f.created) {
             destroy_fb_images(f);
@@ -1643,7 +1636,7 @@ void dk_update_framebuffer_parameters(int fb_id, uint32_t width, uint32_t height
 
 bool dk_start_draw_to_framebuffer(int fb_id, float noise_scale) {
     if (fb_id != s_cur_fb) wfx_flush();   /* the records belong to the target being left */
-    if (gfx_framebuffers_enabled && fb_id < (int)s_fbs.size()) {
+    if (ge_render_cfg.framebuffers_enabled && fb_id < (int)s_fbs.size()) {
         if (noise_scale != 0.0f) s_noise_scale = 1.0f / noise_scale;
         if (fb_id != s_cur_fb || s_bound_fb != fb_id) s_target_dirty = true;
         s_cur_fb = fb_id;
@@ -1740,7 +1733,7 @@ void blit_gl(int fb_src, int sx0, int sy0, int sx1, int sy1, int fb_dst, int dx0
 
 void dk_copy_framebuffer(int fb_dst, int fb_src, int left, int top, bool flip_y, bool use_back) {
     (void)use_back;   /* deko3d reads the image being drawn (GL: GL_BACK) */
-    if (!gfx_framebuffers_enabled || fb_dst >= (int)s_fbs.size() || fb_src >= (int)s_fbs.size()) return;
+    if (!ge_render_cfg.framebuffers_enabled || fb_dst >= (int)s_fbs.size() || fb_src >= (int)s_fbs.size()) return;
     wfx_flush();
     const int dw = (int)fb_width(fb_dst), dh = (int)fb_height(fb_dst);
     int sx0, sy0, sx1, sy1;
@@ -1756,7 +1749,7 @@ void dk_copy_framebuffer(int fb_dst, int fb_src, int left, int top, bool flip_y,
 }
 
 void dk_resolve_msaa_color_buffer(int fb_target, int fb_source) {
-    if (!gfx_framebuffers_enabled || fb_source <= 0 || fb_source >= (int)s_fbs.size() || fb_target >= (int)s_fbs.size()) return;
+    if (!ge_render_cfg.framebuffers_enabled || fb_source <= 0 || fb_source >= (int)s_fbs.size() || fb_target >= (int)s_fbs.size()) return;
     Fb& src = s_fbs[fb_source];
     if (!src.created) return;
     wfx_flush();
@@ -1862,7 +1855,7 @@ bool wfx_prepare(int fb) {
     Fb& f = s_fbs[s_wfx_hfb];
     if (!f.created || !f.has_depth_img) {
         s_wfx_dead = true;
-        sysLogPrintf(LOG_NOTE, "DK: GE+ water half resolution: off (no %ux%u target); the water is drawn at full resolution", hw, hh);
+        ge_log(GE_LOG_NOTE, "DK: GE+ water half resolution: off (no %ux%u target); the water is drawn at full resolution", hw, hh);
         return false;
     }
     if (s_wfx_slot < 0 || s_wfx_slot_w != f.w || s_wfx_slot_h != f.h || s_wfx_blk.chunk != f.blk_color.chunk ||
@@ -1875,20 +1868,20 @@ bool wfx_prepare(int fb) {
         if (s_wfx_slot == s_dummy_slot) {
             s_wfx_slot = -1;
             s_wfx_dead = true;
-            sysLogPrintf(LOG_NOTE, "DK: GE+ water half resolution: off (no image descriptor); the water is drawn at full resolution");
+            ge_log(GE_LOG_NOTE, "DK: GE+ water half resolution: off (no image descriptor); the water is drawn at full resolution");
             return false;
         }
     }
     if (!s_wfx_logged) {
         s_wfx_logged = true;
-        sysLogPrintf(LOG_NOTE, "DK: GE+ water half resolution: on (target %ux%u for a %ux%u view)", f.w, f.h, fb_width(fb), fb_height(fb));
+        ge_log(GE_LOG_NOTE, "DK: GE+ water half resolution: on (target %ux%u for a %ux%u view)", f.w, f.h, fb_width(fb), fb_height(fb));
     }
     return true;
 }
 
 /* Called for a water draw already issued with the water program: true = recorded (the caller draws the cheap body variant). */
 bool wfx_record(const float* buf, size_t len) {
-    if (!s_wfx_pack_ok || s_wfx_dead || !s_wfx_sky_on || !gfx_framebuffers_enabled || buf == nullptr || len == 0) return false;
+    if (!s_wfx_pack_ok || s_wfx_dead || !s_wfx_sky_on || !ge_render_cfg.framebuffers_enabled || buf == nullptr || len == 0) return false;
     if (s_wfx_flushes >= WFX_MAX_FLUSHES || s_wrec.size() >= WFX_MAX_RECORDS || s_wverts.size() + len > WFX_MAX_FLOATS) return false;
     if (!s_wrec.empty() && s_wfx_fb != s_cur_fb) return false;
     if (!is_window(s_cur_fb) && !s_fbs[s_cur_fb].created) return false;
@@ -2083,8 +2076,8 @@ const char* gfx_deko3d_renderer_string(void) {
 }
 
 void gfx_deko3d_get_dimensions(uint32_t* w, uint32_t* h) {
-    if (!s_up) {   /* asked by gfx_sdl_init before the swapchain exists */
-        const bool hh = nxIsHandheld() != 0;
+    if (!s_up) {   /* asked by ge_window_sdl init before the swapchain exists */
+        const bool hh = ge_is_handheld() != 0;
         *w = hh ? 1280 : 1920;
         *h = hh ? 720 : 1080;
         return;
@@ -2139,11 +2132,11 @@ void gfx_deko3d_park(void) {
     dkQueueDestroy(s_queue);
     dkDeviceDestroy(s_dev);
     s_up = false;
-    sysLogPrintf(LOG_NOTE, "DK: deko3d backend parked (queue idle, swapchain and device destroyed)");
+    ge_log(GE_LOG_NOTE, "DK: deko3d backend parked (queue idle, swapchain and device destroyed)");
 }
 
 void gfx_deko3d_fxaa_pass(int src_fb_id) {
-    if (!s_up || !s_fxaa_ok || !gfx_framebuffers_enabled || src_fb_id <= 0 || src_fb_id >= (int)s_fbs.size()) return;
+    if (!s_up || !s_fxaa_ok || !ge_render_cfg.framebuffers_enabled || src_fb_id <= 0 || src_fb_id >= (int)s_fbs.size()) return;
     Fb& src = s_fbs[src_fb_id];
     if (!src.created) return;
     wfx_flush();
@@ -2174,7 +2167,7 @@ void gfx_deko3d_skyplus_pass(int slot) {
     if (!s_up || slot < 0 || slot >= SKYPLUS_RING) return;
     wfx_flush();   /* the water draws so far still read the previous sky block (another player's view) */
     if (!s_sky_ok) {
-        gfx_skyplus_failed = 1;   /* skyplus.c draws GE's sky from the next frame on */
+        ge_render_cfg.skyplus_failed = 1;   /* skyplus.c draws GE's sky from the next frame on */
         return;
     }
     const SkyPlusDraw& d = s_sky_ring[slot];
@@ -2298,7 +2291,7 @@ void gfx_deko3d_skyplus_pass(int slot) {
     }
     /* the reflection sky, once per pass, into its small panorama; the sea reads it */
     bool lut = false;
-    if (sea && s_lut_ok && gfx_framebuffers_enabled) {
+    if (sea && s_lut_ok && ge_render_cfg.framebuffers_enabled) {
         if (s_lut_fb < 0) {
             s_lut_fb = dk_create_framebuffer();
             dk_update_framebuffer_parameters(s_lut_fb, SKYLUT_W, SKYLUT_H, 1, false, true, false, false);
@@ -2329,7 +2322,7 @@ void gfx_deko3d_skyplus_pass(int slot) {
     }
     /* the far sea, baked into its panorama when the sun (or the level's sky and water) changes */
     bool pano = false;
-    if ((sea && lut) || (farOnly && gfx_framebuffers_enabled)) {
+    if ((sea && lut) || (farOnly && ge_render_cfg.framebuffers_enabled)) {
         if (s_pano_fb < 0) {
             s_pano_fb = dk_create_framebuffer();
             s_fbs[s_pano_fb].smp = SmpKey{ DkFilter_Linear, DkFilter_Linear, DkMipFilter_None, DkWrapMode_Repeat, DkWrapMode_ClampToEdge, 1 };
@@ -2384,7 +2377,7 @@ void gfx_deko3d_skyplus_pass(int slot) {
                 s_pano_bakes++;
                 s_pano_frame = s_frame_count;
                 if (farOnly) {
-                    sysLogPrintf(LOG_NOTE, "DK: GE+ water: far sea baked (#%d) for the level's surfaces: plane y %.0f, %.0f under the eye", s_pano_bakes,
+                    ge_log(GE_LOG_NOTE, "DK: GE+ water: far sea baked (#%d) for the level's surfaces: plane y %.0f, %.0f under the eye", s_pano_bakes,
                                  p.farSeaY, p.bakeEye[1] - p.farSeaY);
                 }
             }
