@@ -2376,6 +2376,13 @@ void clear_rect(bool color, bool depth, int x, int y, int w, int h) {
         a[n].clearValue.depthStencil = { 1.0f, 0 };
         n++;
     }
+    /* begin_rendering may just have recreated the swapchain (a resize): the caller sized the rect from the old
+     * extent, so clip it to the target as it is now (a rect outside the render area is invalid). */
+    const int W = (int)fb_width(s_cur_fb), H = (int)fb_height(s_cur_fb);
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > W) w = W - x;
+    if (y + h > H) h = H - y;
     if (n == 0 || w <= 0 || h <= 0) return;
     VkClearRect r = {};
     r.rect = { { x, y }, { (uint32_t)w, (uint32_t)h } };
