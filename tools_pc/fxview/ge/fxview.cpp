@@ -43,6 +43,13 @@
 #include "fx_tex.h"
 #include "mv_png.h"
 #ifndef __SWITCH__
+#include <SDL.h>   // the sea mode's keyboard camera
+#endif
+#include "sea_tab.h"   // --mode sea|water|sky: the GE+ sky, sea and water (tools_pc/fxview/sea, #145)
+#ifdef SEA_HAVE_PACK
+extern "C" const unsigned char ge007_sea_pack[], ge007_sea_pack_end[];   // the sky/water VIEWER variants (sea_pack.S)
+#endif
+#ifndef __SWITCH__
 #include "fx_reload.h"
 #endif
 
@@ -771,7 +778,7 @@ static int selftest(const Args &a) {
 // ---------------------------------------------------------------- ImGui panel
 static const char *kViewKey[] = { "side", "split", "orig", "fx", "sheet" };   // sheet: decal mode only
 static const char *kBgKey[] = { "grey", "dark", "checker", "wall" };
-static const char *kModeKey[] = { "sprite", "decal", "cluster", "muzzle", "tracer", "burst", "explosion" };
+static const char *kModeKey[] = { "sprite", "decal", "cluster", "muzzle", "tracer", "burst", "explosion", "sea" };
 static const char *kTshowKey[] = { "game", "port", "side" };
 static std::string g_iniPath;
 static const char *kDiagKey[] = { "", "coverage", "veye", "uv", "pom", "pomalpha", "deriv" };
@@ -842,9 +849,16 @@ static void uiPanel(Args &a, int w, int h, const char *backendName, std::string 
     ImGui::Text("fxview  %s  %dx%d", backendName, w, h);
     ImGui::TextWrapped("%s", fxRomNote().c_str());
     int mode = keyIndex(kModeKey, a.mode);
-    if (ImGui::Combo("mode", &mode, "sprite\0decal\0cluster\0muzzle\0tracer\0burst\0explosion\0")) a.mode = kModeKey[mode];
+    if (ImGui::Combo("mode", &mode, "sprite\0decal\0cluster\0muzzle\0tracer\0burst\0explosion\0sky / sea\0")) a.mode = kModeKey[mode];
     ImGui::Separator();
-    if (a.mode == "sprite") {
+    if (a.mode == "sea") {
+#ifdef __SWITCH__
+        ImGui::TextDisabled("sticks move and look, ZL/ZR down/up, B fast\nL/R load /2 x2, Minus pass size, Y sway, X freeze");
+#else
+        ImGui::TextDisabled("WASD move, right mouse look, Space/Ctrl up/down,\nShift fast, R/F load x2 /2, M pass size");
+#endif
+        seaTabUi();
+    } else if (a.mode == "sprite") {
         int k = kindIndex(a.kind);
         if (ImGui::Combo("effect", &k, "tracer\0laser\0watch laser\0wall puff\0blood puff\0scatter puff\0bullet hole\0")) a.kind = kKindKey[k];
         if (k == K_IMPACT) ImGui::SliderInt("impact type", &a.impact, 0, 19);
@@ -957,6 +971,24 @@ int main(int argc, char **argv) {
         parseArgs(a, av);
         a.out = out;
     }
+    {   // the sky/sea module takes its own arguments (--mode sea|water|sky, --level, --view, --cam, --rep ...); fxview shows it as mode "sea"
+        std::vector<std::string> sv;
+#ifdef __SWITCH__
+        for (const char *s : { "--data", "sdmc:/switch/project-dam/data", "--imagelist", "sdmc:/switch/project-dam/fxview/imagelist.u.csv" }) sv.push_back(s);
+#endif
+        if (!a.rom.empty()) { sv.push_back("--rom"); sv.push_back(a.rom); }
+        if (!a.mode.empty() && a.mode != "sea" && a.mode != "water" && a.mode != "sky") {   // another mode: only the module's own keys reach it
+            for (size_t i = 0; i < av.size(); i++)
+                if (av[i] == "--level" || av[i] == "--cam" || av[i] == "--rep" || av[i] == "--set") { sv.push_back(av[i]); if (i + 1 < av.size()) sv.push_back(av[++i]); }
+        } else {
+            sv.insert(sv.end(), av.begin(), av.end());
+        }
+        std::vector<char *> sa;
+        sa.push_back((char *)"fxview");
+        for (std::string &s : sv) sa.push_back((char *)s.c_str());
+        for (int i = 1; i < (int)sa.size();) if (!seaTabParseArg((int)sa.size(), sa.data(), &i)) i++;
+        if (a.mode == "water" || a.mode == "sky") a.mode = "sea";
+    }
     g_tPlay = a.play != 0;
     if (a.t >= 0) { g_tTime = a.t; g_tPlay = false; }
     g_tSpeed = a.tspeed;
@@ -1002,6 +1034,8 @@ int main(int argc, char **argv) {
     api()->update_framebuffer_parameters(0, w, h, 1, false, true, true, true);
     const int shotFrame = a.probeFrame;
     Cluster ccluster, dcluster;
+    bool seaStarted = false, seaLoaded = false;
+    SeaTabCam seaCam = {};
     bool shotReq = false;
     int shotN = 0;
     std::string status;
@@ -1033,7 +1067,67 @@ int main(int argc, char **argv) {
         const int x0 = showUi ? (int)kPanelW : 0;
         const Pane scene = { x0, 0, (int)w - x0, H };
         std::vector<std::pair<Pane, std::string>> labels;   // drawn by ImGui after the scene
-        if (isTab(a)) {
+        if (a.mode == "sea") {
+            if (!seaStarted) {   // the first time the mode is shown: textures from the ROM, the VIEWER variants, the saved settings
+                const void *pack = nullptr; size_t packSize = 0;
+#ifdef SEA_HAVE_PACK
+                pack = ge007_sea_pack; packSize = (size_t)(ge007_sea_pack_end - ge007_sea_pack);
+#endif
+                seaLoaded = seaTabInit(pack, packSize);
+                seaTabLoadIni((a.out + "sea.ini").c_str());
+                seaTabInitCam(&seaCam);
+                seaStarted = true;
+                logf("fxview: sky/sea module %s", seaLoaded ? "ready" : "failed (see the log)");
+            }
+            static auto seaLast = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            const float dt = std::min(std::chrono::duration<float>(now - seaLast).count(), 0.25f);
+            seaLast = now;
+            float fwd = 0, right = 0, up = 0, fast = 1;
+            GeRenderInput in;
+            ge_render_poll_input(&in);
+            auto dz = [](float v) { return v > -0.18f && v < 0.18f ? 0.0f : v; };   // a worn stick drifts
+            fwd = dz(in.pad_ly); right = dz(in.pad_lx);
+            seaTabLook(&seaCam, dz(in.pad_rx) * 1.5f * dt, -dz(in.pad_ry) * 1.5f * dt);
+            if (in.pad_buttons & GE_PAD_B) fast = 10;
+            static uint32_t prevPad = 0;
+            const uint32_t down = in.pad_buttons & ~prevPad;
+            prevPad = in.pad_buttons;
+            if (down & GE_PAD_RSHOULDER) seaTabSetRep(seaTabRep() * 2);
+            if (down & GE_PAD_LSHOULDER) seaTabSetRep(seaTabRep() / 2);
+            if (down & GE_PAD_BACK) seaTabCycleScale();
+            if (down & GE_PAD_Y) seaTabToggleSway();
+            if (down & GE_PAD_X) seaTabToggleFreeze();
+#ifndef __SWITCH__
+            if (!ImGui::GetCurrentContext() || !ImGui::GetIO().WantCaptureKeyboard) {
+                const Uint8 *k = SDL_GetKeyboardState(nullptr);
+                if (k[SDL_SCANCODE_LSHIFT] || k[SDL_SCANCODE_RSHIFT]) fast = 10;
+                if (k[SDL_SCANCODE_W]) fwd += 1;
+                if (k[SDL_SCANCODE_S]) fwd -= 1;
+                if (k[SDL_SCANCODE_D]) right += 1;
+                if (k[SDL_SCANCODE_A]) right -= 1;
+                if (k[SDL_SCANCODE_SPACE] || k[SDL_SCANCODE_E]) up += 0.5f;
+                if (k[SDL_SCANCODE_LCTRL] || k[SDL_SCANCODE_Q]) up -= 0.5f;
+                static bool rDown = false, fDown = false, mDown = false;
+                if (k[SDL_SCANCODE_R] && !rDown) seaTabSetRep(seaTabRep() * 2);
+                if (k[SDL_SCANCODE_F] && !fDown) seaTabSetRep(seaTabRep() / 2);
+                if (k[SDL_SCANCODE_M] && !mDown) seaTabCycleScale();
+                rDown = k[SDL_SCANCODE_R]; fDown = k[SDL_SCANCODE_F]; mDown = k[SDL_SCANCODE_M];
+            }
+            {   // right mouse drag looks around (outside the panel)
+                static int lmx = 0, lmy = 0;
+                if ((in.mouse_buttons & 2) && in.mouse_x >= x0) seaTabLook(&seaCam, (in.mouse_x - lmx) * 0.0025f, (in.mouse_y - lmy) * 0.0025f);
+                lmx = in.mouse_x; lmy = in.mouse_y;
+            }
+#endif
+            const float speed = dt * 60.0f * fast;
+            seaTabMove(&seaCam, fwd * speed, right * speed, up * speed);
+            const int vp[4] = { scene.x, 0, scene.w, H };
+            if (seaLoaded) seaTabFrame(headless ? 1.0f / 60.0f : dt, &seaCam, vp);
+            api()->set_viewport(0, 0, (int)w, (int)h);
+            api()->set_scissor(0, 0, (int)w, (int)h);
+            if (!showUi) labels.push_back({ scene, seaTabStatus() });
+        } else if (isTab(a)) {
             const int ts = tshowOf(a);
             auto paneDraw = [&](const Pane &p, bool port, int c0, int c1) { drawTabPane(a, p, H, port, c0, c1); };
             if (ts == 2) {
@@ -1149,6 +1243,10 @@ int main(int argc, char **argv) {
         if (in.pad_buttons & GE_PAD_START) break;
     }
     if (!headless) saveIni(a, g_iniPath);
+    if (seaStarted) {
+        if (!headless) seaTabSaveIni((a.out + "sea.ini").c_str());
+        seaTabShutdown();
+    }
     ge_imgui_shutdown();
     ge_render_park();
     ge_render_close();

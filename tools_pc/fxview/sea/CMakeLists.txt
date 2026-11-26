@@ -1,5 +1,5 @@
 # The sea and sky tab of fxview (issue #145): fxview_sea (the tab, a static library the fxview host links; its ImGui widgets need no
-# backend) and seatab_host (a small ge_render host that runs the tab on its own, with a fly camera). Included by the root
+# backend); fxview links it for its --mode sea. Included by the root
 # CMakeLists.txt inside the GE_TOOLS block.
 set(GE_IMGUI_DIR "${CMAKE_SOURCE_DIR}/port/third_party/imgui")
 
@@ -61,15 +61,4 @@ if(_sea_kind)
     target_compile_options(fxview_sea_pack PRIVATE -fPIE)
   endif()
   target_link_libraries(fxview_sea INTERFACE fxview_sea_pack)
-endif()
-
-add_executable(seatab_host seatab_host.cpp)
-target_compile_definitions(seatab_host PRIVATE SDL_MAIN_HANDLED)
-if(_sea_kind)
-  target_compile_definitions(seatab_host PRIVATE SEA_HAVE_PACK=1)
-endif()
-target_link_libraries(seatab_host fxview_sea ge_render)
-if(GE_SWITCH)
-  nx_generate_nacp(seatab_host.nacp NAME "seatab_host" AUTHOR "Project Dam" VERSION "0")
-  nx_create_nro(seatab_host NACP seatab_host.nacp ICON "${NX_DEFAULT_ICON}")
 endif()

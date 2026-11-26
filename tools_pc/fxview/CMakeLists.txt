@@ -43,7 +43,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_D
 set(_mv "${CMAKE_SOURCE_DIR}/tools_pc/modelview/pc")   # modelview's texture decoder and inflate (reused as is)
 add_executable(fxview ge/fxview.cpp ge/fx_rom.cpp ge/fx_tex.cpp "${_mv}/mv_tex.cpp" "${_mv}/mv_zlib.cpp")
 set_property(TARGET fxview PROPERTY INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/port/third_party/imgui" "${CMAKE_SOURCE_DIR}/port/ge_render/include"
-                                                         "${CMAKE_SOURCE_DIR}/port/include" "${_mv}" "${CMAKE_CURRENT_BINARY_DIR}")
+                                                         "${CMAKE_SOURCE_DIR}/port/include" "${_mv}" "${CMAKE_CURRENT_BINARY_DIR}"
+                                                         "${CMAKE_SOURCE_DIR}/tools_pc/fxview/sea" "${SDL2_INCLUDE_DIR}")
 set_property(TARGET fxview PROPERTY COMPILE_OPTIONS ${_imgui_opts})
 set_property(TARGET fxview PROPERTY COMPILE_DEFINITIONS "")
 set_property(TARGET fxview PROPERTY CXX_STANDARD 20)
@@ -55,7 +56,10 @@ if(NOT GE_SWITCH)   # PC: the effect shaders' hot reload (dkshgen compiled in, a
   target_sources(fxview PRIVATE ge/fx_reload.cpp)
   target_include_directories(fxview PRIVATE "${CMAKE_SOURCE_DIR}/port/ge_render/src")
 endif()
-target_link_libraries(fxview ge_render_imgui ge_imgui ge_render)
+target_link_libraries(fxview fxview_sea ge_render_imgui ge_imgui ge_render)   # fxview_sea: --mode sea (the GE+ sky/sea/water)
+if(TARGET fxview_sea_pack)
+  set_property(TARGET fxview APPEND PROPERTY COMPILE_DEFINITIONS SEA_HAVE_PACK=1)
+endif()
 if(GE_SWITCH)
   nx_generate_nacp(fxview.nacp NAME "fxview" AUTHOR "Project Dam" VERSION "0")
   nx_create_nro(fxview NACP fxview.nacp ICON "${NX_DEFAULT_ICON}")

@@ -41,6 +41,7 @@ On the Switch the options come from the nxlink argv, else from one line in `sdmc
 | `--mode explosion` | `--explo 0..20` (g_ExplosionTypes), `--etail F` (pause after, s) |
 | tabs (all four) | `--t SECONDS` (freezes the clock; a shot is reproducible at a given `--t` and `--tseed`), `--tspeed F`, `--tshow game\|port\|side`, `--tyaw DEG --tpitch DEG --tzoom F`, `--twall 0\|1`, `--twalltex N`, `--tseed N`, `--play 0\|1`, `--nearest 0\|1` |
 | `--mode cluster` (#141 repro) | `--dist N`, `--holes N`, `--cmat 0..6`, `--holesize F`, `--seed N`, `--fov DEG`, `--sun 0\|1`, `--diag coverage\|veye\|uv\|pom\|pomalpha\|deriv` |
+| `--mode sea` (also `water`, `sky`) | the GE+ sky, sea and level water (#145): `--level`, `--view`, `--cam`, `--rep`, `--scale`, ... — see `sea/README.md` |
 | common | `--backend gl\|vk\|deko3d`, `--w N --h N`, `--frames N`, `--ui 0\|1`, `--out DIR`, `--rom FILE.z64`, `--shaders DIR`, `--shot FILE.png`, `--dump FILE.ppm`, `--probe X,Y` (repeat), `--probeframe N`, `--hold N`, `--selftest` |
 
 `--probe X,Y` (window pixels, top-left origin) prints `PROBE x y r g b a`, the exact values the backend wrote (`ge_render_read_pixels`), at frame

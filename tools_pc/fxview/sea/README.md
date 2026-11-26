@@ -11,7 +11,6 @@ code on Vulkan, GL and deko3d. Background: [shaders-sea.md](../../../docs/dev/sh
 |---|---|
 | `sea_tab.h`, `sea_tab.cpp` | the tab as a module: `seaTabParseArg`, `seaTabInit`, `seaTabFrame`, `seaTabUi` (ImGui widgets, no backend), camera helpers, `.ini` save/load |
 | `sea_pack.cmake`, `sea_pack.S` | the tool pack: the `#ifdef VIEWER` variants of `sky/sky`, `sky/lut` and `water/water` (SPIR-V for Vulkan, DKSH for deko3d) |
-| `seatab_host.cpp` | a small `ge_render` host with a fly camera and the tab's arguments (no ImGui panel) |
 | `sea_env.cmake`, `sea_env.c`, `sea_env.h` | the game's environment records, cut out of `bgfog.c` at build time |
 | `cloudtex.cpp` | ROM textures (cloud, water) through the shared `mv_tex` decoder |
 | `img.h`, `waterbake.h`, `clouds.h` | image I/O, the level-water colour bake (keep it in step with `skyPlusWaterSource` in `port/src/skyplus.c`), the generated fallback clouds |
@@ -30,22 +29,29 @@ No capture: the tab builds every input as the game does, from the user's ROM and
 - the cloud texture and the water texture: decoded from the ROM (`--rom`, else `N64_ROM` / `FXVIEW_ROM`, else a `.env` up the tree, else the `--data` dir) through the image list (`imagelist.<region>.csv` of the repo, `--imagelist`) by `tools_pc/modelview/pc/mv_tex` (the game's `image.c` codecs). The water texture is `skywaterimages[env->WaterImageId]` of the game's global image table (`src/game/sky.c`); a record with `WaterImageId` 0 (Dam, Complex) has its water draws textured by the level's own room data, which a tool without the level loader cannot reach: the first water image stands in (logged). `--wtex FILE` overrides it. Without a ROM: generated textures, logged;
 - the wave fbm (the game's), the water settings (`<data dir>/water/<level>.ini`, `--data`), a free camera.
 
-## The test host
+## Running it
+
+fxview's `--mode sea` (also `water` or `sky`; "sky / sea" in the panel's mode list) hosts the tab: the panel shows its settings, the
+scene its view. Same commands as fxview (`tools_pc/fxview/README.md`):
 
 ```sh
-cmake -S . -B build-linux -G Ninja -DROMID=ntsc-final -DGE_TOOLS=ON && cmake --build build-linux --target seatab_host   # in the build image
-build-linux/tools_pc/fxview/sea/seatab_host --backend vk --level dam --view pier --rep 8
+python tools/dev.py tools fxview win --mode sea --level frigate --view pier
+python tools/dev.py tools fxview win --mode water --level dam --scene 1 --view pool --rep 8
+python tools/dev.py tools fxview ryujinx --mode sky --level surface
+python tools/dev.py tools fxview nx --mode sea --level frigate --rep 64      # GPU times: the console only
 ```
 
-Arguments (also valid in the fxview host): `--rom`, `--data`, `--ini`, `--mode sea|water|sky`, `--level <name or stage number>` (names: frigate, dam, caverns, complex, surface, streets, runway, temple, cradle; others stage<N>), `--sea N`, `--sky N`,
+Arguments: `--rom`, `--data`, `--ini`, `--mode sea|water|sky`, `--level <name or stage number>` (names: frigate, dam, caverns, complex, surface, streets, runway, temple, cradle; others stage<N>), `--sea N`, `--sky N`,
 `--tex N`, `--wtex FILE`, `--scene 0|1`, `--cam x,y,z,yaw,pitch`, `--view overview|pier|boxes|shore|pool|far`, `--time T`, `--sway 0|1`,
-`--rep N` (load mode), `--scale 0|1|2`, `--set "Name=value"` (any value of the table by its name). Host: `--backend gl|vk|deko3d`, `--size WxH`,
-`--frames N`, `--shot out.ppm`, `--noviewer` (the game's own shaders). An `.ini` saved by the UI (names as in the panel, plus `__mode`, `__level`, `__wtex`, ...) loads with `--ini`.
+`--rep N` (load mode), `--scale 0|1|2`, `--set "Name=value"` (any value of the table by its name). The settings are saved to `sea.ini`
+next to `fxview.ini`; another file loads with `--ini`.
 
-PC: WASD / ZQSD, Shift fast, Space or E up, Ctrl or Q down, right mouse button to look, R / F load x2 / x1/2, M scale.
-Switch (`seatab_host.nro`, deko3d): put the NRO and `imagelist.u.csv` in `sdmc:/switch/project-dam/fxview/` (the ROM and `water/*.ini` are the game's, in `sdmc:/switch/project-dam/data`); arguments from `seatab.args` there (an
-emulator passes none) or nxlink; left stick moves, right stick looks, ZR / ZL up / down, B fast, L / R load /2 x2, Minus scale, Y sway, X freeze,
-+ quits. The GPU time per second is in the log (`seatab.log` there). The tab's messages (stderr) go to that file, the status lines also to nxlink's stdout. `--scale` also sets the divisor of deko3d's reduced sky passes (`ge_render_tool_sky_div`; 0 = full size is the default here: Ryubing draws the game's half-size composite wrong, `docs/dev/shaders-sea.md`). Ryubing reports GPU times of 0 (no timestamps): read them on the console.
+PC: WASD, Shift fast, Space or E up, Ctrl or Q down, right mouse button to look, R / F load x2 / x1/2, M scale.
+Switch (deko3d): `imagelist.u.csv` in `sdmc:/switch/project-dam/fxview/` (the ROM and `water/*.ini` are the game's, in
+`sdmc:/switch/project-dam/data`); left stick moves, right stick looks, B fast, L / R load /2 x2, Minus scale, Y sway, X freeze, + quits.
+The status line (mode, variants, GPU time) is at the top of the panel. `--scale` also sets the divisor of deko3d's reduced sky passes
+(`ge_render_tool_sky_div`; 0 = full size is the default here: Ryubing draws the game's half-size composite wrong, `docs/dev/shaders-sea.md`).
+Ryubing reports GPU times of 0 (no timestamps): read them on the console.
 
 ## Changes from seaview
 

@@ -11,7 +11,7 @@
     python tools/dev.py config                         # show the resolved config
     python tools/dev.py tools                          # the dev tools, and what each still needs (g++, ROM)
     python tools/dev.py tools modelview [ARGS...]      # build if a source changed, then run (also fxview, menuview,
-                                                       # seaview, verify, or any tools_pc/<name>.py|.sh)
+                                                       # verify, or any tools_pc/<name>.py|.sh)
 
 Machine-specific paths are NOT in this file: they come from <repo>/.env, or the main checkout's when run from a worktree (gitignored):
 SWITCH_IP, SWITCH_EMU_EXE, SWITCH_EMU_SD (default %APPDATA%/Ryujinx/sdcard),
@@ -263,11 +263,9 @@ TOOLS = {
     "fxview":    ("tools_pc/fxview/fxview.py", "combat effects on ge_render: sprites, bullet holes, cluster scene, muzzle / tracer / burst / explosion tabs (win | ryujinx | nx)",
                   ["win", "ryujinx", "nx", "selftest", "shots", "decalshots", "tabshots"]),
     "menuview":  ("tools_pc/menuview/menuview.py", "the options menu on its own", []),
-    "seaview":   ("tools_pc/seaview/seaview.py", "GE+ sky and sea, PC viewer and console viewer",
-                  ["pc", "dump", "nx-build", "nx-send", "ini2args"]),
     "verify":    ("tools_pc/verify.sh", "headless capture of a level vs the golden frames (build-pc)", []),
 }
-GXX_KEYS = {"modelview": ("MODELVIEW_GXX",), "fxview": ("FXVIEW_GXX", "MODELVIEW_GXX"), "menuview": (), "seaview": ()}
+GXX_KEYS = {"modelview": ("MODELVIEW_GXX",), "fxview": ("FXVIEW_GXX", "MODELVIEW_GXX"), "menuview": ()}
 ROM_KEYS = {"modelview": ("MODELVIEW_ROM",), "fxview": ("FXVIEW_ROM", "MODELVIEW_ROM")}
 
 
@@ -392,9 +390,9 @@ def main():
 
     p = sub.add_parser("config"); p.set_defaults(fn=cmd_config)
 
-    p = sub.add_parser("tools", help="the dev tools (modelview, fxview, menuview, seaview, verify, any tools_pc script): "
+    p = sub.add_parser("tools", help="the dev tools (modelview, fxview (also the GE+ sky/sea: --mode sea), menuview, verify, any tools_pc script): "
                                      "no name lists them and what each still needs")
-    p.add_argument("name", nargs="?", help="modelview | fxview | menuview | seaview | verify | a tools_pc script name")
+    p.add_argument("name", nargs="?", help="modelview | fxview | menuview | verify | a tools_pc script name")
     p.add_argument("args", nargs=argparse.REMAINDER, help="passed to the tool (its default subcommand when none is given)")
     p.set_defaults(fn=cmd_tools)
     a = ap.parse_args()
