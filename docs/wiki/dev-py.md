@@ -110,9 +110,8 @@ needs (g++, ROM, a converted `data/`). `tools NAME [ARGS...]` runs one:
 | Name | What | Default subcommand |
 |---|---|---|
 | `modelview` | models from the ROM: subdivision, textures, guard animations | `pc` (also `selftest`, `shots`) |
-| `fxview` | combat effects | `pc` (also `selftest`, `shots`, `decalshots`) |
+| `fxview` | combat effects, and the GE+ sky/sea/water (`--mode sea`, `water`, `sky`) | `win` (also `ryujinx`, `nx`, `selftest`, `shots`, `decalshots`, `tabshots`) |
 | `menuview` | the options menu on its own | none (`--build` builds only) |
-| `seaview` | GE+ sky and sea | `pc` (also `dump`, `nx-build`, `nx-send`, `ini2args`) |
 | `verify` | `tools_pc/verify.sh`: headless capture vs the golden frames | none |
 | any other | `tools_pc/<name>.py` or `.sh` (`disasm`, `d88_propdef_scan`, …) | none |
 

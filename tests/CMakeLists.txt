@@ -10,7 +10,7 @@ function(ge_add_test name)
   target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
                                              "${CMAKE_CURRENT_SOURCE_DIR}/platform"
                                              "${CMAKE_SOURCE_DIR}/port/src"
-                                             "${CMAKE_SOURCE_DIR}/port/fast3d")
+                                             "${CMAKE_SOURCE_DIR}/port/ge_render/include")
   target_link_libraries(${name} ${GE_CORE_LIBS})
   # The tests have their own int main(void): keep SDL from renaming it to
   # SDL_main on Windows.

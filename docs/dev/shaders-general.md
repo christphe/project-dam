@@ -1,6 +1,6 @@
 # GE+ shaders on the Switch backend: general lessons
 
-Read this before touching `port/shaders/*.glsl` or the sky pass in `port/fast3d/gfx_deko3d.cpp`.
+Read this before touching `port/shaders/*.glsl` or the sky pass in `port/ge_render/src/gfx_deko3d.cpp`.
 The sea and the sky have their own notes: [shaders-sea.md](shaders-sea.md), [shaders-sky.md](shaders-sky.md).
 Everything here was learned the hard way on issue #38 (Scenery (Enhanced) on water levels); each item cost at least one wasted build/run cycle.
 
@@ -49,5 +49,5 @@ Everything here was learned the hard way on issue #38 (Scenery (Enhanced) on wat
 
 - Ryujinx: build `build-switch-args` (reads `data/ge007.args`), launch, PrintWindow screenshot. The reference spot on Frigate is `GE_TELEPORT=595.3,521.9,690.4,296` with `-level_26 -hard0`.
 - Console: `tools/switch/nxlink.py` to the console's netloader (hbmenu, Y). The console must have no game running.
-- **`tools_pc/seaview/`** (README there): a PC viewer (Win32 + OpenGL) and a console viewer (deko3d, sent by nxlink) that draw the real shaders from one captured frame (`GE_SEADUMP=1`), with variant menus, every `PRM` value editable and saved to an `.ini`, render scale, GPU time. The console viewer compiles the `.ini`'s values in as constants, as the game's build does. **The viewer only shows what it shares with the game**: the bake logic in the game changed once without the viewer, and the viewer hid the game's bug. Keep them in step.
+- **The sea and sky tab of fxview** (`tools_pc/fxview/sea/`, issue #145; it replaced `tools_pc/seaview/`): draws any level's sky, sea and water (the environment record, the cloud texture decoded from the user's ROM, the wave fbm and the water settings come from `port/src/skyplus_core.c`, the code the game fills its `PortSkyPlus` with) through ge_render's own sky and water passes (the same code as the game, no copy of the shaders) on Vulkan, GL and deko3d, with the variant menus, every `PRM` value editable and saved to an `.ini`, render scale, and a load mode (the passes 1-64 times per frame) timed with `ge_render_gpu_timer_*`. The `#ifdef VIEWER` variants live in a tool pack (`sea_pack.cmake`: SPIR-V, DKSH) the game never links; the GL backend compiles them at run time. The `VIEWER_CONST` mode (the `.ini` values compiled in as constants) went with seaview: the game's own shaders (viewer off) are the baked defaults. Run it with `python tools/dev.py tools fxview win --mode sea` (README in `tools_pc/fxview/sea/`). **The viewer only shows what it shares with the game**: the bake logic in the game changed once without the viewer, and the viewer hid the game's bug. Now the tab runs the game's backend code, which removes that class of drift.
 - Use **Ryubing** for screenshots of this sea, never the old Ryujinx r.49574a9 (it mis-renders the far sea).

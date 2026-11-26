@@ -1,7 +1,7 @@
 /*
  * Video: SDL2 window + OpenGL context + frame pacing on top of fast3d.
  *
- * The window itself lives in port/fast3d/gfx_sdl2.cpp (the wapi backend);
+ * The window itself lives in port/ge_render/src/ge_window_sdl.cpp (ge_render, the wapi backend);
  * this file wires the rendering API up, owns frame boundaries and FPS stats,
  * and exposes the small surface the libultra VI shims need.
  *
@@ -37,15 +37,14 @@ extern void exit(int status);
 #include "optionsoverlay.h"
 #include "audio.h"
 
+#include "console.h"   /* portIsConsole */
+#include "audio.h"     /* audioNotifyDeviceRemoved */
 #include "../fast3d/gfx_api.h"
-#include "../fast3d/gfx_sdl.h"
-#include "../fast3d/gfx_opengl.h"
+#include "../fast3d/gfx_glprobe.h"   /* the first-launch GPU benchmark's GL half */
+#include "ge_render.h"   /* issue #142: the renderer library (backends, window, config, events) */
 #ifdef __SWITCH__
-#include "../fast3d/gfx_deko3d.h"   /* D973: deko3d on the Switch unless GE_RENDERER=gl */
-extern void gfx_sdl_set_external_present(void (*present)(void), void (*dims)(uint32_t *, uint32_t *), void (*park)(void));
-extern void gfx_sdl_set_external_swap_interval(void (*set_interval)(int));
+extern int nxIsHandheld(void);   /* port/src/switch/nxmem.c */
 #endif
-#include "../fast3d/gfx_vulkan.h"   /* issue #44: Vulkan on PC (Video.Renderer) */
 #include "../fast3d/gfx_frame.h"   /* D969: replay thread */
 static int s_vulkanActive = 0;   /* issue #44: the Vulkan backend was selected (0 without GE_VULKAN) */
 
@@ -93,7 +92,7 @@ static int cfgMSAA          = 2;   /* 1/2/4/8/16 samples; 2x default is lighter 
  * (kVideoPresets); Custom shows every graphics row. */
 static int cfgDisplayMode   = 0;
 extern int portSkyPlus;   /* port/src/skyplus.c */
-extern int gfx_skyplus_half;   /* gfx_opengl.cpp: Video.SkyScale */
+#define gfx_skyplus_half (ge_render_cfg.skyplus_half)   /* Video.SkyScale (the renderer config: ge_render.h) */
 extern int gfx_a2c_user;       /* gfx_pc.cpp: Video.AlphaToCoverage (hidden; the GPU probe may clear it) */
 /* Video.Visuals (D982): 0 Original, 1 Fixed, 2 Enhanced. Fixed turns on
  * every fix of a display flaw of the original game (D979 landmarks, D980
@@ -108,6 +107,7 @@ int portPerPixelFog = 1;    /* Video.PerPixelFog: the exact fog of the pixel's o
 static void videoApplyVisuals(void)
 {
     portDisplayFixes = portVisuals >= 1;
+    ge_render_cfg.display_fixes = portDisplayFixes;
     portSkyPlus = portVisuals >= 2;
 }   /* the fog form is its own setting: Video.PerPixelFog */
 static int cfgTexFilter     = 1;   /* 0 = nearest, 1 = bilinear (default), 2 = N64 3-point + trilinear, 3 = trilinear (Trilinear option, playtest 2026-10-03) */
@@ -134,7 +134,7 @@ static int cfgGpuProbeDone = 0;      /* first-launch GPU benchmark ran (or its c
 static int cfgDefaultsRev = 0;       /* D546: 1 once the 2.5x -> 2.0x draw/LOD default migration ran */
 
 /*
- * [Window] persistence. W/H = 0 -> auto (gfx_sdl2 fits a 4:3 window into ~85%
+ * [Window] persistence. W/H = 0 -> auto (ge_window_sdl fits a 4:3 window into ~85%
  * of the desktop); X/Y = -1 -> let SDL centre the window.
  * videoSaveWindowState() writes the live geometry back into these on a clean
  * exit (see main.c's atexit handler), so after the first run the file pins
@@ -964,13 +964,7 @@ static void videoApplyGpuProbe(void)
 
 static void videoApplyLowEndDefaults(void)
 {
-    const char *r = gfx_opengl_renderer_string();
-#ifdef __SWITCH__
-    if (gfx_deko3d_wanted()) r = gfx_deko3d_renderer_string();   /* D973 */
-#endif
-#ifdef GE_VULKAN
-    if (s_vulkanActive) r = gfx_vulkan_renderer_string();   /* issue #44 */
-#endif
+    const char *r = ge_render_renderer_string();   /* the backend in use: GL_RENDERER, deko3d (D973), Vulkan (issue #44) */
     const char *why = "";
     const char *fake = getenv("GE_FAKE_LOWEND");
     int low;
@@ -1251,13 +1245,13 @@ static void videoDrainWindowRequests(void)
         if (wmAPI->set_dimensions) {
             wmAPI->set_dimensions((uint32_t)w, (uint32_t)h, px, py);
         }
-        gfx_sdl_update_cached_size();
+        ge_render_update_size();
         cfgWinW = w; cfgWinH = h;
         sysLogPrintf(LOG_INFO, "video: window -> %dx%d", w, h);
     } else if (kind == 2) {
         int on = winReqA;
         if (wmAPI->set_fullscreen) wmAPI->set_fullscreen(on != 0);
-        gfx_sdl_update_cached_size();
+        ge_render_update_size();
         cfgFullscreen = on ? 1 : 0;
         sysLogPrintf(LOG_INFO, "video: fullscreen %s", on ? "on" : "off");
     } else if (kind == 3) {   /* D511: Center window (windowed only) */
@@ -1276,7 +1270,7 @@ static void videoDrainWindowRequests(void)
     } else if (kind == 4) {   /* D511: borderless vs exclusive; re-enters fullscreen when already on */
         int ex = winReqA;
         if (wmAPI->set_fullscreen_exclusive) wmAPI->set_fullscreen_exclusive(ex != 0);
-        gfx_sdl_update_cached_size();
+        ge_render_update_size();
         cfgFullscreenMode = ex ? 1 : 0;
         sysLogPrintf(LOG_INFO, "video: fullscreen mode %s (fullscreen now %d)", ex ? "exclusive" : "borderless",
                      wmAPI->get_fullscreen_state ? (int)wmAPI->get_fullscreen_state() : -1);
@@ -1290,7 +1284,6 @@ static volatile int screenshotReq = 0;
 
 /* Pre-swap capture hook (defined below, registered in videoInit). */
 static void videoPreSwapCapture(void);
-extern void (*gfx_pre_swap_hook)(void);
 static double fpsWindowStart = 0.0;
 static int fpsNumFrames = 0;
 static float vidAvgFPS = 0.f;
@@ -1316,7 +1309,7 @@ static int s_dumpSlot = -1;   /* D578: GE_PCDUMP_PRESENTS names each present */
 int videoAutoFpsCap(void)
 {
     const int vi = (osTvType == 0) ? 50 : 60;
-    const int refresh = gfx_sdl_get_refresh_rate();
+    const int refresh = ge_render_get_refresh_rate();
     if (refresh <= vi + 5) return vi;
     return refresh > 4 * vi ? 4 * vi : refresh;
 }
@@ -1328,7 +1321,7 @@ static void videoApplyFpsCap(void)
     const int cap = cfgFpsCap < 0 ? videoAutoFpsCap() : cfgFpsCap;   /* effective cap */
     int hz = 0;
     if (cap > vi) {
-        const int refresh = gfx_sdl_get_refresh_rate();
+        const int refresh = ge_render_get_refresh_rate();
         hz = cap;
         /* Presents cannot reach the screen faster than it refreshes: with VSync
          * the swap waits for it, and without it a composited window (Windows
@@ -1377,10 +1370,72 @@ int videoInterpVSync(void)
 /* Render worker (GL thread): display refresh and the live GL swap interval. */
 void videoInterpInfo(int *refreshHz, int *swapInterval)
 {
-    *refreshHz = gfx_sdl_get_refresh_rate();
+    *refreshHz = ge_render_get_refresh_rate();
     *swapInterval = wmAPI ? wmAPI->get_swap_interval() : -1;
 }
 
+
+
+/* ---- the renderer library's host callbacks (ge_render.h) ----------------------------------------------------
+ * The system calls, and the events its window pump (the render thread's, every frame; the host thread's own pump
+ * below drains the same SDL queue) hands the game: quit, keys, mouse, pads, audio devices. */
+void videoRequestQuit(const char *why);   /* below (D344) */
+static void rcbLog(int level, const char *msg) { sysLogPrintf((enum LogLevel)level, "%s", msg); }
+static void rcbFatal(const char *msg) { sysFatalError("%s", msg); }
+static void rcbSleep(uint32_t us) { sysSleep(us); }
+static void rcbQuit(const char *why) { videoRequestQuit(why); }   /* D344: request, never exit() from the pump */
+static void rcbKeyDown(int sym, int mod, int repeat)
+{
+    if (sym == SDLK_F4 && (mod & KMOD_ALT)) {
+        /* D145: Alt+F4 quits; bare ESC no longer does (it is the menu "back" key). D344: request, don't exit():
+         * this is the render thread, mid-frame. It parks at the frame's end; the host exits. */
+        videoRequestQuit("Alt+F4 (render pump)");
+    } else if (sym == SDLK_ESCAPE && !repeat) {
+        /* WI-1: this render-thread pump and the host-thread pump both drain the same SDL queue, so either one can be
+         * the loop that dequeues a given ESC keydown. Handle it here too or click-to-lock's ESC-to-free races. */
+        inputReleaseCapture();
+    }
+}
+static void rcbMouseButton(int button) { (void)button; inputNotifyClick(); }   /* WI-1: (re)lock in click-to-lock mode */
+static void rcbMouseWheel(int y) { inputPostWheel(y); }                        /* weapon cycle */
+static void rcbPadButton(int id, int button, uint32_t ts) { inputNoteButtonDown((SDL_JoystickID)id, button, ts); }   /* D961 */
+static void rcbPadAxis(int id, int axis, int value, uint32_t ts) { inputNoteAxis((SDL_JoystickID)id, axis, value, ts); }   /* D961 */
+static void rcbPadDevices(void) { inputRequestRescan(); }   /* D450: request a rescan, never rescan here */
+static void rcbFocus(int gained) { inputSetMouseGrab(gained ? 1 : 0); }   /* free + show the cursor on alt-tab */
+#ifdef __SWITCH__
+static void rcbAudioRemoved(uint32_t id) { audioNotifyDeviceRemoved(id); }   /* D959 */
+static void rcbResize(int w, int h)
+{
+    sysLogPrintf(LOG_INFO, "SDL: window size changed -> drawable %dx%d, handheld=%d", w, h, nxIsHandheld());
+}
+#endif
+
+static const GeRenderCallbacks *videoRenderCallbacks(void)
+{
+    static GeRenderCallbacks cb;
+    cb.log = rcbLog;
+    cb.fatal = rcbFatal;
+    cb.arg_check = sysArgCheck;
+    cb.arg_get_string = sysArgGetString;
+    cb.resolve_path = sysResolvePath;
+    cb.sleep_us = rcbSleep;
+    cb.cpu_relax = sysCpuRelax;
+    cb.is_console = portIsConsole;
+#ifdef __SWITCH__
+    cb.is_handheld = nxIsHandheld;
+    cb.on_audio_device_removed = rcbAudioRemoved;
+    cb.on_resize = rcbResize;
+#endif
+    cb.on_quit = rcbQuit;
+    cb.on_key_down = rcbKeyDown;
+    cb.on_mouse_button_down = rcbMouseButton;
+    cb.on_mouse_wheel = rcbMouseWheel;
+    cb.on_pad_button_down = rcbPadButton;
+    cb.on_pad_axis = rcbPadAxis;
+    cb.on_pad_device_change = rcbPadDevices;
+    cb.on_focus = rcbFocus;
+    return &cb;
+}
 
 int videoInit(void)
 {
@@ -1435,26 +1490,24 @@ int videoInit(void)
         videoApplyPreset(VIDEO_PRESET_PORT);
     }
 
-    wmAPI = &gfx_sdl;
-    renderingAPI = &gfx_opengl_api;
+    /* Which backend (issue #142: ge_render_open then creates that backend's own window or surface). The Switch runs deko3d
+     * (D973; GE_RENDERER=gl selects GL). PC: Vulkan by default (issue #44, Video.Renderer; ge_render falls back to GL
+     * when there is no usable Vulkan 1.3 driver), except for the first launch's GPU probe, which measures a GL context. */
+    GeRenderBackend wantBackend = GE_RENDER_GL;
 #ifdef __SWITCH__
-    /* D973: deko3d backend (the Switch default); SDL then keeps input/audio/events only */
-    if (gfx_deko3d_wanted()) {
-        renderingAPI = &gfx_deko3d_api;
-        gfx_sdl_set_external_present(gfx_deko3d_present, gfx_deko3d_get_dimensions, gfx_deko3d_park);
-        gfx_sdl_set_external_swap_interval(gfx_deko3d_set_swap_interval);
+    if (ge_render_deko3d_wanted()) {
+        wantBackend = GE_RENDER_DEKO3D;
         sysLogPrintf(LOG_NOTE, "video: renderer deko3d (default; GE_RENDERER=gl selects GL)");
     }
 #endif
 #ifdef GE_VULKAN
-    /* issue #44: Vulkan backend, the PC default (Video.Renderer); no usable driver -> GL. */
     if (cfgRenderer == 1) {
 #ifndef __SWITCH__
         int probeForce;
         char probeMarker[512];
         if (videoProbeMode(&probeForce, probeMarker, sizeof probeMarker) == 1) {
             /* the first-launch GPU probe measures the GL context: this launch runs on GL (the stored renderer stays Vulkan) */
-            if (gfx_sdl_gl_usable()) {
+            if (ge_render_gl_usable()) {
                 s_probeOnGl = 1;
                 sysLogPrintf(LOG_NOTE, "gpuprobe: first launch on GL for the probe; Vulkan from the next launch");
             } else {
@@ -1463,25 +1516,14 @@ int videoInit(void)
             }
         }
 #endif
-        if (s_probeOnGl) {
-            /* GL for this session only */
-        } else if (gfx_vulkan_probe()) {
-            renderingAPI = &gfx_vulkan_api;
-            gfx_sdl_set_vulkan_window(true);
-            gfx_sdl_set_external_present(gfx_vulkan_present, gfx_vulkan_get_dimensions, gfx_vulkan_park);
-            gfx_sdl_set_external_swap_interval(gfx_vulkan_set_swap_interval);
-            s_vulkanActive = 1;
-            sysLogPrintf(LOG_NOTE, "video: renderer Vulkan");
-        } else {
-            sysLogPrintf(LOG_WARNING, "video: Vulkan selected but no usable Vulkan 1.3 driver; using OpenGL");
-        }
+        if (!s_probeOnGl) wantBackend = GE_RENDER_VULKAN;   /* else: GL for this session only */
     }
 #endif
 
     gfx_current_native_viewport.width = GE_NATIVE_W;
     gfx_current_native_viewport.height = GE_NATIVE_H;
     gfx_current_native_aspect = (float)GE_NATIVE_W / (float)GE_NATIVE_H;
-    gfx_framebuffers_enabled = true;
+    ge_render_cfg.framebuffers_enabled = true;
     gfx_detail_textures_enabled = false;
 
     /* MSAA: snap the requested sample count down to a supported power of two. */
@@ -1493,29 +1535,39 @@ int videoInit(void)
     gfx_msaa_handheld = NX_MSAA_LVL(cfgMSAAHandheld);
     gfx_msaa_level = 1;
 #endif
-    gfx_fxaa_on = cfgFXAA != 0;
+    ge_render_cfg.fxaa_on = cfgFXAA != 0;
+    ge_render_cfg.per_pixel_fog = portPerPixelFog;   /* read by the backend at init: fog_vertex = !per_pixel_fog */
+    ge_render_cfg.display_fixes = portDisplayFixes;
 
-    int winW = cfgWinW > 0 ? cfgWinW : 0;   /* 0 -> gfx_sdl2 auto-fits to the desktop */
+    int winW = cfgWinW > 0 ? cfgWinW : 0;   /* 0 -> ge_window_sdl auto-fits to the desktop */
     int winH = cfgWinH > 0 ? cfgWinH : 0;
     int havePos = (cfgWinX >= 0 && cfgWinY >= 0);
 
-    struct GfxInitSettings set = {
-        .wapi = wmAPI,
-        .rapi = renderingAPI,
-        .window_settings = {
-            .title = "GoldenEye 007",
-            .width = winW,
-            .height = winH,
-            .x = havePos ? cfgWinX : 100,
-            .y = havePos ? cfgWinY : 100,
-            .fullscreen = cfgFullscreen != 0,
-            .fullscreen_is_exclusive = cfgFullscreenMode != 0,
-            .maximized = cfgWinMax != 0,
-            .centered = !havePos,
-            .allow_hidpi = false,
-        },
+    struct GfxWindowInitSettings win = {
+        .title = "GoldenEye 007",
+        .width = winW,
+        .height = winH,
+        .x = havePos ? cfgWinX : 100,
+        .y = havePos ? cfgWinY : 100,
+        .fullscreen = cfgFullscreen != 0,
+        .fullscreen_is_exclusive = cfgFullscreenMode != 0,
+        .maximized = cfgWinMax != 0,
+        .centered = !havePos,
+        .allow_hidpi = false,
     };
 
+    /* The renderer library: the backend's window / surface and the backend itself, then the translator (fast3d) on top. */
+    GeRenderConfig rcfg = ge_render_cfg;   /* what the config load and the lines above put there */
+    rcfg.backend = wantBackend;
+    rcfg.window = win;
+    ge_render_open(&rcfg, videoRenderCallbacks());
+    wmAPI = ge_render_window();
+    renderingAPI = ge_render_api();
+    s_vulkanActive = ge_render_backend() == GE_RENDER_VULKAN;
+    if (s_vulkanActive) sysLogPrintf(LOG_NOTE, "video: renderer Vulkan");
+    else if (wantBackend == GE_RENDER_VULKAN) sysLogPrintf(LOG_WARNING, "video: Vulkan selected but no usable Vulkan 1.3 driver; using OpenGL");
+
+    struct GfxInitSettings set = { .window_settings = win };
     gfx_init(&set);
     videoMigrateDefaults();       /* D546: before D482, which compares against the new defaults */
     videoApplyLowEndDefaults();   /* D482: needs GL_RENDERER; before the first frame */
@@ -1531,7 +1583,7 @@ int videoInit(void)
         sysLogPrintf(LOG_WARNING, "video: Video.FpsCap=%d too low (throttles the sim); using 0 (uncapped)", cfgFpsCap);
         cfgFpsCap = 0;
     }
-    gfx_sdl_poll_refresh_rate();   /* D578: host thread, window exists */
+    ge_render_poll_refresh_rate();   /* D578: host thread, window exists */
     videoApplyFpsCap();   /* 0 = uncapped; above the VI rate = D578 interpolation */
 
     /* Texture filtering. 1 = bilinear (default, matches prior behaviour),
@@ -1549,17 +1601,15 @@ int videoInit(void)
     /* The GL context is currently current on this (host main) thread, but all
      * rendering happens on the game's scheduler thread. WGL only allows a
      * context to be current on one thread at a time, so release it here; the
-     * scheduler thread re-binds it per frame via gfx_sdl_make_context_current()
+     * scheduler thread re-binds it per frame via ge_render_bind_thread()
      * (see videoStartFrame). Must come after set_swap_interval above, which
      * still needs a current context on this thread. */
-    gfx_sdl_release_context();
+    ge_render_release_thread();
 
-    gfx_pre_swap_hook = videoPreSwapCapture;
-#ifdef __SWITCH__
-    if (gfx_deko3d_wanted()) {
-        gfx_pre_swap_hook = NULL;   /* D973: GE_PCDUMP / screenshots read GL's back buffer */
+    ge_render_set_pre_present_hook(videoPreSwapCapture);
+    if (ge_render_backend() == GE_RENDER_DEKO3D) {
+        ge_render_set_pre_present_hook(NULL);   /* D973: GE_PCDUMP / screenshots read GL's back buffer */
     }
-#endif
 
     initDone = 1;
     sysLogPrintf(LOG_INFO, "video: %dx%d window (native %dx%d)",
@@ -1620,7 +1670,7 @@ int videoQuitRequested(void)
 static void videoRenderPark(void)
 {
     gfx_frame_thread_park();   /* D969: the replay thread finishes, glFinish()es, unbinds and is joined */
-    gfx_sdl_park_for_exit();
+    ge_render_park();
     SDL_AtomicSet(&s_inFrame, 0);
     SDL_AtomicSet(&s_parked, 1);
     {
@@ -1659,7 +1709,7 @@ void videoTeardownForExit(void)
         sysLogPrintf(LOG_WARNING, "video: render not parked; GL teardown skipped");
         return;
     }
-    gfx_sdl_teardown_for_exit();
+    ge_render_close();
     sysLogPrintf(LOG_INFO, s_vulkanActive ? "video: window destroyed" : "video: GL context and window destroyed");
 }
 
@@ -1764,7 +1814,7 @@ void videoStartFrame(void)
      * GE_RENDERINLINE/GE_DETERM); the GL context was created on the host
      * main thread. */
     if (!gfx_frame_thread_active()) {
-        gfx_sdl_make_context_current();   /* D969: pipelined, the replay thread owns the context */
+        ge_render_bind_thread();   /* D969: pipelined, the replay thread owns the context */
     }
 
     int dirty = SDL_AtomicSet(&liveCfgDirty, 0);
@@ -1777,9 +1827,10 @@ void videoStartFrame(void)
         if (dirty & VCFG_CROP) gfx_set_safe_area_crop(cfgSafeAreaCrop);
         if (dirty & VCFG_VISUALS) {   /* D982 */
             videoApplyVisuals();
+            ge_render_cfg.per_pixel_fog = portPerPixelFog;
             gfx_set_fog_pixel(portPerPixelFog);
         }
-        if (dirty & VCFG_FXAA) gfx_fxaa_on = cfgFXAA != 0;   /* project-dam */
+        if (dirty & VCFG_FXAA) ge_render_cfg.fxaa_on = cfgFXAA != 0;   /* project-dam */
 #ifdef __SWITCH__
         if (dirty & VCFG_MSAA) {   /* project-dam: picked up by gfx_start_frame */
             gfx_msaa_docked = NX_MSAA_LVL(cfgMSAA);
@@ -1814,7 +1865,7 @@ void videoPumpEvents(void)
 {
     {   /* D578: keep the display refresh rate current (window moved, mode change) */
         static unsigned pumpN = 0;
-        if ((pumpN++ % 120) == 0) gfx_sdl_poll_refresh_rate();
+        if ((pumpN++ % 120) == 0) ge_render_poll_refresh_rate();
     }
     if (!initDone) {
         return;
@@ -1902,7 +1953,7 @@ void videoPumpEvents(void)
             if (ev.window.event == SDL_WINDOWEVENT_CLOSE) {
                 videoRequestQuit("window closed");
             } else if (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
-                gfx_sdl_update_cached_size();
+                ge_render_update_size();
             } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
                 inputSetMouseGrab(0);   /* free the cursor when alt-tabbed away */
             } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
@@ -1944,19 +1995,14 @@ void videoSubmitCommands(Gfx *cmds)
     gfx_run(cmds);
 }
 
-/* Runs from gfx_sdl_swap_buffers_begin with the composited frame still in the
+/* Runs from the window pump's present (ge_window_pre_present) with the composited frame still in the
  * back buffer, just before SDL_GL_SwapWindow. Reading the back buffer after
  * the swap is undefined on buffer-exchange drivers (Mesa/WSLg) -> black. */
 /* The window as a PPM: GL reads its back buffer now; Vulkan writes it in the present that follows (issue #44). */
 static int videoDumpWindow(const char *path)
 {
-#ifdef GE_VULKAN
-    if (s_vulkanActive) {
-        return gfx_vulkan_dump_window(path);
-    }
-#endif
-    return gfx_opengl_dump_bound_fbo((uint32_t)gfx_current_window_dimensions.width,
-                                     (uint32_t)gfx_current_window_dimensions.height, path);
+    return ge_render_dump_window((uint32_t)gfx_current_window_dimensions.width,
+                                 (uint32_t)gfx_current_window_dimensions.height, path);
 }
 
 static void videoPreSwapCapture(void)

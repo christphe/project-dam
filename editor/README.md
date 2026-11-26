@@ -44,9 +44,13 @@ docker compose run --rm windows sh -c 'export SDL2DIR=/usr/x86_64-w64-mingw32/sy
   && cmake --build build-win --target project-dam-editor make_test_rec'
 ```
 
-Targets (`editor/CMakeLists.txt`): `project-dam-editor`; `ge_luau_analysis` (Luau Analysis, a static library of its own with a clean include path); `ge_editor_f3d` (fast3d's OpenGL backend and glad,
-compiled as the game compiles them, plus `fast3d_stubs.cpp` for the few game symbols it expects);
-`make_test_rec`. Needs OpenGL 3.3 core.
+Targets (`editor/CMakeLists.txt`): `project-dam-editor`; `ge_luau_analysis` (Luau Analysis, a static library of its own with a clean include path);
+`make_test_rec`. The editor links the `ge_render` library (`port/ge_render`, issue #142): it opens its window and its backend with
+`ge_render_open`, draws the level through the backend's draw API (`scene.cpp`) and the GUI through the same API
+(`imgui_render_ge.cpp`, replacing the OpenGL3 ImGui backend). **Renderer:** OpenGL (default; needs 3.0 or newer) or Vulkan 1.3,
+`--renderer gl|vk` or Tools > Settings > Rendering (applies at the next start; `dev.py editor --renderer vk`). Vulkan falls back
+to OpenGL when there is no usable driver. The whole-frame offscreen option is OpenGL only; on Vulkan a thumbnail or screenshot read-back
+presents one frame.
 
 ## Run
 

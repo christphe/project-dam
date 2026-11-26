@@ -1280,7 +1280,7 @@ static int rowPlatformOk(const struct Row *r)
     }
 #else
     /* A non-Switch console (GE_CONSOLE): the window rows do not apply, the
-     * display is the active mode in fullscreen (gfx_sdl2.cpp). The relaunch
+     * display is the active mode in fullscreen (ge_window_sdl.cpp). The relaunch
      * row stays: Restart Game works there. */
     if (portIsConsole()) {
         static const char *const kWindowOnly[] = {

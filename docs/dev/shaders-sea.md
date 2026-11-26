@@ -1,6 +1,6 @@
 # The GE+ sea (water levels: Frigate, and the sea of Dam / Caverns / Complex)
 
-Issue #38. Read [shaders-general.md](shaders-general.md) first. Code: `port/shaders/sky/common.glsl` (`waterNormal`, `waterShade`, `waveLayers`, `texWaves`), `sky/sky.frag.glsl` (the passes), `port/fast3d/gfx_deko3d.cpp` (the sky pass driver), `port/src/skyplus.c` (the wave texture, per-level settings).
+Issue #38. Read [shaders-general.md](shaders-general.md) first. Code: `port/shaders/sky/common.glsl` (`waterNormal`, `waterShade`, `waveLayers`, `texWaves`), `sky/sky.frag.glsl` (the passes), `port/ge_render/src/gfx_deko3d.cpp` (the sky pass driver), `port/src/skyplus.c` (the wave texture, per-level settings).
 
 ## What it is
 
@@ -70,7 +70,7 @@ Only Frigate has a sea plane. On Dam, Caverns and Complex the water is level geo
 | `ToneKeep = x` | 0..1: the reflection pulled into the body's hue | Dam 0.8, Caverns 0.8, others 0 |
 | `ReflectGain = x` | 0..2: the reflection's weight, x the Fresnel | Dam 0.6, Caverns 0.5, others 1 |
 
-Tuning: `GE_SEADUMP=1` also writes the level's source water texture to `data/water_src.bin` (int w, int h, RGBA8), to convert into `tools_pc/seaview/data/water_<level>.tga` for the viewer's Water surface mode (README there). The PC intro cameras (`GE_INTROCAM=n`) give fixed views of the water for before/after captures (Dam: 1 = the pier, 0 = the lake from the dam; Caverns: 1, 2).
+Tuning: the sea tab of fxview (`tools_pc/fxview/sea/README.md`) shows any level's sky, sea and water with every value editable; the level's own water texture for its Water surface mode is a `water_<level>.png|tga` in the data dir (else a placeholder). The PC intro cameras (`GE_INTROCAM=n`) give fixed views of the water for before/after captures (Dam: 1 = the pier, 0 = the lake from the dam; Caverns: 1, 2).
 
 ## The far sea (the part that took a week)
 

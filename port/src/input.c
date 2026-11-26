@@ -604,7 +604,7 @@ static u32 padReadRaw(SDL_GameController *pad)
 
 /* D961 GE_PRESSLATCH: event latch. The pad is sampled by value (once per
  * retrace on the scheduler thread), so a tap that goes down and up between two
- * samples is invisible. The render thread's SDL event pump (gfx_sdl2.cpp)
+ * samples is invisible. The render thread's SDL event pump (port/ge_render/src/ge_window_sdl.cpp)
  * also runs SDL_JoystickUpdate, at its own instants, and sees the DOWN event:
  * it is latched here and OR-ed into the next sample for exactly one sample.
  * Double-edge guard: a DOWN whose time is not after the previous sample, when
@@ -1483,7 +1483,7 @@ void inputDestroy(void)
  * mouse-aim delta into the accumulator. */
 /* D450: controller hot-plug. SDL_CONTROLLERDEVICEADDED / REMOVED land on
  * whichever of the two event pumps dequeues them first: video.c's host loop
- * or fast3d's gfx_sdl_handle_events (render thread, every frame), and the
+ * or ge_render's window pump (ge_render_poll_events) (render thread, every frame), and the
  * latter used to drop them, so a replugged pad was never reopened. Both pumps
  * now only post a request; the rescan runs here, at the top of inputUpdate(),
  * on the thread that is about to read pads[], so a pad is never closed under

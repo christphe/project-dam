@@ -31,10 +31,11 @@
 #endif
 
 #include "imgui.h"
-#include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl2.h"
+#include "imgui_render_ge.h"
 
 #include "doc.h"
+#include "ge_render.h"
 #include "filedialog.h"
 #include "editor_gl.h"
 #include "launch.h"
@@ -45,8 +46,6 @@
 #include "view.h"
 #include "ui_app.h"
 #include "ui_scripts.h"
-
-extern "C" void editorStubsSetArgs(int argc, char **argv);   // fast3d_stubs.cpp
 
 using namespace ed;
 
@@ -61,6 +60,7 @@ struct Options {
     float drag[4] = { 0, 0, 0, 0 };
     int dragAxis = -1;
     bool noOffscreen = false;   // --no-offscreen: draw straight into the window (see editor_gl.h)
+    std::string renderer;       // --renderer gl|vk: the ge_render backend (else the Settings choice, OpenGL by default)
     bool hasMouseDrag = false, mouseClickMode = false, mouseMiddle = false;   // --mouse-middle: the drag uses the middle button (pan)   // --mouse-click: click the handle, move, click to confirm
     float mouseDrag[2] = { 0, 0 };   // --mouse-drag DX,DY: real SDL mouse events on the gizmo (--drag-axis picks the arrow)
     float cam[5] = { 0, 0, 0, 0, 0 };
@@ -86,6 +86,41 @@ struct Options {
     std::string selectWhat, openScript;          // test aids: --select script:N|zone:ID|prop:N, --open-script NAME[:LINE]
     std::string openMenu, openWindow, openTab;   // test aids: --open-menu File, --open-window settings|help|log, --open-tab selection|mission|mod
 };
+
+// ---- what ge_render asks of its host (ge_render.h, GeRenderCallbacks) ----
+int gArgc = 0;
+char **gArgv = nullptr;
+bool gQuitReq = false;   // the window was closed (or SDL_QUIT): the loop decides, a dirty mission asks first
+
+int cbArgCheck(const char *arg)   // the command line has this argument (the backend's --debug-gl, --gl-version)
+{
+    for (int i = 1; i < gArgc; i++)
+        if (strcmp(gArgv[i], arg) == 0) return i;
+    return 0;
+}
+const char *cbArgGet(const char *arg)
+{
+    const int i = cbArgCheck(arg);
+    return i && i + 1 < gArgc ? gArgv[i + 1] : nullptr;
+}
+void cbLog(int level, const char *msg)
+{
+    static const char *tag[] = { "error", "warning", "note", "info", "debug" };
+    fprintf(stderr, "[ge_render %s] %s\n", tag[level < 0 ? 0 : level > 4 ? 4 : level], msg);
+}
+void cbFatal(const char *msg)
+{
+    fprintf(stderr, "fatal: %s\n", msg);
+    abort();
+}
+void cbQuit(const char *) { gQuitReq = true; }
+
+// ge_render_poll_events drains the SDL queue into its callbacks; ImGui's SDL backend reads the same events through a watch.
+int SDLCALL imguiEventWatch(void *, SDL_Event *e)
+{
+    ImGui_ImplSDL2_ProcessEvent(e);
+    return 0;
+}
 
 std::string dirOfExe(const char *argv0)
 {
@@ -137,6 +172,9 @@ void usage()
          "    --no-mcp          do not start the MCP HTTP server\n"
          "    --no-offscreen    draw straight into the window, not into a whole offscreen frame copied at the end\n"
          "                      (the default avoids half-drawn frames on NVIDIA's DXGI present path)\n"
+         "    --renderer gl|vk  the ge_render backend: OpenGL or Vulkan (default: the Settings choice, OpenGL; Vulkan falls back to OpenGL\n"
+         "                      when there is no usable Vulkan 1.3 driver)\n"
+         "    --debug-gl        OpenGL debug output of the backend; --gl-version M.m[core|es] picks the context version\n"
          "    --mcp-stdio       headless: MCP over stdin/stdout (newline-delimited JSON-RPC), no window\n"
          "    --mcp-http        headless: only the HTTP MCP server, no window (until killed)\n"
          "    --game EXE        game executable for Play (default: GE_EDITOR_GAME, else ge007 next to the editor)\n"
@@ -173,6 +211,9 @@ bool parseArgs(int argc, char **argv, Options &o)
         else if (s == "--mcp-http") o.mcpHttp = true;
         else if (s == "--no-mcp") o.noMcp = true;
         else if (s == "--no-offscreen") o.noOffscreen = true;
+        else if (s == "--renderer") next(o.renderer);
+        else if (s == "--debug-gl") {}                       // read by the backend through the arg_check callback
+        else if (s == "--gl-version" && i + 1 < argc) i++;   // ... and this one through arg_get_string
         else if (s == "--export") next(o.exportDir);
         else if (s == "--level") next(o.level);
         else if (s == "--mission") next(o.missionFile);
@@ -259,7 +300,7 @@ int main(int argc, char **argv)
     Options opt;
     if (!parseArgs(argc, argv, opt)) return 2;
     if (opt.help) { usage(); return 0; }
-    editorStubsSetArgs(argc, argv);
+    gArgc = argc; gArgv = argv;
     const std::string exeDir = dirOfExe(argv[0]);
 
     if (opt.mcpStdio) {
@@ -304,33 +345,34 @@ int main(int argc, char **argv)
     snprintf(app.gameExe, sizeof app.gameExe, "%s", app.doc.gameExe.c_str());
 
     SDL_SetMainReady();
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
-    app.win = SDL_CreateWindow("Project Dam editor", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, opt.winW, opt.winH,
-                               SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
-    if (!app.win) { fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return 1; }
+    {   // the renderer library opens the window and the backend (OpenGL, or Vulkan with an SDL Vulkan window)
+        GeRenderConfig cfg = ge_render_cfg;
+        const bool vk = opt.renderer.empty() ? app.prefRenderer == 1 : opt.renderer == "vk" || opt.renderer == "vulkan";
+        cfg.backend = vk ? GE_RENDER_VULKAN : GE_RENDER_GL;
+        cfg.window.title = "Project Dam editor";
+        cfg.window.width = (uint32_t)opt.winW;
+        cfg.window.height = (uint32_t)opt.winH;
+        cfg.window.centered = 1;
+        cfg.window.allow_hidpi = 1;
+        cfg.fog_vertex = 1;   // no fog in the editor
+        GeRenderCallbacks cb = {};
+        cb.log = cbLog;
+        cb.fatal = cbFatal;
+        cb.arg_check = cbArgCheck;
+        cb.arg_get_string = cbArgGet;
+        cb.on_quit = cbQuit;
+        if (!ge_render_open(&cfg, &cb)) { fprintf(stderr, "ge_render_open failed\n"); return 1; }
+        app.win = (SDL_Window *)ge_render_window()->get_window_handle();
+        if (!app.win) { fprintf(stderr, "no window\n"); return 1; }
+        SDL_StartTextInput();   // the window layer stops it (the game takes no text); the GUI's text fields need it
+    }
     {   // the window icon (tools_pc/make_icon.py), R,G,B,A bytes per pixel
         SDL_Surface *icon = SDL_CreateRGBSurfaceWithFormatFrom((void *)editor_icon_rgba, EDITOR_ICON_SIZE, EDITOR_ICON_SIZE, 32,
                                                                EDITOR_ICON_SIZE * 4, SDL_PIXELFORMAT_RGBA32);
         if (icon) { SDL_SetWindowIcon(app.win, icon); SDL_FreeSurface(icon); }
     }
-    app.gl = SDL_GL_CreateContext(app.win);
-    if (!app.gl) { fprintf(stderr, "no OpenGL 3.3 core context: %s\n", SDL_GetError()); return 1; }
-    SDL_GL_SetSwapInterval(1);
-    {   // what the driver really gave (a single-buffered window would show half-drawn frames)
-        int dbl = -1, depth = -1, maj = -1, min = -1;
-        SDL_GL_GetAttribute(SDL_GL_DOUBLEBUFFER, &dbl);
-        SDL_GL_GetAttribute(SDL_GL_DEPTH_SIZE, &depth);
-        SDL_GL_GetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, &maj);
-        SDL_GL_GetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, &min);
-        fprintf(stderr, "[editor] GL context %d.%d: doublebuffer %d, depth %d bits, swap interval %d, offscreen frame %s\n",
-                maj, min, dbl, depth, SDL_GL_GetSwapInterval(), opt.noOffscreen ? "off (--no-offscreen)" : "on");
-    }
+    fprintf(stderr, "[editor] renderer %s (\"%s\"), offscreen frame %s\n", ge_render_backend() == GE_RENDER_VULKAN ? "Vulkan" : "OpenGL",
+            ge_render_renderer_string(), ge_render_backend() != GE_RENDER_GL ? "n/a" : opt.noOffscreen ? "off (--no-offscreen)" : "on");
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -340,14 +382,17 @@ int main(int argc, char **argv)
     ImGui::StyleColorsDark();
     ImGui::GetStyle().WindowRounding = 0;
     ImGui::GetStyle().FontScaleMain = 1.15f;   // 1.92: was io.FontGlobalScale
-    ImGui_ImplSDL2_InitForOpenGL(app.win, app.gl);
-    ImGui_ImplOpenGL3_Init("#version 330");
+    ImGui_ImplSDL2_InitForOther(app.win);
+    imguiGeInit();
+    SDL_AddEventWatch(imguiEventWatch, nullptr);
 
     int dw, dh;
-    SDL_GL_GetDrawableSize(app.win, &dw, &dh);
+    auto drawable = [&dw, &dh] { editorDrawableSize(&dw, &dh); };
+    drawable();
     std::string err;
     if (!app.scene.init(dw, dh, err)) { fprintf(stderr, "renderer: %s\n", err.c_str()); return 1; }
-    app.scene.setOffscreen(!opt.noOffscreen && app.prefOffscreen);
+    app.scene.setOffscreen(!opt.noOffscreen && app.prefOffscreen && ge_render_backend() == GE_RENDER_GL);
+    int sceneW = dw, sceneH = dh;
 
     if (!loadStartup(app.doc, opt, err, false)) app.say("startup: %s", err.c_str());
     if (!opt.level.empty() && !app.doc.hasLevel) requestLevel(app, opt.level, false);
@@ -466,24 +511,22 @@ int main(int argc, char **argv)
                 else if (tok.size() == 1 && tok[0] >= 'a' && tok[0] <= 'z') kio.AddKeyEvent((ImGuiKey)(ImGuiKey_A + (tok[0] - 'a')), on);
             }
         }
-        while (SDL_PollEvent(&e)) {
-            ImGui_ImplSDL2_ProcessEvent(&e);
-            if (e.type == SDL_QUIT || (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_CLOSE)) {
-                if (app.doc.hasMission && app.doc.dirty && !app.modalOpen) guarded(app, [&app] { app.wantQuit = true; });   // waits for the answer
-                else if (!(app.doc.hasMission && app.doc.dirty)) quit = true;
-            }
+        ge_render_poll_events();   // the events reach ImGui through imguiEventWatch, a close or SDL_QUIT sets gQuitReq
+        if (gQuitReq) {
+            gQuitReq = false;
+            if (app.doc.hasMission && app.doc.dirty && !app.modalOpen) guarded(app, [&app] { app.wantQuit = true; });   // waits for the answer
+            else if (!(app.doc.hasMission && app.doc.dirty)) quit = true;
         }
         drainJobs();
         pollLevel(app);
         if (app.doc.levelGen != app.seenLevelGen) reloadLevelGpu(app);
 
-        SDL_GL_GetDrawableSize(app.win, &dw, &dh);
+        drawable();
         int ww, wh;
         SDL_GetWindowSize(app.win, &ww, &wh);
         if (SDL_GetWindowFlags(app.win) & SDL_WINDOW_MINIMIZED) { SDL_Delay(50); continue; }
 
         processOwnerQueue(app, dw, dh);   // the Props browser's model thumbnails, between two frames
-        ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         if (opt.hasMouseAt && frame >= 4 && !opt.hasMouseDrag) { const bool then = opt.mouseThen[0] >= 0 && frame >= (int)opt.mouseThen[0]; ImGui::GetIO().AddMousePosEvent(then ? opt.mouseThen[1] : opt.mouseAt[0], then ? opt.mouseThen[2] : opt.mouseAt[1]); }   // over the real cursor
         if (!opt.openMenu.empty() && frame >= 5) {   // test aid: click the title of a menu, then keep the cursor on it
@@ -509,11 +552,14 @@ int main(int argc, char **argv)
 
         // 3D view in drawable pixels
         const float sx = (float)dw / (float)std::max(ww, 1), sy = (float)dh / (float)std::max(wh, 1);
+        if (dw != sceneW || dh != sceneH) { app.scene.resize(dw, dh); sceneW = dw; sceneH = dh; }
+        ge_render_begin_frame();
         app.scene.render(app.doc, app.cam, dw, dh, (int)(app.vx * sx), (int)(app.vy * sy), (int)(app.vw * sx), (int)(app.vh * sy),
                          app.showRooms, app.showProps);
         if (app.scene.offscreen()) editorOffscreenBind(dw, dh);   // the GUI goes into the same offscreen frame
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        imguiGeRender(ImGui::GetDrawData());
         if (app.scene.offscreen()) editorOffscreenPresent(dw, dh);
+        ge_render_end_frame();
 
         frame++;
         if (opt.logCam && (app.cam.pos[0] != lastCam[0] || app.cam.pos[1] != lastCam[1] || app.cam.pos[2] != lastCam[2])) {
@@ -561,16 +607,17 @@ int main(int argc, char **argv)
             else fprintf(stderr, "screenshot failed\n");
             quit = true;
         }
-        SDL_GL_SwapWindow(app.win);
+        ge_render_present();
     }
 
     app.http.stop();
     app.scene.setLevel(nullptr);
-    ImGui_ImplOpenGL3_Shutdown();
+    SDL_DelEventWatch(imguiEventWatch, nullptr);
+    imguiGeShutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
-    SDL_GL_DeleteContext(app.gl);
-    SDL_DestroyWindow(app.win);
+    ge_render_park();
+    ge_render_close();
     SDL_Quit();
     return 0;
 }

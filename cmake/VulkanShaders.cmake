@@ -1,7 +1,7 @@
 # Issue #44: the Vulkan backend's SPIR-V shader pack, the PC twin of the
 # deko3d pack (cmake/SwitchPort.cmake, D973). Same generator (tools_pc/dkshgen),
 # same GLSL (the generated combiners and port/shaders/), same pack
-# layout (port/fast3d/gfx_dk_layout.h, blobs = SPIR-V words); only the compiler
+# layout (port/ge_render/src/gfx_dk_layout.h, blobs = SPIR-V words); only the compiler
 # differs: glslangValidator -V instead of uam. --sub 4 moves every uniform block
 # up by 4 bindings so they share descriptor set 0 with the two samplers
 # (binding 0, 1): Draw 4, Comb 5, Mesh 6 (gfx_vulkan.cpp's set layout).
@@ -9,8 +9,8 @@
 # Script mode (-P, see vulkan_shaders below): host dkshgen, glslang, pack.
 if(VK_PACK_RUN)
   file(MAKE_DIRECTORY "${VK_OUT}/glsl")
-  execute_process(COMMAND "${VK_HOST_CXX}" -std=c++20 -O2 -I "${VK_SRC}/port/fast3d"
-      "${VK_SRC}/tools_pc/dkshgen/dkshgen.cpp" "${VK_SRC}/port/fast3d/gfx_cc.cpp" -o "${VK_OUT}/dkshgen"
+  execute_process(COMMAND "${VK_HOST_CXX}" -std=c++20 -O2 -I "${VK_SRC}/port/ge_render/include" -I "${VK_SRC}/port/ge_render/src"
+      "${VK_SRC}/tools_pc/dkshgen/dkshgen.cpp" "${VK_SRC}/port/ge_render/src/gfx_cc.cpp" -o "${VK_OUT}/dkshgen"
     RESULT_VARIABLE _r)
   if(NOT _r EQUAL 0)
     message(FATAL_ERROR "dkshgen: host build failed (${VK_HOST_CXX})")
@@ -19,7 +19,7 @@ if(VK_PACK_RUN)
   if(_old)
     file(REMOVE ${_old})
   endif()
-  execute_process(COMMAND "${VK_OUT}/dkshgen" glsl "${VK_LIST}" "${VK_OUT}/glsl" RESULT_VARIABLE _r)
+  execute_process(COMMAND "${VK_OUT}/dkshgen" glsl "${VK_LIST}" "${VK_OUT}/glsl" ${VK_TOOL_LIST} RESULT_VARIABLE _r)
   if(NOT _r EQUAL 0)
     message(FATAL_ERROR "dkshgen glsl failed")
   endif()
@@ -101,7 +101,7 @@ ${_uo}${_ue}")
   return()
 endif()
 
-# Builds the pack and links it into <target> through port/fast3d/gfx_vk_pack.S
+# Builds the pack and links it into <target> through port/ge_render/src/gfx_vk_pack.S
 # (.incbin), in a small library of its own: the game's compile options (the
 # forced versioninfo.h, the shadow headers) are not meant for an assembler file.
 macro(vulkan_shaders target)
@@ -109,22 +109,28 @@ macro(vulkan_shaders target)
   find_program(VK_HOST_CXX NAMES c++ g++ HINTS /usr/bin REQUIRED NO_CMAKE_FIND_ROOT_PATH)
   set(_vk_pack "${CMAKE_BINARY_DIR}/ge007_spv.bin")
   file(GLOB_RECURSE _vk_glsl CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/*.glsl")
+  set(_vk_tool "")   # GE_TOOLS: the fxview tool's combiners (the diagnostic kinds) join the pack; the game's build has none
+  if(GE_TOOLS)
+    set(_vk_tool "-DVK_TOOL_LIST=${CMAKE_SOURCE_DIR}/tools_pc/fxview/combiners.txt")
+    file(GLOB _vk_tool_deps "${CMAKE_SOURCE_DIR}/tools_pc/fxview/combiners.txt" "${CMAKE_SOURCE_DIR}/tools_pc/fxview/shaders/*.glsl")
+    list(APPEND _vk_glsl ${_vk_tool_deps})
+  endif()
   add_custom_command(OUTPUT "${_vk_pack}"
     COMMAND "${CMAKE_COMMAND}" -DVK_PACK_RUN=ON
             "-DVK_SRC=${CMAKE_SOURCE_DIR}" "-DVK_OUT=${CMAKE_BINARY_DIR}/spv"
             "-DVK_LIST=${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt"
-            "-DVK_PACK=${_vk_pack}" "-DVK_GLSLANG=${VK_GLSLANG}" "-DVK_HOST_CXX=${VK_HOST_CXX}"
+            ${_vk_tool} "-DVK_PACK=${_vk_pack}" "-DVK_GLSLANG=${VK_GLSLANG}" "-DVK_HOST_CXX=${VK_HOST_CXX}"
             -P "${CMAKE_SOURCE_DIR}/cmake/VulkanShaders.cmake"
     DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt" "${CMAKE_SOURCE_DIR}/port/shaders/fx/combiners.txt"
             ${_vk_glsl}
             "${CMAKE_SOURCE_DIR}/tools_pc/dkshgen/dkshgen.cpp"
-            "${CMAKE_SOURCE_DIR}/port/fast3d/gfx_cc.cpp"
-            "${CMAKE_SOURCE_DIR}/port/fast3d/gfx_cc.h"
-            "${CMAKE_SOURCE_DIR}/port/fast3d/gfx_dk_layout.h"
+            "${CMAKE_SOURCE_DIR}/port/ge_render/src/gfx_cc.cpp"
+            "${CMAKE_SOURCE_DIR}/port/ge_render/include/gfx_cc.h"
+            "${CMAKE_SOURCE_DIR}/port/ge_render/src/gfx_dk_layout.h"
             "${CMAKE_SOURCE_DIR}/cmake/VulkanShaders.cmake"
     COMMENT "Vulkan shader pack (dkshgen + glslangValidator)"
     VERBATIM)
-  set(_vk_s "${CMAKE_SOURCE_DIR}/port/fast3d/gfx_vk_pack.S")
+  set(_vk_s "${CMAKE_SOURCE_DIR}/port/ge_render/src/gfx_vk_pack.S")
   add_library(ge_vkpack STATIC "${_vk_s}")
   set_property(TARGET ge_vkpack PROPERTY INCLUDE_DIRECTORIES "")
   set_property(TARGET ge_vkpack PROPERTY COMPILE_OPTIONS "-Wa,-I${CMAKE_BINARY_DIR}")

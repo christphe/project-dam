@@ -103,6 +103,27 @@ bool rle(Bits& bs, int total, std::vector<int>& out) {
     out.resize((size_t)total);
     return !bs.bad;
 }
+// image.c texBlur (compression method 8: Huffman coded channels, then a predictor per pixel)
+void blur(std::vector<int>& px, int width, int height, int method, int chansize) {
+    for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
+        const int cur = px[(size_t)(y * width + x)] + chansize * 2;
+        const int left = x > 0 ? px[(size_t)(y * width + x - 1)] : 0;
+        const int above = y > 0 ? px[(size_t)((y - 1) * width + x)] : 0;
+        const int aboveleft = x > 0 && y > 0 ? px[(size_t)((y - 1) * width + x - 1)] : 0;
+        int v = 0;
+        switch (method) {
+            case 0: v = cur + left; break;
+            case 1: v = cur + above; break;
+            case 2: v = cur + aboveleft; break;
+            case 3: v = cur + (left + above - aboveleft); break;
+            case 4: v = cur + ((above - aboveleft) / 2 + left); break;
+            case 5: v = cur + ((left - aboveleft) / 2 + above); break;
+            case 6: v = cur + ((left + above) / 2); break;
+            default: continue;
+        }
+        px[(size_t)(y * width + x)] = v % chansize;
+    }
+}
 std::vector<std::pair<int, int>> g_list;   // (offset, size) per texture number
 }  // namespace
 
@@ -137,6 +158,34 @@ bool mv_tex_load(const uint8_t* rom, size_t romSize, int tn, MvTexImage& out) {
     Bits bs(b, size, 1);
     const int fmt = (int)bs.read(4), w = (int)bs.read(8), h = (int)bs.read(8), cm = (int)bs.read(4);
     if (!w || !h || w * h > 0x2000 || fmt > MVT_I4) { out.note = "bad header"; return false; }
+    if (cm == 2 || cm == 8) {   // HUFFMAN / HUFFMANBLUR (image.c texInflateNonZlib): the channels of the format, Huffman coded, blurred for 8
+        static const int nch[13] = { 4, 3, 3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1 }, csz[13] = { 0x100, 0x20, 0x100, 0x20, 0x100, 0x10, 8, 0x100, 0x10, 0x100, 0x10, 0x100, 0x10 };
+        if (fmt >= MVT_CI8_RGBA16) { out.note = "paletted huffman texture"; return false; }
+        const int stack = cm == 8 ? (int)bs.read(3) : 0, nc = nch[fmt], cs = csz[fmt];
+        std::vector<int> px;
+        if (!huffman(bs, nc * w * h, cs, px)) { out.note = "huffman failed"; return false; }
+        if (cm == 8) blur(px, w, nc * h, stack, cs);
+        std::vector<int> abit;
+        if (fmt == MVT_RGBA16 || fmt == MVT_IA4) { for (int i = 0; i < w * h; i++) abit.push_back((int)bs.read(1)); }   // texReadAlphaBits
+        const int m = w * h;
+        out.rgba.assign((size_t)m * 4, 0);
+        for (int i = 0; i < m; i++) {
+            const int c0 = px[(size_t)i], c1 = nc > 1 ? px[(size_t)(m + i)] : 0, c2 = nc > 2 ? px[(size_t)(2 * m + i)] : 0, c3 = nc > 3 ? px[(size_t)(3 * m + i)] : 0;
+            uint32_t v = 0;
+            switch (fmt) {
+                case MVT_RGBA32: v = ((uint32_t)c0 << 24) | ((uint32_t)c1 << 16) | ((uint32_t)c2 << 8) | (uint32_t)c3; break;
+                case MVT_RGB24: v = ((uint32_t)c0 << 16) | ((uint32_t)c1 << 8) | (uint32_t)c2; break;
+                case MVT_RGBA16: v = ((uint32_t)c0 << 11) | ((uint32_t)c1 << 6) | ((uint32_t)c2 << 1) | (uint32_t)abit[(size_t)i]; break;
+                case MVT_RGB15: v = ((uint32_t)c0 << 10) | ((uint32_t)c1 << 5) | (uint32_t)c2; break;
+                case MVT_IA16: v = ((uint32_t)c0 << 8) | (uint32_t)c1; break;
+                case MVT_IA8: v = ((uint32_t)c0 << 4) | (uint32_t)c1; break;
+                case MVT_IA4: v = ((uint32_t)c0 << 1) | (uint32_t)abit[(size_t)i]; break;
+                default: v = (uint32_t)c0; break;   // I8, I4
+            }
+            mv_tex_value_rgba(fmt, v, &out.rgba[(size_t)i * 4]);
+        }
+        out.w = w; out.h = h; out.note = cm == 8 ? "huffman+blur" : "huffman"; return true;
+    }
     if (cm < 5 || cm > 7) { char t[64]; snprintf(t, sizeof t, "compmethod %d not supported", cm); out.note = t; return false; }
     const int bpp = bitsOf(fmt), n = (int)bs.read(11);
     std::vector<uint32_t> lut((size_t)n);

@@ -338,7 +338,7 @@ static int bsOpen(void)
     }
     g_sdlUp = 1;
     {
-        /* same window as the game's (gfx_sdl2.cpp): the ini's size/position,
+        /* same window as the game's (ge_window_sdl.cpp): the ini's size/position,
          * else a 4:3 window filling ~85% of the desktop; fullscreen if it will be */
         int w, h, x, y, fs;
         Uint32 fl = SDL_WINDOW_SHOWN;

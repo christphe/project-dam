@@ -84,12 +84,13 @@ satisfied by the `port/` layer:
 
 ```
 port/
-├── fast3d/            # Software RSP: interprets GBI display lists -> OpenGL
+├── fast3d/            # Software RSP: translates GBI display lists into ge_render calls
 │   ├── gfx_pc.cpp     #   the RSP interpreter (matrices, lights, tris, fog)
-│   ├── gfx_opengl.cpp #   OpenGL rendering backend (shaders, textures, zbuf)
-│   ├── gfx_sdl2.cpp   #   SDL2 window-manager backend
-│   ├── gfx_cc.cpp     #   color-combiner -> GLSL shader compiler
+│   ├── gfx_frame.cpp  #   frame recorder / replay thread
 │   └── ...
+├── ge_render/         # Renderer library (issue #142): backends, gfx_cc, window per backend, no N64 code
+│   ├── include/ge_render.h
+│   └── src/           #   gfx_opengl / gfx_vulkan / gfx_deko3d, gfx_cc, ge_window_sdl
 ├── include/           # port-facing headers
 │   ├── audio.h  config.h  fs.h  input.h  mixer.h  mod.h
 │   ├── romdata.h  system.h  video.h  utils.h  platform.h

@@ -58,9 +58,8 @@
 #include "system.h"
 #include "gfx_cc.h"
 #include "gfx_window_manager_api.h"
-#include "gfx_sdl.h"
+#include "ge_render.h"
 
-extern bool gfx_framebuffers_enabled;   /* gfx_pc.cpp */
 
 namespace {
 
@@ -647,7 +646,7 @@ void r_set_lights(const struct GfxLights* l) {
 }
 
 void r_init(void) {
-    B->init();
+    /* ge_render_open already ran the backend's init (and created its window); this is the recorder's side. */
     s_fb_count = 1;   /* gfx_opengl_init: framebuffers.resize(1) */
 }
 
@@ -719,7 +718,7 @@ void r_update_framebuffer_parameters(int fb_id, uint32_t width, uint32_t height,
 }
 
 bool r_start_draw_to_framebuffer(int fb_id, float noise_scale) {
-    const bool ok = gfx_framebuffers_enabled && fb_id < s_fb_count;
+    const bool ok = ge_render_cfg.framebuffers_enabled && fb_id < s_fb_count;
     if (ok) {
         if (noise_scale != 0.0f) {
             s_noise = 1.0f / noise_scale;
@@ -1060,7 +1059,7 @@ void run_frame_job(const Job& j) {
 
 void* replay_thread(void*) {
     if (s_hook_enter) s_hook_enter();
-    gfx_sdl_make_context_current();
+    ge_render_bind_thread();
     std::vector<uint32_t> names;
     for (;;) {
         pthread_mutex_lock(&s_tl);
@@ -1074,13 +1073,13 @@ void* replay_thread(void*) {
         s_busy = true;
         pthread_mutex_unlock(&s_tl);
 
-        gfx_sdl_make_context_current();   /* no-op when already current (SDL) */
+        ge_render_bind_thread();   /* no-op when already current (SDL) */
         bool leave = false;
         switch (j.kind) {
             case JOB_FRAME: run_frame_job(j); break;
             case JOB_CALL: j.fn(j.arg); break;
-            case JOB_RELEASE: gfx_sdl_release_context(); break;
-            case JOB_PARK: gfx_sdl_park_for_exit(); leave = true; break;   /* glFinish + unbind (D344) */
+            case JOB_RELEASE: ge_render_release_thread(); break;
+            case JOB_PARK: ge_render_park(); leave = true; break;   /* glFinish + unbind (D344) */
         }
         if (!leave && j.kind != JOB_RELEASE) {
             /* refill the decoder's pool of texture names (64) with what it used */
@@ -1316,7 +1315,7 @@ void gfx_frame_thread_activate(bool on) {
             gfx_frame_submit();   /* not expected at a frame start; keep the order */
         }
         /* the decoder thread held the context for the inline frames: give it up */
-        gfx_sdl_release_context();
+        ge_render_release_thread();
         if (!s_running) {
             pthread_attr_t attr;
             pthread_attr_init(&attr);
@@ -1324,7 +1323,7 @@ void gfx_frame_thread_activate(bool on) {
             if (pthread_create(&s_th, &attr, replay_thread, nullptr) != 0) {
                 pthread_attr_destroy(&attr);
                 sysLogPrintf(LOG_ERROR, "F3D: replay thread failed to start; replaying inline");
-                gfx_sdl_make_context_current();
+                ge_render_bind_thread();
                 return;
             }
             pthread_attr_destroy(&attr);
@@ -1347,7 +1346,7 @@ void gfx_frame_thread_activate(bool on) {
     s_thr = false;
     s_rec = false;
     frame_reset();
-    gfx_sdl_make_context_current();
+    ge_render_bind_thread();
 }
 
 void gfx_frame_thread_set_token(int64_t token) {

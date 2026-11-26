@@ -269,7 +269,7 @@ static int mc_on(void) {
 
 static inline uint8_t mc_settings(void) {
     return (uint8_t)((g_wrap_fix ? 1 : 0) | (gfx_detail_textures_enabled ? 2 : 0) | (g_detail_base_tile ? 4 : 0) |
-                     (g_fix_mip_textures ? 8 : 0) | (gfx_fog_vertex ? 16 : 0));
+                     (g_fix_mip_textures ? 8 : 0) | (ge_render_cfg.fog_vertex ? 16 : 0));
 }
 
 /* Which segment seg_addr() would read for w1, or -1 (mirrors seg_addr). */
@@ -756,7 +756,7 @@ static inline float* mc_emit_vertex(const McSeg& s, const struct LoadedVertex* v
         *out++ = L[rdp.fog_color.r];
         *out++ = L[rdp.fog_color.g];
         *out++ = L[rdp.fog_color.b];
-        *out++ = gfx_fog_vertex ? L[(uint8_t)vi->fog_n] : vi->fog_n / 255.0f;
+        *out++ = ge_render_cfg.fog_vertex ? L[(uint8_t)vi->fog_n] : vi->fog_n / 255.0f;
     }
     if (ts.use_grayscale) {
         *out++ = L[rdp.grayscale_color.r];

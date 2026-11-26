@@ -12,12 +12,13 @@ research write-up and phased plan.
 
 ```
 port/
-├── fast3d/            # Software RSP: interprets GBI display lists -> OpenGL
+├── fast3d/            # Software RSP: translates GBI display lists into ge_render calls
 │   ├── gfx_pc.cpp     #   RSP interpreter (matrices, lights, tris, fog)
-│   ├── gfx_opengl.cpp #   OpenGL rendering backend (shaders, textures, zbuf)
-│   ├── gfx_sdl2.cpp   #   SDL2 window-manager backend
-│   ├── gfx_cc.cpp     #   color-combiner -> GLSL shader compiler
+│   ├── gfx_frame.cpp  #   frame recorder / replay thread
 │   └── ...
+├── ge_render/         # Renderer library (issue #142), no N64 code
+│   ├── include/ge_render.h  #   public API: open/close, config, callbacks, frame calls, meshes, debug draw
+│   └── src/           #   gfx_opengl / gfx_vulkan / gfx_deko3d backends, gfx_cc, ge_window_sdl (window per backend)
 ├── include/           # port-facing headers
 │   ├── audio.h  config.h  fs.h  input.h  mixer.h
 │   ├── platform.h  romdata.h  system.h  video.h  utils.h
