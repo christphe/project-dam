@@ -290,6 +290,11 @@ struct Doc {
     bool modCheckForPublish(std::string &err);                       // saves the mod, then validates it and its missions (errors refuse)
     bool publishMod(const std::string &outDir, std::string &outPath, uint64_t &bytes, std::string &err);   // <outDir>/<mod>.pmod
     bool deployMod(std::string &outPath, uint64_t &bytes, std::string &err);                                // <modsRoot>/<mod>.pmod
+    static bool isPackageFile(const std::string &path);              // a regular file named *.pmod
+    // Unpacks the package file X.pmod into a folder X.pmod/ to edit it (the game reads that folder like the file).
+    // destParent empty: in place, the file becomes X.pmod.old (refused when that exists). Else into <destParent>/X.pmod/,
+    // the file kept (refused when that folder exists). outDir: the folder made. Refused when it holds no campaign.json.
+    static bool extractMod(const std::string &pmod, const std::string &destParent, std::string &outDir, std::string &err);
     // New mission folder (unique, from `folder` or the name), mission.json written, appended to the
     // campaign, campaign saved, the mission opened.
     bool modAddMission(const std::string &name, const std::string &level, const std::string &folder, std::string &outFolder, std::string &err, bool emptied = false);

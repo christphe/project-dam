@@ -39,6 +39,45 @@ static void mkp(const char *base, const char *rel)   /* base/rel's folders, one 
     }
 }
 
+/* the folders of base/rel, recorded for cleanup (already made by pkgExtract) */
+static void mkpRecord(const char *base, const char *rel)
+{
+    char p[700];
+    int seen;
+    size_t n = strlen(base);
+    memcpy(p, base, n);
+    p[n] = 0;
+    seen = 0;
+    for (int i = 0; i < g_nd; i++) if (!strcmp(g_dirs[i], p)) seen = 1;
+    if (!seen) snprintf(g_dirs[g_nd++], sizeof g_dirs[0], "%s", p);
+    p[n++] = '/';
+    for (const char *s = rel; *s; s++) {
+        if (*s == '/') {
+            p[n] = 0;
+            seen = 0;
+            for (int i = 0; i < g_nd; i++) if (!strcmp(g_dirs[i], p)) seen = 1;
+            if (!seen) snprintf(g_dirs[g_nd++], sizeof g_dirs[0], "%s", p);
+        }
+        p[n++] = *s;
+    }
+}
+
+static int sameBytes(const char *a, const char *b)
+{
+    uint8_t *x = NULL, *y = NULL;
+    size_t nx = 0, ny = 0;
+    int same;
+    FILE *f;
+    /* read both as plain files (a path ending in .pmod is a file here, not an entry) */
+    f = fopen(a, "rb"); if (!f) return 0; fseek(f, 0, SEEK_END); nx = (size_t)ftell(f); fseek(f, 0, SEEK_SET);
+    x = (uint8_t *)malloc(nx + 1); nx = fread(x, 1, nx, f); fclose(f);
+    f = fopen(b, "rb"); if (!f) { free(x); return 0; } fseek(f, 0, SEEK_END); ny = (size_t)ftell(f); fseek(f, 0, SEEK_SET);
+    y = (uint8_t *)malloc(ny + 1); ny = fread(y, 1, ny, f); fclose(f);
+    same = nx == ny && memcmp(x, y, nx) == 0;
+    free(x); free(y);
+    return same;
+}
+
 static size_t gen(uint8_t *b, size_t n, unsigned seed)
 {
     for (size_t i = 0; i < n; i++) { seed = seed * 1664525u + 1013904223u; b[i] = (uint8_t)(seed >> 24); }
@@ -185,6 +224,84 @@ int main(void)
         GE_CHECK_EQ_INT(pkgReadFile(p, &got, &n), 1);
         GE_CHECK_EQ_INT(n, 1000);
         pkgFree(got);
+    }
+
+    /* pkgExtract: the package unpacks into a new folder, every packed file byte for byte (the skipped ones absent) */
+    {
+        char ex[650], f2[700];
+        snprintf(ex, sizeof ex, "%s/ex.pmod", tmp);
+        err[0] = 0;
+        GE_CHECK_EQ_INT(pkgExtract(pkg, ex, err, sizeof err), 1);
+        if (err[0]) printf("  pkgExtract: %s\n", err);
+        snprintf(p, sizeof p, "%s/campaign.json", ex);
+        GE_CHECK_EQ_INT(pkgReadFile(p, &got, &n), 1);
+        GE_CHECK(got && strstr((const char *)got, "changed") != NULL);
+        pkgFree(got);
+        for (int i = 0; i < NF; i++) {
+            snprintf(f2, sizeof f2, "%s/%s", ex, kFiles[i].rel);
+            if (strcmp(kFiles[i].rel, "campaign.json")) {
+                uint8_t *want = (uint8_t *)malloc(kFiles[i].len + 1);
+                got = NULL;
+                if (kFiles[i].skipped) GE_CHECK_EQ_INT(pkgExists(f2), 0);
+                else GE_CHECK_EQ_INT(pkgReadFile(f2, &got, &n), 1);
+                if (got) {
+                    GE_CHECK_EQ_INT(n, kFiles[i].len);
+                    gen(want, kFiles[i].len, kFiles[i].seed);
+                    GE_CHECK(memcmp(got, want, kFiles[i].len) == 0);
+                    pkgFree(got);
+                }
+                free(want);
+            }
+            if (!kFiles[i].skipped) { snprintf(g_files[g_nf++], sizeof g_files[0], "%s", f2); mkpRecord(ex, kFiles[i].rel); }
+        }
+        /* repacking the unpacked folder gives the same bytes as the package */
+        snprintf(f2, sizeof f2, "%s/re.pmod", tmp);
+        GE_CHECK_EQ_INT(pkgWriteDir(ex, f2, err, sizeof err), 1);
+        GE_CHECK_EQ_INT(sameBytes(pkg, f2), 1);
+        remove(f2);
+        /* an existing destination is refused */
+        err[0] = 0;
+        GE_CHECK_EQ_INT(pkgExtract(pkg, ex, err, sizeof err), 0);
+        GE_CHECK(err[0] != 0);
+        /* a file that is not a tar is refused, nothing made */
+        snprintf(f2, sizeof f2, "%s/ex2.pmod", tmp);
+        snprintf(p, sizeof p, "%s/m1/mission.json", src);
+        GE_CHECK_EQ_INT(pkgExtract(p, f2, err, sizeof err), 0);
+        GE_CHECK_EQ_INT(pkgExists(f2), 0);
+        /* an entry with ".." is refused before anything is written */
+        {
+            char evil[650];
+            FILE *f;
+            unsigned char h[512];
+            unsigned sum = 0;
+            snprintf(evil, sizeof evil, "%s/evil.pmod", tmp);
+            memset(h, 0, sizeof h);
+            memcpy(h, "../escape.txt", 13);
+            memcpy(h + 100, "0000644", 7);
+            memcpy(h + 124, "00000000001", 11);
+            memset(h + 148, ' ', 8);
+            h[156] = '0';
+            memcpy(h + 257, "ustar", 6);
+            memcpy(h + 263, "00", 2);
+            for (int i = 0; i < 512; i++) sum += h[i];
+            snprintf((char *)h + 148, 8, "%06o", sum);
+            f = fopen(evil, "wb");
+            if (f) {
+                unsigned char z[1536];
+                memset(z, 0, sizeof z);
+                z[0] = 'x';
+                fwrite(h, 1, 512, f);
+                fwrite(z, 1, sizeof z, f);
+                fclose(f);
+            }
+            err[0] = 0;
+            GE_CHECK_EQ_INT(pkgExtract(evil, f2, err, sizeof err), 0);
+            GE_CHECK(strstr(err, "outside") != NULL);
+            GE_CHECK_EQ_INT(pkgExists(f2), 0);
+            snprintf(p, sizeof p, "%s/escape.txt", tmp);
+            GE_CHECK_EQ_INT(pkgExists(p), 0);
+            remove(evil);
+        }
     }
 
     /* a source folder that is not there: refused with a message, nothing written */

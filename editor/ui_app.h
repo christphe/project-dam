@@ -131,6 +131,11 @@ struct App {
     char pubDir[512] = "";             // the output folder of Publish
     std::string pubResult;             // the last line shown in the modal (written path + size, or the refusal)
     bool pubFailed = false;
+    // ---- Open mod... on a .pmod file: the "Extract package" modal ----
+    bool askExtract = false;
+    std::string extractPmod;           // the package file to unpack
+    char extractDest[512] = "";        // the folder that gets <mod>.pmod/ (its own folder: in place, the file becomes .pmod.old)
+    std::string extractErr;            // the last refusal shown in the modal
     // Name and level of a mission file (the recent lists and the mod's mission list show these, not paths); cached.
     struct MissionInfo { std::string name, level; bool ok = false; };
     std::map<std::string, MissionInfo> infoCache;

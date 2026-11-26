@@ -36,6 +36,12 @@ void pkgFree(void *p);
 int pkgWriteDir(const char *srcDir, const char *outFile, char *err, size_t errlen);
 int pkgWriteDirSized(const char *srcDir, const char *outFile, uint64_t *outBytes, char *err, size_t errlen);
 
+/* Unpack the package file `pkgFile` into the new folder `destDir` (it must not exist; its parent must). Every regular
+ * file of the tar, with its subfolders. An entry that would land outside destDir (an absolute path, a drive, a ".."
+ * component) refuses the whole package. 1 on success; else 0 with a message in err, and destDir may hold part of the
+ * files (the caller removes it). */
+int pkgExtract(const char *pkgFile, const char *destDir, char *err, size_t errlen);
+
 #ifdef __cplusplus
 }
 #endif

@@ -5,6 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#define PKG_MKDIR(p) _mkdir(p)
+#else
+#define PKG_MKDIR(p) mkdir(p, 0755)
+#endif
 
 #define BLK 512
 #define CACHE_N 4
@@ -436,6 +442,8 @@ int pkgWriteDirSized(const char *srcDir, const char *outFile, uint64_t *outBytes
         }
     }
     if (rename(tmp, outFile) != 0) { snprintf(lerr, sizeof lerr, "cannot rename %s to %s", tmp, outFile); goto fail; }
+    /* drop its cached index: a rewrite of the same size within the same second (mtime has 1 s steps) would keep it */
+    for (int i = 0; i < CACHE_N; i++) if (s_cache[i].path[0] && !strcmp(s_cache[i].path, outFile)) indexClear(&s_cache[i]);
     if (outBytes) *outBytes = total;
     ok = 1;
     goto done;
@@ -451,4 +459,71 @@ done:
 int pkgWriteDir(const char *srcDir, const char *outFile, char *err, size_t errlen)
 {
     return pkgWriteDirSized(srcDir, outFile, NULL, err, errlen);
+}
+
+/* ---- the extractor ---------------------------------------------------------------------------------------------- */
+
+/* A tar entry name that stays inside the destination: relative, no drive, no "." or ".." component, no empty one. */
+static int safeName(const char *name)
+{
+    const char *p = name;
+    if (!*name || isSep(name[0]) || strchr(name, ':')) return 0;
+    while (*p) {
+        const char *q = p;
+        while (*q && !isSep(*q)) q++;
+        if (q == p) return 0;
+        if ((q - p == 1 && p[0] == '.') || (q - p == 2 && p[0] == '.' && p[1] == '.')) return 0;
+        p = *q ? q + 1 : q;
+    }
+    return 1;
+}
+
+int pkgExtract(const char *pkgFile, const char *destDir, char *err, size_t errlen)
+{
+    PkgIndex *ix;
+    FILE *in = NULL;
+    struct stat st;
+    char lerr[300] = "";
+    int ok = 0;
+    if (err && errlen) err[0] = 0;
+    if (stat(destDir, &st) == 0) { snprintf(lerr, sizeof lerr, "%s already exists", destDir); goto out; }
+    ix = indexGet(pkgFile);
+    if (!ix) { snprintf(lerr, sizeof lerr, "%s is not a package (a tar file)", pkgFile); goto out; }
+    for (int i = 0; i < ix->n; i++)
+        if (!safeName(ix->e[i].name)) { snprintf(lerr, sizeof lerr, "refused: entry \"%s\" would land outside the folder", ix->e[i].name); goto out; }
+    if (PKG_MKDIR(destDir) != 0) { snprintf(lerr, sizeof lerr, "cannot create %s", destDir); goto out; }
+    in = fopen(pkgFile, "rb");
+    if (!in) { snprintf(lerr, sizeof lerr, "cannot read %s", pkgFile); goto out; }
+    for (int i = 0; i < ix->n; i++) {
+        char full[2200];
+        unsigned char buf[8192];
+        long long left = ix->e[i].size;
+        FILE *o;
+        size_t base = strlen(destDir) + 1;
+        if (snprintf(full, sizeof full, "%s/%s", destDir, ix->e[i].name) >= (int)sizeof full) { snprintf(lerr, sizeof lerr, "path too long: %s", ix->e[i].name); goto out; }
+        for (char *c = full + base; *c; c++) {   /* the entry's folders, one level at a time */
+            if (*c != '/') continue;
+            *c = 0;
+            if (stat(full, &st) != 0 && PKG_MKDIR(full) != 0) { snprintf(lerr, sizeof lerr, "cannot create %s", full); goto out; }
+            *c = '/';
+        }
+        if (fseek(in, (long)ix->e[i].off, SEEK_SET) != 0) { snprintf(lerr, sizeof lerr, "cannot read %s", pkgFile); goto out; }
+        o = fopen(full, "wb");
+        if (!o) { snprintf(lerr, sizeof lerr, "cannot write %s", full); goto out; }
+        while (left > 0) {
+            size_t want = left > (long long)sizeof buf ? sizeof buf : (size_t)left;
+            if (fread(buf, 1, want, in) != want || fwrite(buf, 1, want, o) != want) {
+                fclose(o);
+                snprintf(lerr, sizeof lerr, "read or write failed at %s", full);
+                goto out;
+            }
+            left -= (long long)want;
+        }
+        if (fclose(o) != 0) { snprintf(lerr, sizeof lerr, "write failed: %s", full); goto out; }
+    }
+    ok = 1;
+out:
+    if (in) fclose(in);
+    if (!ok && err && errlen) snprintf(err, errlen, "%s", lerr);
+    return ok;
 }

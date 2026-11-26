@@ -57,6 +57,7 @@ bool Doc::openMod(const std::string &dirIn, std::string &err, bool openFirst)
     std::string dir = dirIn;
     while (dir.size() > 1 && (dir.back() == '/' || dir.back() == '\\')) dir.pop_back();
     if (dir.empty()) { err = "no mod folder given"; return false; }
+    if (isPackageFile(dir)) { err = dir + " is a package file: extract it to a folder first (Open mod... in the editor, mod_extract over MCP)"; return false; }
     const std::string file = dir + "/campaign.json";
     Campaign c; campaignInit(&c);
     char e[256] = "";
@@ -241,6 +242,54 @@ bool Doc::deployMod(std::string &outPath, uint64_t &bytes, std::string &err)
     outPath = root + "/" + modFolderName(modDir) + ".pmod";
     if (sameFolder(modDir, outPath)) { err = "the open mod is the unpacked " + outPath + " itself: nothing to deploy"; return false; }
     return packMod(modDir, outPath, bytes, err);
+}
+
+bool Doc::isPackageFile(const std::string &path)
+{
+    std::error_code ec;
+    const std::string n = baseName(path);
+    return n.size() > 5 && n.compare(n.size() - 5, 5, ".pmod") == 0 && fs::is_regular_file(fs::path(path), ec);
+}
+
+bool Doc::extractMod(const std::string &pmodIn, const std::string &destParentIn, std::string &outDir, std::string &err)
+{
+    std::string pmod = pmodIn, destParent = destParentIn;
+    for (char &c : pmod) if (c == '\\') c = '/';
+    for (char &c : destParent) if (c == '\\') c = '/';
+    while (destParent.size() > 1 && destParent.back() == '/') destParent.pop_back();
+    outDir.clear();
+    if (!isPackageFile(pmod)) { err = pmod + " is not a package file (X.pmod)"; return false; }
+    const std::string name = baseName(pmod);                 // X.pmod
+    const size_t slash = pmod.find_last_of('/');
+    const std::string parent = slash == std::string::npos ? "." : pmod.substr(0, slash);
+    std::error_code ec;
+    const bool inPlace = destParent.empty() || sameFolder(destParent, parent);
+    const std::string target = inPlace ? pmod : destParent + "/" + name;
+    const std::string old = pmod + ".old", tmp = target + ".extracting";
+    if (inPlace && exists(old)) { err = old + " already exists: remove or rename it first"; return false; }
+    if (!inPlace && exists(target)) { err = target + " already exists"; return false; }
+    if (!inPlace) {
+        fs::create_directories(fs::path(destParent), ec);
+        if (ec) { err = "cannot create " + destParent; return false; }
+    }
+    fs::remove_all(fs::path(tmp), ec);                        // a leftover of an interrupted extraction
+    char e[400] = "";
+    if (!pkgExtract(pmod.c_str(), tmp.c_str(), e, sizeof e)) { fs::remove_all(fs::path(tmp), ec); err = e[0] ? e : "cannot unpack " + pmod; return false; }
+    if (!exists(tmp + "/campaign.json")) { fs::remove_all(fs::path(tmp), ec); err = name + " is not a mod: it holds no campaign.json"; return false; }
+    if (inPlace) {
+        fs::rename(fs::path(pmod), fs::path(old), ec);
+        if (ec) { fs::remove_all(fs::path(tmp), ec); err = "cannot rename " + pmod + " (in use?)"; return false; }
+    }
+    fs::rename(fs::path(tmp), fs::path(target), ec);
+    if (ec) {
+        std::error_code ec2;
+        if (inPlace) fs::rename(fs::path(old), fs::path(pmod), ec2);   // put the package back
+        fs::remove_all(fs::path(tmp), ec2);
+        err = "cannot create " + target;
+        return false;
+    }
+    outDir = target;
+    return true;
 }
 
 std::vector<std::string> Doc::validateMod() const

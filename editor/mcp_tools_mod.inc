@@ -77,6 +77,18 @@ ToolResult toolModPublish(Doc &d, const cJSON *a)
     return modPackResult(ok, path, bytes, err);
 }
 
+ToolResult toolModExtract(Doc &, const cJSON *a)
+{
+    const std::string pmod = argStr(a, "pmod"), dest = argStr(a, "dest");
+    if (pmod.empty()) return fail("\"pmod\" is required: the package file X.pmod");
+    std::string out, err;
+    if (!Doc::extractMod(pmod, dest, out, err)) return fail(err);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "dir", out.c_str());
+    if (dest.empty()) cJSON_AddStringToObject(o, "old", (pmod + ".old").c_str());
+    return okJson(o);
+}
+
 ToolResult toolModDeploy(Doc &d, const cJSON *)
 {
     std::string path, err;

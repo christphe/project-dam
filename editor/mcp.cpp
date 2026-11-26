@@ -516,10 +516,14 @@ const Tool kTools[] = {
       toolSetTransform },
     { "capture_thumb", "Render the editor's current 3D view to a 320x240 PNG (a plain 4:3 crop of the view, no markers or panels). Needs the editor window.",
       "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"default: thumb.png in the open mission's folder inside the open mod\"}}}", toolCaptureThumb },
-    { "mod_open", "Open a mod folder (mods/<mod>, created with an empty campaign.json when new). Optional name, author, description, affects [story|multiplayer], unlock (ordered|open) edit the campaign; mission (folder or index) opens one of its missions.",
+    { "mod_open", "Open a mod folder (mods/<mod>, created with an empty campaign.json when new; a .pmod package file is refused: mod_extract it first). Optional name, author, description, affects [story|multiplayer], unlock (ordered|open) edit the campaign; mission (folder or index) opens one of its missions.",
       "{\"type\":\"object\",\"properties\":{\"dir\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"author\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"},"
       "\"affects\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"story\",\"multiplayer\"]}},\"unlock\":{\"type\":\"string\",\"enum\":[\"ordered\",\"open\"]},"
       "\"mission\":{\"type\":[\"integer\",\"string\"]}},\"required\":[\"dir\"]}", toolModOpen },
+    { "mod_extract", "Unpack a package file X.pmod into a folder X.pmod/ to edit it (the game plays that folder like the file); then mod_open the returned dir. "
+      "Without dest it is done in place: the file is renamed X.pmod.old (refused when that exists). With dest: into <dest>/X.pmod/, the file kept (refused when that folder exists). "
+      "Refused when the package holds no campaign.json. Returns dir (and old).",
+      "{\"type\":\"object\",\"properties\":{\"pmod\":{\"type\":\"string\"},\"dest\":{\"type\":\"string\",\"description\":\"the folder that gets X.pmod/; default: in place\"}},\"required\":[\"pmod\"]}", toolModExtract },
     { "mod_save", "Write the open mod's campaign.json (the open mission is saved with mission_save).", "{\"type\":\"object\",\"properties\":{}}", toolModSave },
     { "mod_publish", "Save the open mod, validate it and its missions (an error refuses), and write it as <out_dir>/<mod>.pmod (a tar of the mod folder; default out_dir <mod>/dist). Returns path and bytes.",
       "{\"type\":\"object\",\"properties\":{\"out_dir\":{\"type\":\"string\"}}}", toolModPublish },
