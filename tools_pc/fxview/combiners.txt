@@ -1,0 +1,12 @@
+# fxview's own combiners (GE_TOOLS builds only: dkshgen glsl takes this list as its 4th argument). PORTFX kinds 8..13 are tool-only:
+# the bullet-hole cluster draw (kind 7, same combiner) with a diagnostic output instead of the colour: tools_pc/fxview/shaders/diag.glsl.
+0x00000000180a180a 0x80000c01
+0x00000000180a180a 0x90000c01
+0x00000000180a180a 0xa0000c01
+0x00000000180a180a 0xb0000c01
+0x00000000180a180a 0xc0000c01
+0x00000000180a180a 0xd0000c01
+# the sprite views draw the game's smoke / flare textures (TEXEL0 x SHADE, MODULATEIA) through the tracer and blood effects too
+# (the game's list has that combiner for sparks and impacts only)
+0x0000000001080108 0x20000001
+0x0000000001080108 0x40000001

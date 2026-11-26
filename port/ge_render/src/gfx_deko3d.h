@@ -25,6 +25,10 @@ bool gfx_deko3d_wanted(void);
 void gfx_deko3d_present(void);
 /* Quit: queue idle, swapchain then memory then device destroyed (replay thread). */
 void gfx_deko3d_park(void);
+/* The next present writes the window to this PPM (GE_PCDUMP-style capture; ge_render_dump_window). */
+bool gfx_deko3d_dump_window(const char* path);
+/* The next present copies the window rectangle to `rgba` (RGBA8, top-left origin, w*h*4 bytes; ge_render_read_pixels). */
+bool gfx_deko3d_read_pixels(int x, int y, int w, int h, uint8_t* rgba);
 /* Swapchain size (1280x720 handheld, 1920x1080 docked). */
 void gfx_deko3d_get_dimensions(uint32_t* w, uint32_t* h);
 void gfx_deko3d_set_swap_interval(int interval);

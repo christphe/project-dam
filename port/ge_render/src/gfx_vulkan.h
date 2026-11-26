@@ -31,6 +31,10 @@ void gfx_vulkan_get_dimensions(uint32_t* w, uint32_t* h);
 void gfx_vulkan_set_swap_interval(int interval);
 /* GE_PCDUMP / screenshots: the next present writes the window to this PPM (before it returns). */
 bool gfx_vulkan_dump_window(const char* path);
+/* The next present copies the window rectangle to `rgba` (RGBA8, top-left origin, w*h*4 bytes; ge_render_read_pixels). */
+/* Tools, PC: replace one program's fragment shader (ge_render_fx_replace_spirv). */
+bool gfx_vulkan_fx_replace_spirv(uint64_t id0, uint32_t id1, const uint32_t* words, size_t nwords, char* log, size_t logsz);
+bool gfx_vulkan_read_pixels(int x, int y, int w, int h, uint8_t* rgba);
 const char* gfx_vulkan_renderer_string(void);
 
 /* Passes outside the rendering API (gfx_pc.cpp picks these or the GL ones). */

@@ -175,6 +175,7 @@ static const char* LIGHTS_FN =
 /* The effect sources (port/shaders/fx/): common.glsl, then one file per family. */
 struct FxSources {
     std::string common, bullets, bursts, impacts;
+    std::string diag;   /* a tool's own kinds (8..10: the cluster's diagnostic views, tools_pc/fxview/shaders/diag.glsl); empty in the game's pack */
 };
 
 /* An effect kind's family file and its call: "" = no shader for that kind. */
@@ -184,6 +185,7 @@ static const std::string& fx_family(const FxSources& fx, unsigned kind) {
         case 2: return fx.bullets;                 /* PORTFX_TRACER: fxTracer */
         case 3: case 4: return fx.bursts;          /* PORTFX_SPARK, PORTFX_BLOOD: fxSpark, fxBlood */
         case 5: case 7: return fx.impacts;         /* PORTFX_IMPACT, PORTFX_CLUSTER: fxImpact, fxClusterPom */
+        case 8: case 9: case 10: case 11: case 12: case 13: return fx.diag;   /* tool-only: fxDiagCoverage, Eye, Uv, Pom, PomAlpha, Deriv (the cluster's inputs and steps, not its look) */
     }
     return none;
 }
@@ -208,9 +210,9 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
             fprintf(stderr, "dkshgen: no effect shader for PORTFX kind %u (port/shaders/fx/)\n", fxk);
             return false;
         }
-        if (fxk == 7u && f.num_inputs < 1) return false;                     /* the cluster's vertex colour */
-        if ((fxk == 5u || fxk == 7u) && !f.used_textures[0]) return false;   /* fx/impacts.glsl reads vTexCoord0 */
-        fx_code = fx->common + fam;
+        if ((fxk == 7u || fxk >= 8u) && f.num_inputs < 1) return false;                     /* the cluster's vertex colour */
+        if ((fxk == 5u || fxk == 7u || fxk >= 8u) && !f.used_textures[0]) return false;   /* fx/impacts.glsl reads vTexCoord0 */
+        fx_code = fx->common + (fxk >= 8u ? fx->impacts + fam : fam);
     }
 
     vs = "#version 460\n";
@@ -303,7 +305,7 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
     for (int i = 0; i < f.num_inputs; i++) {
         fs += fmt("layout(location = %d) %sin vec%d vInput%d;\n", DK_ATTR_IN1 + i, shadeq, nin, i + 1);
     }
-    const bool fx_impacts = fxk == 5u || fxk == 7u;   /* fx/impacts.glsl: the clusters read uTex0 / uTex1 */
+    const bool fx_impacts = fxk == 5u || fxk == 7u || fxk >= 8u;   /* fx/impacts.glsl: the clusters read uTex0 / uTex1 */
     if (f.used_textures[0] || fx_impacts) fs += "layout(binding = 0) uniform sampler2D uTex0;\n";
     if (f.used_textures[1] || fx_impacts) fs += "layout(binding = 1) uniform sampler2D uTex1;\n";
     fs += "layout(std140, binding = 0) uniform Draw {\n"
@@ -417,7 +419,12 @@ static bool gen_combiner(CCFeatures& f, std::string& vs, std::string& fs, bool m
               "    vec3 new_texel = vGrayscaleColor.rgb * intensity;\n"
               "    texel.rgb = mix(texel.rgb, new_texel, vGrayscaleColor.a);\n";
     }
-    if (fxk == 7u) {
+    if (fxk >= 8u) {   /* tool-only diagnostic views of the cluster draw: one value per pixel, no lighting, fog or blend of the game's */
+        static const char* const diag_fn[] = { "fxDiagCoverage", "fxDiagEye", "fxDiagUv", "fxDiagPom", "fxDiagPomAlpha", "fxDiagDeriv" };
+        const char* fn = fxk <= 13u ? diag_fn[fxk - 8u] : diag_fn[0];
+        fs += nin == 4 ? "    vec4 fxVc = cInput1;\n" : "    vec4 fxVc = vec4(cInput1, 1.0);\n";
+        fs += std::string("    outColor = ") + fn + "(fxVc);\n    return;\n";
+    } else if (fxk == 7u) {
         /* the cluster's own colour replaces the combiner's: lit and fogged like the game's surfaces */
         fs += nin == 4 ? "    vec4 fxVc = cInput1;\n" : "    vec4 fxVc = vec4(cInput1, 1.0);\n";
         fs += "    vec4 fxD = fxClusterPom(fxVc);\n"
@@ -504,8 +511,8 @@ static bool read_text(const std::string& path, std::string& out) {
     return true;
 }
 
-static int cmd_glsl(const char* list, const char* outdir) {
-    std::vector<std::pair<uint64_t, uint32_t>> ids, fx_ids;
+static int cmd_glsl(const char* list, const char* outdir, const char* tool_list = nullptr) {
+    std::vector<std::pair<uint64_t, uint32_t>> ids, fx_ids, tool_ids;
     if (!read_list(list, ids)) return 1;
     std::string dir = list;
     const size_t cut = dir.find_last_of("/\\");
@@ -524,6 +531,18 @@ static int cmd_glsl(const char* list, const char* outdir) {
             }
             *fl.second = "// ---- " + std::string("fx/") + fl.first + "\n" + *fl.second;
         }
+    }
+    if (tool_list) {   /* a GE_TOOLS build: the tool's combiners (kinds 8..13) and their GLSL, next to the list */
+        if (!read_list(tool_list, tool_ids)) return 1;
+        std::string td = tool_list;
+        const size_t tc = td.find_last_of("/\\");
+        td = tc == std::string::npos ? std::string(".") : td.substr(0, tc);
+        if (!read_text(td + "/shaders/diag.glsl", fx.diag)) {
+            fprintf(stderr, "dkshgen: cannot read %s/shaders/diag.glsl\n", td.c_str());
+            return 1;
+        }
+        fx.diag = "// ---- fxview diag.glsl\n" + fx.diag;
+        fx_ids.insert(fx_ids.end(), tool_ids.begin(), tool_ids.end());
     }
     int misfiled = 0;
     for (auto& id : ids) {
@@ -663,6 +682,7 @@ static int cmd_pack(const char* outfile, const char* listfile) {
 
 int main(int argc, char** argv) {
     if (argc == 4 && strcmp(argv[1], "glsl") == 0) return cmd_glsl(argv[2], argv[3]);
+    if (argc == 5 && strcmp(argv[1], "glsl") == 0) return cmd_glsl(argv[2], argv[3], argv[4]);
     if (argc == 4 && strcmp(argv[1], "pack") == 0) return cmd_pack(argv[2], argv[3]);
     fprintf(stderr, "usage: dkshgen glsl <combiners.txt> <outdir>\n       dkshgen pack <outfile> <listfile>\n");
     return 2;

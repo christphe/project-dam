@@ -139,6 +139,37 @@ int ge_render_get_refresh_rate(void);     /* ... readable anywhere; 0 = unknown 
 /* Frame capture (dev tool): read the window back as a PPM. GL: now (call from the pre-present hook); Vulkan: the next present writes it. */
 bool ge_render_dump_window(uint32_t width, uint32_t height, const char *path);
 
+/* Pixel readback (tools): a rectangle of the window as RGBA8 (alpha included), top-left origin, w*h*4 bytes in `rgba`.
+ * Call after ge_render_end_frame() and before ge_render_present(): GL reads now; Vulkan and deko3d copy the rectangle in
+ * that present, so `rgba` must stay valid and is filled when ge_render_present() returns. Pixels outside the window read 0.
+ * false: this backend cannot read the window back. */
+bool ge_render_read_pixels(int x, int y, int w, int h, uint8_t *rgba);
+
+/* ---- effect shader hot reload (tools, PC only: the game never calls these) ------------------------------------ */
+
+/* GL: the effect functions of port/shaders/fx/ (common, bullets, bursts, impacts, as text) compiled into the effect programs (PORTFX kinds
+ * 2..5: fxTracer, fxSpark, fxBlood, fxImpact; GL has no effect shaders of its own otherwise). Replaces the previous sources; the programs
+ * already built are recompiled. false: the sources did not compile, the previous stay, `log` has the compiler's text ("#line 1 N" names the
+ * file: N = 0 common, 1 bullets, 2 bursts, 3 impacts). */
+bool ge_render_fx_reload_gl(const char *common, const char *bullets, const char *bursts, const char *impacts, char *log, size_t logsz);
+/* Vulkan: replace the fragment shader of the program (id0, id1), which must have been created, with this SPIR-V (generated and compiled by
+ * the tool: dkshgen's GLSL and glslangValidator, so it matches the pack's layout). The pack is not touched; false + log on failure. */
+bool ge_render_fx_replace_spirv(uint64_t id0, uint32_t id1, const uint32_t *words, size_t nwords, char *log, size_t logsz);
+
+/* ---- input snapshot (tools) ---------------------------------------------------------------------------- */
+
+/* Mouse and the first game controller, polled from SDL (the window layer already needs SDL; a controller is opened on
+ * demand, the Switch pads included). For the ImGui backend (ge_imgui.h) and tools that have no input system of their own. */
+enum { GE_PAD_A = 1, GE_PAD_B = 2, GE_PAD_X = 4, GE_PAD_Y = 8, GE_PAD_BACK = 16, GE_PAD_START = 32, GE_PAD_LSHOULDER = 64,
+       GE_PAD_RSHOULDER = 128, GE_PAD_UP = 256, GE_PAD_DOWN = 512, GE_PAD_LEFT = 1024, GE_PAD_RIGHT = 2048 };
+typedef struct GeRenderInput {
+    int mouse_x, mouse_y;       /* window pixels */
+    int mouse_buttons;          /* bit 0 left, 1 right, 2 middle */
+    uint32_t pad_buttons;       /* GE_PAD_* */
+    float pad_lx, pad_ly, pad_rx, pad_ry;   /* -1..1 */
+} GeRenderInput;
+void ge_render_poll_input(GeRenderInput *out);
+
 /* ---- debug drawing ------------------------------------------------------------------------------------- */
 
 /* Lines and points in flat colour, with or without the depth test (light gizmos, normals, wireframe). A batch:

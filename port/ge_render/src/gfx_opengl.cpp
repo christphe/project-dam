@@ -275,6 +275,30 @@ static void append_line(char* buf, size_t* len, const char* str) {
     buf[(*len)++] = '\n';
 }
 
+/* Tool-only effect shaders on GL (ge_render_fx_reload_gl; fxview): the game never sets them, so its shaders are unchanged. The sources of
+ * port/shaders/fx/ (common, bullets, bursts, impacts), pasted as dkshgen pastes them into the packs' shaders; the kinds 2..5 reshape the
+ * combined colour (fxTracer, fxSpark, fxBlood, fxImpact). The cluster (kind 7) needs the Lights block and vEye, which GL has not: it draws plain. */
+static std::string s_fx_src[4];
+static bool s_fx_on = false;
+static int fx_gl_family(int kind) { return kind == 2 ? 1 : (kind == 3 || kind == 4) ? 2 : kind == 5 ? 3 : -1; }
+/* impacts.glsl is mostly the cluster's (Lights block, vEye, inverse(): GLSL 140), which GL has not: GL takes only fxImpact from it. */
+static std::string fx_gl_impact_part(const std::string& src) {
+    const size_t a = src.find("vec4 fxImpact(");
+    if (a == std::string::npos) return std::string();
+    size_t b = src.find("\n}", a);
+    b = b == std::string::npos ? src.size() : b + 2;
+    int line = 1;
+    for (size_t i = 0; i < a; i++) line += src[i] == '\n';
+    return "#line " + std::to_string(line) + " 3\n" + src.substr(a, b - a) + "\n";
+}
+static std::string fx_gl_code(int kind, bool tex1) {
+    (void)tex1;
+    const int fam = s_fx_on ? fx_gl_family(kind) : -1;
+    if (fam < 0) return std::string();
+    if (kind == 5) return "#line 1 0\n" + s_fx_src[0] + "\n" + fx_gl_impact_part(s_fx_src[3]);
+    return "#line 1 0\n" + s_fx_src[0] + "\n#line 1 " + std::to_string(fam) + "\n" + s_fx_src[(size_t)fam] + "\n";
+}
+
 #define RAND_NOISE "((random(vec3(floor(gl_FragCoord.xy * noise_scale), float(frame_count))) + 1.0) / 2.0)"
 
 static const char* shader_item_to_str(uint32_t item, bool with_alpha, bool only_alpha, bool inputs_have_alpha,
@@ -395,7 +419,7 @@ static std::string gfx_opengl_water_fs(const struct CCFeatures& f) {
 }
 
 #define SHADER_VS_MAX 4096   /* issue #10: the GPU-transform twin is longer */
-#define SHADER_FS_MAX 12288
+#define SHADER_FS_MAX 20480
 
 /* Generates the vertex + fragment shader text of a combiner program. */
 static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_buf, size_t* vs_len_out,
@@ -651,6 +675,10 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
         append_line(fs_buf, &fs_len, "out vec4 outColor;");
     }
 
+    {   /* tool-only effect code (above) */
+        const std::string fx = fx_gl_code(cc_features.fx_kind, cc_features.used_textures[1]);
+        for (char ch : fx) fs_buf[fs_len++] = ch;
+    }
     append_line(fs_buf, &fs_len, "void main() {");
     /* D548: combiner inputs are 8-bit on the N64 (shade, prim, env), so never
      * above 1.0. Under the D540 noperspective shade, GPU clipping of a big
@@ -783,6 +811,15 @@ static void gfx_opengl_gen_shader_src(struct CCFeatures& cc_features, char* vs_b
         append_line(fs_buf, &fs_len, "    texel.rgb = mix(texel.rgb, new_texel, vGrayscaleColor.a);");
     }
 
+    if (s_fx_on && fx_gl_family(cc_features.fx_kind) >= 0) {   /* tool-only: the effect reshapes the combined colour, as dkshgen's call does */
+        static const char* const kCall[6] = { "", "", "fxTracer(%s)", "fxSpark(%s)", "fxBlood(%s)", "fxImpact(%s, vTexCoord0)" };
+        char line[160];
+        const char* call = kCall[cc_features.fx_kind];
+        char inner[96];
+        snprintf(inner, sizeof inner, call, cc_features.opt_alpha ? "texel" : "vec4(texel, 1.0)");
+        snprintf(line, sizeof line, cc_features.opt_alpha ? "    texel = %s;" : "    texel = %s.rgb;", inner);
+        append_line(fs_buf, &fs_len, line);
+    }
     if (cc_features.opt_alpha) {
         if (cc_features.opt_alpha_threshold) {
             append_line(fs_buf, &fs_len, "    if (texel.a < 8.0 / 256.0) discard;");
@@ -2078,6 +2115,57 @@ extern "C" bool gfx_opengl_pcdump_enabled(void) {
     static int cached = -1;
     if (cached < 0) cached = getenv("GE_PCDUMP") != NULL;
     return cached != 0;
+}
+
+/* ge_render_read_pixels: the back buffer rectangle as RGBA, top-left origin (glReadPixels is bottom-left). Immediate. */
+extern "C" bool gfx_opengl_read_pixels(uint32_t win_h, int x, int y, int w, int h, uint8_t* rgba) {
+    if (rgba == NULL || w <= 0 || h <= 0) return false;
+    std::vector<uint8_t> tmp((size_t)w * h * 4);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glReadBuffer(GL_BACK);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glFinish();
+    glReadPixels(x, (int)win_h - (y + h), w, h, GL_RGBA, GL_UNSIGNED_BYTE, tmp.data());
+    if (glGetError()) return false;
+    for (int row = 0; row < h; row++) memcpy(rgba + (size_t)row * w * 4, tmp.data() + (size_t)(h - 1 - row) * w * 4, (size_t)w * 4);
+    return true;
+}
+
+/* ge_render_fx_reload_gl: compile-check the effect sources (the functions the kinds 2..5 call), then recompile the effect programs
+ * with them. On an error the previous sources stay and `log` takes the compiler's text; "#line 1 N" names the file: 0 common, 1 bullets,
+ * 2 bursts, 3 impacts. */
+extern "C" bool gfx_opengl_fx_reload(const char* common, const char* bullets, const char* bursts, const char* impacts, char* log, size_t logsz) {
+    const std::string src[4] = { common ? common : "", bullets ? bullets : "", bursts ? bursts : "", impacts ? impacts : "" };
+    if (gl_es) { snprintf(log, logsz, "GL ES: no effect shaders"); return false; }
+    std::string t = std::string("#version ") + gl_glsl_version_str + "\nuniform int frame_count;\nin vec2 vTexCoord0;\nout vec4 o;\n";
+    t += "#line 1 0\n" + src[0] + "\n#line 1 1\n" + src[1] + "\n#line 1 2\n" + src[2] + "\n" + fx_gl_impact_part(src[3]);
+    t += "void main() { vec4 c = vec4(1.0); c = fxTracer(c); c = fxSpark(c); c = fxBlood(c); c = fxImpact(c, vTexCoord0); o = c; }\n";
+    const GLchar* sp = t.c_str();
+    GLuint sh = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(sh, 1, &sp, NULL);
+    glCompileShader(sh);
+    GLint ok = 0;
+    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        GLsizei n = 0;
+        glGetShaderInfoLog(sh, (GLsizei)logsz - 1, &n, log);
+        log[n] = 0;
+        glDeleteShader(sh);
+        return false;
+    }
+    glDeleteShader(sh);
+    for (int i = 0; i < 4; i++) s_fx_src[i] = src[i];
+    s_fx_on = true;
+    int n = 0;
+    for (auto& kv : shader_program_pool) {   /* the effect programs already built: recompile in place (the caller reloads them before each draw) */
+        ShaderProgram& p = kv.second;
+        if (fx_gl_family((int)((p.id1 & SHADER_OPT_FX_MASK) >> SHADER_OPT_FX_SHIFT)) < 0) continue;
+        glDeleteProgram(p.opengl_program_id);
+        gfx_opengl_compile_program(p.id0, p.id1, false, &p);
+        n++;
+    }
+    snprintf(log, logsz, "ok: %d effect programs recompiled", n);
+    return true;
 }
 
 extern "C" bool gfx_opengl_dump_bound_fbo(uint32_t width, uint32_t height, const char* path) {

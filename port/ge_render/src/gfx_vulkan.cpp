@@ -2802,6 +2802,9 @@ void gfx_vulkan_set_swap_interval(int interval) {
 
 /* GE_PCDUMP / screenshots: the path of the PPM the next present writes, empty for none. */
 std::string s_dump_path;
+/* ge_render_read_pixels: a window rectangle the next present copies to `out` (RGBA, top-left origin). */
+struct ReadReq { int x = 0, y = 0, w = 0, h = 0; uint8_t* out = nullptr; };
+ReadReq s_read_req;
 
 /* The just-presented image, copied to host memory in the same submission (at
  * the head of the PRESENT transition) and written as a P6 PPM, top row first,
@@ -2834,7 +2837,9 @@ void gfx_vulkan_present(void) {
     const uint32_t dw = s_sc_extent.width, dh = s_sc_extent.height;
     const std::string dump_path = s_dump_path;
     s_dump_path.clear();
-    if (present && !dump_path.empty() && s_sc_readable && dw && dh) {
+    const ReadReq read_req = s_read_req;
+    s_read_req = ReadReq();
+    if (present && (!dump_path.empty() || read_req.out) && s_sc_readable && dw && dh) {
         dump = make_host_chunk((VkDeviceSize)dw * dh * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         layout_to(f.cmd, s_sc_images[s_acq], VK_IMAGE_ASPECT_COLOR_BIT, s_sc_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         VkBufferImageCopy r = {};
@@ -2894,7 +2899,19 @@ void gfx_vulkan_present(void) {
     s_frame_idx = (s_frame_idx + 1) % FRAMES_IN_FLIGHT;
     if (dump.buf) {   /* a capture is rare and may stall: wait for the copy, then write the file */
         vkQueueWaitIdle(s_queue);
-        write_dump(dump, dw, dh, dump_path);
+        if (!dump_path.empty()) write_dump(dump, dw, dh, dump_path);
+        if (read_req.out) {
+            const bool bgr = s_sc_format == VK_FORMAT_B8G8R8A8_UNORM || s_sc_format == VK_FORMAT_B8G8R8A8_SRGB;
+            for (int yy = 0; yy < read_req.h; yy++) {
+                for (int xx = 0; xx < read_req.w; xx++) {
+                    uint8_t* d = read_req.out + ((size_t)yy * read_req.w + xx) * 4;
+                    const int sx = read_req.x + xx, sy = read_req.y + yy;
+                    if (sx < 0 || sy < 0 || sx >= (int)dw || sy >= (int)dh) { d[0] = d[1] = d[2] = d[3] = 0; continue; }
+                    const uint8_t* src = dump.cpu + ((size_t)sy * dw + sx) * 4;
+                    d[0] = src[bgr ? 2 : 0]; d[1] = src[1]; d[2] = src[bgr ? 0 : 2]; d[3] = src[3];
+                }
+            }
+        }
         free_host_chunk(dump);
     }
 }
@@ -3333,6 +3350,34 @@ void gfx_vulkan_frame_count_rewind(void) { s_frame_count--; }
 
 /* GE_PCDUMP / screenshots: have the next present write the window to `path`
  * (a PPM). false: the swapchain cannot be read back. */
+/* ge_render_fx_replace_spirv (tools, PC): the fragment shader of the program (id0, id1) replaced by this SPIR-V (the pack stays as it is).
+ * The programs' pipelines are rebuilt on their next use; the old module is kept (it may still be in flight). */
+bool gfx_vulkan_fx_replace_spirv(uint64_t id0, uint32_t id1, const uint32_t* words, size_t nwords, char* log, size_t logsz) {
+    if (!s_up || s_parked || words == nullptr || nwords == 0) { snprintf(log, logsz, "Vulkan backend not up"); return false; }
+    auto it = s_progs.find(std::make_pair(id0, id1));
+    if (it == s_progs.end()) { snprintf(log, logsz, "program %016llx %08x not created yet", (unsigned long long)id0, (unsigned)id1); return false; }
+    VkShaderModuleCreateInfo ci = {};
+    ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    ci.codeSize = nwords * 4;
+    ci.pCode = words;
+    VkShaderModule m = VK_NULL_HANDLE;
+    const VkResult r = vkCreateShaderModule(s_dev, &ci, nullptr, &m);
+    if (r != VK_SUCCESS) { snprintf(log, logsz, "vkCreateShaderModule failed (%d)", (int)r); return false; }
+    it->second->frag = m;
+    it->second->skip = false;
+    for (auto& kv : s_pipes) s_dead_pipes.push_back(std::make_pair(kv.second, s_serial));
+    s_pipes.clear();
+    s_bound_pipe = VK_NULL_HANDLE;
+    snprintf(log, logsz, "ok");
+    return true;
+}
+
+bool gfx_vulkan_read_pixels(int x, int y, int w, int h, uint8_t* rgba) {
+    if (!s_up || s_parked || !s_sc_readable || rgba == nullptr || w <= 0 || h <= 0) return false;
+    s_read_req = { x, y, w, h, rgba };
+    return true;
+}
+
 bool gfx_vulkan_dump_window(const char* path) {
     if (!s_up || s_parked || !s_sc_readable || path == nullptr) return false;
     s_dump_path = path;

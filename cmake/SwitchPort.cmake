@@ -12,7 +12,7 @@ if(DK_PACK_RUN)
   if(_old)
     file(REMOVE ${_old})
   endif()
-  execute_process(COMMAND "${DK_OUT}/dkshgen" glsl "${DK_LIST}" "${DK_OUT}/glsl" RESULT_VARIABLE _r)
+  execute_process(COMMAND "${DK_OUT}/dkshgen" glsl "${DK_LIST}" "${DK_OUT}/glsl" ${DK_TOOL_LIST} RESULT_VARIABLE _r)
   if(NOT _r EQUAL 0)
     message(FATAL_ERROR "dkshgen glsl failed")
   endif()
@@ -170,11 +170,17 @@ macro(switch_deko3d_shaders target)
     find_program(DK_HOST_CXX NAMES c++ g++ HINTS /usr/bin REQUIRED NO_CMAKE_FIND_ROOT_PATH)
     set(_dk_pack "${CMAKE_BINARY_DIR}/ge007_dksh.bin")
     file(GLOB_RECURSE _dk_glsl CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/*.glsl")
+    set(_dk_tool "")   # GE_TOOLS: the fxview tool's combiners (the diagnostic kinds) join the pack; the game's build has none
+    if(GE_TOOLS)
+      set(_dk_tool "-DDK_TOOL_LIST=${CMAKE_SOURCE_DIR}/tools_pc/fxview/combiners.txt")
+      file(GLOB _dk_tool_deps "${CMAKE_SOURCE_DIR}/tools_pc/fxview/combiners.txt" "${CMAKE_SOURCE_DIR}/tools_pc/fxview/shaders/*.glsl")
+      list(APPEND _dk_glsl ${_dk_tool_deps})
+    endif()
     add_custom_command(OUTPUT "${_dk_pack}"
       COMMAND "${CMAKE_COMMAND}" -DDK_PACK_RUN=ON
               "-DDK_SRC=${CMAKE_SOURCE_DIR}" "-DDK_OUT=${CMAKE_BINARY_DIR}/dksh"
               "-DDK_LIST=${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt"
-              "-DDK_PACK=${_dk_pack}" "-DDK_UAM=${DK_UAM}" "-DDK_HOST_CXX=${DK_HOST_CXX}"
+              ${_dk_tool} "-DDK_PACK=${_dk_pack}" "-DDK_UAM=${DK_UAM}" "-DDK_HOST_CXX=${DK_HOST_CXX}"
               -P "${CMAKE_SOURCE_DIR}/cmake/SwitchPort.cmake"
       DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt" "${CMAKE_SOURCE_DIR}/port/shaders/fx/combiners.txt"
             ${_dk_glsl}

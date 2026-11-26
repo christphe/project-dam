@@ -258,8 +258,8 @@ def cmd_editor(a):
 TOOLS = {
     "modelview": ("tools_pc/modelview/modelview.py", "models from your ROM: subdivision, textures, guard animations",
                   ["pc", "selftest", "shots"]),
-    "fxview":    ("tools_pc/fxview/fxview.py", "combat effects: tracers, puffs, bullet-hole decals",
-                  ["pc", "selftest", "shots", "decalshots"]),
+    "fxview":    ("tools_pc/fxview/fxview.py", "combat effects on ge_render: sprites, bullet holes, cluster scene, muzzle / tracer / burst / explosion tabs (win | ryujinx | nx)",
+                  ["win", "ryujinx", "nx", "selftest", "shots", "decalshots", "tabshots"]),
     "menuview":  ("tools_pc/menuview/menuview.py", "the options menu on its own", []),
     "seaview":   ("tools_pc/seaview/seaview.py", "GE+ sky and sea, PC viewer and console viewer",
                   ["pc", "dump", "nx-build", "nx-send", "ini2args"]),

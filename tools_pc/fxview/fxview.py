@@ -1,34 +1,38 @@
 #!/usr/bin/env python
-"""fxview: GoldenEye's combat-effect sprites up close, ORIGINAL vs EFFECT SHADER (fxShade), outside the game (PC only).
+"""fxview: GoldenEye's combat effects up close, ORIGINAL vs EFFECT shader, drawn through ge_render (issue #144).
 
-  python tools_pc/fxview/fxview.py pc [viewer options]   build and open the viewer (detached)
-        viewer options go through: --shot FILE.png (renders one image, writes it, exits; waits for it) --w N --h N
-        --rom FILE.z64 --kind tracer|laser|watchlaser|wallpuff|bloodpuff|scatter|impact --impact 0..19 --age TICKS
-        --angle RAD --view side|split|orig|fx --backdrop grey|dark|checker|wall --bgtex N --zoom F --fc N --nearest 0|1
-        --tracerlen F --shader FILE (default: <repo>/port/shaders/fx.glsl)
-  python tools_pc/fxview/fxview.py selftest              texture formats, the FXSHADE block, the puff frame stepping; no ROM
-  python tools_pc/fxview/fxview.py shots --out DIR [--backdrop grey|dark|checker|wall] [--bgtex N] [--fc N]
+  python tools_pc/fxview/fxview.py win [viewer options]        build (Docker, GE_TOOLS=ON) and open the viewer on PC (Vulkan; --backend gl|vk)
+  python tools_pc/fxview/fxview.py ryujinx [viewer options]    build the NRO, put it on Ryujinx's SD card and start Ryujinx (the options go to fxview.args)
+  python tools_pc/fxview/fxview.py nx [viewer options]         build the NRO and run it on the console over nxlink (the options are its argv)
+  python tools_pc/fxview/fxview.py shots --out DIR [--backdrop grey|dark|checker|wall] [--bgtex N] [--fc N] [--backend vk|gl]
         one side-by-side PNG per effect (puffs: several animation frames) plus DIR/index.html
-  python tools_pc/fxview/fxview.py decalshots --out DIR [--holes N] [--yaw DEG] [--pitch DEG]
-        the port's bullet holes (fxDecalBlend) on a real wall texture per material, game vs port, plus DIR/index.html
-        (decal mode in the viewer: pc --mode decal [--mat stone|tile|default|wood|metal|metalobj|dirt|mud|snow|glass ...])
-  the viewer's tabs: pc --mode decal|muzzle|tracer|burst|explosion|sprite [--t SECONDS --tshow game|port|side ...]
-        (muzzle flashes, tracers, blood / smoke / debris bursts and explosions, game vs port FX: see README.md)
+  python tools_pc/fxview/fxview.py decalshots --out DIR [--holes N] [--yaw DEG] [--pitch DEG] [--backend vk|gl]
+        the port's bullet-hole clusters on a real wall texture per material, game vs port, plus DIR/index.html
+  python tools_pc/fxview/fxview.py tabshots --out DIR [--backend vk|gl]
+        the Muzzle, Tracers, Blood/smoke/debris and Explosions tabs (game vs port) at fixed times, plus the decal texture sheets, plus DIR/index.html
+  python tools_pc/fxview/fxview.py selftest                    texture codecs, puff frame stepping, effect files; no ROM, no window
 
-fxShade is read from port/shaders/fx.glsl (between "// FXSHADE BEGIN" and "// FXSHADE END") and hot-reloaded when the file
-changes: tuning = editing that file with the viewer open. The Windows g++ comes from FXVIEW_GXX, MODELVIEW_GXX or
-SEAVIEW_GXX (environment or <repo>/.env). The sprites are decoded from your own ROM at run time: --rom, else FXVIEW_ROM,
-else MODELVIEW_ROM, else N64_ROM, else a game data/ folder (build-win/data/...). Settings: tools_pc/fxview/data/fxview.ini (git
-ignores data/ and build/). Nothing from the ROM is written into the repo: shots refuse an output dir inside it.
+Viewer options (the same on PC and Switch, see ge/fxview.cpp): --mode sprite|decal|cluster|muzzle|tracer|burst|explosion, --kind tracer|laser|watchlaser|wallpuff|
+bloodpuff|scatter|impact, --impact 0..19, --age TICKS, --angle RAD, --view side|split|orig|fx, --split F, --backdrop grey|dark|checker|wall,
+--bgtex N, --zoom F, --fc N, --nearest 0|1, --tracerlen F, --seed N; decal: --mat stone|tile|default|wood|metal|metalobj|dirt|mud|snow|glass,
+--holes N, --yaw DEG, --pitch DEG, --sun/--pt lights; cluster: --dist N, --diag coverage|veye|uv|pom|pomalpha|deriv; --probe X,Y (pixel readback
+to the log), --shot FILE.png, --w N --h N, --rom FILE.z64; tabs: --t SECONDS --tshow game|port|side --gun NAME --tritem gun|laser|watchlaser --burst
+metal|wood|glass|water|snow|dirt|stone|blood --explo 0..20 (and --mrate --mscale --mvis --trrange --trperiod --bperiod --etail --tyaw --tpitch --tzoom --twall --twalltex --tseed);
+decal --view sheet [--page N]. Settings are saved to <out>/fxview.ini (loaded unless --shot/--probe/--dump; arguments win).
+
+The ROM: --rom, else FXVIEW_ROM / MODELVIEW_ROM / N64_ROM (environment or <repo>/.env, the main checkout's in a worktree), else the game's
+data/ folder (build-win/data, the Ryujinx SD's switch/project-dam/data). Nothing ROM-derived is written into the repo: shots and
+decalshots refuse an output dir inside it (except tools_pc/fxview/data/, git-ignored).
+The effect shaders are port/shaders/fx/*.glsl: the packs (deko3d, Vulkan) are built from them, so a change rebuilds the pack on the next
+`win` / `ryujinx` / `nx` (cmake tracks the files); see README.md for the hot reload.
 """
-import argparse, html, os, subprocess, sys
+import argparse, html, os, shutil, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 DATA = os.path.join(HERE, "data")
-MV = os.path.join(REPO, "tools_pc", "modelview", "pc")   # the texture decoder, inflate, ImGui renderer and PNG writer are modelview's
 sys.path.insert(0, os.path.join(REPO, "tools"))
-import devenv   # tools/devenv.py: .env (the main checkout's from a worktree), ROM and g++ lookup
+import devenv   # tools/devenv.py: .env (the main checkout's from a worktree) and the ROM lookup
 
 # (file stem, viewer args, caption) for `shots`
 SHOTS = [
@@ -40,11 +44,11 @@ SHOTS = [
   + [(f"scatter_age{a:02d}", ["--kind", "scatter", "--age", str(a), "--zoom", "2.5"], f"scatter puff, age {a}") for a in (0, 4, 8)] \
   + [(f"impact_{t:02d}", ["--kind", "impact", "--impact", str(t)], f"bullet-hole decal type {t}") for t in (0, 1, 2, 3, 7, 8, 9, 13, 16)]
 
-# `decalshots`: the port's bullet holes (fxDecalBlend) per material, (file stem, viewer args, caption)
+# `decalshots`: the port's bullet holes per material, (file stem, viewer args, caption)
 DECAL_MATS = [("stone", "stone"), ("tile", "tile"), ("default", "default (untagged)"), ("wood", "wood"), ("metal", "metal"),
               ("dirt", "dirt"), ("snow", "snow"), ("glass", "glass")]
 SUN_UL = ["--sun", "1", "--sunaz", "135", "--sunel", "35"]           # the sun from the upper left
-FLASH = ["--pt", "1", "--ptx", "40", "--pty", "-20", "--pth", "90"]   # a muzzle flash in front of the wall, beside the holes (closer: the wall saturates)
+FLASH = ["--pt", "1", "--ptx", "40", "--pty", "-20", "--pth", "90"]   # a muzzle flash in front of the wall, beside the holes
 DECAL_SHOTS = [(f"decal_{m}_sun_flash", ["--mat", m] + SUN_UL + FLASH, f"{cap}: sun from the upper left + muzzle flash") for m, cap in DECAL_MATS] \
     + [(f"decal_{m}_flash", ["--mat", m, "--sun", "0"] + FLASH, f"{cap}: muzzle flash only (no sun: the in-game case today)") for m, cap in DECAL_MATS] \
     + [("decal_stone_sun_lowright", ["--mat", "stone", "--sun", "1", "--sunaz", "-30", "--sunel", "20", "--pt", "0"], "stone: low sun from the lower right, no flash (relief check)"),
@@ -52,76 +56,21 @@ DECAL_SHOTS = [(f"decal_{m}_sun_flash", ["--mat", m] + SUN_UL + FLASH, f"{cap}: 
        ("decal_stone_grazing", ["--mat", "stone", "--yaw", "68", "--pitch", "8"] + SUN_UL + FLASH, "stone: grazing view"),
        ("decal_wood_type7_overlap", ["--mat", "wood", "--dtype", "7", "--holes", "6"] + SUN_UL + FLASH, "wood, impact type 7, six overlapping holes")]
 
+# `tabshots`: the Muzzle, Tracers, Blood/smoke/debris and Explosions tabs (game vs port), at a fixed time (--t SECONDS freezes the tab's clock)
+TAB_SHOTS = [("muzzle", ["--mode", "muzzle", "--t", "0.02"], "muzzle flash (Pchrautoshot GUNFIRE), 0.02 s"),
+             ("tracer_gun", ["--mode", "tracer", "--t", "0.1"], "gun tracer, 0.1 s"),
+             ("tracer_laser", ["--mode", "tracer", "--tritem", "laser", "--t", "0.1"], "laser tracer, 0.1 s")]     + [(f"burst_{m}_t{int(t * 100):03d}", ["--mode", "burst", "--burst", m, "--t", str(t)], f"burst {m}, {t} s")
+       for m, t in (("stone", 0.05), ("stone", 0.15), ("metal", 0.1), ("wood", 0.1), ("glass", 0.1), ("water", 0.1), ("snow", 0.1), ("dirt", 0.1), ("blood", 0.1), ("blood", 0.3))]     + [(f"explosion_{n}_t{int(t * 100):03d}", ["--mode", "explosion", "--explo", str(n), "--t", str(t)], f"explosion type {n}, {t} s")
+       for n, t in ((13, 0.3), (13, 1.2), (13, 2.4), (4, 1.0), (10, 1.0), (19, 1.0))]
+SHEET_SHOTS = [("sheet_" + m, ["--mode", "decal", "--view", "sheet", "--mat", m], f"texture sheet: {m}") for m in ("stone", "wood", "metal", "glass")]
+
 
 def load_env():
     return devenv.load_env()
 
 
-def find_gxx(env):
-    gxx = devenv.find_gxx(env, ("FXVIEW_GXX", "MODELVIEW_GXX"))
-    if not gxx:
-        sys.exit(f"fxview: set FXVIEW_GXX (or MODELVIEW_GXX / SEAVIEW_GXX) in {devenv.env_files()[-1]}: a Windows g++ (MinGW-w64)")
-    return gxx
-
-
 def find_rom(env):
     return devenv.find_rom(env, ("FXVIEW_ROM", "MODELVIEW_ROM"))
-
-
-def build(env):
-    """compile the viewer; returns the exe path (build/fxview_new.exe when a running viewer locks fxview.exe)"""
-    gxx = find_gxx(env)
-    pc = os.path.join(HERE, "pc")
-    imgui = os.path.join(REPO, "port", "third_party", "imgui")   # vendored, declared in NOTICE
-    bdir = os.path.join(HERE, "build"); odir = os.path.join(bdir, "obj")
-    os.makedirs(odir, exist_ok=True); os.makedirs(DATA, exist_ok=True)
-    e = dict(os.environ, PATH=os.path.dirname(gxx) + os.pathsep + os.environ.get("PATH", ""))
-    objs = []
-
-    def obj(src, flags):   # cached by modification time
-        o = os.path.join(odir, os.path.basename(src) + ".o")
-        objs.append(o)
-        if not os.path.exists(o) or os.path.getmtime(o) < os.path.getmtime(src):
-            if subprocess.run([gxx, "-O2", "-std=c++17", "-c", "-o", o, src] + flags, env=e).returncode != 0:
-                sys.exit(f"fxview: {os.path.basename(src)} did not compile")
-
-    for f in ("imgui.cpp", "imgui_draw.cpp", "imgui_tables.cpp", "imgui_widgets.cpp"):
-        obj(os.path.join(imgui, f), ["-I", imgui, "-w"])
-    for f in ("mv_tex.cpp", "mv_zlib.cpp", "mv_imgui.cpp"):
-        obj(os.path.join(MV, f), ["-I", imgui, "-I", MV, "-Wall"])
-
-    exe = os.path.join(bdir, "fxview.exe")
-    if os.path.exists(exe):
-        try:
-            os.remove(exe)
-        except OSError:   # a running viewer locks it: build next to it
-            exe = os.path.join(bdir, "fxview_new.exe")
-            print("fxview: fxview.exe is running, building", exe)
-    cmd = [gxx, "-O2", "-std=c++17", "-Wall", "-I", imgui, "-I", MV, "-o", exe, os.path.join(pc, "fxview.cpp"), os.path.join(pc, "fx_tex.cpp")] + objs \
-        + ["-lopengl32", "-lgdi32", "-luser32", "-limm32", "-static"]
-    if subprocess.run(cmd, env=e).returncode != 0:
-        sys.exit("fxview: the viewer did not build")
-    return exe
-
-
-def cmd_pc(env, a):
-    exe = build(env)
-    extra = list(a.extra)
-    if "--rom" not in extra:
-        rom = find_rom(env)
-        if rom:
-            extra += ["--rom", rom]
-        else:
-            print("fxview: no ROM (pass --rom or set N64_ROM in .env): the sprites show as untextured quads")
-    extra += ["--repo", REPO]
-    for i, x in enumerate(extra[:-1]):   # the viewer runs in data/: a path given relative to here must be made absolute
-        if x in ("--shot", "--rom", "--shader"):
-            extra[i + 1] = os.path.abspath(extra[i + 1])
-    if "--shot" in extra:   # unattended screenshot: wait for it
-        sys.exit(subprocess.run([exe] + extra, cwd=DATA).returncode)
-    detached = 0x00000008 | 0x00000200 if os.name == "nt" else 0   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen([exe] + extra, cwd=DATA, creationflags=detached)
-    print("viewer open; its settings are saved in", DATA)
 
 
 def inside(path, root):
@@ -132,83 +81,157 @@ def inside(path, root):
         return False
 
 
+# ---- fxview on ge_render (issue #144): the CMake target `fxview` (GE_TOOLS=ON), built in Docker, run on PC, in Ryujinx or on the console
+IMAGE = "local/project-dam-build:latest"
+GE_BUILDS = {   # kind -> (build dir, cmake configure extras, output)
+    "win": ("build-win", None, "build-win/tools_pc/fxview/fxview.exe"),
+    "linux": ("build-linux", [], "build-linux/tools_pc/fxview/fxview"),
+    "switch": ("build-switch", ["-DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake"], "build-switch/tools_pc/fxview/fxview.nro"),
+}
+
+
+def ge_build(kind):
+    """build fxview for `kind` in Docker with GE_TOOLS=ON; returns the output path. A changed port/shaders file rebuilds the packs (cmake dependency)."""
+    d, extra, out = GE_BUILDS[kind]
+    envv = dict(os.environ, MSYS_NO_PATHCONV="1")
+    if kind == "win":   # the compose service (the offline MinGW image) and its script, with the tools on
+        cmd = ["docker", "compose", "run", "--rm", "-e", "CMAKE_EXTRA=-DGE_TOOLS=ON", "windows", "sh", "-c",
+               "SDL2DIR=/usr/x86_64-w64-mingw32/sys-root/mingw cmake -S . -B build-win -G Ninja -DROMID=ntsc-final -DCMAKE_BUILD_TYPE=RelWithDebInfo "
+               "-DCMAKE_TOOLCHAIN_FILE=/usr/share/mingw/toolchain-mingw64.cmake -DGE_TOOLS=ON && cmake --build build-win --target fxview"]
+        r = subprocess.run(cmd, cwd=REPO, env=envv)
+    else:
+        sh = (f"cmake -S . -B {d} -G Ninja -DROMID=ntsc-final {' '.join(extra)} -DGE_TOOLS=ON && cmake --build {d} --target {'fxview_nro' if kind == 'switch' else 'fxview'}")
+        r = subprocess.run(["docker", "run", "--rm", "-v", f"{REPO}:/src", "-v", "project-dam-ccache:/ccache", "-w", "/src", IMAGE, "sh", "-c", sh],
+                           env=envv)
+    if r.returncode:
+        sys.exit("fxview: build failed")
+    return os.path.join(REPO, out)
+
+
+def win_exe(a):
+    """the Windows fxview.exe next to the DLLs (build-win), built in Docker unless --nobuild"""
+    exe = os.path.join(REPO, "build-win", "fxview.exe")
+    if not getattr(a, "nobuild", False) or not os.path.exists(exe):
+        shutil.copy(ge_build("win"), exe)
+    return exe
+
+
+def cmd_win(env, a):
+    exe = win_exe(a)
+    os.makedirs(DATA, exist_ok=True)
+    extra = list(a.extra)
+    if "--rom" not in extra:
+        rom = find_rom(env)
+        if rom:
+            extra += ["--rom", rom]
+    if "--shaders" not in extra:
+        extra += ["--shaders", os.path.join(REPO, "port", "shaders", "fx")]
+    subprocess.Popen([exe, "--out", DATA + os.sep] + extra, cwd=os.path.join(REPO, "build-win"))
+
+
 def cmd_selftest(env, a):
-    exe = build(env)
-    sys.exit(subprocess.run([exe, "--selftest", "--repo", REPO], cwd=DATA).returncode)
+    exe = win_exe(a)
+    sys.exit(subprocess.run([exe, "--selftest", "--shaders", os.path.join(REPO, "port", "shaders", "fx")], cwd=os.path.join(REPO, "build-win")).returncode)
+
+
+def _batch(env, a, name, shots, common_extra, caption, width):
+    out = os.path.abspath(a.out)
+    if inside(out, REPO) and not inside(out, DATA):
+        sys.exit("fxview: --out must be outside the repo or inside tools_pc/fxview/data/ (the images are ROM-derived)")
+    os.makedirs(out, exist_ok=True)
+    exe = win_exe(a)
+    rom = a.rom or find_rom(env)
+    if not rom:
+        sys.exit("fxview: no ROM: pass --rom, or set N64_ROM in .env")
+    common = ["--rom", os.path.abspath(rom), "--shaders", os.path.join(REPO, "port", "shaders", "fx"), "--out", out + os.sep, "--backend", a.backend, "--ui", "0", "--w", str(a.w), "--h", str(a.h)] + common_extra
+    ok = {}
+    for stem, args, cap in shots:
+        png = os.path.join(out, stem + ".png")
+        if os.path.exists(png):
+            os.remove(png)
+        r = subprocess.run([exe] + common + args + ["--shot", png], cwd=os.path.join(REPO, "build-win"), capture_output=True, text=True)
+        ok[stem] = r.returncode == 0 and os.path.exists(png)
+        print(("ok   " if ok[stem] else "FAIL ") + stem + ("" if ok[stem] else "\n" + (r.stdout + r.stderr).strip()[-600:]))
+    cells = "".join(f'<figure><figcaption>{html.escape(cap)}</figcaption>'
+                    + (f'<a href="{stem}.png"><img src="{stem}.png" width="{width}"></a>' if ok[stem] else "failed") + "</figure>"
+                    for stem, _, cap in shots)
+    with open(os.path.join(out, "index.html"), "w", encoding="utf-8") as f:
+        f.write(f"<!doctype html><meta charset=utf-8><title>fxview {name}</title>"
+                "<style>body{background:#222;color:#ddd;font:14px sans-serif}figure{display:inline-block;margin:6px}img{display:block}</style>"
+                f"<h3>{caption}</h3>" + cells)
+    print("wrote", os.path.join(out, "index.html"))
+    if not all(ok.values()):
+        sys.exit(1)
 
 
 def cmd_shots(env, a):
-    out = os.path.abspath(a.out)
-    if inside(out, REPO) and not inside(out, DATA):
-        sys.exit("fxview: --out must be outside the repo or inside tools_pc/fxview/data/ (the images are ROM-derived)")
-    os.makedirs(out, exist_ok=True)
-    exe = build(env)
-    rom = a.rom or find_rom(env)
-    if not rom:
-        sys.exit("fxview: no ROM: pass --rom, or set N64_ROM in .env")
-    common = ["--rom", os.path.abspath(rom), "--repo", REPO, "--view", "side", "--backdrop", a.backdrop, "--fc", str(a.fc),
-              "--w", str(a.w), "--h", str(a.h)] + (["--bgtex", str(a.bgtex)] if a.bgtex is not None else [])
-    ok = {}
-    for stem, args, cap in SHOTS:
-        png = os.path.join(out, stem + ".png")
-        r = subprocess.run([exe] + common + args + ["--shot", png], cwd=DATA, capture_output=True, text=True)
-        ok[stem] = r.returncode == 0 and os.path.exists(png)
-        print(("ok   " if ok[stem] else "FAIL ") + stem + ("" if ok[stem] else "\n" + r.stderr.strip()))
-    cells = "".join(f'<figure><figcaption>{html.escape(cap)}</figcaption>'
-                    + (f'<a href="{stem}.png"><img src="{stem}.png" width="640"></a>' if ok[stem] else "failed") + "</figure>"
-                    for stem, _, cap in SHOTS)
-    with open(os.path.join(out, "index.html"), "w", encoding="utf-8") as f:
-        f.write("<!doctype html><meta charset=utf-8><title>fxview shots</title>"
-                "<style>body{background:#222;color:#ddd;font:14px sans-serif}figure{display:inline-block;margin:6px}img{display:block}</style>"
-                f"<h3>left: original (texture x vertex colour, alpha over) | right: + fxShade, frame_count {a.fc}, backdrop {html.escape(a.backdrop)}</h3>"
-                + cells)
-    print("wrote", os.path.join(out, "index.html"))
-    if not all(ok.values()):
-        sys.exit(1)
+    _batch(env, a, "shots", SHOTS, ["--view", "side", "--backdrop", a.backdrop, "--fc", str(a.fc)] + (["--bgtex", str(a.bgtex)] if a.bgtex is not None else []),
+           f"left: original (texture x vertex colour, alpha over) | right: the pack's effect shader, frame_count {a.fc}, backdrop {html.escape(a.backdrop)}, backend {a.backend}", 640)
+
+
+def cmd_tabshots(env, a):
+    _batch(env, a, "tabshots", TAB_SHOTS + SHEET_SHOTS, ["--tshow", "side"],
+           f"left: the game's own look (F9 off) | right: the port (effect shaders, the Lights block); backend {a.backend}. The Lights block exists on Vulkan and deko3d only: "
+           "on GL the lit wall and the explosion's light are missing", 900)
 
 
 def cmd_decalshots(env, a):
-    out = os.path.abspath(a.out)
-    if inside(out, REPO) and not inside(out, DATA):
-        sys.exit("fxview: --out must be outside the repo or inside tools_pc/fxview/data/ (the images are ROM-derived)")
-    os.makedirs(out, exist_ok=True)
-    exe = build(env)
-    rom = a.rom or find_rom(env)
-    if not rom:
-        sys.exit("fxview: no ROM: pass --rom, or set N64_ROM in .env")
-    common = ["--rom", os.path.abspath(rom), "--repo", REPO, "--mode", "decal", "--view", "side", "--holes", str(a.holes),
-              "--yaw", str(a.yaw), "--pitch", str(a.pitch), "--w", str(a.w), "--h", str(a.h)]
-    ok = {}
-    for stem, args, cap in DECAL_SHOTS:
-        png = os.path.join(out, stem + ".png")
-        r = subprocess.run([exe] + common + args + ["--shot", png], cwd=DATA, capture_output=True, text=True)
-        ok[stem] = r.returncode == 0 and os.path.exists(png)
-        print(("ok   " if ok[stem] else "FAIL ") + stem + ("" if ok[stem] else "\n" + r.stderr.strip()))
-    cells = "".join(f'<figure><figcaption>{html.escape(cap)}</figcaption>'
-                    + (f'<a href="{stem}.png"><img src="{stem}.png" width="900"></a>' if ok[stem] else "failed") + "</figure>"
-                    for stem, _, cap in DECAL_SHOTS)
-    with open(os.path.join(out, "index.html"), "w", encoding="utf-8") as f:
-        f.write("<!doctype html><meta charset=utf-8><title>fxview decal shots</title>"
-                "<style>body{background:#222;color:#ddd;font:14px sans-serif}figure{display:inline-block;margin:6px}img{display:block}</style>"
-                "<h3>left: the game's hole (texture x vertex colour, alpha over) | right: the port's (fxDecalBlend, 2x multiply over the wall)."
-                f" Camera yaw {a.yaw}, pitch {a.pitch}; {a.holes} holes; the wall is a real level texture of the material</h3>" + cells)
-    print("wrote", os.path.join(out, "index.html"))
-    if not all(ok.values()):
-        sys.exit(1)
+    _batch(env, a, "decalshots", DECAL_SHOTS, ["--mode", "decal", "--view", "side", "--holes", str(a.holes), "--yaw", str(a.yaw), "--pitch", str(a.pitch)],
+           "left: the game's hole (texture x vertex colour, alpha over) | right: the port's cluster (fxClusterPom) on a lit real wall texture. "
+           f"Camera yaw {a.yaw}, pitch {a.pitch}; {a.holes} holes; backend {a.backend}", 900)
+
+
+def _switch_args_file(sd, extra):
+    os.makedirs(sd, exist_ok=True)
+    with open(os.path.join(sd, "fxview.args"), "w", encoding="utf-8") as f:
+        f.write(" ".join(extra) + chr(10))
+
+
+def cmd_ryujinx(env, a):
+    c = devenv.load_env()
+    exe = c.get("SWITCH_EMU_EXE")
+    sdroot = c.get("SWITCH_EMU_SD") or os.path.join(os.environ.get("APPDATA", ""), "Ryujinx", "sdcard")
+    if not exe:
+        sys.exit("fxview: set SWITCH_EMU_EXE in .env")
+    nro = ge_build("switch")
+    sd = os.path.join(sdroot, "switch", "project-dam")
+    os.makedirs(os.path.join(sd, "fxview"), exist_ok=True)
+    shutil.copy(nro, os.path.join(sd, "fxview.nro"))
+    _switch_args_file(os.path.join(sd, "fxview"), a.extra)
+    print("args file:", os.path.join(sd, "fxview", "fxview.args")); print("log:", os.path.join(sd, "fxview", "fxview.log"))
+    subprocess.Popen([exe, os.path.join(sd, "fxview.nro")], cwd=os.path.dirname(exe))
+
+
+def cmd_nx(env, a):
+    c = devenv.load_env()
+    ip = c.get("SWITCH_IP")
+    if not ip:
+        sys.exit("fxview: set SWITCH_IP in .env")
+    nro = ge_build("switch")
+    log = os.path.join(REPO, "build-switch", "fxview-nx.log")
+    cmd = [sys.executable, os.path.join(REPO, "tools", "switch", "nxlink.py"), ip, nro, "project-dam/fxview.nro", log] + a.extra   # argv reaches fxview over nxlink
+    print("log:", log)
+    subprocess.run(cmd, env=dict(os.environ, NXLINK_RETRIES=os.environ.get("NXLINK_RETRIES", "20")))
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("pc", allow_abbrev=False); p.set_defaults(f=cmd_pc)
-    p = sub.add_parser("selftest"); p.set_defaults(f=cmd_selftest)
+    for nm, fn in (("win", cmd_win), ("ryujinx", cmd_ryujinx), ("nx", cmd_nx)):   # remaining args go to the viewer
+        p = sub.add_parser(nm, allow_abbrev=False); p.set_defaults(f=fn)
+        if nm == "win":
+            p.add_argument("--nobuild", action="store_true", help="run the existing build-win/fxview.exe")
+    p = sub.add_parser("selftest"); p.add_argument("--nobuild", action="store_true"); p.set_defaults(f=cmd_selftest)
     p = sub.add_parser("shots", allow_abbrev=False)
-    p.add_argument("--out", required=True); p.add_argument("--rom")
+    p.add_argument("--out", required=True); p.add_argument("--rom"); p.add_argument("--nobuild", action="store_true"); p.add_argument("--backend", default="vk", choices=["vk", "gl"])
     p.add_argument("--backdrop", default="grey", choices=["grey", "dark", "checker", "wall"]); p.add_argument("--bgtex", type=int)
-    p.add_argument("--fc", type=int, default=120, help="frame_count given to fxShade")
+    p.add_argument("--fc", type=int, default=120, help="frame_count given to the effect shaders")
     p.add_argument("--w", type=int, default=1200); p.add_argument("--h", type=int, default=600); p.set_defaults(f=cmd_shots)
+    p = sub.add_parser("tabshots", allow_abbrev=False)
+    p.add_argument("--out", required=True); p.add_argument("--rom"); p.add_argument("--nobuild", action="store_true"); p.add_argument("--backend", default="vk", choices=["vk", "gl"])
+    p.add_argument("--w", type=int, default=1200); p.add_argument("--h", type=int, default=600); p.set_defaults(f=cmd_tabshots)
     p = sub.add_parser("decalshots", allow_abbrev=False)
-    p.add_argument("--out", required=True); p.add_argument("--rom")
+    p.add_argument("--out", required=True); p.add_argument("--rom"); p.add_argument("--nobuild", action="store_true"); p.add_argument("--backend", default="vk", choices=["vk", "gl"])
     p.add_argument("--holes", type=int, default=3); p.add_argument("--yaw", type=float, default=25); p.add_argument("--pitch", type=float, default=12)
     p.add_argument("--w", type=int, default=1400); p.add_argument("--h", type=int, default=600); p.set_defaults(f=cmd_decalshots)
     a, extra = ap.parse_known_args()

@@ -38,6 +38,7 @@
 #include <math.h>
 
 #include <map>
+#include <string>
 #include <vector>
 #include <utility>
 #include <chrono>
@@ -2091,10 +2092,74 @@ void gfx_deko3d_set_swap_interval(int interval) {
     if (s_swapchain) dkSwapchainSetSwapInterval(s_swapchain, (uint32_t)s_swap_interval);
 }
 
+static std::string s_dump_path;   /* GE_PCDUMP-style capture of the next present (ge_render_dump_window) */
+struct ReadReq { int x = 0, y = 0, w = 0, h = 0; uint8_t* out = nullptr; };
+static ReadReq s_read_req;        /* ge_render_read_pixels: a window rectangle the next present copies out (RGBA, top-left origin) */
+
+/* The rectangle of the window image copied out as RGBA. */
+static void read_finish(const Block& blk, uint32_t w, uint32_t h, const ReadReq& q) {
+    for (int yy = 0; yy < q.h; yy++) {
+        for (int xx = 0; xx < q.w; xx++) {
+            uint8_t* d = q.out + ((size_t)yy * q.w + xx) * 4;
+            const int sx = q.x + xx, sy = q.y + yy;
+            if (sx < 0 || sy < 0 || sx >= (int)w || sy >= (int)h) { d[0] = d[1] = d[2] = d[3] = 0; continue; }
+            memcpy(d, blk.cpu + ((size_t)sy * w + sx) * 4, 4);
+        }
+    }
+}
+
+/* The window image to a PPM: a copy recorded after the frame's draws, the buffer read once the queue has run it. */
+static void dump_finish(Block& blk, uint32_t w, uint32_t h, const std::string& path) {
+    FILE* f = fopen(path.c_str(), "wb");
+    if (f) {
+        std::vector<uint8_t> row((size_t)w * 3);
+        fprintf(f, "P6"); fputc(10, f); fprintf(f, "%u %u", w, h); fputc(10, f); fprintf(f, "255"); fputc(10, f);
+        for (uint32_t y = 0; y < h; y++) {
+            const uint8_t* src = blk.cpu + (size_t)y * w * 4;   /* RGBA8 */
+            for (uint32_t x = 0; x < w; x++) { row[x * 3] = src[x * 4]; row[x * 3 + 1] = src[x * 4 + 1]; row[x * 3 + 2] = src[x * 4 + 2]; }
+            fwrite(row.data(), 1, row.size(), f);
+        }
+        fclose(f);
+    }
+    free_block(blk);
+}
+
+bool gfx_deko3d_read_pixels(int x, int y, int w, int h, uint8_t* rgba) {
+    if (!s_up || s_parked || rgba == nullptr || w <= 0 || h <= 0) return false;
+    s_read_req = { x, y, w, h, rgba };
+    return true;
+}
+
+bool gfx_deko3d_dump_window(const char* path) {
+    if (!s_up || s_parked || path == nullptr) return false;
+    s_dump_path = path;
+    return true;
+}
+
 void gfx_deko3d_present(void) {
     if (!s_up || s_parked) return;
     if (s_acq >= 0) {
+        Block dumpBlk;
+        const ReadReq rq = s_read_req;
+        s_read_req = ReadReq();
+        const bool dump = !s_dump_path.empty() || rq.out;
+        if (dump) {
+            dumpBlk = make_block(s_win_w * s_win_h * 4, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuUncached);
+            dkCmdBufBarrier(s_cmd, DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+            DkImageView v;
+            dkImageViewDefaults(&v, &s_win_img[s_acq]);
+            DkImageRect r = { 0, 0, 0, s_win_w, s_win_h, 1 };
+            DkCopyBuf d = { dumpBlk.gpu, 0, 0 };
+            dkCmdBufCopyImageToBuffer(s_cmd, &v, &r, &d, 0);
+        }
         submit();
+        if (dump) {
+            wait_serial(s_serial - 1);
+            if (rq.out) read_finish(dumpBlk, s_win_w, s_win_h, rq);
+            if (!s_dump_path.empty()) dump_finish(dumpBlk, s_win_w, s_win_h, s_dump_path);   /* frees the block */
+            else free_block(dumpBlk);
+            s_dump_path.clear();
+        }
         dkQueuePresentImage(s_queue, s_swapchain, s_acq);
         s_acq = -1;
         /* GE_DKLATSYNC=1: return only once the GPU has finished this frame, so

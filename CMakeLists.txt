@@ -1000,8 +1000,10 @@ list(APPEND LIBS ge_imgui)   # a static library, so the CTest binaries (GE_CORE_
 # the window and the static-mesh API. It knows no game: the game (port/fast3d, port/src/video.c) and the tools
 # (tools_pc/ge_render_hello) link it and talk to it through port/ge_render/include/ge_render.h. Compiled with the game's
 # directory-wide options and include paths, like the game itself (the backends still read <PR/gbi.h> for the RDP constants).
+option(GE_TOOLS "Build the ge_render tools (tools_pc/ge_render_hello, tools_pc/fxview)" OFF)   # declared here: the shader packs below read it
 set(GE_RENDER_DIR "${CMAKE_SOURCE_DIR}/port/ge_render")
 file(GLOB SRC_GE_RENDER CONFIGURE_DEPENDS "${GE_RENDER_DIR}/src/*.cpp")
+list(FILTER SRC_GE_RENDER EXCLUDE REGEX "/ge_imgui[.]cpp$")   # the ImGui backend is compiled clean, with the tools (below)
 add_library(ge_render STATIC ${SRC_GE_RENDER} "${GE_RENDER_DIR}/include/glad/glad.c")
 target_include_directories(ge_render PUBLIC "${GE_RENDER_DIR}/include" PRIVATE "${GE_RENDER_DIR}/src")
 if(GE_SWITCH)
@@ -1063,9 +1065,21 @@ if(GE007_BUILD_TESTS AND NOT GE_SWITCH)
 endif()
 # The renderer's tools (tools_pc/ge_render_hello, later fxview): hosts of ge_render with no game in them. On the Switch the
 # hello host is an NRO next to the game's.
-option(GE_TOOLS "Build the ge_render tools (tools_pc/ge_render_hello)" OFF)
 if(GE_TOOLS)
+  # The ImGui backend over ge_render's draw API (port/ge_render/src/ge_imgui.cpp): clean include paths, like ge_imgui itself
+  # (the game's include/ breaks imgui.h, D66). It reaches ge_render through ge_render.h only.
+  add_library(ge_render_imgui STATIC "${GE_RENDER_DIR}/src/ge_imgui.cpp")
+  set_property(TARGET ge_render_imgui PROPERTY INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/port/third_party/imgui" "${GE_RENDER_DIR}/include")
+  set_property(TARGET ge_render_imgui PROPERTY COMPILE_OPTIONS ${_imgui_opts})
+  set_property(TARGET ge_render_imgui PROPERTY COMPILE_DEFINITIONS "")
+  set_property(TARGET ge_render_imgui PROPERTY CXX_STANDARD 20)
+  if(GE_SWITCH)
+    set_property(TARGET ge_render_imgui PROPERTY POSITION_INDEPENDENT_CODE OFF)
+    target_compile_options(ge_render_imgui PRIVATE -fPIE)
+  endif()
+  target_link_libraries(ge_render_imgui ge_imgui ge_render)
   add_subdirectory(tools_pc/ge_render_hello)
+  add_subdirectory(tools_pc/fxview)
 endif()
 # The mission editor (editor/): its own executable, never on the Switch.
 if(NOT GE_SWITCH)

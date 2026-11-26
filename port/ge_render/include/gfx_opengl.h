@@ -13,6 +13,8 @@ const char *gfx_opengl_renderer_string(void);
 
 /* Frame capture (dev tool, env GE_PCDUMP=1) — see gfx_opengl.cpp. */
 bool gfx_opengl_pcdump_enabled(void);
+bool gfx_opengl_read_pixels(uint32_t win_h, int x, int y, int w, int h, uint8_t* rgba);
+bool gfx_opengl_fx_reload(const char* common, const char* bullets, const char* bursts, const char* impacts, char* log, size_t logsz);
 bool gfx_opengl_dump_bound_fbo(uint32_t width, uint32_t height, const char* path);
 
 /* D578: frame-interpolation present queue. store copies the finished back

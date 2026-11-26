@@ -19,7 +19,7 @@ if(VK_PACK_RUN)
   if(_old)
     file(REMOVE ${_old})
   endif()
-  execute_process(COMMAND "${VK_OUT}/dkshgen" glsl "${VK_LIST}" "${VK_OUT}/glsl" RESULT_VARIABLE _r)
+  execute_process(COMMAND "${VK_OUT}/dkshgen" glsl "${VK_LIST}" "${VK_OUT}/glsl" ${VK_TOOL_LIST} RESULT_VARIABLE _r)
   if(NOT _r EQUAL 0)
     message(FATAL_ERROR "dkshgen glsl failed")
   endif()
@@ -109,11 +109,17 @@ macro(vulkan_shaders target)
   find_program(VK_HOST_CXX NAMES c++ g++ HINTS /usr/bin REQUIRED NO_CMAKE_FIND_ROOT_PATH)
   set(_vk_pack "${CMAKE_BINARY_DIR}/ge007_spv.bin")
   file(GLOB_RECURSE _vk_glsl CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/*.glsl")
+  set(_vk_tool "")   # GE_TOOLS: the fxview tool's combiners (the diagnostic kinds) join the pack; the game's build has none
+  if(GE_TOOLS)
+    set(_vk_tool "-DVK_TOOL_LIST=${CMAKE_SOURCE_DIR}/tools_pc/fxview/combiners.txt")
+    file(GLOB _vk_tool_deps "${CMAKE_SOURCE_DIR}/tools_pc/fxview/combiners.txt" "${CMAKE_SOURCE_DIR}/tools_pc/fxview/shaders/*.glsl")
+    list(APPEND _vk_glsl ${_vk_tool_deps})
+  endif()
   add_custom_command(OUTPUT "${_vk_pack}"
     COMMAND "${CMAKE_COMMAND}" -DVK_PACK_RUN=ON
             "-DVK_SRC=${CMAKE_SOURCE_DIR}" "-DVK_OUT=${CMAKE_BINARY_DIR}/spv"
             "-DVK_LIST=${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt"
-            "-DVK_PACK=${_vk_pack}" "-DVK_GLSLANG=${VK_GLSLANG}" "-DVK_HOST_CXX=${VK_HOST_CXX}"
+            ${_vk_tool} "-DVK_PACK=${_vk_pack}" "-DVK_GLSLANG=${VK_GLSLANG}" "-DVK_HOST_CXX=${VK_HOST_CXX}"
             -P "${CMAKE_SOURCE_DIR}/cmake/VulkanShaders.cmake"
     DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt" "${CMAKE_SOURCE_DIR}/port/shaders/fx/combiners.txt"
             ${_vk_glsl}

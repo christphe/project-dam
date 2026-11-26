@@ -248,9 +248,41 @@ int ge_render_get_refresh_rate(void) {
     return ge_window_get_refresh_rate();
 }
 
+bool ge_render_fx_reload_gl(const char *common, const char *bullets, const char *bursts, const char *impacts, char *log, size_t logsz) {
+    if (s_backend != GE_RENDER_GL) { snprintf(log, logsz, "not the GL backend"); return false; }
+    return gfx_opengl_fx_reload(common, bullets, bursts, impacts, log, logsz);
+}
+
+bool ge_render_fx_replace_spirv(uint64_t id0, uint32_t id1, const uint32_t *words, size_t nwords, char *log, size_t logsz) {
+#ifdef GE_VULKAN
+    if (s_backend == GE_RENDER_VULKAN) return gfx_vulkan_fx_replace_spirv(id0, id1, words, nwords, log, logsz);
+#endif
+    snprintf(log, logsz, "not the Vulkan backend");
+    return false;
+}
+
+bool ge_render_read_pixels(int x, int y, int w, int h, uint8_t *rgba) {
+#ifdef GE_VULKAN
+    if (s_backend == GE_RENDER_VULKAN) return gfx_vulkan_read_pixels(x, y, w, h, rgba);
+#endif
+#ifdef __SWITCH__
+    if (s_backend == GE_RENDER_DEKO3D) return gfx_deko3d_read_pixels(x, y, w, h, rgba);
+#endif
+    if (s_backend == GE_RENDER_GL) {
+        uint32_t ww = 0, wh = 0;
+        int32_t px = 0, py = 0;
+        s_wapi->get_dimensions(&ww, &wh, &px, &py);
+        return gfx_opengl_read_pixels(wh, x, y, w, h, rgba);
+    }
+    return false;
+}
+
 bool ge_render_dump_window(uint32_t width, uint32_t height, const char *path) {
 #ifdef GE_VULKAN
     if (s_backend == GE_RENDER_VULKAN) return gfx_vulkan_dump_window(path);
+#endif
+#ifdef __SWITCH__
+    if (s_backend == GE_RENDER_DEKO3D) return gfx_deko3d_dump_window(path);
 #endif
     if (s_backend == GE_RENDER_GL) return gfx_opengl_dump_bound_fbo(width, height, path);
     return false;
