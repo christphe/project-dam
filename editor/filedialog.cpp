@@ -73,7 +73,7 @@ bool run(bool save, const std::string &startDir, std::string &out)
 bool fileDialogAvailable() { return true; }
 bool fileDialogOpenMission(const std::string &startDir, std::string &out) { return run(false, startDir, out); }
 bool fileDialogSaveMission(const std::string &startDir, std::string &out) { return run(true, startDir, out); }
-bool fileDialogOpenMod(const std::string &startDir, std::string &out) { return openWith(kModFilter, "Open mod (its campaign.json)", startDir, out); }
+bool fileDialogOpenMod(const std::string &startDir, std::string &out) { return openWith(kModFilter, "Open mod (its campaign.json, or a .pmod package)", startDir, out); }
 bool fileDialogOpenImage(const std::string &startDir, std::string &out) { return openWith(kImageFilter, "Import picture", startDir, out); }
 
 bool fileDialogPickProgram(const std::string &startPath, std::string &out)

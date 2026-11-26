@@ -2682,6 +2682,14 @@ bool handles_shot_actors(ChrRecord *self, s32 hitpart, coord3d *vector, s32 weap
 #    endif
                 self->damage += damageToCause;
 
+#ifdef PORT
+            {
+                /* port/src/missions_host.c: a guard a mission script made revivable goes down instead of dying (it lies
+                 * on the floor until a player revives it); 0 for every other chr, which dies as before. */
+                extern int missionsChrDownInsteadOfDeath(ChrRecord *chr);
+                if (self->damage >= self->maxdamage && missionsChrDownInsteadOfDeath(self)) return TRUE;
+            }
+#endif
             if (self->damage < 0.0f)
             {
                 f32 endframe = -1.0f; //sp34
@@ -2761,6 +2769,13 @@ s32 chrlvExplosionDamage(ChrRecord *self, coord3d *arg1, f32 damage, s32 arg3)
     self->numarghs += 1;
     self->damage += damage;
     self->chrflags |= CHRFLAG_WAS_DAMAGED;
+#ifdef PORT
+    {
+        /* any explosion damage kills (below): a revivable guard goes down instead (as for a shot, above) */
+        extern int missionsChrDownInsteadOfDeath(ChrRecord *chr);
+        if (self->damage > 0.0f && missionsChrDownInsteadOfDeath(self)) return 0;
+    }
+#endif
 
     if (self->damage > 0.0f)
     {

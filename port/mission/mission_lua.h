@@ -4,7 +4,7 @@
 /* The Luau runtime of a custom mission (issue #104).
  *
  * One VM per mission. Each entry of mission.json "scripts" runs as a coroutine
- * of its own, in a sandbox (no io / os / debug / require, read-only globals, a
+ * of its own, in a sandbox (no io / os / debug, a require() that only loads mission modules, read-only globals, a
  * memory cap, and an interrupt that aborts a script that runs over its time
  * budget in one resume). The runtime knows nothing of the game: everything it
  * reads or does goes through the MissionHost callbacks, which port/src/missions.c
@@ -18,9 +18,22 @@
  *   say(who, text)                                  a dialogue line at the top of the screen, shown "who: text" to every player
  *   wait(seconds)                                   sleep
  *   wait(event(name [, filter]))                    sleep until an event matches; returns the event table
+ *   clock() -> number                               the mission time in seconds (the runtime's own clock: it stops while the game is paused)
+ *   spawn(fn) -> Task                               run fn as a new coroutine of its own (it may wait()); first run at the next
+ *                                                   sleeper pass of this tick. Task:cancel(): it never resumes (a finished task: no-op)
+ *   on(name, fn [, filter]) -> Connection           fn(event) runs as a NEW coroutine (like spawn: it may wait()) every time a
+ *                                                   matching event is raised, on the runtime's tick. An error in fn is logged, not fatal.
+ *                                                   Connection:off() unsubscribes (running callbacks finish). wait(event(...)) is unchanged.
+ *   require(name) -> value                          the module <name>.luau (mission dir, mission dir/scripts, mod dir/scripts, built-in
+ *                                                   library; name = letters, digits, _ and -, so require("jokes_" .. level) works). Run
+ *                                                   ONCE per mission in its own environment over the mission globals (not the calling
+ *                                                   script target / props), its return value cached (true if it returns nothing).
+ *                                                   The module top level must not wait(); its functions called later may.
  *   event(name [, filter]) -> descriptor            filter: table of field = value that must all match
  *   objectives.add(id, text [, difficulty])   objectives.complete(id)
  *   objectives.is_complete(id) -> bool        objectives.all_complete() -> bool   (of the current difficulty)
+ *   objectives.reset(id)                      back to incomplete (neither complete nor failed): "keep X alive" can be complete while
+ *                                             X stands and incomplete while X is down
  *   objectives.fail(id)                       shown as failed (pause, end screen, and the game's own "Objective a:
  *                                             failed" line); it can no longer be completed
  *   objectives.is_failed(id) -> bool
@@ -67,9 +80,22 @@
  *                   :guards_near(radius) -> number  living guards within radius of the target (the target itself left out)
  *                   :hits() -> number               how many times the guard has been hit (chrGetNumArghs)
  *                   :make_usable() :was_used()      an object players can activate (it gets the tag flag the game's own
- *                                                   terminals have); true once per activation since the last call
- *                   :play_anim(name) -> bool        play a named animation once (missions_host.c kAnims:
- *                                                   keyboard_right_hand_tapping, keyboard_left_hand, keyboard_right_hand2)
+ *                                                   terminals have); true once per activation since the last call. On a GUARD: a
+ *                                                   player within 120 units, facing it, presses use (B), or stands within 90 units
+ *                                                   for 1.5 s (missions_host.c guardUseTick), makes was_used() true once
+ *                   :play_anim(name [, hold]) -> bool  play a named animation once (missions_host.c kAnims:
+ *                                                   keyboard_right_hand_tapping, keyboard_left_hand, keyboard_right_hand2,
+ *                                                   kneel_cough, kneel_cough2); hold = true: the guard stays on the last frame until
+ *                                                   :stand() or another order
+ *                   :health() -> number             a guard health in game units (maxdamage - damage); 0 if not there
+ *                   :max_health() -> number         its maxdamage
+ *                   :set_health(n)                  damage = maxdamage - n (damage clamped at 0, i.e. at most max_health)
+ *                   :set_max_health(n)              maxdamage = n, RAW: not scaled by the 007 health modifier the setup health gets
+ *                   :set_revivable([on])            goes down instead of dying (lies on the floor, invincible, no order
+ *                                                   reaches it); a player revives it like a co-op partner: B near it,
+ *                                                   10 s; up again with full health. :is_down() -> bool while it lies
+ *                   :pos() -> x, y, z               the target current world position (a guard, player, prop, pad or zone);
+ *                                                   nil, nil, nil when it has none (a guard not spawned, an original pad number)
  *                   :say(who, text [, range])       say(who, text) spoken from the target: a marker over it (a guard or a
  *                                                   player: above its head, followed while it moves, never in that player's
  *                                                   own view; a pad or a zone: its point) in every
@@ -80,9 +106,14 @@
  *   print(...)                                      to the host log
  * Events (name, fields): "start", "end" {win}, "pickup" {item, player}, "death" {prop},
  *   "door" {prop, state = "open" | "closed" | "moving"}, "zone" {id, player},
- *   "objective" {id}.
- * Events are found by diffing the host's state every tick; "objective" and "end"
- * are raised by the runtime itself. */
+ *   "objective" {id}, "objective_failed" {id},
+ *   "player_death" {player}, "player_hurt" {player, health 0..1, armor 0..1} (health or armor went down),
+ *   "player_revived" {player}, "gunfire" {x, y, z, player?, prop?} (a shot starts at x y z; player = 0-based when a player
+ *   fired, prop = the setup prop when a setup guard fired; at most one per shooter per 0.25 s), "alarm" {} (off to on),
+ *   "guard_hurt" {prop, health} (a setup guard damage went up; health in game units),
+ *   "guard_down" {prop} / "guard_revived" {prop} (a revivable guard went down instead of dying / a player revived it).
+ * Events are found by diffing the host state every tick (the host raises the player, gunfire, alarm and guard_hurt ones
+ * through missionRtRaise); "objective" and "end" are raised by the runtime itself. */
 
 #include <stddef.h>
 #include <stdint.h>
@@ -117,7 +148,12 @@ typedef struct MissionHost {
     int  (*guard_moving)(void *ud, int prop);                      /* 1 while the guard is walking to a position */
     int  (*guard_face_prop)(void *ud, int prop, int target);       /* face setup prop `target` square on, set on the spot in
                                                                       front of it when close; 0: that spot is occupied */
-    int  (*guard_anim)(void *ud, int prop, const char *name);      /* play a named animation once; 0: unknown or refused */
+    int  (*guard_anim)(void *ud, int prop, const char *name, int hold);   /* play a named animation once (hold: stay on its last
+                                                                              frame); 0: unknown or refused */
+    int  (*guard_health)(void *ud, int prop, double *health, double *max);   /* maxdamage - damage, maxdamage; 0: no such guard */
+    void (*guard_set_health)(void *ud, int prop, int which, double v);       /* MH_HEALTH_*: v is the health or the raw maxdamage */
+    void (*guard_set_revivable)(void *ud, int prop, int on);       /* goes down instead of dying; a player revives it */
+    int  (*guard_is_down)(void *ud, int prop);                     /* 1 while a revivable guard lies down */
     void (*prop_usable)(void *ud, int prop);                       /* a player can activate this object (B / use) */
     void (*guard_keep_body)(void *ud, int prop);                   /* the guard's body stays when it dies (no fade-out) */
     int  (*guard_aim_at)(void *ud, int prop, int target, int fire);  /* aim (fire: and shoot) at guard `target`; 0: unarmed */
@@ -139,6 +175,9 @@ typedef struct MissionHost {
     void (*say_at)(void *ud, const char *who, const char *text, int kind, int index, const float pos[3], float range);
     void (*fail)(void *ud);                            /* end the level as a failure */
 } MissionHost;
+
+#define MH_HEALTH_CUR  0
+#define MH_HEALTH_MAX  1
 
 /* guard:follow(): the passive AI list (GAILIST_DEAD_AI, "yield forever") and the follow timing. */
 /* say_at speakers */
@@ -179,6 +218,10 @@ MissionRuntime *missionRtCreate(const Mission *m, const MissionHost *host, const
                                 char *err, size_t errlen);
 void missionRtDestroy(MissionRuntime *rt);
 
+/* An event the host found (player, gunfire, alarm, guard_hurt ...): str != NULL makes the field a string, else num is used. */
+typedef struct MissionEvField { const char *key; const char *str; double num; } MissionEvField;
+void missionRtRaise(MissionRuntime *rt, const char *name, const MissionEvField *fields, int nfields);
+
 /* One game frame: `dt` seconds since the last call. Diffs the host state into events,
  * resumes the scripts that are due. */
 void missionRtTick(MissionRuntime *rt, double dt);
@@ -192,6 +235,7 @@ const char *missionRtObjectiveText(const MissionRuntime *rt, int i);
 int  missionRtObjectiveDifficulty(const MissionRuntime *rt, int i);
 int  missionRtObjectiveComplete(const MissionRuntime *rt, int i);
 int  missionRtObjectiveStatus(const MissionRuntime *rt, int i);   /* OBJECTIVESTATUS: 0 incomplete, 1 complete, 2 failed */
+int  missionRtObjectiveQuiet(const MissionRuntime *rt, int i);    /* completed with objectives.complete(id, true): no HUD line */
 int  missionRtAllComplete(const MissionRuntime *rt, int difficulty);
 /* Marks an objective complete from the host side (e.g. the debug console). */
 int  missionRtCompleteObjective(MissionRuntime *rt, const char *id);

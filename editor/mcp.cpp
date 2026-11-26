@@ -516,11 +516,18 @@ const Tool kTools[] = {
       toolSetTransform },
     { "capture_thumb", "Render the editor's current 3D view to a 320x240 PNG (a plain 4:3 crop of the view, no markers or panels). Needs the editor window.",
       "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"default: thumb.png in the open mission's folder inside the open mod\"}}}", toolCaptureThumb },
-    { "mod_open", "Open a mod folder (mods/<mod>, created with an empty campaign.json when new). Optional name, author, description, affects [story|multiplayer], unlock (ordered|open) edit the campaign; mission (folder or index) opens one of its missions.",
+    { "mod_open", "Open a mod folder (mods/<mod>, created with an empty campaign.json when new; a .pmod package file is refused: mod_extract it first). Optional name, author, description, affects [story|multiplayer], unlock (ordered|open) edit the campaign; mission (folder or index) opens one of its missions.",
       "{\"type\":\"object\",\"properties\":{\"dir\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"author\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"},"
       "\"affects\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"story\",\"multiplayer\"]}},\"unlock\":{\"type\":\"string\",\"enum\":[\"ordered\",\"open\"]},"
       "\"mission\":{\"type\":[\"integer\",\"string\"]}},\"required\":[\"dir\"]}", toolModOpen },
+    { "mod_extract", "Unpack a package file X.pmod into a folder X.pmod/ to edit it (the game plays that folder like the file); then mod_open the returned dir. "
+      "Without dest it is done in place: the file is renamed X.pmod.old (refused when that exists). With dest: into <dest>/X.pmod/, the file kept (refused when that folder exists). "
+      "Refused when the package holds no campaign.json. Returns dir (and old).",
+      "{\"type\":\"object\",\"properties\":{\"pmod\":{\"type\":\"string\"},\"dest\":{\"type\":\"string\",\"description\":\"the folder that gets X.pmod/; default: in place\"}},\"required\":[\"pmod\"]}", toolModExtract },
     { "mod_save", "Write the open mod's campaign.json (the open mission is saved with mission_save).", "{\"type\":\"object\",\"properties\":{}}", toolModSave },
+    { "mod_publish", "Save the open mod, validate it and its missions (an error refuses), and write it as <out_dir>/<mod>.pmod (a tar of the mod folder; default out_dir <mod>/dist). Returns path and bytes.",
+      "{\"type\":\"object\",\"properties\":{\"out_dir\":{\"type\":\"string\"}}}", toolModPublish },
+    { "mod_deploy", "Like mod_publish, but writes <mods folder>/<mod>.pmod, where the game finds it. Returns path and bytes.", "{\"type\":\"object\",\"properties\":{}}", toolModDeploy },
     { "mod_add_mission", "Add a new mission for a level to the open mod: creates its folder and mission.json, appends it to the campaign (saved) and opens it.",
       "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"level\":{\"type\":\"string\",\"description\":\"solo level name, e.g. bunker1\"},\"folder\":{\"type\":\"string\"}}}", toolModAddMission },
     { "mod_reorder", "Reorder the open mod's missions: order [folder, ...] (a permutation), or mission (folder or index) with to (new index). Save with mod_save.",
@@ -565,8 +572,8 @@ const Tool kTools[] = {
       "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"pos\":{\"type\":\"array\",\"items\":{\"type\":\"number\"},\"minItems\":3,\"maxItems\":3},\"radius\":{\"type\":\"number\"},\"room\":{\"type\":\"integer\"}},\"required\":[\"id\"]}", toolZoneSet },
     { "zone_remove", "Remove a zone (scripts that target it are reported by validate).",
       "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}", toolZoneRemove },
-    { "mission_set", "Set the open mission's name, briefing and/or description (one undo step).",
-      "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"briefing\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"}}}", toolMissionSet },
+    { "mission_set", "Set the open mission's name, briefing, description and/or keep_level_objectives (true: the level keeps its own briefing, objectives and exit, and the mission's objectives are added after them; one undo step).",
+      "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"briefing\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"},\"keep_level_objectives\":{\"type\":\"boolean\"}}}", toolMissionSet },
     { "objective_add", "Add an objective: id (letters, digits, _ -; unique; scripts name the objective by it), text, difficulty = the lowest difficulty it applies to (0 Agent, 1 Secret Agent, 2 00 Agent; default 0). An objective is completed by a script or a zone.",
       "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"},\"difficulty\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2}},\"required\":[\"id\",\"text\"]}", toolObjectiveAdd },
     { "objective_set", "Change an objective (by id): text, difficulty, new_id (scripts that name the old id are then reported by validate), index (move it to that position in the list).",
@@ -578,7 +585,7 @@ const Tool kTools[] = {
     { "undo", "Undo the last mission edit.", "{\"type\":\"object\",\"properties\":{}}", toolUndo },
     { "validate", "Check the mission (format, ids, pads and props against the level export).",
       "{\"type\":\"object\",\"properties\":{}}", toolValidate },
-    { "test_run", "Save the mission and start the game on it: solo by default, co-op (two players, two pads) with coop: true; at the level's own start unless spawn is given. wait_seconds (cap 120; default 0 = return at once) waits that long (ends early if the game exits) and returns the game log's \"missions:\" lines since the launch (objective completions, script errors and loads) in missions, [ERROR] lines in errors, and running; the editor window is busy while it waits. stop: true then ends the game process this editor started (never another).",
+    { "test_run", "Save the mission and start the game on it (a mission of a mod runs from the mod packed into <mods folder>/<mod>.pmod): solo by default, co-op (two players, two pads) with coop: true; at the level's own start unless spawn is given. wait_seconds (cap 120; default 0 = return at once) waits that long (ends early if the game exits) and returns the game log's \"missions:\" lines since the launch (objective completions, script errors and loads) in missions, [ERROR] lines in errors, and running; the editor window is busy while it waits. stop: true then ends the game process this editor started (never another).",
       "{\"type\":\"object\",\"properties\":{\"wait_seconds\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":120},\"stop\":{\"type\":\"boolean\"},\"spawn\":{\"type\":[\"integer\",\"string\"],\"description\":\"pad to start at: a pad number or a mission pad id (default: the level's own start)\"},\"coop\":{\"type\":\"boolean\",\"description\":\"two players (default false: solo)\"}}}",
       toolTestRun },
 };

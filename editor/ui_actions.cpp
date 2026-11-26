@@ -311,6 +311,14 @@ void doOpenModPath(App &a, std::string dir)
     if (dir.size() > tail.size() && dir.compare(dir.size() - tail.size(), tail.size(), tail) == 0) dir.resize(dir.size() - tail.size());
     std::string err;
     if (a.doc.hasMod && a.doc.modDirty) { a.say("mod: the open mod has unsaved changes (Mod tab > Save mod first)"); return; }
+    if (Doc::isPackageFile(dir)) {   // a package: the modal offers to unpack it into a folder X.pmod/, then opens that
+        const size_t s = dir.find_last_of('/');
+        a.extractPmod = dir;
+        snprintf(a.extractDest, sizeof a.extractDest, "%s", s == std::string::npos ? "." : dir.substr(0, s).c_str());
+        a.extractErr.clear();
+        a.askExtract = true;
+        return;
+    }
     if (a.doc.openMod(dir, err)) {
         snprintf(a.missionPath, sizeof a.missionPath, "%s", a.doc.missionPath.c_str());
         modOpened(a);

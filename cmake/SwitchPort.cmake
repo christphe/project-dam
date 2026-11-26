@@ -224,8 +224,18 @@ macro(switch_package target)
     if(NOT EXISTS "${_ge_nx_icon}")
       set(_ge_nx_icon "${NX_DEFAULT_ICON}")
     endif()
-    nx_create_nro(${target}
-      NACP ge007.nacp
-      ICON "${_ge_nx_icon}")
+    # A test build may carry files in its romfs (romfs:/), e.g. mods to try without the SD card: -DNX_ROMFS_DIR=<dir>
+    # holding mods/<x>.pmod. Empty (the default, and CI): no romfs.
+    set(NX_ROMFS_DIR "" CACHE PATH "folder packed as the .nro's romfs (test builds); empty: none")
+    if(NX_ROMFS_DIR)
+      nx_create_nro(${target}
+        NACP ge007.nacp
+        ICON "${_ge_nx_icon}"
+        ROMFS "${NX_ROMFS_DIR}")
+    else()
+      nx_create_nro(${target}
+        NACP ge007.nacp
+        ICON "${_ge_nx_icon}")
+    endif()
   endif()
 endmacro()

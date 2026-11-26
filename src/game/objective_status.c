@@ -338,6 +338,14 @@ bool objectiveIsAllComplete(void)
     DIFFICULTY curdiff;
     int objective;
     
+#ifdef PORT
+    {
+        /* port/src/missions_host.c: a custom mission with "keep_level_objectives" adds its own objectives to the level's;
+         * the level ends only when those are complete too (always TRUE with no mission, or without the flag). */
+        extern int missionsExtraObjectivesComplete(void);
+        if (!missionsExtraObjectivesComplete()) return FALSE;
+    }
+#endif
     for (objective = 0; objective < objectiveGetCount(); objective++)
     {
         objdiff = get_difficulty_for_objective(objective);

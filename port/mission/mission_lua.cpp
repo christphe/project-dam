@@ -1,5 +1,6 @@
 // The Luau runtime of a custom mission: see mission_lua.h.
 #include "mission_lua.h"
+#include "mission_pkg.h"
 
 #include <algorithm>
 #include <chrono>
@@ -8,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -21,7 +23,14 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 constexpr size_t kMemCap = 16u * 1024u * 1024u;   // the VM never holds more than this
-constexpr double kResumeBudget = 0.004;           // seconds one script may run per resume
+// Time budgets. Nothing is cut (a rough first version): going over one logs a warning, the script goes on.
+constexpr double kFrameBudget = 0.002;            // seconds all the scripts may run per frame, together
+constexpr double kModuleBudget = 10.0;            // seconds a require()d module's top level may run (once: building its tables)
+constexpr double kLoadBudget = 10.0;              // seconds a script's load (its first run, up to its first wait()) and its
+                                                  // start() may each run: both happen while the level loads
+constexpr double kStuckWarn = 1.0;                // a frame-time resume still running after this: "still running" (a loop
+                                                  // that never ends freezes the game; the log names the script)
+constexpr double kFrameWarnEvery = 5.0;           // seconds between two "over the frame budget" warnings
 constexpr double kScanEvery = 0.1;                // seconds between state scans (inventory, doors, guards, zones)
 constexpr int kItemScan = 128;                    // ITEM_IDS 0..127 are diffed for pickups
 constexpr int kMaxPlayers = 4;
@@ -62,6 +71,19 @@ struct Script {
     std::vector<Field> filter;
     std::string name;
     bool started = false;
+    int id = 0;               // spawn() / on() tasks: a handle for :cancel()
+    bool task = false;        // a spawned coroutine (reaped once done); the mission's own scripts stay
+    bool cancelled = false;   // Task:cancel(): never resumes again
+    bool loaded = false;      // its first resume is done (a mission script: its load; a start() task: start() itself)
+    bool isStart = false;     // the task that runs the script's start() (kLoadBudget for its first resume)
+};
+
+struct Sub {                  // on(name, fn, filter)
+    int id = 0;
+    std::string name;
+    std::vector<Field> filter;
+    int fnref = 0;            // registry reference of the callback
+    bool active = true;
 };
 
 struct Objective {
@@ -69,6 +91,7 @@ struct Objective {
     int difficulty = 0;
     bool done = false;
     bool failed = false;   // objectives.fail(): shown as failed; it can no longer be completed
+    bool quiet = false;    // objectives.complete(id, true): completing it never shows a HUD line (a protect objective)
 };
 
 struct Alloc {
@@ -87,11 +110,19 @@ struct MissionRuntime {
     std::vector<Objective> objs;
     std::vector<Event> queue;
     std::vector<Follow> follows;
+    std::vector<Sub> subs;
+    std::map<std::string, int> modules;   // require(): name -> registry ref of its result (0 while it loads)
+    int nextId = 1;
     struct PendingHit { int target; double at; };
     std::vector<PendingHit> hits;   // :shoot(): the hit lands once the shooter has had time to raise and fire
     double time = 0, lastScan = -1, lastFollow = -1;
     bool first = true, ended = false, scanned = false;
-    Clock::time_point deadline;
+    Clock::time_point deadline;         // the running resume's budget: past it, one warning (onInterrupt)
+    std::string budgetWhat;             // what that budget is for, in the warning ("script x#0: its load")
+    double budgetSecs = 0;
+    bool overWarned = false;            // the running resume has already been warned about
+    double frameUsed = 0, frameTop = 0, lastFrameWarn = -100;   // this frame's script time, the longest resume in it
+    std::string frameTopName;
     // state diffed into events
     bool had[kMaxPlayers][kItemScan] = {};
     std::vector<signed char> propType;
@@ -134,11 +165,23 @@ void *allocFn(void *ud, void *ptr, size_t osize, size_t nsize)
 void onInterrupt(lua_State *L, int gc)
 {
     if (gc >= 0) return;
+    // Luau calls this at every call and loop back-edge: reading the clock each time made scripts ~5x slower on the
+    // Switch (Ryubing: a 100k-iteration loop 13.3 ms against 2.4 ms). Once every 64 checks is plenty for a 4 ms budget.
+    static thread_local unsigned s_checks = 0;
+    if ((++s_checks & 63u) != 0) return;
     MissionRuntime *rt = rtOf(L);
-    if (rt && Clock::now() > rt->deadline) {
-        lua_checkstack(L, 1);
-        luaL_error(L, "script ran over its time budget");
+    if (rt && !rt->overWarned && Clock::now() > rt->deadline) {
+        rt->overWarned = true;   // once per budget; nothing is cut
+        rt->log("%s: still running after %.3g s (over its budget; nothing is cut)", rt->budgetWhat.c_str(), rt->budgetSecs);
     }
+}
+
+void setBudget(MissionRuntime *rt, const std::string &what, double secs)
+{
+    rt->budgetWhat = what;
+    rt->budgetSecs = secs;
+    rt->overWarned = false;
+    rt->deadline = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(secs));
 }
 
 // ---------------------------------------------------------------- helpers
@@ -172,10 +215,10 @@ void readFilter(lua_State *L, int idx, std::vector<Field> &out)
     }
 }
 
-bool matches(const Script &s, const Event &e)
+bool matchFilter(const std::string &name, const std::vector<Field> &filter, const Event &e)
 {
-    if (s.evName != e.name) return false;
-    for (const Field &want : s.filter) {
+    if (name != e.name) return false;
+    for (const Field &want : filter) {
         bool ok = false;
         for (const Field &have : e.f) {
             if (have.key != want.key) continue;
@@ -186,6 +229,8 @@ bool matches(const Script &s, const Event &e)
     }
     return true;
 }
+
+bool matches(const Script &s, const Event &e) { return matchFilter(s.evName, s.filter, e); }
 
 void pushEvent(lua_State *T, const Event &e)
 {
@@ -346,6 +391,10 @@ int l_obj_complete(lua_State *L)
 {
     MissionRuntime *rt = rtOf(L);
     const char *id = luaL_checkstring(L, 1);
+    if (lua_toboolean(L, 2)) {
+        Objective *o = findObj(rt, id);
+        if (o) o->quiet = true;
+    }
     if (!completeObjective(rt, id)) luaL_error(L, "no objective '%s'", id);
     return 0;
 }
@@ -360,6 +409,21 @@ int l_obj_fail(lua_State *L)
         o->failed = true;
         rt->log("objective failed: %s", id);
         raise(rt, Event{ "objective_failed", { str("id", id) } });
+    }
+    return 0;
+}
+
+// objectives.reset(id): back to incomplete (neither complete nor failed), e.g. "keep X alive" while X is down.
+int l_obj_reset(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    const char *id = luaL_checkstring(L, 1);
+    Objective *o = findObj(rt, id);
+    if (!o) luaL_error(L, "no objective '%s'", id);
+    if (o->done || o->failed) {
+        o->done = false;
+        o->failed = false;
+        rt->log("objective reset: %s", id);
     }
     return 0;
 }
@@ -411,8 +475,6 @@ int l_win(lua_State *L)
     MissionRuntime *rt = rtOf(L);
     rt->log("mission.win()");
     if (rt->host.win) rt->host.win(rt->host.ud);
-    /* the host call may take long (it ends the level): it is not the script's time */
-    rt->deadline = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(kResumeBudget));
     return 0;
 }
 
@@ -421,8 +483,162 @@ int l_fail(lua_State *L)
     MissionRuntime *rt = rtOf(L);
     rt->log("mission.fail()");
     if (rt->host.fail) rt->host.fail(rt->host.ud);
-    rt->deadline = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(kResumeBudget));
     return 0;
+}
+
+// ------------------------------------------------- clock, spawn, on, require
+const char kTaskMT[] = "ge.task";
+const char kConnMT[] = "ge.connection";
+
+Script *newTask(MissionRuntime *rt, const std::string &name);
+void resumeScript(MissionRuntime *rt, Script &s, const Event *ev);
+bool validName(const char *n);
+bool loadSource(MissionRuntime *rt, const std::string &use, std::string &out, std::string &origin);
+
+int l_clock(lua_State *L)
+{
+    lua_pushnumber(L, rtOf(L)->time);
+    return 1;
+}
+
+// A handle table { id = n } with a metatable whose __index holds the method.
+void pushHandle(lua_State *L, const char *mt, int id)
+{
+    lua_createtable(L, 0, 1);
+    lua_pushnumber(L, id);
+    lua_setfield(L, -2, "id");
+    luaL_getmetatable(L, mt);
+    lua_setmetatable(L, -2);
+}
+
+int handleId(lua_State *L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_getfield(L, 1, "id");
+    int id = lua_isnumber(L, -1) ? (int)lua_tonumber(L, -1) : -1;
+    lua_pop(L, 1);
+    return id;
+}
+
+// spawn(fn) -> Task: fn runs as a coroutine of its own (it may wait()), first at this tick's sleeper pass.
+int l_spawn(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    luaL_checktype(L, 1, LUA_TFUNCTION);
+    Script *s = newTask(rt, "task");
+    lua_pushvalue(L, 1);
+    lua_xmove(L, s->T, 1);
+    s->st = St::Sleep;
+    s->wake = rt->time;
+    pushHandle(L, kTaskMT, s->id);
+    return 1;
+}
+
+int task_cancel(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    const int id = handleId(L);
+    for (auto &sp : rt->scripts)
+        if (sp->task && sp->id == id) {
+            sp->cancelled = true;
+            sp->st = St::Done;
+        }
+    return 0;
+}
+
+// on(name, fn [, filter]) -> Connection: fn(event) runs as a new coroutine every time a matching event is raised.
+int l_on(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    Sub sub;
+    sub.name = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    readFilter(L, 3, sub.filter);
+    sub.id = rt->nextId++;
+    sub.fnref = lua_ref(L, 2);
+    const int id = sub.id;
+    rt->subs.push_back(std::move(sub));
+    pushHandle(L, kConnMT, id);
+    return 1;
+}
+
+int conn_off(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    const int id = handleId(L);
+    for (Sub &s : rt->subs)
+        if (s.id == id && s.active) {
+            s.active = false;
+            lua_unref(L, s.fnref);
+            s.fnref = 0;
+        }
+    return 0;
+}
+
+// require(name): a module <name>.luau (same lookup as the scripts), run once, its return value cached.
+int l_require(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    const char *name = luaL_checkstring(L, 1);
+    char err[512] = "";
+    if (!validName(name)) luaL_error(L, "require: invalid module name");
+    {
+        auto it = rt->modules.find(name);
+        if (it != rt->modules.end()) {
+            if (it->second == 0) luaL_error(L, "require: module '%s' requires itself", name);
+            lua_getref(L, it->second);
+            return 1;
+        }
+    }
+    lua_State *T = lua_newthread(L);   // anchored on L's stack while the module runs
+    int ok = 0;
+    // The caller's budget is its own: a require (reading, compiling and running the module) does not spend it. Its
+    // deadline is put back afterwards, moved on by the time the require took.
+    const Clock::time_point callerDeadline = rt->deadline, requireStart = Clock::now();
+    const std::string callerWhat = rt->budgetWhat;
+    const double callerSecs = rt->budgetSecs;
+    const bool callerWarned = rt->overWarned;
+    {
+        std::string src, origin, chunk;
+        if (!loadSource(rt, name, src, origin)) {
+            snprintf(err, sizeof err, "require: module '%s' not found", name);
+        } else {
+            lua_CompileOptions opts = {};
+            opts.optimizationLevel = 1;
+            opts.debugLevel = 1;
+            size_t bsz = 0;
+            char *bc = luau_compile(src.data(), src.size(), &opts, &bsz);
+            luaL_sandboxthread(T);   // its own globals table over the mission's
+            chunk = "=" + origin;
+            if (!bc || luau_load(T, chunk.c_str(), bc, bsz, 0) != 0) {
+                snprintf(err, sizeof err, "require: %s: %s", name, lua_isstring(T, -1) ? lua_tostring(T, -1) : "compile error");
+            } else {
+                rt->modules[name] = 0;
+                // Reading the module (from a .pmod, on the Switch from the romfs) and compiling it is the host's work,
+                // not the script's. Its top level runs once (a data module builds all its tables there): a budget of
+                // its own.
+                setBudget(rt, std::string("require('") + name + "')", kModuleBudget);
+                const int rc = lua_pcall(T, 0, 1, 0);
+                rt->deadline = callerDeadline + (Clock::now() - requireStart);
+                rt->budgetWhat = callerWhat;
+                rt->budgetSecs = callerSecs;
+                rt->overWarned = callerWarned;
+                if (rc != LUA_OK) {
+                    snprintf(err, sizeof err, "require: %s: %s", name, lua_isstring(T, -1) ? lua_tostring(T, -1) : "error");
+                    rt->modules.erase(name);
+                } else {
+                    if (lua_isnil(T, -1)) { lua_pop(T, 1); lua_pushboolean(T, 1); }
+                    lua_xmove(T, L, 1);
+                    rt->modules[name] = lua_ref(L, -1);
+                    rt->log("require: module %s loaded from %s", name, origin.c_str());
+                    ok = 1;
+                }
+            }
+            free(bc);
+        }
+    }
+    if (!ok) luaL_error(L, "%s", err);
+    return 1;
 }
 
 // ------------------------------------------------------------ targets
@@ -621,12 +837,58 @@ int t_play_anim(lua_State *L)
     MissionRuntime *rt = rtOf(L);
     int p = tgtProp(L);
     const char *name = luaL_checkstring(L, 2);
-    const int ok = p >= 0 && rt->host.guard_anim && rt->host.guard_anim(rt->host.ud, p, name);
-    rt->log("guard %d: play_anim %s: %s", p, name, ok ? "ok" : "unknown animation or refused");
+    const int hold = lua_toboolean(L, 3);
+    const int ok = p >= 0 && rt->host.guard_anim && rt->host.guard_anim(rt->host.ud, p, name, hold);
+    rt->log("guard %d: play_anim %s%s: %s", p, name, hold ? " (hold)" : "", ok ? "ok" : "unknown animation or refused");
     lua_pushboolean(L, ok);
     return 1;
 }
 int t_stand(lua_State *L) { return poseCmd(L, MH_POSE_STAND); }
+
+// guard:health() / :max_health(): game units (maxdamage - damage, maxdamage); 0 for a guard that is not there.
+int healthField(lua_State *L, int which)
+{
+    MissionRuntime *rt = rtOf(L);
+    const int p = tgtProp(L);
+    double h = 0, m = 0;
+    if (p >= 0 && rt->host.guard_health && !rt->host.guard_health(rt->host.ud, p, &h, &m)) h = m = 0;
+    lua_pushnumber(L, which ? m : h);
+    return 1;
+}
+int t_health(lua_State *L) { return healthField(L, 0); }
+int t_max_health(lua_State *L) { return healthField(L, 1); }
+
+int setHealthField(lua_State *L, int which)
+{
+    MissionRuntime *rt = rtOf(L);
+    const int p = tgtProp(L);
+    const double v = luaL_checknumber(L, 2);
+    if (p < 0) luaL_error(L, "this target is not a prop");
+    if (rt->host.guard_set_health) rt->host.guard_set_health(rt->host.ud, p, which, v);
+    return 0;
+}
+int t_set_health(lua_State *L) { return setHealthField(L, MH_HEALTH_CUR); }
+int t_set_max_health(lua_State *L) { return setHealthField(L, MH_HEALTH_MAX); }
+
+// guard:set_revivable([on]): down instead of dead, revived by a player (missions_host.c reviveTick). :is_down().
+int t_set_revivable(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    const int p = tgtProp(L);
+    const int on = lua_isnoneornil(L, 2) ? 1 : lua_toboolean(L, 2);
+    if (p < 0) luaL_error(L, "set_revivable: this target is not a prop");
+    if (rt->host.guard_set_revivable) rt->host.guard_set_revivable(rt->host.ud, p, on);
+    rt->log("guard %d: revivable %s", p, on ? "on" : "off");
+    return 0;
+}
+
+int t_is_down(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    const int p = tgtProp(L);
+    lua_pushboolean(L, p >= 0 && rt->host.guard_is_down && rt->host.guard_is_down(rt->host.ud, p));
+    return 1;
+}
 
 // player(n)'s index (the "player" field), -1 if none.
 int tgtPlayer(lua_State *L, int idx)
@@ -699,6 +961,19 @@ double nearestPlayerIdx(MissionRuntime *rt, const float c[3], int only, int *whi
 }
 
 double nearestPlayer(MissionRuntime *rt, const float c[3]) { return nearestPlayerIdx(rt, c, -1, nullptr); }
+
+// target:pos() -> x, y, z (nil, nil, nil when the target has no position)
+int t_pos(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    float c[3], r;
+    if (!targetPos(L, rt, c, &r)) {
+        for (int i = 0; i < 3; i++) lua_pushnil(L);
+        return 3;
+    }
+    for (int i = 0; i < 3; i++) lua_pushnumber(L, c[i]);
+    return 3;
+}
 
 // target:say(who, text [, range]): say() from the target's place (missions_host.c hSayAt). A prop is followed while
 // the line shows; a pad or a zone is its point; no position: a plain say().
@@ -781,6 +1056,8 @@ void followTick(MissionRuntime *rt)
         float g[3], q[3];
         if (h.guard_dead && h.guard_dead(h.ud, f.prop)) { rt->follows.erase(rt->follows.begin() + (long)i); continue; }
         i++;
+        // a revivable guard lying down: no orders; it follows again once revived
+        if (h.guard_is_down && h.guard_is_down(h.ud, f.prop)) { f.ordered = false; continue; }
         if (!h.prop_pos || !h.prop_pos(h.ud, f.prop, g)) continue;
         int who;
         const double d = nearestPlayerIdx(rt, g, f.player, &who);
@@ -891,13 +1168,11 @@ bool loadSource(MissionRuntime *rt, const std::string &use, std::string &out, st
     }
     if (!rt->modDir.empty()) cands[nc++] = rt->modDir + "/scripts/" + use + ".luau";
     for (int i = 0; i < nc; i++) {
-        FILE *f = fopen(cands[i].c_str(), "rb");
-        if (f) {
-            char buf[4096];
-            size_t n;
-            out.clear();
-            while ((n = fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
-            fclose(f);
+        uint8_t *data = nullptr;   // through the package layer: a mod's scripts may live inside its .pmod
+        size_t n = 0;
+        if (pkgReadFile(cands[i].c_str(), &data, &n)) {
+            out.assign((const char *)data, n);
+            pkgFree(data);
             origin = cands[i];
             return true;
         }
@@ -1030,12 +1305,27 @@ bool startScript(MissionRuntime *rt, const MissionScript &ms, int index)
 
 void resumeScript(MissionRuntime *rt, Script &s, const Event *ev)
 {
-    if (s.st == St::Done) return;
+    if (s.st == St::Done || s.cancelled) return;
     int nargs = 0;
     if (ev) { pushEvent(s.T, *ev); nargs = 1; }
     s.st = St::Run;
-    rt->deadline = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(kResumeBudget));
+    // The first resume of a mission script is its load (requires, its tables, up to its first wait) and the first one
+    // of its start() task is start(): both run while the level loads, with kLoadBudget each. The rest is frame time:
+    // all the scripts share kFrameBudget per frame (missionRtTick warns), and a resume still running after kStuckWarn
+    // is named in the log. Nothing is cut.
+    const bool loading = !s.loaded && (!s.task || s.isStart);
+    s.loaded = true;
+    if (loading) setBudget(rt, "script " + s.name + (s.isStart ? "" : ": its load"), kLoadBudget);
+    else setBudget(rt, "script " + s.name, kStuckWarn);
+    const Clock::time_point t0 = Clock::now();
     int r = lua_resume(s.T, nullptr, nargs);
+    const double took = std::chrono::duration<double>(Clock::now() - t0).count();
+    if (loading) {
+        if (took > kLoadBudget) rt->log("%s took %.3g s (budget %.3g s)", rt->budgetWhat.c_str(), took, kLoadBudget);
+    } else {
+        rt->frameUsed += took;
+        if (took > rt->frameTop) { rt->frameTop = took; rt->frameTopName = s.name; }
+    }
     if (r == LUA_YIELD) {
         lua_settop(s.T, 0);
         if (s.st == St::Run) { s.st = St::Sleep; s.wake = rt->time; }   // a bare yield: next tick
@@ -1047,17 +1337,59 @@ void resumeScript(MissionRuntime *rt, Script &s, const Event *ev)
         rt->log("script %s: error: %s", s.name.c_str(), msg ? msg : "?");
         s.st = St::Done;
     }
+    if (s.cancelled) s.st = St::Done;   // a task that cancelled itself
 }
 
+Script *newTask(MissionRuntime *rt, const std::string &name)
+{
+    auto sc = std::make_unique<Script>();
+    sc->name = name;
+    sc->task = true;
+    sc->id = rt->nextId++;
+    lua_State *T = lua_newthread(rt->L);
+    sc->ref = lua_ref(rt->L, -1);
+    lua_pop(rt->L, 1);
+    sc->T = T;
+    lua_setthreaddata(T, sc.get());
+    sc->name += "#" + std::to_string(sc->id);
+    Script *raw = sc.get();
+    rt->scripts.push_back(std::move(sc));
+    return raw;
+}
+
+// Callbacks of on(): each match runs the function as a task of its own, with the event as its argument.
+// Indexed loops throughout: a callback may spawn tasks, subscribe or unsubscribe.
 void dispatch(MissionRuntime *rt)
 {
     for (int guard = 0; !rt->queue.empty() && guard < 256; guard++) {
         Event e = std::move(rt->queue.front());
         rt->queue.erase(rt->queue.begin());
-        for (auto &sp : rt->scripts)
+        for (size_t i = 0; i < rt->scripts.size(); i++) {
+            Script *sp = rt->scripts[i].get();
             if (sp->st == St::Event && matches(*sp, e)) resumeScript(rt, *sp, &e);
+        }
+        for (size_t i = 0; i < rt->subs.size(); i++) {
+            if (!rt->subs[i].active || !matchFilter(rt->subs[i].name, rt->subs[i].filter, e)) continue;
+            const int ref = rt->subs[i].fnref;
+            Script *t = newTask(rt, "on:" + e.name);
+            lua_getref(t->T, ref);
+            resumeScript(rt, *t, &e);
+        }
     }
     rt->queue.clear();
+}
+
+// Drop finished tasks and unsubscribed callbacks (never inside a resume).
+void reap(MissionRuntime *rt)
+{
+    for (size_t i = rt->scripts.size(); i-- > 0;) {
+        Script &s = *rt->scripts[i];
+        if (!s.task || s.st != St::Done) continue;
+        lua_unref(rt->L, s.ref);
+        rt->scripts.erase(rt->scripts.begin() + (long)i);
+    }
+    for (size_t i = rt->subs.size(); i-- > 0;)
+        if (!rt->subs[i].active) rt->subs.erase(rt->subs.begin() + (long)i);
 }
 
 void scan(MissionRuntime *rt)
@@ -1154,14 +1486,15 @@ MissionRuntime *missionRtCreate(const Mission *m, const MissionHost *host, const
         lua_call(L, 1, 0);
         lua_pop(L, 1);
     }
-    for (const char *drop : { "os", "io", "debug", "require", "dofile", "loadfile", "collectgarbage" }) {
+    for (const char *drop : { "os", "io", "debug", "dofile", "loadfile", "collectgarbage" }) {
         lua_pushnil(L);
         lua_setglobal(L, drop);
     }
     struct Fn { const char *name; lua_CFunction f; };
     for (const Fn &f : { Fn{ "print", l_print }, Fn{ "message", l_message }, Fn{ "say", l_say }, Fn{ "give", l_give }, Fn{ "take", l_take },
                          Fn{ "has", l_has }, Fn{ "wait", l_wait }, Fn{ "event", l_event }, Fn{ "door", l_door }, Fn{ "guard", l_door },
-                         Fn{ "player", l_player } }) {
+                         Fn{ "player", l_player }, Fn{ "clock", l_clock }, Fn{ "spawn", l_spawn }, Fn{ "on", l_on },
+                         Fn{ "require", l_require } }) {
         lua_pushcfunction(L, f.f, f.name);
         lua_setglobal(L, f.name);
     }
@@ -1174,7 +1507,8 @@ MissionRuntime *missionRtCreate(const Mission *m, const MissionHost *host, const
         lua_setglobal(L, name);
     };
     table("objectives", { Fn{ "add", l_obj_add }, Fn{ "complete", l_obj_complete }, Fn{ "is_complete", l_obj_is_complete },
-                          Fn{ "fail", l_obj_fail }, Fn{ "is_failed", l_obj_is_failed }, Fn{ "all_complete", l_obj_all } });
+                          Fn{ "fail", l_obj_fail }, Fn{ "is_failed", l_obj_is_failed }, Fn{ "all_complete", l_obj_all },
+                          Fn{ "reset", l_obj_reset } });
     table("alarm", { Fn{ "trigger", l_alarm_trigger } });
     table("mission", { Fn{ "win", l_win }, Fn{ "fail", l_fail }, Fn{ "difficulty", l_difficulty } });
     luaL_newmetatable(L, kTargetMT);
@@ -1188,11 +1522,21 @@ MissionRuntime *missionRtCreate(const Mission *m, const MissionHost *host, const
                          Fn{ "make_usable", t_make_usable }, Fn{ "was_used", t_was_used }, Fn{ "keep_body", t_keep_body },
                          Fn{ "aim_at", t_aim_at }, Fn{ "shoot", t_shoot }, Fn{ "sees_player", t_sees_player },
                          Fn{ "was_shot_at", t_was_shot_at }, Fn{ "guards_near", t_guards_near }, Fn{ "hits", t_hits },
-                         Fn{ "say", t_say } }) {
+                         Fn{ "say", t_say }, Fn{ "pos", t_pos }, Fn{ "health", t_health }, Fn{ "max_health", t_max_health },
+                         Fn{ "set_health", t_set_health }, Fn{ "set_max_health", t_set_max_health },
+                         Fn{ "set_revivable", t_set_revivable }, Fn{ "is_down", t_is_down } }) {
         lua_pushcfunction(L, f.f, f.name);
         lua_setfield(L, -2, f.name);
     }
     lua_pop(L, 1);
+    for (const auto &mt : { std::make_pair(kTaskMT, Fn{ "cancel", task_cancel }), std::make_pair(kConnMT, Fn{ "off", conn_off }) }) {
+        luaL_newmetatable(L, mt.first);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, mt.second.f, mt.second.name);
+        lua_setfield(L, -2, mt.second.name);
+        lua_pop(L, 1);
+    }
     luaL_sandbox(L);
 
     for (int i = 0; i < m->nscripts; i++) startScript(rt.get(), m->scripts[i], i);
@@ -1210,9 +1554,26 @@ void missionRtTick(MissionRuntime *rt, double dt)
 {
     if (!rt) return;
     rt->time += dt > 0 ? dt : 0;
+    rt->frameUsed = 0;
+    rt->frameTop = 0;
     if (rt->first) {
         rt->first = false;
-        for (auto &sp : rt->scripts) resumeScript(rt, *sp, nullptr);   // run each up to its first wait
+        const size_t n = rt->scripts.size();
+        for (size_t i = 0; i < n; i++) resumeScript(rt, *rt->scripts[i], nullptr);   // each one's load: up to its first wait
+        // Then each script's start(), if it has one (BepInEx / Unity's Start: every script is loaded, the level's guards
+        // and objects exist). As a task of its own: start() may wait().
+        for (size_t i = 0; i < n; i++) {
+            Script *sp = rt->scripts[i].get();
+            if (sp->task) continue;
+            lua_getglobal(sp->T, "start");
+            if (!lua_isfunction(sp->T, -1)) { lua_pop(sp->T, 1); continue; }
+            Script *t = newTask(rt, sp->name + ":start()");
+            t->isStart = true;
+            lua_xmove(sp->T, t->T, 1);
+            resumeScript(rt, *t, nullptr);
+        }
+        rt->frameUsed = 0;                                             // the load is not frame time
+        rt->frameTop = 0;
         scan(rt);                                                      // the baseline: no events from it
         rt->lastScan = rt->time;
         raise(rt, Event{ "start", {} });
@@ -1221,8 +1582,10 @@ void missionRtTick(MissionRuntime *rt, double dt)
         scan(rt);
     }
     dispatch(rt);
-    for (auto &sp : rt->scripts)
+    for (size_t i = 0; i < rt->scripts.size(); i++) {
+        Script *sp = rt->scripts[i].get();
         if (sp->st == St::Sleep && rt->time >= sp->wake) resumeScript(rt, *sp, nullptr);
+    }
     dispatch(rt);
     for (size_t i = 0; i < rt->hits.size();) {
         if (rt->time < rt->hits[i].at) { i++; continue; }
@@ -1233,7 +1596,25 @@ void missionRtTick(MissionRuntime *rt, double dt)
         rt->lastFollow = rt->time;
         followTick(rt);
     }
+    reap(rt);
     lua_gc(rt->L, LUA_GCSTEP, 4);
+    if (rt->frameUsed > kFrameBudget && rt->time - rt->lastFrameWarn >= kFrameWarnEvery) {
+        rt->lastFrameWarn = rt->time;
+        rt->log("scripts: %.2f ms this frame (budget %.2f ms; the longest: %s, %.2f ms)", rt->frameUsed * 1000.0,
+                kFrameBudget * 1000.0, rt->frameTopName.c_str(), rt->frameTop * 1000.0);
+    }
+}
+
+void missionRtRaise(MissionRuntime *rt, const char *name, const MissionEvField *f, int n)
+{
+    if (!rt || !name) return;
+    Event e;
+    e.name = name;
+    for (int i = 0; i < n; i++) {
+        if (f[i].str) e.f.push_back(str(f[i].key, f[i].str));
+        else e.f.push_back(num(f[i].key, f[i].num));
+    }
+    raise(rt, std::move(e));
 }
 
 void missionRtEnd(MissionRuntime *rt, int win)
@@ -1253,6 +1634,11 @@ int missionRtObjectiveStatus(const MissionRuntime *rt, int i)
 {
     if (!rt || i < 0 || i >= (int)rt->objs.size()) return 0;
     return rt->objs[i].done ? 1 : rt->objs[i].failed ? 2 : 0;
+}
+
+int missionRtObjectiveQuiet(const MissionRuntime *rt, int i)
+{
+    return rt && i >= 0 && i < (int)rt->objs.size() && rt->objs[i].quiet;
 }
 
 int missionRtAllComplete(const MissionRuntime *rt, int difficulty)
@@ -1278,6 +1664,6 @@ int missionRtScriptsAlive(const MissionRuntime *rt)
     int n = 0;
     if (rt)
         for (const auto &sp : rt->scripts)
-            if (sp->st != St::Done) n++;
+            if (!sp->task && sp->st != St::Done) n++;
     return n;
 }

@@ -1318,7 +1318,10 @@ static void videoApplyFpsCap(void)
 {
     static int lastHz = -1, lastTarget = -1;
     const int vi = (osTvType == 0) ? 50 : 60;   /* OS_TV_PAL; MPAL is 60 Hz (D488) */
-    const int cap = cfgFpsCap < 0 ? videoAutoFpsCap() : cfgFpsCap;   /* effective cap */
+    int cap = cfgFpsCap < 0 ? videoAutoFpsCap() : cfgFpsCap;   /* effective cap */
+    /* A level export (--export-level) runs on the plain path: interpolated frames go through gfx_interp_tick, not
+     * gfx_run, which arms the export; on a display faster than 60 Hz the export never started and the game stayed open. */
+    if (sysArgGetString("--export-level") != NULL && cap > vi) cap = vi;
     int hz = 0;
     if (cap > vi) {
         const int refresh = ge_render_get_refresh_rate();

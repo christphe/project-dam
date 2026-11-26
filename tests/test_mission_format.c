@@ -410,9 +410,41 @@ static void test_difficulties(void)
     missionFree(&m);
 }
 
+static void test_keep_level_objectives(void)
+{
+    Mission m, back;
+    char err[128];
+    char *out;
+    const char *base = "{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\"%s }";
+    char json[256];
+    snprintf(json, sizeof json, base, "");
+    GE_CHECK(missionParse(json, &m, err, sizeof(err)));
+    GE_CHECK_EQ_INT(m.keep_level_objectives, 0);             /* default: the mission replaces the level's objectives */
+    out = missionToJson(&m);
+    GE_CHECK(strstr(out, "keep_level_objectives") == NULL);  /* false is not written */
+    free(out);
+    missionFree(&m);
+    snprintf(json, sizeof json, base, ", \"keep_level_objectives\": true");
+    GE_CHECK(missionParse(json, &m, err, sizeof(err)));
+    GE_CHECK_EQ_INT(m.keep_level_objectives, 1);
+    GE_CHECK(missionValidate(&m, err, sizeof(err)));
+    out = missionToJson(&m);
+    GE_CHECK(strstr(out, "\"keep_level_objectives\"") != NULL);
+    GE_CHECK(missionParse(out, &back, err, sizeof(err)));
+    GE_CHECK_EQ_INT(back.keep_level_objectives, 1);          /* round trip */
+    free(out);
+    missionFree(&back);
+    missionFree(&m);
+    snprintf(json, sizeof json, base, ", \"keep_level_objectives\": 1");
+    GE_CHECK_EQ_INT(missionParse(json, &m, err, sizeof(err)), 0);   /* not a bool: refused */
+    GE_CHECK(strstr(err, "keep_level_objectives") != NULL);
+    missionFree(&m);
+}
+
 int main(void)
 {
     GE_TEST_BEGIN("mission format");
+    test_keep_level_objectives();
     test_roundtrip();
     test_difficulties();
     test_validate();

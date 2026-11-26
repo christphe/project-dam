@@ -45,6 +45,7 @@ add_library(ge_mission STATIC
   "${CMAKE_SOURCE_DIR}/port/mission/mission_setup.c"
   "${CMAKE_SOURCE_DIR}/port/mission/mission_apply.c"
   "${CMAKE_SOURCE_DIR}/port/mission/mission_dir.c"
+  "${CMAKE_SOURCE_DIR}/port/mission/mission_pkg.c"
   "${CMAKE_SOURCE_DIR}/port/mission/mission_thumb.c"
   "${CMAKE_SOURCE_DIR}/port/mission/mission_lua.cpp"
   "${GE_MISSION_LIB_C}"

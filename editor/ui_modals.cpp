@@ -1,6 +1,8 @@
 // ui_modals.cpp: see ui_app.h for how the editor UI is split.
 #include "ui_app.h"
 
+#include <filesystem>
+
 
 namespace ed {
 
@@ -129,12 +131,106 @@ void newMissionModal(App &a)
     ImGui::EndPopup();
 }
 
-// The popups, drawn last in the frame: unsaved changes, mission level, New mission, and Help > Controls.
+// Mod > Publish...: the mod as a .pmod file. Publish writes <folder>/<mod>.pmod (to share); Deploy writes it into the game's
+// mods folder (to play). Both save the mod first and refuse when it does not validate.
+void publishModal(App &a)
+{
+    if (a.askPublish) { ImGui::OpenPopup("Publish mod"); a.askPublish = false; }
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.3f), ImGuiCond_Appearing, ImVec2(0.5f, 0.0f));
+    if (!ImGui::BeginPopupModal("Publish mod", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    a.modalOpen = true;
+    Doc &d = a.doc;
+    ImGui::Text("%s.pmod", Doc::modFolderName(d.modDir).c_str());
+    ImGui::TextUnformatted("Output folder");
+    ImGui::SetNextItemWidth(420);
+    ImGui::InputText("##pubdir", a.pubDir, sizeof a.pubDir);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 460);
+    ImGui::TextDisabled("Deploy writes %s/%s.pmod, where the game finds it.", d.modsRoot().c_str(), Doc::modFolderName(d.modDir).c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::Spacing();
+    auto report = [&](bool ok, const std::string &path, uint64_t bytes, const std::string &err) {
+        a.pubFailed = !ok;
+        if (ok) { char b[1200]; snprintf(b, sizeof b, "wrote %s (%llu bytes)", path.c_str(), (unsigned long long)bytes); a.pubResult = b; }
+        else a.pubResult = "refused: " + err;
+        a.say("publish: %s", a.pubResult.c_str());
+    };
+    std::string path, err;
+    uint64_t bytes = 0;
+    if (ImGui::Button("Publish", ImVec2(100, 0))) {
+        const bool ok = d.publishMod(a.pubDir, path, bytes, err);
+        report(ok, path, bytes, err);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Deploy", ImVec2(100, 0))) {
+        const bool ok = d.deployMod(path, bytes, err);
+        report(ok, path, bytes, err);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(100, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
+    if (!a.pubResult.empty()) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 460);
+        ImGui::TextColored(a.pubFailed ? ImVec4(1.0f, 0.5f, 0.45f, 1) : ImVec4(0.55f, 0.95f, 0.55f, 1), "%s", a.pubResult.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::EndPopup();
+}
+
+// Open mod... on a package file X.pmod: unpack it into a folder X.pmod/ (the game reads it like the file), then open that.
+// In its own folder the file is renamed X.pmod.old; into another folder the file stays.
+void extractModal(App &a)
+{
+    if (a.askExtract) { ImGui::OpenPopup("Extract package"); a.askExtract = false; }
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.3f), ImGuiCond_Appearing, ImVec2(0.5f, 0.0f));
+    if (!ImGui::BeginPopupModal("Extract package", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    a.modalOpen = true;
+    const std::string pm = a.extractPmod;
+    const size_t s = pm.find_last_of('/');
+    const std::string name = s == std::string::npos ? pm : pm.substr(s + 1), parent = s == std::string::npos ? "." : pm.substr(0, s);
+    std::string dest = a.extractDest;
+    for (char &c : dest) if (c == '\\') c = '/';
+    while (dest.size() > 1 && dest.back() == '/') dest.pop_back();
+    std::error_code ec;
+    const bool inPlace = dest.empty() || (std::filesystem::exists(dest, ec) && std::filesystem::equivalent(dest, parent, ec));
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 460);
+    ImGui::Text("%s is a package. To edit it, the editor unpacks it into a folder.", name.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::TextUnformatted("Into the folder");
+    ImGui::SetNextItemWidth(420);
+    ImGui::InputText("##exdest", a.extractDest, sizeof a.extractDest);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 460);
+    if (inPlace) ImGui::TextDisabled("Makes the folder %s/ in place of the file; the file is kept as %s.old. The game plays the folder as it plays the file.", name.c_str(), name.c_str());
+    else ImGui::TextDisabled("Makes %s/%s/; the package file stays where it is.", dest.c_str(), name.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::Spacing();
+    if (ImGui::Button("Extract and open", ImVec2(140, 0))) {
+        std::string out, err;
+        if (Doc::extractMod(pm, inPlace ? std::string() : dest, out, err)) {
+            a.say("mod: unpacked %s into %s", pm.c_str(), out.c_str());
+            ImGui::CloseCurrentPopup();
+            doOpenModPath(a, out);
+        } else {
+            a.extractErr = "refused: " + err;
+            a.say("mod: %s", a.extractErr.c_str());
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(100, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
+    if (!a.extractErr.empty()) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 460);
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.45f, 1), "%s", a.extractErr.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::EndPopup();
+}
+
+// The popups, drawn last in the frame: unsaved changes, mission level, New mission, Publish, Extract package, Help > Controls.
 void drawModals(App &a)
 {
     unsavedModal(a);
     levelSwitchModal(a);
     newMissionModal(a);
+    publishModal(a);
+    extractModal(a);
     drawHelpWindow(a);
 }
 

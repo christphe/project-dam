@@ -26,6 +26,7 @@
 #include "fs.h"
 #include "mission.h"
 #include "mission_dir.h"
+#include "mission_pkg.h"
 #include "missions.h"
 #include "missions_priv.h"
 #include "realzlib.h"
@@ -69,18 +70,15 @@ static uint32_t be32(const uint8_t *p) { return ((uint32_t)p[0] << 24) | ((uint3
 /* path -> dw x dh RGBA (area average, alpha over black); malloc'd, NULL if it cannot be read. */
 static unsigned char *pngRgba(const char *path, int dw, int dh)
 {
-    FSFile *f = fsOpen(path, "rb");
     uint8_t *file = NULL, *idat = NULL, *raw = NULL, *pix = NULL;
+    size_t flen = 0;
     unsigned char *out = NULL;
     int32_t fsz;
     uint32_t w = 0, h = 0, idatn = 0, pos = 8, ch, stride;
     int ctype = -1, ok = 0;
     z_stream z;
-    if (!f) return NULL;
-    fsz = fsSize(f);
-    file = (uint8_t *)malloc((size_t)fsz + 1);
-    if (!file || fsRead(f, file, fsz) != fsz) { fsClose(f); free(file); return NULL; }
-    fsClose(f);
+    if (!pkgReadFile(path, &file, &flen)) return NULL;   /* the package layer: the PNG may be inside a .pmod */
+    fsz = (int32_t)flen;
     if (fsz < 33 || memcmp(file, "\x89PNG\r\n\x1a\n", 8)) goto done;
     idat = (uint8_t *)malloc((size_t)fsz);
     if (!idat) goto done;
@@ -162,7 +160,7 @@ done:
 static int addThumb(const char *path)
 {
     unsigned char *px;
-    if (s_nthumb >= THUMBS_MAX || !fsExists(path)) return -1;
+    if (s_nthumb >= THUMBS_MAX || !pkgExists(path)) return -1;
     px = pngRgba(path, THUMB_W, THUMB_H);
     if (!px) {
         sysLogPrintf(LOG_WARNING, "missions: cannot read %s (8-bit non-interlaced PNG expected)", path);

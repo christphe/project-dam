@@ -179,7 +179,8 @@ fast3d OpenGL backend, so textures and colours match the game (fog is off).
   exported first. MCP `mission_open` takes `emptied: true` with `new`. The recent lists (File > Recent, the Mission tab)
   show each mission's name and level; the path is the tooltip, and paths that differ only by slash direction are one entry.
 * **Mission tab.** *General*: name, the base level (read only; red with *Load* / *Move the mission to...* when the loaded
-  level is another one), briefing. The mission's `description` is not edited (kept in the file when present).
+  level is another one), briefing, and the checkbox *Keep the level's objectives* (`keep_level_objectives` in mission.json: the
+  level's briefing, objectives and exit stay; the mission's objectives are added after them). The mission's `description` is not edited (kept in the file when present).
   *Start and test*: the play spawn (level start, or a pad picked in the view), Co-op, Play. *Objectives*: letter, text,
   lowest difficulty (Agent / Secret Agent / 00 Agent), add, remove, reorder; an objective is completed by a script or
   a zone. *Environment*: below. *Thumbnail*: *Capture the view* stores a plain 4:3 crop as the base image; Contrast and
@@ -187,11 +188,21 @@ fast3d OpenGL backend, so textures and colours match the game (fog is off).
   `port/mission/mission_thumb.c` (the game's own code path): the mission select film strip (68x44 grey) and the
   briefing polaroid (16 greys in two 128x64 halves). The base image is the last capture of the session, or the loaded
   `thumb.png`. *File*: the mission path, Open / Save as, the recent list, the level to open or re-export.
-* **Mod tab.** A mod is `mods/<mod>/campaign.json` + `<mission>/mission.json` + `thumb.png`. Open or create a folder; edit
+* **Mod tab.** A mod is a folder `<mod>/campaign.json` + `<mission>/mission.json` + `thumb.png`. Open or create a folder; edit
   name, author, description, affects (Story / Multiplayer) and the unlock order (ordered / open); the missions are a list
   with thumbnail, name and level: open, reorder, remove (the folder stays), *New mission...*, *Add the open mission*
-  (saved into the mod's folder); *Save mod* / *Check mod*. `thumb.png` of a mission in the open mod is next to its
-  `mission.json`; any other mission uses the folder of its file.
+  (saved into the mod's folder); *Save mod* / *Check mod* / *Publish...*. `thumb.png` of a mission in the open mod is next
+  to its `mission.json`; any other mission uses the folder of its file.
+* **Packages (.pmod).** The game loads a mod as `mods/<mod>.pmod`, a plain `tar` of the mod's source folder (the source folder
+  is the one you open in the Mod tab, kept outside `mods/`, usually a git repository of its own). *Play* on a mission of an
+  open mod first writes `<mods>/<mod>.pmod` (the whole folder, so its scripts and pictures are what the game reads) and
+  starts the game on `--mission <mods>/<mod>.pmod/<mission>/mission.json`; if the package cannot be written (the game
+  holds it open) Play reports the error and does not start. *Mod > Publish...* (also a button of the Mod tab) opens a dialog
+  with an output folder (default `<mod>/dist`): **Publish** writes `<folder>/<mod>.pmod` to share, **Deploy** writes
+  `<mods>/<mod>.pmod`. Both save the mod, validate its campaign and every mission (an error refuses, the message shows in
+  the dialog) and report the path and size written. Dotfiles (`.git`, `.gitignore`) and a top-level `dist/` are not packed. A
+  new mod gets a `.gitignore` containing `dist/`. MCP: `mod_publish` (`out_dir` optional) and `mod_deploy` return the path and
+  byte count; `test_run` follows Play.
 * **Check (Mission > Validate, the log).** Format and ids; pads and ops against the level; every pad in use against the
   walkable floor (a stan tile within 35 units on the ground plane): a guard standing off the floor is an *error* (it does
   not spawn), an object or a mission pad is a *warning*; scripts whose target prop is removed or missing, whose
@@ -235,7 +246,7 @@ Tools: `level_describe` (`detail`: summary, pads, props, mission, links, names),
 (`{"added": {"kind": "guard", "op": 3, "uuid": "...", "name": "..."}, "uuid": "..."}`). `level_describe` items and `script_list` (`added_props`) show the uuid and name of every added prop. Scripts and zones: `script_list` (the entries with `use`, `target`, `props` and the script's Props schema, the library, the mission's own scripts, the zone ids), `script_read {use}` (source, schema, type-checker findings), `script_write {use, text}` (a mission script; held until `mission_save`; returns the findings with line numbers), `script_copy {use, switch?}` (library or mod script -> the mission's own), `script_attach {use, target, props}` or with `index` an update (`target` = `{kind: prop, prop: N}` (an original prop) | `{kind: prop, uuid: "..."}` (a prop the mission adds) | `{kind: pad, pad: N | "id"}` | `{kind: zone, zone: "id"}` | `{kind: mission}`; `props` = `{name: number | string | boolean}`; a `Door` / `Guard` / `Prop` property is an original prop's number or an added prop's uuid string), `set_props {index, props?, unset?, replace?}`, `script_remove {index}`, `zone_add {pos, radius?, room?, id?}`, `zone_set {id, pos?, radius?, room?}`, `zone_remove {id}`. `validate` returns the type-checker findings as issues with `script` and `line`.
 
 A whole mission can be authored, checked and play-tested through these tools alone (the sample `docs/modding/samples/formula` is such a mission):
-`mission_set {name?, briefing?, description?}`; `objective_add {id, text, difficulty?}`, `objective_set {id, text?, difficulty?, new_id?, index?}`
+`mission_set {name?, briefing?, description?, keep_level_objectives?}`; `objective_add {id, text, difficulty?}`, `objective_set {id, text?, difficulty?, new_id?, index?}`
 (`index` reorders), `objective_remove {id}` (`difficulty` = the lowest difficulty, 0 Agent .. 2 00 Agent; ids are unique, one undo step each);
 `place_guard` / `place_object` take every record field of the add op by name (`head`, `health`, `reaction_time`, `bitflags`, ... for a guard; the
 header fields flat and the type's own in a sub-object, e.g. `{"type": 1, "door": {...}}`, for an object; `mission_fields.h`), `difficulties`

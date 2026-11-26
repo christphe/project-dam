@@ -1,6 +1,7 @@
 // Mod (campaign) folder handling and the mission environment edit of Doc.
 // A mod is mods/<mod>/campaign.json plus one folder per mission (mission.json, thumb.png).
 #include "doc.h"
+#include "mission_pkg.h"
 
 #include <algorithm>
 #include <cctype>
@@ -56,6 +57,7 @@ bool Doc::openMod(const std::string &dirIn, std::string &err, bool openFirst)
     std::string dir = dirIn;
     while (dir.size() > 1 && (dir.back() == '/' || dir.back() == '\\')) dir.pop_back();
     if (dir.empty()) { err = "no mod folder given"; return false; }
+    if (isPackageFile(dir)) { err = dir + " is a package file: extract it to a folder first (Open mod... in the editor, mod_extract over MCP)"; return false; }
     const std::string file = dir + "/campaign.json";
     Campaign c; campaignInit(&c);
     char e[256] = "";
@@ -69,6 +71,10 @@ bool Doc::openMod(const std::string &dirIn, std::string &err, bool openFirst)
         c.affects = CAMPAIGN_AFFECTS_STORY;
         snprintf(c.id, sizeof c.id, "%s", generateUuid().c_str());
         if (!campaignSaveFile(file.c_str(), &c, e, sizeof e)) { err = e; campaignFree(&c); return false; }
+        const std::string gi = dir + "/.gitignore";   // the source folder is a repo of its own: Publish writes dist/
+        if (!exists(gi)) {
+            if (FILE *g = fopen(gi.c_str(), "wb")) { fputs("dist/\n", g); fclose(g); }
+        }
     }
     campaignFree(&camp);
     camp = c;   // takes over the owned pointers
@@ -145,6 +151,144 @@ bool Doc::saveMod(std::string &err)
     }
     if (!campaignSaveFile((modDir + "/campaign.json").c_str(), &camp, e, sizeof e)) { err = e[0] ? e : "cannot write campaign.json"; return false; }
     modDirty = false;
+    return true;
+}
+
+// ---- packaging (.pmod, issue #139) ----
+
+std::string Doc::modFolderName(const std::string &dir)
+{
+    std::string n = baseName(dir);
+    if (n.size() > 5 && n.compare(n.size() - 5, 5, ".pmod") == 0) n.resize(n.size() - 5);
+    return n;
+}
+
+static bool sameFolder(const std::string &a, const std::string &b)
+{
+    std::error_code ec;
+    return fs::exists(fs::path(a), ec) && fs::exists(fs::path(b), ec) && fs::equivalent(fs::path(a), fs::path(b), ec);
+}
+
+bool Doc::packMod(const std::string &srcDir, const std::string &outFile, uint64_t &bytes, std::string &err)
+{
+    const std::string name = modFolderName(srcDir);
+    if (name.empty() || name.size() > 56) { err = "the mod's folder name must be 1 to 56 characters: " + name; return false; }
+    char e[300] = "";
+    bytes = 0;
+    if (!pkgWriteDirSized(srcDir.c_str(), outFile.c_str(), &bytes, e, sizeof e)) { err = e[0] ? e : "cannot write " + outFile; return false; }
+    return true;
+}
+
+bool Doc::modPackForPlay(const std::string &missionFile, std::string &outPath, std::string &err)
+{
+    outPath.clear();
+    const std::string mod = modOfMission(missionFile);
+    if (mod.empty()) return true;   // not in a mod: runs as it is
+    if (hasMod && modDirty && sameFolder(mod, modDir) && !saveMod(err)) return false;   // the package is made from the disk
+    const std::string root = modsRoot();
+    const std::string target = root + "/" + modFolderName(mod) + ".pmod";
+    const std::string mp = slashes(missionFile);
+    if (sameFolder(mod, target)) return true;   // the source is an unpacked X.pmod/ in the game's mods folder: the game reads it as it is
+    std::error_code ec;
+    fs::create_directories(fs::path(root), ec);
+    uint64_t bytes = 0;
+    if (!packMod(mod, target, bytes, err)) return false;
+    outPath = target + mp.substr(mod.size());
+    return true;
+}
+
+bool Doc::modCheckForPublish(std::string &err)
+{
+    if (!hasMod) { err = "no mod is open"; return false; }
+    if (!saveMod(err)) return false;
+    if (hasMission && dirty && !modOfMission(missionPath).empty() && !saveMission("", err)) return false;
+    for (const std::string &s : validateMod()) { err = "mod: " + s; return false; }
+    for (int i = 0; i < camp.nmissions; i++) {
+        Mission m; missionInit(&m);
+        char e[256] = "";
+        const std::string p = modMissionPath(i);
+        if (!missionLoadFile(p.c_str(), &m, e, sizeof e) || !missionValidate(&m, e, sizeof e)) {
+            missionFree(&m);
+            err = std::string("mission '") + camp.missions[i] + "': " + e;
+            return false;
+        }
+        missionFree(&m);
+    }
+    // the open one also gets the level / script checks, when its level is the one loaded (they read the level export)
+    if (hasMission && !missionPath.empty() && modOfMission(missionPath) == slashes(modDir) && (!hasLevel || level.name == mission.level)) {
+        for (const Issue &i : checkIssues())
+            if (i.sev >= 2) { err = std::string("mission '") + mission.name + "': " + i.text; return false; }
+    }
+    return true;
+}
+
+bool Doc::publishMod(const std::string &outDir, std::string &outPath, uint64_t &bytes, std::string &err)
+{
+    if (!modCheckForPublish(err)) return false;
+    if (outDir.empty()) { err = "no output folder"; return false; }
+    std::error_code ec;
+    fs::create_directories(fs::path(outDir), ec);
+    if (ec) { err = "cannot create " + outDir; return false; }
+    outPath = outDir + "/" + modFolderName(modDir) + ".pmod";
+    return packMod(modDir, outPath, bytes, err);
+}
+
+bool Doc::deployMod(std::string &outPath, uint64_t &bytes, std::string &err)
+{
+    if (!modCheckForPublish(err)) return false;
+    const std::string root = modsRoot();
+    std::error_code ec;
+    fs::create_directories(fs::path(root), ec);
+    outPath = root + "/" + modFolderName(modDir) + ".pmod";
+    if (sameFolder(modDir, outPath)) { err = "the open mod is the unpacked " + outPath + " itself: nothing to deploy"; return false; }
+    return packMod(modDir, outPath, bytes, err);
+}
+
+bool Doc::isPackageFile(const std::string &path)
+{
+    std::error_code ec;
+    const std::string n = baseName(path);
+    return n.size() > 5 && n.compare(n.size() - 5, 5, ".pmod") == 0 && fs::is_regular_file(fs::path(path), ec);
+}
+
+bool Doc::extractMod(const std::string &pmodIn, const std::string &destParentIn, std::string &outDir, std::string &err)
+{
+    std::string pmod = pmodIn, destParent = destParentIn;
+    for (char &c : pmod) if (c == '\\') c = '/';
+    for (char &c : destParent) if (c == '\\') c = '/';
+    while (destParent.size() > 1 && destParent.back() == '/') destParent.pop_back();
+    outDir.clear();
+    if (!isPackageFile(pmod)) { err = pmod + " is not a package file (X.pmod)"; return false; }
+    const std::string name = baseName(pmod);                 // X.pmod
+    const size_t slash = pmod.find_last_of('/');
+    const std::string parent = slash == std::string::npos ? "." : pmod.substr(0, slash);
+    std::error_code ec;
+    const bool inPlace = destParent.empty() || sameFolder(destParent, parent);
+    const std::string target = inPlace ? pmod : destParent + "/" + name;
+    const std::string old = pmod + ".old", tmp = target + ".extracting";
+    if (inPlace && exists(old)) { err = old + " already exists: remove or rename it first"; return false; }
+    if (!inPlace && exists(target)) { err = target + " already exists"; return false; }
+    if (!inPlace) {
+        fs::create_directories(fs::path(destParent), ec);
+        if (ec) { err = "cannot create " + destParent; return false; }
+    }
+    fs::remove_all(fs::path(tmp), ec);                        // a leftover of an interrupted extraction
+    char e[400] = "";
+    if (!pkgExtract(pmod.c_str(), tmp.c_str(), e, sizeof e)) { fs::remove_all(fs::path(tmp), ec); err = e[0] ? e : "cannot unpack " + pmod; return false; }
+    if (!exists(tmp + "/campaign.json")) { fs::remove_all(fs::path(tmp), ec); err = name + " is not a mod: it holds no campaign.json"; return false; }
+    if (inPlace) {
+        fs::rename(fs::path(pmod), fs::path(old), ec);
+        if (ec) { fs::remove_all(fs::path(tmp), ec); err = "cannot rename " + pmod + " (in use?)"; return false; }
+    }
+    fs::rename(fs::path(tmp), fs::path(target), ec);
+    if (ec) {
+        std::error_code ec2;
+        if (inPlace) fs::rename(fs::path(old), fs::path(pmod), ec2);   // put the package back
+        fs::remove_all(fs::path(tmp), ec2);
+        err = "cannot create " + target;
+        return false;
+    }
+    outDir = target;
     return true;
 }
 

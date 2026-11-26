@@ -394,6 +394,10 @@ int main(int argc, char **argv)
     app.scene.setOffscreen(!opt.noOffscreen && app.prefOffscreen && ge_render_backend() == GE_RENDER_GL);
     int sceneW = dw, sceneH = dh;
 
+    if (!opt.modDir.empty() && Doc::isPackageFile(opt.modDir)) {   // --mod X.pmod: the window offers to extract it
+        doOpenModPath(app, opt.modDir);
+        opt.modDir.clear();
+    }
     if (!loadStartup(app.doc, opt, err, false)) app.say("startup: %s", err.c_str());
     if (!opt.level.empty() && !app.doc.hasLevel) requestLevel(app, opt.level, false);
     if (!app.doc.hasLevel) app.cam.pos = { 0, 800, 0 };
