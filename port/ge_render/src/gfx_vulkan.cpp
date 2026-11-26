@@ -101,6 +101,7 @@
 #include "gfx_dk_layout.h"
 #include "gfx_dk_heap.h"
 #include "ge_render_sky.h"
+#include "ge_render_tool.h"
 
 extern "C" const uint8_t ge007_spv_pack[], ge007_spv_pack_end[];   /* gfx_vk_pack.S */
 
@@ -182,6 +183,7 @@ struct Frame {
     uint64_t serial;            /* of its last submission */
 };
 Frame s_frames[FRAMES_IN_FLIGHT];
+float s_ts_period = 1.0f;   /* tool-only GPU timers: nanoseconds per timestamp tick */
 uint32_t s_frame_idx = 0;
 bool s_frame_open = false;
 uint64_t s_serial = 1, s_completed = 0;
@@ -494,6 +496,7 @@ void create_device(void) {
     s_ubo_align = props.limits.minUniformBufferOffsetAlignment;
     if (s_ubo_align < 16) s_ubo_align = 16;
     s_max_tex = props.limits.maxImageDimension2D;
+    s_ts_period = props.limits.timestampPeriod;
     s_sample_counts = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts;
     vkGetPhysicalDeviceMemoryProperties(s_phys, &s_memprops);
     ge_log(GE_LOG_NOTE, "VK: depth clip control %s, mirror-clamp %s, depth clamp %s, anisotropy up to %.0fx",
@@ -699,6 +702,24 @@ VkPipeline s_bound_pipe = VK_NULL_HANDLE;
 bool s_rendering = false;
 int s_render_fb = -1;
 
+/* Tool-only GPU timers (ge_render_tool.h): two timestamps per timer in each frame in flight, read back once the frame's fence
+ * has been waited on (begin_frame), so nothing stalls. */
+VkQueryPool s_tq[FRAMES_IN_FLIGHT] = {};
+uint32_t s_tq_written[FRAMES_IN_FLIGHT] = {};   /* bit 2*id: begin written, 2*id+1: end written */
+double s_tq_ms[GE_GPU_TIMERS] = { -1, -1, -1, -1, -1, -1, -1, -1 };
+bool s_tq_failed = false;
+
+void tq_collect(uint32_t fi) {
+    for (int id = 0; id < GE_GPU_TIMERS; id++) {
+        if ((s_tq_written[fi] & (3u << (2 * id))) != (3u << (2 * id))) continue;
+        uint64_t t[2] = {};
+        if (vkGetQueryPoolResults(s_dev, s_tq[fi], (uint32_t)(2 * id), 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && t[1] >= t[0]) {
+            s_tq_ms[id] = (double)(t[1] - t[0]) * (double)s_ts_period / 1.0e6;
+        }
+    }
+    s_tq_written[fi] = 0;
+}
+
 void begin_frame(void) {
     Frame& f = s_frames[s_frame_idx];
     VK_CHECK(vkWaitForFences(s_dev, 1, &f.fence, VK_TRUE, UINT64_MAX));
@@ -711,6 +732,10 @@ void begin_frame(void) {
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(f.pre, &bi));
     VK_CHECK(vkBeginCommandBuffer(f.cmd, &bi));
+    if (s_tq[s_frame_idx]) {
+        tq_collect(s_frame_idx);
+        vkCmdResetQueryPool(f.pre, s_tq[s_frame_idx], 0, 2 * GE_GPU_TIMERS);
+    }
     s_frame_open = true;
     s_acq = -1;
     s_acq_failed = false;
@@ -1015,6 +1040,8 @@ VkDescriptorSetLayout s_sky_set_layout = VK_NULL_HANDLE;   /* the GE+ sky passes
 VkPipelineLayout s_pipe_layout = VK_NULL_HANDLE, s_sky_pipe_layout = VK_NULL_HANDLE, s_water_pipe_layout = VK_NULL_HANDLE;
 VkDescriptorSetLayout s_water_set_layout = VK_NULL_HANDLE;   /* the water draws: samplers 0..3 and 9, Draw 4, Comb 5, Lights 7, the Sky block 8 */
 VkPipelineCache s_pipe_cache = VK_NULL_HANDLE;
+bool s_viewer_on = false;       /* tool-only: the viewer variants of the sky and water shaders are in use (ge_render_tool.h) */
+float s_viewer_data[28] = {};   /* the Viewer block: ivec4 uVarv, vec4 uPrv[6] */
 
 /* The driver's pipeline cache lives in $S/ge007.vkcache between runs: the first
  * run pays for every pipeline, later ones read the compiled code back. The
@@ -1121,14 +1148,14 @@ void create_layouts(void) {
     VK_CHECK(vkCreatePipelineLayout(s_dev, &pl, nullptr, &s_pipe_layout));
     /* the GE+ sky and sea read five textures (cloud, wave, sky LUT, half-size sea, far-sea panorama), so binding 4 is a sampler
      * there and cannot be the draws' Draw block: a layout of their own, the Sky block (uniform binding 0 in the GLSL) at 5 */
-    VkDescriptorSetLayoutBinding sb[6] = {};
-    for (int i = 0; i < 6; i++) {
-        sb[i].binding = (uint32_t)i;
+    VkDescriptorSetLayoutBinding sb[7] = {};
+    for (int i = 0; i < 7; i++) {
+        sb[i].binding = i < 6 ? (uint32_t)i : 13u;   /* 13: the Viewer block of the tool-only sky variants (ge_render_tool.h), unused by the game's shaders */
         sb[i].descriptorCount = 1;
         sb[i].descriptorType = i < 5 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sb[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    ci.bindingCount = 6;
+    ci.bindingCount = 7;
     ci.pBindings = sb;
     VK_CHECK(vkCreateDescriptorSetLayout(s_dev, &ci, nullptr, &s_sky_set_layout));
     pl.pSetLayouts = &s_sky_set_layout;
@@ -1136,15 +1163,15 @@ void create_layouts(void) {
     /* the water draws (water/water.frag.glsl, built with the blocks moved up by 4 like the other draws': Draw 4, Comb 5; its
      * colour-map sampler moved to 9 and its Sky block to 8, cmake/VulkanShaders.cmake): the uber vertex shader's Lights block
      * is at 7, like the other draws' */
-    VkDescriptorSetLayoutBinding wb[9] = {};
-    static const uint32_t wnums[9] = { 0, 1, 2, 3, 9, 4, 5, 8, 7 };
-    for (int i = 0; i < 9; i++) {
+    VkDescriptorSetLayoutBinding wb[10] = {};
+    static const uint32_t wnums[10] = { 0, 1, 2, 3, 9, 4, 5, 8, 7, 12 };   /* 12: the Viewer block of the tool-only water variant */
+    for (int i = 0; i < 10; i++) {
         wb[i].binding = wnums[i];
         wb[i].descriptorCount = 1;
         wb[i].descriptorType = i < 5 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         wb[i].stageFlags = i == 8 ? (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT) : VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    ci.bindingCount = 9;
+    ci.bindingCount = 10;
     ci.pBindings = wb;
     VK_CHECK(vkCreateDescriptorSetLayout(s_dev, &ci, nullptr, &s_water_set_layout));
     pl.pSetLayouts = &s_water_set_layout;
@@ -1853,8 +1880,8 @@ void push_water_descriptors(const VkDescriptorImageInfo ii[2], const VkDescripto
     VkDescriptorBufferInfo sb = { s_wat_buf, s_wat_off, WATER_UBO_BYTES };
     lights_ensure();
     const VkDescriptorBufferInfo li = { s_lights_buf, s_lights_off, sizeof(GfxLights) };
-    VkWriteDescriptorSet w[9] = {};
-    for (int i = 0; i < 9; i++) {
+    VkWriteDescriptorSet w[10] = {};
+    for (int i = 0; i < 10; i++) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].descriptorCount = 1;
     }
@@ -1871,7 +1898,19 @@ void push_water_descriptors(const VkDescriptorImageInfo ii[2], const VkDescripto
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         w[i].pBufferInfo = bufs[i - 5];
     }
-    vkCmdPushDescriptorSetKHR(main_cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, s_water_pipe_layout, 0, 9, w);
+    uint32_t nw = 9;
+    VkDescriptorBufferInfo vbi = {};
+    if (s_viewer_on) {   /* tool-only: the Viewer block of the water variant */
+        VkBuffer vb;
+        VkDeviceSize vo;
+        memcpy(ring_alloc(sizeof s_viewer_data, (uint32_t)s_ubo_align, &vb, &vo), s_viewer_data, sizeof s_viewer_data);
+        vbi = { vb, vo, sizeof s_viewer_data };
+        w[9].dstBinding = 12;
+        w[9].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w[9].pBufferInfo = &vbi;
+        nw = 10;
+    }
+    vkCmdPushDescriptorSetKHR(main_cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, s_water_pipe_layout, 0, nw, w);
     s_desc_dirty = false;
 }
 
@@ -2965,6 +3004,10 @@ void gfx_vulkan_park(void) {
     destroy_swapchain_views();
     if (s_swapchain) vkDestroySwapchainKHR(s_dev, s_swapchain, nullptr);
     s_swapchain = VK_NULL_HANDLE;
+    for (VkQueryPool& q : s_tq) {
+        if (q) vkDestroyQueryPool(s_dev, q, nullptr);
+        q = VK_NULL_HANDLE;
+    }
     for (Frame& f : s_frames) {
         vkDestroySemaphore(s_dev, f.acquired, nullptr);
         vkDestroyFence(s_dev, f.fence, nullptr);
@@ -3034,12 +3077,18 @@ void draw_sky(VkShaderModule frag, const void* uni, uint32_t uni_size, const VkI
     vkCmdSetDepthTestEnable(c, VK_FALSE);
     vkCmdSetDepthWriteEnable(c, VK_FALSE);
     vkCmdSetDepthBiasEnable(c, VK_FALSE);
+    if (!s_static_dyn_set) {   /* the static dynamic state, as the first draw of apply_dynamic sets it (a sky pass can open a command buffer) */
+        vkCmdSetCullMode(c, VK_CULL_MODE_NONE);
+        vkCmdSetFrontFace(c, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+        vkCmdSetDepthBias(c, -2.0f, 0.0f, -2.0f);
+        s_static_dyn_set = true;
+    }
     VkBuffer ub;
     VkDeviceSize uo;
     uint8_t* up = ring_alloc(uni_size, (uint32_t)s_ubo_align, &ub, &uo);
     memcpy(up, uni, uni_size);
     VkDescriptorImageInfo ii[5];
-    VkWriteDescriptorSet w[6] = {};
+    VkWriteDescriptorSet w[7] = {};
     for (int i = 0; i < 5; i++) {
         ii[i] = { smps[i], views[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -3054,7 +3103,21 @@ void draw_sky(VkShaderModule frag, const void* uni, uint32_t uni_size, const VkI
     w[5].dstBinding = 5;
     w[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     w[5].pBufferInfo = &bi;
-    vkCmdPushDescriptorSetKHR(c, VK_PIPELINE_BIND_POINT_GRAPHICS, s_sky_pipe_layout, 0, 6, w);
+    uint32_t nw = 6;
+    VkDescriptorBufferInfo vbi = {};
+    if (s_viewer_on) {   /* tool-only: the Viewer block of the sky variants */
+        VkBuffer vb;
+        VkDeviceSize vo;
+        memcpy(ring_alloc(sizeof s_viewer_data, (uint32_t)s_ubo_align, &vb, &vo), s_viewer_data, sizeof s_viewer_data);
+        vbi = { vb, vo, sizeof s_viewer_data };
+        w[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[6].descriptorCount = 1;
+        w[6].dstBinding = 13;
+        w[6].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w[6].pBufferInfo = &vbi;
+        nw = 7;
+    }
+    vkCmdPushDescriptorSetKHR(c, VK_PIPELINE_BIND_POINT_GRAPHICS, s_sky_pipe_layout, 0, nw, w);
     vkCmdDraw(c, 3, 1, 0, 0);
     s_st_draws++;
     s_vp_dirty = s_sc_dirty_rect = s_depth_dirty = s_desc_dirty = true;   /* GL's state again at the next draw */
@@ -3345,6 +3408,92 @@ void gfx_vulkan_perf_report(double frames) {
             (unsigned long long)s_st_draws, (unsigned long long)s_st_uber_draws, (unsigned long long)s_st_mesh_draws,
             (unsigned long long)s_st_uploads, (unsigned long long)s_st_pipelines, frames, s_ring.chunks());
     s_st_draws = s_st_uber_draws = s_st_mesh_draws = s_st_uploads = 0;
+}
+
+/* ---- tool-only (ge_render_tool.h) ---- */
+
+void gfx_vulkan_gpu_timer_begin(int id) {
+    if (!s_up || s_parked || s_tq_failed || id < 0 || id >= GE_GPU_TIMERS) return;
+    ensure_frame();
+    if (!s_tq[0]) {
+        VkQueryPoolCreateInfo qi = {};
+        qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        qi.queryCount = 2 * GE_GPU_TIMERS;
+        for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
+            if (vkCreateQueryPool(s_dev, &qi, nullptr, &s_tq[i]) != VK_SUCCESS) { s_tq_failed = true; return; }
+            vkCmdResetQueryPool(pre_cmd(), s_tq[i], 0, 2 * GE_GPU_TIMERS);   /* the other frames' pools are reset again in their begin_frame */
+        }
+    }
+    vkCmdWriteTimestamp2(main_cmd(), VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, s_tq[s_frame_idx], (uint32_t)(2 * id));
+    s_tq_written[s_frame_idx] = (s_tq_written[s_frame_idx] & ~(3u << (2 * id))) | (1u << (2 * id));
+}
+
+void gfx_vulkan_gpu_timer_end(int id) {
+    if (!s_up || s_parked || s_tq_failed || !s_tq[0] || id < 0 || id >= GE_GPU_TIMERS) return;
+    if (!(s_tq_written[s_frame_idx] & (1u << (2 * id)))) return;
+    vkCmdWriteTimestamp2(main_cmd(), VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, s_tq[s_frame_idx], (uint32_t)(2 * id + 1));
+    s_tq_written[s_frame_idx] |= 2u << (2 * id);
+}
+
+double gfx_vulkan_gpu_timer_ms(int id) { return id >= 0 && id < GE_GPU_TIMERS ? s_tq_ms[id] : -1.0; }
+
+namespace {
+VkShaderModule s_vm_sky = VK_NULL_HANDLE, s_vm_lut = VK_NULL_HANDLE, s_vm_water = VK_NULL_HANDLE;
+VkShaderModule s_orig_sky = VK_NULL_HANDLE, s_orig_lut = VK_NULL_HANDLE, s_orig_water = VK_NULL_HANDLE;
+
+/* a fragment shader of the tool pack (the game's pack format) */
+VkShaderModule viewer_module(const uint8_t* base, size_t size, uint32_t named) {
+    uint32_t n = 0;
+    memcpy(&n, base + 8, 4);
+    const DkPackEntry* e = (const DkPackEntry*)(base + 16);
+    for (uint32_t i = 0; i < n; i++) {
+        if (e[i].id0 != 0 || e[i].id1 != named) continue;
+        if (e[i].frag_len == 0 || (e[i].frag_len & 3) != 0 || (size_t)e[i].frag_off + e[i].frag_len > size) return VK_NULL_HANDLE;
+        VkShaderModuleCreateInfo ci = {};
+        ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        ci.codeSize = e[i].frag_len;
+        ci.pCode = (const uint32_t*)(base + e[i].frag_off);
+        VkShaderModule m = VK_NULL_HANDLE;
+        return vkCreateShaderModule(s_dev, &ci, nullptr, &m) == VK_SUCCESS ? m : VK_NULL_HANDLE;
+    }
+    return VK_NULL_HANDLE;
+}
+}
+
+bool gfx_vulkan_viewer_enable(const void* pack, size_t size) {
+    if (!s_up || s_parked || !pack || size < 16) return false;
+    if (s_viewer_on) return true;
+    const uint8_t* b = (const uint8_t*)pack;
+    if (memcmp(b, DK_PACK_MAGIC, 8) != 0) return false;
+    vkDeviceWaitIdle(s_dev);
+    if (!s_vm_sky) {
+        s_vm_sky = viewer_module(b, size, DK_PACK_SKYPLUS);
+        s_vm_lut = viewer_module(b, size, DK_PACK_SKYLUT);
+        s_vm_water = viewer_module(b, size, DK_PACK_WATER);
+    }
+    if (!s_vm_sky || !s_vm_lut || !s_vm_water) {
+        ge_log(GE_LOG_ERROR, "VK: viewer pack: sky %d, reflection sky %d, water %d", s_vm_sky != 0, s_vm_lut != 0, s_vm_water != 0);
+        return false;
+    }
+    s_orig_sky = s_sky_frag; s_orig_lut = s_lut_frag; s_orig_water = s_water_frag;
+    s_sky_frag = s_vm_sky; s_lut_frag = s_vm_lut; s_water_frag = s_vm_water;
+    s_viewer_on = true;
+    vk_clear_shaders();   /* the water programs name their fragment module */
+    return true;
+}
+
+void gfx_vulkan_viewer_set(const struct GeRenderViewer* v) {
+    if (v) memcpy(s_viewer_data, v, sizeof s_viewer_data);
+}
+
+void gfx_vulkan_viewer_disable(void) {
+    if (!s_viewer_on) return;
+    vkDeviceWaitIdle(s_dev);
+    s_sky_frag = s_orig_sky; s_lut_frag = s_orig_lut; s_water_frag = s_orig_water;
+    s_viewer_on = false;
+    vk_clear_shaders();   /* the pipelines built from the variants go first */
+    for (VkShaderModule* m : { &s_vm_sky, &s_vm_lut, &s_vm_water }) { if (*m) vkDestroyShaderModule(s_dev, *m, nullptr); *m = VK_NULL_HANDLE; }
 }
 
 } // extern "C"

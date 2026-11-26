@@ -27,6 +27,7 @@
 #include "ge_internal.h"
 #include "ge_render_sky.h"
 #include "ge_render_gl.h"   /* GE+ sky pass */
+#include "ge_render_tool.h"
 
 /* D578 L3: the glad (GL 1.0 base) header lacks this token. */
 #ifndef GL_CLEAR_COLOR
@@ -379,6 +380,15 @@ static bool s_water_gl = false;   /* desktop GL 4.6: the water surfaces are draw
 static GLuint s_wat_ubo, s_sp2_wmap;   /* the Sky block (binding 2) of the water draws, and the colour map (unit 4) */
 #define WATER_UBO_BYTES 320            /* 20 vec4: the sky block's 16 and uWX0..3 */
 
+/* Tool-only (ge_render_tool.h): the viewer variants of the sky and water shaders, compiled at run time with this header after the
+ * #version line. The Viewer block sits at uniform binding 8 (the game never binds it). */
+static bool s_viewer_on = false;
+static GLuint s_viewer_ubo = 0;
+static const char kViewerHeader[] = "#define VIEWER\n"
+                                    "layout(std140, binding = 8) uniform Viewer { ivec4 uVarv; vec4 uPrv[6]; };\n"
+                                    "#define uSeaVar uVarv.x\n"
+                                    "#define uSkyVar uVarv.y\n";
+
 /* the water fragment shader of a combiner program: gl_water_glsl with this program's inputs defined */
 static std::string gfx_opengl_water_fs(const struct CCFeatures& f) {
     const char* nl = strchr(gl_water_glsl, '\n');   /* the first line is `#version 460`, written here */
@@ -390,6 +400,7 @@ static std::string gfx_opengl_water_fs(const struct CCFeatures& f) {
     s += std::string("#define WATER_SHADEQ ") + shadeq + "\n";
     s += std::string("#define WATER_FOGQ ") + (ge_render_cfg.fog_vertex ? shadeq : "") + "\n";
     s += f.opt_alpha ? "#define WATER_IVEC vec4\n" : "#define WATER_IVEC vec3\n";
+    if (s_viewer_on) s += kViewerHeader;
     s += nl ? nl + 1 : gl_water_glsl;
     return s;
 }
@@ -2675,6 +2686,7 @@ struct Sp2Target {
 };
 static GLuint s_sp2_prog_sky, s_sp2_prog_lut, s_sp2_vao, s_sp2_ubo, s_sp2_cloud, s_sp2_wave, s_sp2_dummy;
 static GLint s_sp2_flip_loc[2];
+static const char* s_sp2_vs = nullptr;   /* the fullscreen vertex shader of the sky programs (kept for the viewer variants) */
 static bool s_sp2_ok = false;
 static int s_sp2_cloud_gen = -1, s_sp2_wave_gen = -1;
 static Sp2Target s_sp2_lut, s_sp2_pano, s_sp2_hsea, s_sp2_skyr;
@@ -2747,6 +2759,7 @@ void main() {
     gl_Position = vec4(p.x * 2.0 - 1.0, (p.y * 2.0 - 1.0) * uFlipY, 0.0, 1.0);
 }
 )GLSL";
+    s_sp2_vs = vs_src;
     s_sp2_prog_sky = sp2_compile(vs_src, gl_skyplus_glsl, "sky");
     s_sp2_prog_lut = sp2_compile(vs_src, gl_skylut_glsl, "reflection sky");
     if (!s_sp2_prog_sky || !s_sp2_prog_lut) {
@@ -2786,6 +2799,110 @@ void main() {
         ge_render_cfg.water_surfaces = 1;
         ge_log(GE_LOG_NOTE, "GE+ water surfaces: on (opengl)");
     }
+}
+
+/* Tool-only: GPU timers (GL_TIME_ELAPSED; one query at a time, so the timers do not overlap), the viewer variants. */
+#define GPUT_RING 4
+static GLuint s_gput_q[GE_GPU_TIMERS][GPUT_RING];
+static bool s_gput_pending[GE_GPU_TIMERS][GPUT_RING];
+static int s_gput_idx[GE_GPU_TIMERS], s_gput_open = -1;
+static double s_gput_ms[GE_GPU_TIMERS];
+static bool s_gput_init = false;
+
+extern "C" void gfx_opengl_gpu_timer_begin(int id) {
+    if (!s_gput_init) {
+        for (int i = 0; i < GE_GPU_TIMERS; i++) { glGenQueries(GPUT_RING, s_gput_q[i]); s_gput_ms[i] = -1.0; }
+        s_gput_init = true;
+    }
+    if (s_gput_open >= 0 || s_gput_pending[id][s_gput_idx[id]]) return;   /* nested, or the ring is full: skip this one */
+    glBeginQuery(GL_TIME_ELAPSED, s_gput_q[id][s_gput_idx[id]]);
+    s_gput_open = id;
+}
+extern "C" void gfx_opengl_gpu_timer_end(int id) {
+    if (s_gput_open != id) return;
+    glEndQuery(GL_TIME_ELAPSED);
+    s_gput_pending[id][s_gput_idx[id]] = true;
+    s_gput_idx[id] = (s_gput_idx[id] + 1) % GPUT_RING;
+    s_gput_open = -1;
+}
+extern "C" double gfx_opengl_gpu_timer_ms(int id) {
+    if (!s_gput_init) return -1.0;
+    for (int k = 0; k < GPUT_RING; k++) {   /* oldest first */
+        const int j = (s_gput_idx[id] + k) % GPUT_RING;
+        if (!s_gput_pending[id][j]) continue;
+        GLuint avail = 0;
+        glGetQueryObjectuiv(s_gput_q[id][j], GL_QUERY_RESULT_AVAILABLE, &avail);
+        if (!avail) break;
+        GLuint64 ns = 0;
+        glGetQueryObjectui64v(s_gput_q[id][j], GL_QUERY_RESULT, &ns);
+        s_gput_ms[id] = (double)ns / 1.0e6;
+        s_gput_pending[id][j] = false;
+    }
+    return s_gput_ms[id];
+}
+
+static std::string viewer_src(const char* src) {   /* the header after the first line (#version) */
+    const char* nl = strchr(src, '\n');
+    return std::string(src, nl ? (size_t)(nl - src) + 1 : 0) + kViewerHeader + (nl ? nl + 1 : src);
+}
+static bool viewer_build(void) {
+    if (!s_sp2_ok || !s_sp2_vs) return false;
+    const std::string sk = viewer_src(gl_skyplus_glsl), lu = viewer_src(gl_skylut_glsl);
+    const GLuint ps = sp2_compile(s_sp2_vs, sk.c_str(), "viewer sky"), pl = sp2_compile(s_sp2_vs, lu.c_str(), "viewer reflection sky");
+    if (!ps || !pl) {
+        if (ps) glDeleteProgram(ps);
+        if (pl) glDeleteProgram(pl);
+        return false;
+    }
+    GLint prev_prog = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
+    glDeleteProgram(s_sp2_prog_sky);
+    glDeleteProgram(s_sp2_prog_lut);
+    s_sp2_prog_sky = ps;
+    s_sp2_prog_lut = pl;
+    sp2_samplers(ps);
+    sp2_samplers(pl);
+    s_sp2_flip_loc[0] = glGetUniformLocation(ps, "uFlipY");
+    s_sp2_flip_loc[1] = glGetUniformLocation(pl, "uFlipY");
+    glUseProgram((GLuint)prev_prog);
+    return true;
+}
+extern "C" bool gfx_opengl_viewer_enable(const void*, size_t) {
+    if (s_viewer_on) return true;
+    s_viewer_on = true;
+    if (!viewer_build()) { s_viewer_on = false; return false; }
+    if (!s_viewer_ubo) {
+        glGenBuffers(1, &s_viewer_ubo);
+        glBindBuffer(GL_UNIFORM_BUFFER, s_viewer_ubo);
+        glBufferData(GL_UNIFORM_BUFFER, 112, NULL, GL_DYNAMIC_DRAW);
+    }
+    glBindBufferBase(GL_UNIFORM_BUFFER, 8, s_viewer_ubo);
+    gfx_opengl_clear_shaders();   /* the water programs are made again with the variant */
+    return true;
+}
+extern "C" void gfx_opengl_viewer_set(const struct GeRenderViewer* v) {
+    if (!s_viewer_on || !v) return;
+    glBindBuffer(GL_UNIFORM_BUFFER, s_viewer_ubo);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, 112, v);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 8, s_viewer_ubo);
+}
+extern "C" void gfx_opengl_viewer_disable(void) {
+    if (!s_viewer_on) return;
+    s_viewer_on = false;
+    if (s_sp2_ok && s_sp2_vs) {
+        const GLuint ps = sp2_compile(s_sp2_vs, gl_skyplus_glsl, "sky"), pl = sp2_compile(s_sp2_vs, gl_skylut_glsl, "reflection sky");
+        if (ps && pl) {
+            glDeleteProgram(s_sp2_prog_sky);
+            glDeleteProgram(s_sp2_prog_lut);
+            s_sp2_prog_sky = ps;
+            s_sp2_prog_lut = pl;
+            sp2_samplers(ps);
+            sp2_samplers(pl);
+            s_sp2_flip_loc[0] = glGetUniformLocation(ps, "uFlipY");
+            s_sp2_flip_loc[1] = glGetUniformLocation(pl, "uFlipY");
+        }
+    }
+    gfx_opengl_clear_shaders();
 }
 
 /* an RGBA8 target of w x h; (re)built when the size changes. wrapS: GL_REPEAT for the panoramas, GL_CLAMP_TO_EDGE for the rest */

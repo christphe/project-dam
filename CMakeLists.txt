@@ -1066,6 +1066,7 @@ endif()
 option(GE_TOOLS "Build the ge_render tools (tools_pc/ge_render_hello)" OFF)
 if(GE_TOOLS)
   add_subdirectory(tools_pc/ge_render_hello)
+  add_subdirectory(tools_pc/fxview/sea)
 endif()
 # The mission editor (editor/): its own executable, never on the Switch.
 if(NOT GE_SWITCH)

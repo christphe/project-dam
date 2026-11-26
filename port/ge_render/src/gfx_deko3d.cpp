@@ -63,6 +63,7 @@ extern "C" void* nwindowGetDefault(void);
 #include "gfx_dk_layout.h"
 #include "gfx_dk_heap.h"
 #include "ge_render_sky.h"
+#include "ge_render_tool.h"
 
 extern "C" const uint8_t ge007_dksh_pack[], ge007_dksh_pack_end[];
 
@@ -435,6 +436,7 @@ int s_hsea_fb = -1;
 int s_pano_fb = -1;
 int s_skyr_fb = -1;   /* the final sky pass drawn at half size (each axis), enlarged onto the screen by uPass 5 */
 #define SKY_HALF_SCALE 1   /* 0: the final sky pass at full size */
+int s_sky_div = 2;         /* the divisor of the sky's reduced passes (2 = half, the game's; ge_render_tool_sky_div: 1 full, 4 quarter) */
 bool s_pano_valid = false;
 int s_pano_bakes = 0;   /* how many bakes so far (the log) */
 float s_pano_eyey = 0.0f, s_pano_ex = 0.0f, s_pano_ez = 0.0f;
@@ -2271,15 +2273,6 @@ void gfx_deko3d_skyplus_pass(int slot) {
         restore_state();
         return;
     }
-    if (getenv("GE_SEADUMP") && (sea || p.wmap) && p.waterTex) {   /* dev: one frame of the sky pass inputs (block Sky, clouds, waves) for tools_pc/seaview */
-        static int dn = 0;
-        if (++dn == 400) {
-            FILE* df = fopen("sdmc:/switch/project-dam/data/sea_dump.bin", "wb");
-            if (df) { fwrite(&u, 1, sizeof u, df); fwrite(p.tex, 1, SKYPLUS_TEX_W * SKYPLUS_TEX_H, df);
-                      fwrite(p.waterTex, 1, SKYPLUS_WTEX_W * SKYPLUS_WTEX_H * 4, df); fclose(df); }
-
-        }
-    }
     const int smp = sampler_slot(SmpKey{ DkFilter_Linear, DkFilter_Linear, DkMipFilter_Linear, DkWrapMode_Repeat, DkWrapMode_Repeat, 1 });
     {
         /* anisotropic: seen at grazing angles, the far waves keep their detail
@@ -2417,8 +2410,8 @@ void gfx_deko3d_skyplus_pass(int slot) {
         /* a target of exactly the sea's size: it is written and read whole, so no texel is ever read unwritten
          * (a larger target with a sub-rectangle read black bands on the console) */
         /* with the half-scale final pass the sea target is halved on both axes too (it feeds a half-size image): the waves are the
-         * heavy part, so this is where most of the saving is (seaview's Scale menu does the same) */
-        const int sdiv = (SKY_HALF_SCALE && d.vp[2] / 2 >= 16 && d.vp[3] / 2 >= 16) ? 2 : 1;
+         * heavy part, so this is where most of the saving is (the Scale option of the sea tab does the same) */
+        const int sdiv = (SKY_HALF_SCALE && d.vp[2] / s_sky_div >= 16 && d.vp[3] / s_sky_div >= 16) ? s_sky_div : 1;
         const int hw = d.vp[2] / sdiv / hdiv, hh = d.vp[3] / sdiv;
         if (s_hsea_fb < 0) {
             s_hsea_fb = dk_create_framebuffer();
@@ -2452,9 +2445,9 @@ void gfx_deko3d_skyplus_pass(int slot) {
     }
     {   /* the final pass at half size: the sky and the sea (whose heavy part is already behind us) are smooth, so they are drawn into
          * a target of a quarter of the pixels, then enlarged onto the screen by the composite (uPass 5) */
-        const bool reduce = SKY_HALF_SCALE && d.vp[2] / 2 >= 16 && d.vp[3] / 2 >= 16;
+        const bool reduce = SKY_HALF_SCALE && s_sky_div > 1 && d.vp[2] / s_sky_div >= 16 && d.vp[3] / s_sky_div >= 16;
         if (reduce) {
-            const int rw = d.vp[2] / 2, rh = d.vp[3] / 2;
+            const int rw = d.vp[2] / s_sky_div, rh = d.vp[3] / s_sky_div;
             if (s_skyr_fb < 0) {
                 s_skyr_fb = dk_create_framebuffer();
                 s_fbs[s_skyr_fb].smp = SmpKey{ DkFilter_Linear, DkFilter_Linear, DkMipFilter_None, DkWrapMode_ClampToEdge, DkWrapMode_ClampToEdge, 1 };
@@ -2552,6 +2545,142 @@ void gfx_deko3d_perf_report(double frames) {
             (unsigned long long)s_st_uber_draws, (unsigned long long)s_st_submits, (unsigned long long)s_st_uploads, frames,
             s_dataRing.chunks(), s_imgHeap.chunks());
     s_st_draws = s_st_pushes = s_st_chunks = s_st_uber_draws = s_st_submits = s_st_uploads = 0;
+}
+
+}   // extern "C"
+
+/* ---- tool-only (ge_render_tool.h) ---- */
+
+namespace {
+/* GPU timers: two counter reports (16 bytes each: value, timestamp) per timer and frame slot, in the s_query block after the
+ * perf probe's slots; a slot is read once the GPU is surely done with its frame (3 frames later). */
+#define GPUT_RING 4
+#define GPUT_OFS 1024
+double s_gput_ms[GE_GPU_TIMERS] = { -1, -1, -1, -1, -1, -1, -1, -1 };
+uint8_t s_gput_state[GE_GPU_TIMERS][GPUT_RING];     /* 1 begun, 2 ended */
+uint32_t s_gput_frame[GE_GPU_TIMERS][GPUT_RING];
+uint32_t gput_off(int id, uint32_t k) { return GPUT_OFS + ((uint32_t)id * GPUT_RING + k) * 32; }
+void gput_collect(int id) {
+    for (uint32_t k = 0; k < GPUT_RING; k++) {
+        if (s_gput_state[id][k] != 2 || s_frame_count - s_gput_frame[id][k] < 3) continue;
+        const uint64_t* q = (const uint64_t*)(s_query.cpu + gput_off(id, k));
+        if (q[3] > q[1]) s_gput_ms[id] = (double)dkTimestampToNs(q[3] - q[1]) / 1.0e6;
+        s_gput_state[id][k] = 0;
+    }
+}
+
+Block s_vcode;
+DkShader s_vm_sky, s_vm_lut, s_vm_water, s_vm_wbody;
+bool s_vm_ok = false, s_vm_has_wbody = false, s_viewer_on = false;
+DkShader s_orig_sky, s_orig_lut, s_orig_water, s_orig_wbody;
+bool s_orig_wfx_pack_ok = false;
+uint8_t s_viewer_data[112];
+#define VIEWER_UBO_OFS 6144
+}
+
+extern "C" {
+
+void gfx_deko3d_tool_sky_div(int div) {
+    s_sky_div = div == 1 || div == 4 ? div : 2;
+}
+
+void gfx_deko3d_gpu_timer_begin(int id) {
+    if (!s_up || id < 0 || id >= GE_GPU_TIMERS) return;
+    gput_collect(id);
+    const uint32_t k = s_frame_count % GPUT_RING;
+    if (s_gput_state[id][k] != 0) return;
+    memset(s_query.cpu + gput_off(id, k), 0, 32);
+    dkCmdBufReportCounter(s_cmd, DkCounter_Timestamp, s_query.gpu + gput_off(id, k));
+    s_gput_state[id][k] = 1;
+    s_gput_frame[id][k] = s_frame_count;
+}
+
+void gfx_deko3d_gpu_timer_end(int id) {
+    if (!s_up || id < 0 || id >= GE_GPU_TIMERS) return;
+    const uint32_t k = s_frame_count % GPUT_RING;
+    if (s_gput_state[id][k] != 1) return;
+    dkCmdBufReportCounter(s_cmd, DkCounter_Timestamp, s_query.gpu + gput_off(id, k) + 16);
+    s_gput_state[id][k] = 2;
+}
+
+double gfx_deko3d_gpu_timer_ms(int id) {
+    if (!s_up || id < 0 || id >= GE_GPU_TIMERS) return -1.0;
+    gput_collect(id);
+    return s_gput_ms[id];
+}
+
+bool gfx_deko3d_viewer_enable(const void* pack, size_t size) {
+    if (!s_up || !pack || size < 16) return false;
+    if (s_viewer_on) return true;
+    const uint8_t* base = (const uint8_t*)pack;
+    if (memcmp(base, DK_PACK_MAGIC, 8) != 0) return false;
+    if (!s_vm_ok) {
+        uint32_t n = 0;
+        memcpy(&n, base + 8, 4);
+        const DkPackEntry* e = (const DkPackEntry*)(base + 16);
+        static const uint32_t want[4] = { DK_PACK_SKYPLUS, DK_PACK_SKYLUT, DK_PACK_WATER, DK_PACK_WATERBODY };
+        DkShader* dst[4] = { &s_vm_sky, &s_vm_lut, &s_vm_water, &s_vm_wbody };
+        const DkPackEntry* ent[4] = { nullptr, nullptr, nullptr, nullptr };
+        uint32_t total = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            if (e[i].id0 != 0) continue;
+            for (int w = 0; w < 4; w++) {
+                if (e[i].id1 != want[w] || e[i].frag_len == 0 || (size_t)e[i].frag_off + e[i].frag_len > size) continue;
+                ent[w] = &e[i];
+                const DkshHeader* h = (const DkshHeader*)(base + e[i].frag_off);
+                total += (h->code_sz + DK_SHADER_CODE_ALIGNMENT - 1) & ~(DK_SHADER_CODE_ALIGNMENT - 1);
+            }
+        }
+        if (!ent[0] || !ent[1] || !ent[2]) {
+            ge_log(GE_LOG_ERROR, "DK: viewer pack: sky %d, reflection sky %d, water %d", ent[0] != nullptr, ent[1] != nullptr, ent[2] != nullptr);
+            return false;
+        }
+        s_vcode = make_block(total + DK_SHADER_CODE_UNUSABLE_SIZE + DK_SHADER_CODE_ALIGNMENT,
+                             DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Code);
+        uint32_t off = 0;
+        for (int w = 0; w < 4; w++) {
+            if (!ent[w]) continue;
+            const uint8_t* blob = base + ent[w]->frag_off;
+            const DkshHeader* h = (const DkshHeader*)blob;
+            memcpy(s_vcode.cpu + off, blob + h->control_sz, h->code_sz);
+            DkShaderMaker m;
+            dkShaderMakerDefaults(&m, s_vcode.mb, off);
+            m.control = blob;
+            m.programId = 0;
+            dkShaderInitialize(dst[w], &m);
+            if (!dkShaderIsValid(dst[w])) { ge_log(GE_LOG_ERROR, "DK: viewer shader %d is not valid", w); return false; }
+            off += (h->code_sz + DK_SHADER_CODE_ALIGNMENT - 1) & ~(DK_SHADER_CODE_ALIGNMENT - 1);
+        }
+        s_vm_has_wbody = ent[3] != nullptr;
+        s_vm_ok = true;
+    }
+    dkQueueWaitIdle(s_queue);
+    s_orig_sky = s_sky_frag; s_orig_lut = s_lut_frag; s_orig_water = s_water_frag; s_orig_wbody = s_wbody_frag;
+    s_orig_wfx_pack_ok = s_wfx_pack_ok;
+    s_sky_frag = s_vm_sky; s_lut_frag = s_vm_lut; s_water_frag = s_vm_water;
+    if (s_vm_has_wbody) s_wbody_frag = s_vm_wbody;
+    else s_wfx_pack_ok = false;   /* no variant of the cheap body: the half-size water stays off */
+    s_viewer_on = true;
+    dk_clear_shaders();   /* the water programs hold a copy of the water fragment shader */
+    dkCmdBufPushConstants(s_cmd, s_ubo.gpu + VIEWER_UBO_OFS, 256, 0, sizeof s_viewer_data, s_viewer_data);
+    dkCmdBufBindUniformBuffer(s_cmd, DkStage_Fragment, 8, s_ubo.gpu + VIEWER_UBO_OFS, 256);
+    return true;
+}
+
+void gfx_deko3d_viewer_set(const struct GeRenderViewer* v) {
+    if (!v || !s_viewer_on) return;
+    memcpy(s_viewer_data, v, sizeof s_viewer_data);
+    dkCmdBufPushConstants(s_cmd, s_ubo.gpu + VIEWER_UBO_OFS, 256, 0, sizeof s_viewer_data, s_viewer_data);
+    dkCmdBufBindUniformBuffer(s_cmd, DkStage_Fragment, 8, s_ubo.gpu + VIEWER_UBO_OFS, 256);
+}
+
+void gfx_deko3d_viewer_disable(void) {
+    if (!s_viewer_on) return;
+    dkQueueWaitIdle(s_queue);
+    s_sky_frag = s_orig_sky; s_lut_frag = s_orig_lut; s_water_frag = s_orig_water; s_wbody_frag = s_orig_wbody;
+    s_wfx_pack_ok = s_orig_wfx_pack_ok;
+    s_viewer_on = false;
+    dk_clear_shaders();
 }
 
 }   // extern "C"

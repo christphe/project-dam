@@ -32,57 +32,20 @@
 #include "fr.h"   /* viSetFillColor etc.: the fill of a level without a sky (water-only) */
 
 #include "skyplus.h"
+#include "skyplus_core.h"
 #include "system.h"
 
 int portSkyPlus = 0;
 
 extern s32 g_SkyStageNum;
 
-#define GAIN 0.4f
-/* One cloud height and size for every level (2026-11-15, console + Ryujinx):
- * tuned on Dam, where GE's 5000 read too low and too fast and 3x that, with
- * the scroll halved, was approved. With the record's own height (Surface:
- * 10000, then x3) the same texture repeated visibly. For a flat layer only the
- * height/texture ratio is visible, so the record's height is not used. */
-#define CLOUD_HEIGHT 15000.0f
-#define SPEED 0.5f
+/* The level numbers skyplus_core.c uses are the game's. */
+_Static_assert(SPC_BUNKER1 == LEVELID_BUNKER1 && SPC_FRIGATE == LEVELID_FRIGATE && SPC_STREETS == LEVELID_STREETS &&
+               SPC_COMPLEX == LEVELID_COMPLEX && SPC_EGYPT == LEVELID_EGYPT && SPC_DAM == LEVELID_DAM && SPC_RUNWAY == LEVELID_RUNWAY &&
+               SPC_SURFACE == LEVELID_SURFACE && SPC_TEMPLE == LEVELID_TEMPLE && SPC_CAVERNS == LEVELID_CAVERNS &&
+               SPC_CITADEL == LEVELID_CITADEL && SPC_CRADLE == LEVELID_CRADLE, "skyplus_core.h level numbers");
 
-enum { MOOD_DAY, MOOD_DUSK, MOOD_EXOTIC, MOOD_NIGHT, MOOD_OVERCAST };
-
-/* Hand-set from the colours of each level's record (see the sky sheet). */
-static int skyPlusMood(const struct CurrentEnvironmentRecord *env)
-{
-    const float lum = (0.30f * env->Red + 0.59f * env->Green + 0.11f * env->Blue) / 255.0f;
-
-    switch (g_SkyStageNum % 100) {
-    case LEVELID_DAM:
-    case LEVELID_FRIGATE:
-        return MOOD_DAY;
-    case LEVELID_EGYPT:
-        return lum < 0.02f ? MOOD_NIGHT : MOOD_DAY;   /* the alt record is black */
-    case LEVELID_STREETS:
-    case LEVELID_SURFACE:
-    case LEVELID_BUNKER1:   /* Surface 1's sky, see skyPlusEnv */
-    case LEVELID_TEMPLE:
-    case LEVELID_CRADLE:
-        return MOOD_DUSK;
-    case LEVELID_COMPLEX:
-    case LEVELID_CITADEL:
-        return MOOD_EXOTIC;
-    case LEVELID_RUNWAY:
-        return MOOD_OVERCAST;
-    default:
-        return lum < 0.10f ? MOOD_NIGHT : MOOD_DAY;
-    }
-}
-
-static void dirFrom(float elDeg, float az, float out[3])
-{
-    const float e = elDeg * (float)M_PI / 180.0f;
-    out[0] = cosf(e) * sinf(az);
-    out[1] = sinf(e);
-    out[2] = cosf(e) * cosf(az);
-}
+#define SPEED 0.5f   /* skyplus_core.c's, for the unwrapped scroll time below */
 
 /* World ray through a point of the player's screen, as skyGetWorldPosFromScreenPos
  * without the WaterConcavity offset (the water fan's, not the camera's). */
@@ -108,7 +71,7 @@ static int skyPlusTexture(s32 imageId)
 {
     struct tex *t;
     const u8 *src;
-    s32 x, y, pitch;
+    s32 pitch;
     s32 num;
 
     if (imageId != 0) {
@@ -125,11 +88,7 @@ static int skyPlusTexture(s32 imageId)
     }
     src = t->data;
     pitch = (t->width + 7) & ~7;   /* texChannelsToPixels IA8 row pitch */
-    for (y = 0; y < SKYPLUS_TEX_H; y++) {
-        for (x = 0; x < SKYPLUS_TEX_W; x++) {
-            s_tex[y * SKYPLUS_TEX_W + x] = (unsigned char)((src[y * pitch + x] >> 4) * 17);   /* I of I4A4 */
-        }
-    }
+    skyPlusCoreCloudTexture(src, pitch, s_tex);
     s_texNum = num;
     s_texGen++;
     return 1;
@@ -143,138 +102,25 @@ static int skyPlusTexture(s32 imageId)
 static unsigned char s_wtex[SKYPLUS_WTEX_W * SKYPLUS_WTEX_H * 4];
 static int s_wtexGen;
 static int s_wtexOk = -1;   /* -1 = not made yet */
-#define WTEX_SLOPE_K 6.0f   /* slope scale in G, B (sky/common.glsl texSlopeAt decodes it) */
 
-static float wnoiseLattice(int x, int y, int n)
-{
-    unsigned h = (unsigned)(((x % n + n) % n) * 374761393u + ((y % n + n) % n) * 668265263u + (unsigned)n * 2246822519u);
-    h = (h ^ (h >> 13)) * 1274126177u;
-    return (float)((h ^ (h >> 16)) & 0xffff) / 65535.0f;
-}
-
-static float wnoise(float x, float y, int n)   /* x, y in 0..n cells, wraps at n */
-{
-    const int ix = (int)x, iy = (int)y;   /* x, y >= 0 */
-    float fx = x - (float)ix, fy = y - (float)iy;
-    float a, b, c, d;
-    fx = fx * fx * (3.0f - 2.0f * fx);
-    fy = fy * fy * (3.0f - 2.0f * fy);
-    a = wnoiseLattice(ix, iy, n);
-    b = wnoiseLattice(ix + 1, iy, n);
-    c = wnoiseLattice(ix, iy + 1, n);
-    d = wnoiseLattice(ix + 1, iy + 1, n);
-    return (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy;
-}
-
-/* The level's water settings: tint (x the water's colour), swell (the big
- * waves), chop (the small ones, and how much they blur the far reflections),
- * speed. Defaults below; $S/water/<level>.ini overrides them, read when the
- * level changes, so they can be tuned on the SD card without a rebuild:
- *     Tint = 1.0, 1.0, 1.0
- *     Swell = 1.0
- *     Chop = 1.0
- *     Speed = 1.0
- * and for the level's own water surfaces (Dam, Caverns, Complex), see shaders-sea.md:
- *     Deep = 0.1, 0.2, 0.2        (0..1, default: the mean colour of the water texture's darker half)
- *     Light = 0.3, 0.5, 0.5       (default: the mean colour of its lighter half)
- *     ReflectLit = 0.0            (0..1, 1 = the vertex lighting dims the reflection as GE's does)
- *     PatchScale = 6.0            (the patch map's size in water-texture repeats)
- *     FarHeight = 300             (the eye height over the fake plane the far sea is baked for, world units; Switch)
- * Keys are not case-sensitive.                                                 */
-struct WaterSettings {
-    float tint[3], swell, chop, speed;
-    /* the level's own water surfaces: the two colours the patch map blends (when not set here they are computed from the
-     * level's water texture), the vertex lighting's weight on the reflection, the patch map's size in texture repeats */
-    float deep[3], light[3];
-    int deepSet, lightSet;
-    float reflectLit, patchScale;
-    float toneKeep, reflectGain;   /* the reflection pulled into the body's hue (0..1), and its strength */
-    float farHeight;               /* Switch: the far sea's baked plane lies this far under the player's start eye */
-};
-
-static const char *waterLevelName(int stage)
-{
-    switch (stage) {
-    case LEVELID_DAM:     return "dam";
-    case LEVELID_FRIGATE: return "frigate";
-    case LEVELID_CAVERNS: return "caverns";
-    case LEVELID_COMPLEX: return "complex";
-    default:              return NULL;
-    }
-}
-
-static int keyeq(const char *a, const char *b)
-{
-    for (; *a && *b; a++, b++) {
-        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
-    }
-    return *a == *b;
-}
+/* The level's water settings: see skyplus_core.h (defaults per level) and shaders-sea.md ($S/water/<level>.ini keys:
+ * Tint, Swell, Chop, Speed, Deep, Light, ReflectLit, PatchScale, ToneKeep, ReflectGain, FarHeight; not case-sensitive). */
+#define WaterSettings SkyPlusWaterSettings
+#define waterLevelName skyPlusCoreWaterName
 
 static void waterSettingsLoad(int stage, struct WaterSettings *w)
 {
-    char path[64], line[128];
+    char path[64];
     const char *name = waterLevelName(stage);
-    FILE *f;
 
-    w->tint[0] = w->tint[1] = w->tint[2] = 1.0f;
-    w->swell = w->chop = w->speed = 1.0f;
-    w->deepSet = w->lightSet = 0;
-    w->deep[0] = w->deep[1] = w->deep[2] = w->light[0] = w->light[1] = w->light[2] = 0.0f;
-    w->reflectLit = 1.0f;   /* unknown levels: GE's rule */
-    w->patchScale = 6.0f;
-    w->toneKeep = 0.0f;
-    w->reflectGain = 1.0f;
-    w->farHeight = 300.0f;
-    if (stage == LEVELID_FRIGATE) {   /* open sea: a real swell, not an oil-flat sea */
-        w->swell = 2.0f;
-        w->chop = 1.2f;
-    } else if (stage == LEVELID_DAM) {   /* a lake: calm */
-        w->swell = 0.3f;
-        w->chop = 0.6f;
-        w->speed = 0.7f;
-        w->reflectLit = 0.0f;   /* Dam's water is lit dark: the reflection is not dimmed by it */
-        w->toneKeep = 0.8f;     /* the original's dark teal: the sky reflection keeps the body's hue */
-        w->reflectGain = 0.6f;  /* measured on the PC (intro camera 1): mean water colour 15,32,39 vs GE's 12,25,29 */
-    } else if (stage == LEVELID_CAVERNS) {   /* still cave water, dark, no sky to mirror */
-        w->swell = 0.3f;
-        w->chop = 0.6f;
-        w->speed = 0.7f;
-        /* the water texture alone (TEXEL0, a dark I4) is ~half the tone of GE's lerp with TEXEL1: x2 brings the mean back to
-         * the original's (measured on the PC, intro camera 1: 10,14,14 vs GE's 10,12.5,12.6); the reflection (the dark
-         * fog colour) at half weight, in the water's own hue */
-        w->tint[0] = w->tint[1] = w->tint[2] = 2.0f;
-        w->reflectLit = 0.0f;
-        w->toneKeep = 0.8f;
-        w->reflectGain = 0.5f;
-    }   /* Complex: reflectLit 1 keeps its pits black */
+    skyPlusCoreWaterDefaults(stage, w);
     if (name == NULL) {
         return;
     }
     snprintf(path, sizeof path, "$S/water/%s.ini", name);
-    f = fopen(sysResolvePath(path), "r");
-    if (f == NULL) {
+    if (!skyPlusCoreWaterIni(sysResolvePath(path), w)) {
         return;
     }
-    while (fgets(line, sizeof line, f)) {
-        char key[32];
-        float a, b, c;
-        if (sscanf(line, " %31[A-Za-z] = %f , %f , %f", key, &a, &b, &c) == 4) {
-            if (keyeq(key, "Tint")) { w->tint[0] = a; w->tint[1] = b; w->tint[2] = c; }
-            else if (keyeq(key, "Deep")) { w->deep[0] = a; w->deep[1] = b; w->deep[2] = c; w->deepSet = 1; }
-            else if (keyeq(key, "Light")) { w->light[0] = a; w->light[1] = b; w->light[2] = c; w->lightSet = 1; }
-        } else if (sscanf(line, " %31[A-Za-z] = %f", key, &a) == 2) {
-            if (keyeq(key, "Swell")) w->swell = a;
-            else if (keyeq(key, "Chop")) w->chop = a;
-            else if (keyeq(key, "Speed")) w->speed = a;
-            else if (keyeq(key, "ReflectLit")) w->reflectLit = a < 0.0f ? 0.0f : a > 1.0f ? 1.0f : a;
-            else if (keyeq(key, "ToneKeep")) w->toneKeep = a < 0.0f ? 0.0f : a > 1.0f ? 1.0f : a;
-            else if (keyeq(key, "ReflectGain")) w->reflectGain = a < 0.0f ? 0.0f : a > 2.0f ? 2.0f : a;
-            else if (keyeq(key, "PatchScale")) w->patchScale = a < 0.5f ? 0.5f : a > 64.0f ? 64.0f : a;
-            else if (keyeq(key, "FarHeight")) w->farHeight = a < 20.0f ? 20.0f : a > 3000.0f ? 3000.0f : a;
-        }
-    }
-    fclose(f);
     sysLogPrintf(LOG_NOTE, "GE+ water: %s (tint %.2f,%.2f,%.2f swell %.2f chop %.2f speed %.2f)", path,
                  w->tint[0], w->tint[1], w->tint[2], w->swell, w->chop, w->speed);
 }
@@ -387,57 +233,15 @@ void skyPlusWaterSource(const unsigned char *rgba, int w, int h, int fmt, int si
     s_wmapCur = nxt;
     s_wmapGen++;
     s_wbaked = 1;
-    if (getenv("GE_SEADUMP")) {   /* dev: the source water texture for tools_pc/seaview (ROM-derived: stays in its data/) */
-#if defined(PLATFORM_SWITCH)
-        FILE *df = fopen("sdmc:/switch/project-dam/data/water_src.bin", "wb");
-#else
-        FILE *df = fopen("data/water_src.bin", "wb");
-#endif
-        if (df) { fwrite(&w, sizeof w, 1, df); fwrite(&h, sizeof h, 1, df); fwrite(rgba, 4, (size_t)n, df); fclose(df); }
-    }
 }
 #endif
 
 static int skyPlusWaterTexture(void)
 {
-    float lo = 1e9f, hi = -1e9f;
-    static float v[SKYPLUS_WTEX_W * SKYPLUS_WTEX_H];
-    s32 x, y, o;
-
     if (s_wtexOk >= 0) {
         return s_wtexOk;
     }
-    for (y = 0; y < SKYPLUS_WTEX_H; y++) {
-        for (x = 0; x < SKYPLUS_WTEX_W; x++) {
-            float sum = 0.0f, amp = 1.0f;
-            int n = 4;
-            for (o = 0; o < 4; o++, n *= 2, amp *= 0.5f) {
-                sum += amp * wnoise((float)x * n / SKYPLUS_WTEX_W, (float)y * n / SKYPLUS_WTEX_H, n);
-            }
-            v[y * SKYPLUS_WTEX_W + x] = sum;
-            if (sum < lo) lo = sum;
-            if (sum > hi) hi = sum;
-        }
-    }
-    /* R = height; G, B = its slope to the next texel in x, y (wrapping),
-     * precomputed so the shader reads one texel per sample, not three (GPU
-     * cost on the console: 36 fetches per sea pixel were too many) */
-    for (x = 0; x < SKYPLUS_WTEX_W * SKYPLUS_WTEX_H; x++) {
-        v[x] = (v[x] - lo) / (hi - lo + 1e-6f);
-    }
-    for (y = 0; y < SKYPLUS_WTEX_H; y++) {
-        for (x = 0; x < SKYPLUS_WTEX_W; x++) {
-            const float h = v[y * SKYPLUS_WTEX_W + x];
-            const float dx = v[y * SKYPLUS_WTEX_W + (x + 1) % SKYPLUS_WTEX_W] - h;
-            const float dy = v[((y + 1) % SKYPLUS_WTEX_H) * SKYPLUS_WTEX_W + x] - h;
-            unsigned char *o = &s_wtex[(y * SKYPLUS_WTEX_W + x) * 4];
-            float g = 127.5f + dx * WTEX_SLOPE_K * 255.0f, b = 127.5f + dy * WTEX_SLOPE_K * 255.0f;
-            o[0] = (unsigned char)(h * 255.0f + 0.5f);
-            o[1] = (unsigned char)(g < 0.0f ? 0.0f : g > 255.0f ? 255.0f : g + 0.5f);
-            o[2] = (unsigned char)(b < 0.0f ? 0.0f : b > 255.0f ? 255.0f : b + 0.5f);
-            o[3] = 255;
-        }
-    }
+    skyPlusCoreWaveTexture(s_wtex);
     s_wtexGen++;
     s_wtexOk = 1;
     return 1;
@@ -523,11 +327,8 @@ Gfx *skyPlusRender(Gfx *gdl)
     coord3d r[5];
     coord3d *eye;
     float fwd[3], len;
-    int i, mood;
+    int i;
     int waterOnly = 0;   /* no sky on this level (Caverns): only the water block is set */
-    /* per extra layer: wind speed and size relative to the GE layer */
-    static const float kSpeed[3] = { 0.35f, 1.0f, 1.9f };
-    static const float kScale[3] = { 1.7f, 1.0f, 0.45f };
 #ifdef SKYPLUS_TEST_ORIGINAL
     return NULL;   /* A/B test build: GE's sky whatever the ini says */
 #endif
@@ -585,91 +386,27 @@ Gfx *skyPlusRender(Gfx *gdl)
     }
 
     eye = bondviewGetCurrentPlayersPosition();
-    p->eye[0] = eye->x;
-    p->eye[1] = eye->y;
-    p->eye[2] = eye->z;
-    p->cloudY = eye->y + CLOUD_HEIGHT;
-    p->sky[0] = env->Red / 255.0f;
-    p->sky[1] = env->Green / 255.0f;
-    p->sky[2] = env->Blue / 255.0f;
-    p->cloud[0] = env->CloudRed / 255.0f;
-    p->cloud[1] = env->CloudGreen / 255.0f;
-    p->cloud[2] = env->CloudBlue / 255.0f;
-    p->gain = GAIN;
     {
-        /* the horizon band's top: the elevation of the level's sky height
-         * (the record's skyheight, GE's cloud plane) seen at the fog's far
-         * distance (bgfog.c g_ScaledFarFogIntensity, Fog x2 included): nothing
-         * is drawn beyond it, so nothing pops in above it */
         extern f32 g_ScaledFarFogIntensity;
-        const float D = g_ScaledFarFogIntensity;
-        const float Hs = env->CloudRepeat;
-        /* no fog (D left at FLT_MAX: Frigate): nothing pops in, GE's clouds
-         * reach the horizon, the band stays at its floor */
-        float b = (D > 1.0f && D < 1e20f && Hs > 0.0f) ? Hs / sqrtf(D * D + Hs * Hs) : 0.0f;
-        if (b < 0.02f) b = 0.02f;
-        if (b > 0.22f) b = 0.22f;
-        p->band = b;
-    }
-    p->texScale = 1.0f;   /* kept at the size tuned on Dam (a 25..2000 % slider settled on 100) */
+        struct SkyPlusInput in;
 
-    /* scroll: GE's layer follows g_SkyCloudOffset exactly; the others run at
-     * their own speed on the unwrapped time (no jump at the 4096 wrap) */
-    if (s_lastGeOfs >= 0.0f) {
-        float d = g_SkyCloudOffset - s_lastGeOfs;
-        if (d < -2048.0f) d += 4096.0f;
-        if (d > 0.0f && d < 2048.0f) s_time += d;
-    }
-    s_lastGeOfs = g_SkyCloudOffset;
-    p->geOffset = g_SkyCloudOffset;
-    for (i = 0; i < 3; i++) {
-        /* tc units -> texels (S10.5), then into the layer's own texel scale */
-        const float tex = (float)fmod(s_time * SPEED * kSpeed[i] / 32.0, 64.0 * 4096.0) / kScale[i];
-        p->layerOfs[i][0] = 0.0f;
-        p->layerOfs[i][1] = wrapf(tex, 64.0f);
-    }
-    p->layerOfs[1][1] = wrapf(g_SkyCloudOffset * SPEED / 32.0f, 64.0f);   /* 4096 * 0.5 / 32 = 64: still seamless at the wrap */
-
-    mood = skyPlusMood(env);
-    if (mood == MOOD_DUSK || mood == MOOD_EXOTIC) {
-        /* the redder the light, the lower the sun (yellow 20 deg, deep red 6: just
-         * above the horizon band of the GL pass, its halo still shows) */
-        float col[3], red, mx;
-        col[0] = p->sky[0] + p->cloud[0] * (1.0f - p->sky[0]);
-        col[1] = p->sky[1] + p->cloud[1] * (1.0f - p->sky[1]);
-        col[2] = p->sky[2] + p->cloud[2] * (1.0f - p->sky[2]);
-        mx = col[1] > col[2] ? col[1] : col[2];
-        red = col[0] > 1e-3f ? (col[0] - mx) / col[0] : 0.0f;
-        if (red < 0.0f) red = 0.0f;
-        if (red > 1.0f) red = 1.0f;
-        /* azimuth: Surface's shadows put its sun 90 deg to the right of the
-         * default, 12 deg back left, 6 back right (console check 2026-11-15;
-         * right-handed world: right = -) */
-        dirFrom(20.0f + (6.0f - 20.0f) * red,
-                (g_SkyStageNum % 100) == LEVELID_SURFACE ? 0.3f + (-90.0f + 12.0f - 6.0f) * (float)M_PI / 180.0f : 0.3f, p->sunDir);
-        memcpy(p->sunCol, col, sizeof col);
-        p->sunGlow = 0.4f + 0.35f * red;
-    } else if (mood == MOOD_DAY) {
-        /* Dam: 120 deg to the right of the default to match its shadows (2026-11-15) */
-        dirFrom(50.0f, (g_SkyStageNum % 100) == LEVELID_DAM ? 0.6f - 120.0f * (float)M_PI / 180.0f : 0.6f, p->sunDir);
-        p->sunCol[0] = 1.0f;
-        p->sunCol[1] = 0.97f;
-        p->sunCol[2] = 0.9f;
-        if ((g_SkyStageNum % 100) == LEVELID_FRIGATE) {
-            /* Frigate's navy sky with pale clouds is the blue hour: the sun has
-             * already set, 4-6 deg under the horizon in photos of such skies, so
-             * no disc and no glints, only a pale glow low over the horizon on
-             * its side. Its light is the level's own lit-cloud colour (GE's
-             * cloud shade at full fade), never a warm tint. */
-            dirFrom(-5.0f, 0.6f, p->sunDir);
-            for (i = 0; i < 3; i++) {
-                p->sunCol[i] = p->sky[i] + p->cloud[i] * (1.0f - p->sky[i]);
-            }
+        /* scroll: GE's layer follows g_SkyCloudOffset exactly; the others run at
+         * their own speed on the unwrapped time (no jump at the 4096 wrap) */
+        if (s_lastGeOfs >= 0.0f) {
+            float d = g_SkyCloudOffset - s_lastGeOfs;
+            if (d < -2048.0f) d += 4096.0f;
+            if (d > 0.0f && d < 2048.0f) s_time += d;
         }
-        p->sunGlow = 0.35f;
-    } else if (mood == MOOD_NIGHT) {
-        p->night = 1;
-        dirFrom(35.0f, -0.5f, p->moonDir);
+        s_lastGeOfs = g_SkyCloudOffset;
+        in.stage = g_SkyStageNum % 100;
+        in.red = env->Red; in.green = env->Green; in.blue = env->Blue;
+        in.cloudRed = env->CloudRed; in.cloudGreen = env->CloudGreen; in.cloudBlue = env->CloudBlue;
+        in.cloudRepeat = env->CloudRepeat;
+        in.eye[0] = eye->x; in.eye[1] = eye->y; in.eye[2] = eye->z;
+        in.farFog = g_ScaledFarFogIntensity;
+        in.time = s_time;
+        in.geOffset = g_SkyCloudOffset;
+        skyPlusCoreSky(p, &in);
     }
 
     p->texGen = s_texGen;
@@ -706,21 +443,11 @@ Gfx *skyPlusRender(Gfx *gdl)
             }
 #endif
         }
-        p->swell = s_ws.swell;
-        p->chop = s_ws.chop;
-        p->speed = s_ws.speed;
-        /* no sea: water[] is the tint of the level's own water draws */
-        for (i = 0; i < 3; i++) {
-            p->water[i] = s_ws.tint[i];
-        }
+        skyPlusCoreWater(p, &s_ws, env->IsWater, env->WaterRepeat);   /* the sea's and the water draws' fields */
         skyPlusWaterTexture();   /* the wave heights, for the sea and the water draws */
         p->waterTexGen = s_wtexGen;
         p->waterTex = s_wtex;
-        p->reflectLit = s_ws.reflectLit;
-        p->patchScale = s_ws.patchScale;
-        p->toneKeep = s_ws.toneKeep;
         p->worldScale = get_room_data_float2();
-        p->reflectGain = s_ws.reflectGain;
 #if defined(PLATFORM_SWITCH)
         /* the levels with their own water surfaces and a sky (Dam, Complex) get Frigate's baked far sea; Frigate has its own sea,
          * Caverns no sky (its water is live everywhere) and the other levels no water at all (no bake, no cost) */
@@ -745,20 +472,6 @@ Gfx *skyPlusRender(Gfx *gdl)
                              s_ws.deepSet ? " (deep from the ini)" : "", s_ws.lightSet ? " (light from the ini)" : "",
                              p->deep[0], p->deep[1], p->deep[2], p->light[0], p->light[1], p->light[2],
                              s_ws.tint[0], s_ws.tint[1], s_ws.tint[2], s_ws.reflectLit, s_ws.patchScale);
-            }
-        }
-    }
-    if (env->IsWater) {
-        p->sea = 1;
-        p->seaY = env->WaterRepeat;
-        /* the sea's body: the sky's own colour, desaturated and darkened, as
-         * open sea reads under such a sky (the film's harbour shots: slate
-         * navy, darker than the sky, never GE's turquoise); its brightness
-         * toward the horizon comes from the sky reflection (Fresnel) */
-        {
-            const float lum = 0.30f * p->sky[0] + 0.59f * p->sky[1] + 0.11f * p->sky[2];
-            for (i = 0; i < 3; i++) {
-                p->water[i] *= (p->sky[i] + (lum - p->sky[i]) * 0.4f) * 0.9f;
             }
         }
     }
