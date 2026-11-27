@@ -6,27 +6,17 @@ keep the port faithful to the original game.
 
 ## Ground rules
 
-1. **The decompilation is not modified for the port.** Everything under `src/`
-   and `include/` is compiled unmodified. `Makefile`, `tools/`, `rsp/`, `ld/`
-   belong to the N64 build and are never touched for PC work. If PC code seems
-   to need a behavioural change in the game, the fix belongs in `port/`.
+1. **There is no N64 build to keep.** The goal is a modern engine that runs
+   the GoldenEye campaign; the N64 `Makefile`, `rsp/`, `ld/` and the N64
+   build's tools are not maintained.
 
-2. **Narrow ABI exception; diagnosis is always allowed.** Trace a bug as
-   deep into the decomp's state as the evidence leads — that's never
-   restricted. Only the *fix* is constrained: the 32→64-bit transition
-   forces a small class of mechanical, semantics-preserving edits — any
-   struct-layout or pointer-width-driven misread caused by 32→64-bit
-   widening, in a ROM-serialized record or a live runtime struct/union alike
-   (see `docs/porting-notes.md` §A1 for the pattern and its tells). These
-   are allowed, must be guarded with `#ifdef PORT`, must change no
-   behaviour, and must be documented. A genuine behavioral difference from
-   real N64 behavior is a separate, much rarer case that needs explicit
-   maintainer sign-off first — see `docs/dev-process.md`'s rule-2 sign-off
-   procedure; it is not something a contributor can self-approve or infer
-   from this exception.
+2. **`src/` may be changed.** The decompiled code is being moved out and
+   removed, so it is edited or deleted like any other code. Trace a bug to
+   its exact cause before fixing it, and state any change in behaviour in
+   the PR (what it did before, what it does now).
 
-3. **Region macros mirror the Makefile.** `CMakeLists.txt` `REGION_DEFS` must
-   match the N64 `Makefile`'s per-region macro set exactly.
+3. **Region macros belong to the build.** `CMakeLists.txt` `REGION_DEFS` no
+   longer has to follow the N64 `Makefile`.
 
 4. **Verify before you push.** A build-affecting change needs, at minimum, a
    clean configure + build for `ntsc-final` and a crash-free run of one level

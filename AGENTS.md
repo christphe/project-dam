@@ -15,12 +15,16 @@
 
 ## Non-negotiables
 
-1. **N64 build untouched.** `Makefile`, `tools/`, `rsp/`, `ld/` belong to the N64 build. Never modify them for the PC port.
-2. **Game logic is unmodified.** All N64 hardware dependencies are satisfied in `port/`. **Diagnosis is never restricted, only the fix.** The one exception that needs no sign-off is 32→64-bit ABI/layout fixes (pointer width, struct layout, raw-offset aliases into widened unions). They must be mechanical and semantics-preserving, each recorded in findings §F and tagged to `docs/porting-notes.md` §A1. A genuine behaviour difference needs the rule-2 sign-off (`docs/dev-process.md` §7) before any `src/game` edit. Full rule and the three buckets: `docs/dev-process.md` §Non-negotiable #2 in full.
-3. **Region macros mirror the Makefile.** `CMakeLists.txt` `REGION_DEFS` must match the N64 Makefile's per-region macro set exactly (finding A1).
+1. **No N64 build (withdrawn 2026-11-27).** The goal is a modern engine that runs the GoldenEye campaign, not a matching N64 ROM. The N64 `Makefile`, `rsp/`, `ld/` and the N64 build's parts of `tools/` are not maintained and may be changed or removed.
+2. **`src/game` may be changed (rule withdrawn 2026-11-27).** The decompiled code is being moved out and removed, so it is edited or deleted like any other code. Diagnosis comes first: name the exact cause before the fix. A change in behaviour is stated in the PR (what it did before, what it does now).
+3. **Region macros belong to the PC build.** `CMakeLists.txt` `REGION_DEFS` no longer has to follow the N64 Makefile (finding A1 is history).
 4. **`src/libultrare/Makefile.libultrare` is ground truth** for original-vs-Rare libultra files (finding B3). The PC build compiles `libultra/audio`, `libultrare/audio`, `libultra/gu` and `libultrare/io/vitbl.c` only. Every other `io/` and `os/` file is excluded and shimmed in `port/src/libultra.c`.
 5. **`rsp/graphics/gmain.s` is the RSP ground truth** for the GBI commands GE emits and its custom CC/RM modes. `port/fast3d/` replaces it on PC.
 6. **A report or a question is not a go.** When the maintainer reports a symptom ("it flickers", "this doesn't line up") or asks a question, look first: read what they sent (the screenshot, the log) closely, check it against the code, then answer with what you see and the likely cause, and stop. Change code only once they ask for the fix. Never start edits on a hunch from one sentence.
+7. **Clean room for porting logic.** The goal is to remove the legally grey code (the decompiled game, libultra, the N64-specific code) step by step. Logic or a format taken from it is ported in two separate steps, by two separate agents:
+   - **Spec agent** (may read the decomp): writes the behaviour or format as facts in prose in `docs/specs/` (layouts, fields, constants, rules, measured values), never code pasted or paraphrased line by line. `docs/specs/README.md` has the rules.
+   - **Implementation agent** (may NOT read the decomp): writes the code from `docs/specs/` only. Its brief lists what it must not open: `src/`, `include/`, `rsp/`, `PR/gbi.h`, libultra, `port/fast3d/` and any tool derived from them. A question the spec does not answer goes back to the spec agent, who amends the spec; the implementation agent never looks it up itself.
+   - The lead never pastes decomp code or names decomp functions into an implementation brief. New code does not depend on `src/game`, libultra or fast3d: it reads the exports.
 
 ## Tree hygiene & release gate
 
@@ -41,7 +45,7 @@ Adding an option or writing its help text: `docs/wiki/options-menu.md`.
 
 | File | Role |
 |---|---|
-| `CMakeLists.txt` | PC build (parallel to the N64 Makefile): source list and `REGION_DEFS`. |
+| `CMakeLists.txt` | The build: source list and `REGION_DEFS`. |
 | `port/src/` | Shims: `libultra.c` (OS API, scheduler leaf calls, runs the software RSP inline; the real `src/sched.c` is compiled), `n64stubs.c`, `random.c`, `ucode.c`, `main.c`, `video.c`, … |
 | `port/fast3d/` | Software RSP (adapted from the PD port). |
 | `rsp/graphics/gmain.s` | GE's RSP ucode: ground truth for GBI/CC/RM. |

@@ -68,13 +68,19 @@ A subagent brief is INVALID and must not be sent unless it contains all of:
   your report with an explicit confidence rating (subagents do not write
   findings; the lead files it in `docs/dev/findings/` if it is a trap). A good
   write-up of a half-solved bug is a deliverable, not a failure.
-- **KNOWN-GOOD / RULED OUT**, **CONSTRAINTS** (no game-logic changes;
-  ABI/layout/format only; `#ifdef PORT`; documented in §F), **REPORT** shape.
+- **KNOWN-GOOD / RULED OUT**, **CONSTRAINTS** (files, scope; any behaviour
+  change stated in the report), **REPORT** shape.
 - **VERIFY** — the exact `tools_pc/verify.sh` / probe invocation that proves
   the task done, or an explicit "runtime verification impossible here; a human
   must run X".
 - Instruction to read `docs/porting-notes.md` first and append any
   generalisable quirk to it.
+- **Porting logic or a format out of the decomp** (AGENTS.md rule 7, clean room):
+  one agent writes the spec in `docs/specs/`, a different agent implements it
+  with a **MAY NOT READ** list (`src/`, `include/`, `rsp/`, `PR/gbi.h`,
+  libultra, `port/fast3d/`, tools derived from them). Never reuse the spec
+  agent to implement, never paste decomp code or decomp names into the
+  implementation brief.
 
 Full template: `docs/dev-process.md` -> "Investigation-brief template".
 
