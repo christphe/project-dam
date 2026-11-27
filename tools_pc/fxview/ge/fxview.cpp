@@ -12,6 +12,7 @@
 //           --dzoom F  --walltex N  --texel F  --wallshade F  --sun 0|1 --sunaz DEG --sunel DEG  --pt 0|1 --ptx --pty --pth --ptr
 //   cluster: --dist N --holes N --cmat 0..6 --holesize F --seed N --fov DEG --sun 0|1 --diag coverage|veye|uv|pom|pomalpha|deriv
 //   common: --backend gl|vk|deko3d  --w N --h N  --frames N  --ui 0|1  --out DIR  --rom FILE.z64  --shaders DIR
+//           textures: --pack ge007.ptexpack (default: texturepacks/ beside the game, else written from the ROM into --out)  --texpack NAME|PATH  --mod PATH
 //           --probeframe N (default 12)  --probe X,Y (repeat)  --dump FILE.ppm  --shot FILE.png  --hold N  --selftest
 //
 // --probe X,Y (window pixels, top-left origin): "PROBE x y r g b a" in the log. --dump / --shot / --probe take frame 12 (the frame
@@ -42,7 +43,9 @@
 #include "portfx.h"
 #include "fx_rom.h"
 #include "fx_tex.h"
-#include "mv_png.h"
+extern "C" {
+#include "ge_png.h"
+}
 #ifndef __SWITCH__
 #include <SDL.h>   // the sea mode's keyboard camera
 #endif
@@ -86,7 +89,7 @@ static void makeDir(const std::string &p) {
 
 // ---------------------------------------------------------------- arguments
 struct Args {
-    std::string mode = "sprite", scene, backend, out, diag, rom, shaders, kind = "wallpuff", view = "side", backdrop = "grey", mat = "stone", dump, shot;
+    std::string mode = "sprite", scene, backend, out, diag, rom, pack, texpack, mod, shaders, kind = "wallpuff", view = "side", backdrop = "grey", mat = "stone", dump, shot;
     float dist = 120.0f, holesize = 6.0f, fov = 60.0f, age = 0, angle = 0, tracerlen = 8.0f, zoom = 1.0f, split = 0.5f, dzoom = 1.0f;
     float yaw = 0, pitch = 0, texel = 2.0f, wallshade = 0.6f, sunaz = 135, sunel = 35, ptx = 10, pty = -6, pth = 70, ptr = 260;
     int probeFrame = 12, hold = 0, holes = 3, cmat = 0, seed = 1, w = 1280, h = 720, frames = 0, ui = -1, sun = -1, pt = 1, impact = 0, bgtex = 20, fc = 120, nearest = 0;
@@ -105,7 +108,7 @@ struct Opt { const char *name; char type; void *p; bool persist; };
 static std::vector<Opt> optTable(Args &a) {
     return {
         { "mode", 'S', &a.mode, true }, { "scene", 'S', &a.scene, false }, { "backend", 'S', &a.backend, false }, { "out", 'S', &a.out, false }, { "diag", 'S', &a.diag, false },
-        { "rom", 'S', &a.rom, false }, { "shaders", 'S', &a.shaders, false }, { "kind", 'S', &a.kind, true }, { "view", 'S', &a.view, true }, { "backdrop", 'S', &a.backdrop, true },
+        { "rom", 'S', &a.rom, false }, { "pack", 'S', &a.pack, false }, { "texpack", 'S', &a.texpack, true }, { "mod", 'S', &a.mod, false }, { "shaders", 'S', &a.shaders, false }, { "kind", 'S', &a.kind, true }, { "view", 'S', &a.view, true }, { "backdrop", 'S', &a.backdrop, true },
         { "mat", 'S', &a.mat, true }, { "dump", 'S', &a.dump, false }, { "shot", 'S', &a.shot, false },
         { "tshow", 'S', &a.tshow, true }, { "gun", 'S', &a.gun, true }, { "tritem", 'S', &a.tritem, true }, { "burst", 'S', &a.burst, true },
         { "dist", 'F', &a.dist, true }, { "holesize", 'F', &a.holesize, true }, { "fov", 'F', &a.fov, true }, { "age", 'F', &a.age, true }, { "angle", 'F', &a.angle, true },
@@ -263,7 +266,7 @@ static void bindTex(int unit, uint32_t id, bool linear, int cms, int cmt, bool m
     api()->set_sampler_parameters(unit, linear, (uint32_t)cms, (uint32_t)cmt, mip);
 }
 
-// The textures: a ROM texture decoded once (key: number + mip), a 1x1 white, the checker.
+// The textures: a pack texture decoded once (key: number + mip), a 1x1 white, the checker.
 struct Tex { uint32_t id = 0; int w = 0, h = 0; std::vector<uint8_t> rgba; };
 static std::map<int, Tex> g_tex;
 static uint32_t g_white = 0, g_checker = 0;
@@ -278,8 +281,8 @@ static const Tex &romTex(int tn, bool mip) {
     auto it = g_tex.find(key);
     if (it != g_tex.end()) return it->second;
     Tex t;
-    MvTexImage img;
-    if (fxRomTexture(tn, img) && img.w > 0) {
+    FxTexImage img;
+    if (fxTexture(tn, img) && img.w > 0) {
         t.w = img.w; t.h = img.h; t.rgba = img.rgba;
         t.id = makeTex(img.rgba.data(), img.w, img.h, mip);
     } else {
@@ -759,7 +762,7 @@ static void sheetLabels(const Args &a) {
 
 // ---------------------------------------------------------------- selftest (no ROM, no window)
 static int selftest(const Args &a) {
-    int fail = mv_tex_selftest() + fx_tex_selftest();
+    int fail = fx_tex_selftest();
     for (int f = 0; f < 11; f++) {   // the puff frame stepping (bullet_sparks_init: frame = age * 0.5, clamped to the table)
         const int want = std::min(f / 2, 5);
         if (puffFrame((float)f, 0.5f, 6) != want) { fprintf(stderr, "selftest FAIL puffFrame(%d) = %d, want %d\n", f, puffFrame((float)f, 0.5f, 6), want); fail++; }
@@ -870,6 +873,7 @@ static void uiPanel(Args &a, int w, int h, const char *backendName, std::string 
     ImGui::PushItemWidth(kPanelW * 0.5f);
     ImGui::Text("fxview  %s  %dx%d", backendName, w, h);
     ImGui::TextWrapped("%s", fxRomNote().c_str());
+    ImGui::TextWrapped("%s", fxTexNote().c_str());
     int mode = keyIndex(kModeKey, a.mode);
     if (ImGui::Combo("mode", &mode, "sprite\0decal\0cluster\0muzzle\0tracer\0burst\0explosion\0sky / sea\0")) a.mode = kModeKey[mode];
     ImGui::Separator();
@@ -1002,8 +1006,19 @@ int main(int argc, char **argv) {
     {
         rom = fxRomFind(a.rom);
         if (rom.empty()) logf("fxview: no ROM found (--rom, FXVIEW_ROM / N64_ROM, or the game's data dir): sprites show as untextured quads");
-        else if (!fxRomOpen(rom, a.out)) logf("fxview: ROM %s: %s", rom.c_str(), fxRomNote().c_str());
+        else if (!fxRomOpen(rom)) logf("fxview: ROM %s: %s", rom.c_str(), fxRomNote().c_str());
         else logf("fxview: %s (%s)", fxRomNote().c_str(), rom.c_str());
+    }
+    {   // the textures: ge007.ptexpack (the game's own picture of every texture) under the chosen pack and mod; written from the ROM when absent
+        std::string base = fxTexFindBase(a.pack, rom);
+        if (base.empty() && !rom.empty()) {
+            const std::string made = a.out + "ge007.ptexpack";
+            std::string note;
+            if (fxTexEnsureBase(rom, made, note)) base = made;
+            logf("fxview: %s", note.c_str());
+        }
+        fxTexOpen(base, a.texpack, a.mod);
+        logf("fxview: %s", fxTexNote().c_str());
     }
 
     GeRenderConfig cfg = ge_render_cfg;
@@ -1281,7 +1296,7 @@ int main(int argc, char **argv) {
         if (wantShot) {
             if (a.probes.empty() && shotPix.empty()) { status = "shot: this backend cannot read the window back"; logf("%s", status.c_str()); }
             else if (!a.probes.empty()) { status = "shot: not with --probe (one readback per frame)"; logf("%s", status.c_str()); }
-            else if (mvpng::write(shotPath, (int)w, (int)h, shotPix.data())) { status = "shot: " + shotPath; logf("shot written %s", shotPath.c_str()); }
+            else if (gePngWrite(shotPath.c_str(), (int)w, (int)h, shotPix.data(), GE_PNG_RGB)) { status = "shot: " + shotPath; logf("shot written %s", shotPath.c_str()); }
             else { status = "shot: cannot write " + shotPath; logf("%s", status.c_str()); }
         }
         if (probeNow) {

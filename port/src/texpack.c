@@ -1,5 +1,5 @@
 /*
- * texpack.c -- texture packs in the game (port/include/texpack.h; the format is port/mission/texpacks.h).
+ * texpack.c -- texture packs in the game (port/include/texpack.h; the format is port/assets/ge_texpacks.h).
  *
  * Two tables, one lock:
  *  - address -> texture number, filled by texLoad on the game thread (the texture pool is a ring: a reused address is
@@ -24,7 +24,8 @@
 #include "config.h"
 #include "portaddr.h"
 #include "texpack.h"
-#include "texpacks.h"
+#include "ge_texpacks.h"
+#include "ge_png.h"
 
 #define REG_SIZE 16384            /* registered textures kept; cleared when full */
 #ifdef __SWITCH__
@@ -247,7 +248,7 @@ const uint8_t *texpackPixels(int texnum, int fmt, int maxSize, int *w, int *h)
         uint8_t *file = NULL, *rgba = NULL;
         size_t len = 0;
         int pw = 0, ph = 0;
-        if (texpackIndexRead(sourceOf(texnum), texnum, &file, &len) && texpackDecodePng(file, len, &pw, &ph, &rgba)) {
+        if (texpackIndexRead(sourceOf(texnum), texnum, &file, &len) && gePngDecode(file, len, &pw, &ph, &rgba)) {
             if (pw > maxSize || ph > maxSize) {
                 sysLogPrintf(LOG_WARNING, "texture pack: textures/%d.png is %dx%d, over this GPU's %d: the game's own is drawn", texnum, pw, ph, maxSize);
                 free(rgba);

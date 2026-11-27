@@ -2,7 +2,7 @@
 // A mod is mods/<mod>/campaign.json plus one folder per mission (mission.json, thumb.png).
 #include "doc.h"
 #include "exportcache.h"
-#include "mission_pkg.h"
+#include "ge_pkg.h"
 #include "png.h"
 
 #include <algorithm>

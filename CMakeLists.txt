@@ -550,6 +550,7 @@ include_directories(
   "${CMAKE_SOURCE_DIR}/src/libultra/gu"
   "${CMAKE_SOURCE_DIR}/port/include"
   "${CMAKE_BINARY_DIR}/port/include"
+  "${CMAKE_SOURCE_DIR}/port/assets"
   "${CMAKE_SOURCE_DIR}/port/mission"
   "${CMAKE_SOURCE_DIR}/port/levelrec"
   "${CMAKE_SOURCE_DIR}/port/third_party/cjson"
@@ -935,6 +936,7 @@ if(GE_SWITCH)
 endif()
 
 # Custom missions and the level export (issues #100-#105).
+include("${CMAKE_SOURCE_DIR}/port/assets/assets.cmake")
 include("${CMAKE_SOURCE_DIR}/port/mission/mission.cmake")
 include("${CMAKE_SOURCE_DIR}/port/levelrec/levelrec.cmake")
 

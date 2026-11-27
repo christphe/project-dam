@@ -16,7 +16,8 @@
 
 #include <ctype.h>
 #include "skyplus_core.h"
-#include "fx_rom.h"   // the user's ROM: fxview's own loader (textures by image number, the global image table)
+#include "fx_rom.h"   // the user's ROM: fxview's own loader (the global image table)
+#include "fx_tex.h"   // the textures, by image number, through the texture pack (ge_assets)
 #include "clouds.h"
 #include "img.h"
 #include "waterbake.h"
@@ -184,14 +185,14 @@ void resetAll() { for (int i = 0; i < NPAR; i++) g.val[i] = g.def[i]; g.seaVar =
 /* GE's cloud texture (bg/clouds, IA8 64x64) from the ROM fxview opened, as skyPlusTexture makes it (the I of I4A4); else a generated one */
 void loadClouds() {
     g.romOk = false;
-    if (fxRomLoaded()) {
-        MvTexImage im;
-        if (fxRomTexture(IMAGE_CLOUDS_GRAYSCALE_NUM, im) && im.w == 64 && im.h == 64) {
+    if (fxTexOpened()) {
+        FxTexImage im;
+        if (fxTexture(IMAGE_CLOUDS_GRAYSCALE_NUM, im) && im.w == 64 && im.h == 64) {
             for (int i = 0; i < 4096; i++) g.cloud[i] = im.rgba[(size_t)i * 4];
             g.romOk = true;
-            fprintf(stderr, "seatab: cloud texture from the ROM (image %d)\n", IMAGE_CLOUDS_GRAYSCALE_NUM);
+            fprintf(stderr, "seatab: cloud texture from the texture pack (image %d)\n", IMAGE_CLOUDS_GRAYSCALE_NUM);
         } else {
-            fprintf(stderr, "seatab: the cloud texture could not be read from the ROM (%s)\n", im.note.c_str());
+            fprintf(stderr, "seatab: the cloud texture could not be read from the texture pack (%s)\n", im.note.c_str());
         }
     } else {
         fprintf(stderr, "seatab: no ROM: a generated cloud texture\n");
@@ -267,16 +268,16 @@ void loadWater() {
     if (!g.wtexPath.empty()) {   /* an explicit file (--wtex) wins */
         if (img::loadImage(g.wtexPath, im)) used = g.wtexPath; else fprintf(stderr, "seatab: water texture %s: not readable\n", g.wtexPath.c_str());
     }
-    if (used.empty() && fxRomLoaded()) {   /* the game's way: skywaterimages[WaterImageId] of the level's environment record (src/game/sky.c) */
+    if (used.empty() && fxRomLoaded() && fxTexOpened()) {   /* the game's way: skywaterimages[WaterImageId] of the level's environment record (src/game/sky.c) */
         /* a record whose WaterImageId is 0 (Dam, Complex...) has its water draws textured by the level's own room data, which a tool without the
          * level loader cannot reach: the first water image of the table stands in */
         const int id = g.waterImageId > 0 ? g.waterImageId : 1;
         const ImgEntry* e = fxTableEntry("skywaterimages", id);
-        MvTexImage t;
-        if (e && fxRomTexture((int)e->index, t)) {
+        FxTexImage t;
+        if (e && fxTexture((int)e->index, t)) {
             im.w = t.w; im.h = t.h; im.px.swap(t.rgba);
-            used = "ROM skywaterimages[" + std::to_string(id) + "] (image " + std::to_string(e->index) + ")" + (g.waterImageId > 0 ? "" : ", the level's own water texture is in its room data: stand-in");
-        } else fprintf(stderr, "seatab: the water texture could not be read from the ROM (%s)\n", e ? t.note.c_str() : "no skywaterimages entry");
+            used = "texture pack, skywaterimages[" + std::to_string(id) + "] (image " + std::to_string(e->index) + ")" + (g.waterImageId > 0 ? "" : ", the level's own water texture is in its room data: stand-in");
+        } else fprintf(stderr, "seatab: the water texture could not be read from the texture pack (%s)\n", e ? t.note.c_str() : "no skywaterimages entry");
     }
     if (used.empty()) {
         im.w = im.h = 64; waterbake::placeholder(g.level + 1, im.px); used = "(generated placeholder: no ROM)";

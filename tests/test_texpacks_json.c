@@ -2,8 +2,8 @@
  * completeness of a pack against the base pack, and the merge of a mod over a pack (field by field, picture only, new key). */
 #include "ge_test.h"
 #include "mission_dir.h"
-#include "mission_pkg.h"
-#include "texpacks.h"
+#include "ge_pkg.h"
+#include "ge_texpacks.h"
 
 #include <stdint.h>
 #include <stdio.h>

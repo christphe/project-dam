@@ -7,7 +7,7 @@
 #include "mission.h"
 #include "mission_lua.h"
 #include "mission_dir.h"
-#include "mission_pkg.h"
+#include "ge_pkg.h"
 
 #include <stdio.h>
 #include <stdlib.h>

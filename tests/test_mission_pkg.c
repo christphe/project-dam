@@ -1,8 +1,8 @@
-/* The .pmod package layer (port/mission/mission_pkg.c): pkgWriteDir tars a folder (ustar), pkgReadFile / pkgExists read
+/* The .pmod package layer (port/assets/ge_pkg.c): pkgWriteDir tars a folder (ustar), pkgReadFile / pkgExists read
  * a path inside X.pmod (a tar file) or an unpacked X.pmod/ folder or a plain file the same way. */
 #include "ge_test.h"
 #include "mission_dir.h"
-#include "mission_pkg.h"
+#include "ge_pkg.h"
 
 #include <stdint.h>
 #include <stdio.h>

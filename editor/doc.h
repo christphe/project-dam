@@ -216,7 +216,7 @@ struct Doc {
     void reloadDecor();
     // Reloads the decor when its texture sources changed (a mod opened or closed, another texture pack chosen).
     void syncModTextures();
-    // ---- texture packs: <game>/texturepacks/X.ptexpack (texpacks.h); exactly one is chosen, ge007.ptexpack by default; the open mod's
+    // ---- texture packs: <game>/texturepacks/X.ptexpack (ge_texpacks.h); exactly one is chosen, ge007.ptexpack by default; the open mod's
     // textures are merged over it (docs/specs/texture-packs.md) ----
     std::string texPack;                            // the chosen pack's file name ("hd.ptexpack"), "" = ge007.ptexpack
     TexSet texSet;                                  // the open mod and the chosen pack, what Level::texSet points at

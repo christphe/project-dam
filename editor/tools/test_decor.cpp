@@ -10,8 +10,8 @@
 #include <filesystem>
 
 extern "C" {
-#include "mission_pkg.h"
-#include "texpacks.h"
+#include "ge_pkg.h"
+#include "ge_texpacks.h"
 }
 
 static int g_fail = 0;
@@ -74,7 +74,7 @@ int main(int argc, char **argv)
     CHECK(near(d.mn[0], -100, 1e-3f) && near(d.mx[0], 300, 1e-3f) && near(d.mx[2], 400, 1e-3f));
     if (d.tex.size() == 1) CHECK(d.tex[0].texnum == 1 && d.tex[0].source == -1 && d.tex[0].origW == 8);
 
-    // texture sources (texpacks.h, texset.h): the game's pack ge007.ptexpack (a folder), a mod folder and a complete hd.ptexpack tar,
+    // texture sources (ge_texpacks.h, texset.h): the game's pack ge007.ptexpack (a folder), a mod folder and a complete hd.ptexpack tar,
     // each with a picture of texture "1" (the glTF's image is textures/1.png): the mod over the chosen pack, any size
     {
         auto solid = [](int w, int h, uint8_t r, uint8_t g, uint8_t b) {
@@ -93,9 +93,9 @@ int main(int argc, char **argv)
         const char *oneJson = "{\"version\":1,\"textures\":{\"1\":{\"image\":\"textures/1.png\",\"surface\":\"stone\",\"impact_sound\":\"stone\",\"alpha\":\"image\",\"width\":8,\"height\":8}}}";
         put(base + "/textures.json", oneJson);
         put(base + "/pack.json", "{\"name\":\"GoldenEye 007\",\"base\":true}");
-        CHECK(synth::writePngStored(base + "/textures/1.png", 8, 8, solid(8, 8, 1, 2, 3)));
-        CHECK(synth::writePngStored(mod + "/textures/1.png", 16, 32, solid(16, 32, 200, 10, 10)));
-        CHECK(synth::writePngStored(packSrc + "/textures/1.png", 64, 64, solid(64, 64, 10, 200, 10)));
+        CHECK(synth::writePng(base + "/textures/1.png", 8, 8, solid(8, 8, 1, 2, 3)));
+        CHECK(synth::writePng(mod + "/textures/1.png", 16, 32, solid(16, 32, 200, 10, 10)));
+        CHECK(synth::writePng(packSrc + "/textures/1.png", 64, 64, solid(64, 64, 10, 200, 10)));
         put(packSrc + "/textures.json", "{\"version\":1,\"textures\":{\"1\":{\"surface\":\"wood\",\"width\":8,\"height\":8}}}");
         put(packSrc + "/pack.json", "{\"name\": \"HD test\", \"author\": \"tests\"}");
         put(lack + "/textures.json", "{\"version\":1,\"textures\":{}}");
@@ -143,7 +143,7 @@ int main(int argc, char **argv)
         const std::string mod3 = dir + "/mymod3";
         std::filesystem::create_directories(mod3 + "/textures", ec);
         put(mod3 + "/textures.json", "{\"version\":1,\"textures\":{\"1\":{\"alpha\":\"luminance\"}}}");
-        CHECK(synth::writePngStored(mod3 + "/textures/1.png", 4, 4, solid(4, 4, 100, 200, 50)));
+        CHECK(synth::writePng(mod3 + "/textures/1.png", 4, 4, solid(4, 4, 100, 200, 50)));
         ts.open(mod3, base, base);
         CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg, &ts) == DECOR_OK);
         if (d.tex.size() == 1) CHECK(d.tex[0].source == 0 && d.tex[0].rgba[3] == (299 * 100 + 587 * 200 + 114 * 50) / 1000);

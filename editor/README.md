@@ -225,7 +225,7 @@ level's own models (an object of type 3 with that model, item none).
 * **Textures (Mod tab).** Decor and props (`models.cpp`) resolve each texture by its key (material `extras.texture`; an older
   glTF: the number in the image file name) through the open mod, merged field by field over the chosen texture pack, and read
   the glTF's own picture only when no source has the key (`TexSet` in `texset.h`, `decorLoad`; the format is
-  `docs/specs/texture-packs.md`, parsed by `port/mission/texpacks.h`). Exactly one pack is chosen: `ge007.ptexpack` (the game's own,
+  `docs/specs/texture-packs.md`, parsed by `port/assets/ge_texpacks.h`). Exactly one pack is chosen: `ge007.ptexpack` (the game's own,
   `<game>/texturepacks/ge007.ptexpack` else the export's copy) by default, or another complete `<game>/texturepacks/X.ptexpack`,
   a tar or a folder; one that lacks textures of ge007 is greyed out in the list with the reason and cannot be chosen. The mod's
   `textures/<n>.png` replace the picture of texture `n`, its `textures.json` changes other fields. *Pick a surface* puts the
@@ -310,7 +310,7 @@ python editor/tools/mcp_smoke.py <project-dam-editor exe> <export dir> <scratch 
 |---|---|
 | `doc.h/.cpp`, `doc_actions.cpp` | the document: level export, mission, selection, every action, undo |
 | `scene.cpp`, `view.cpp` | replay through `gfx_opengl_api`; camera, projection, picking |
-| `decor.h/.cpp`, `exportcache.*` | the glTF decor loader (cgltf + `png.cpp`); the export cache folders and the game runs that fill them |
+| `decor.h/.cpp`, `exportcache.*` | the glTF decor loader (cgltf; its pictures through `ge_assets`, `port/assets/ge_tex.h`); the export cache folders and the game runs that fill them |
 | `mcp.cpp`, `mcp_http.cpp` | JSON-RPC tools; the HTTP transport (cpp-httplib) |
 | `main.cpp` | `main()`, the loop, the command line and the test aids |
 | `ui_app.h` | the GUI state (`App`) and the helpers shared by the panel files |

@@ -1,5 +1,6 @@
 # Custom co-op missions (issues #100-#104): the mission library.
 # Owned by the missions-in-game track (mission lib, setup apply, Luau runtime).
+# (The package reader, PNG and texture resolution moved to ge_assets, port/assets.)
 # Plain host C/C++: its own static target, without the decomp's shadow headers
 # (port/shim, include/ have an N64 stdlib.h/math.h) or the forced
 # versioninfo.h, like ge_volk. The game links it; so do the tests and the
@@ -45,12 +46,9 @@ add_library(ge_mission STATIC
   "${CMAKE_SOURCE_DIR}/port/mission/mission_setup.c"
   "${CMAKE_SOURCE_DIR}/port/mission/mission_apply.c"
   "${CMAKE_SOURCE_DIR}/port/mission/mission_dir.c"
-  "${CMAKE_SOURCE_DIR}/port/mission/mission_pkg.c"
   "${CMAKE_SOURCE_DIR}/port/mission/mission_thumb.c"
-  "${CMAKE_SOURCE_DIR}/port/mission/texpacks.c"
   "${CMAKE_SOURCE_DIR}/port/mission/mission_lua.cpp"
   "${GE_MISSION_LIB_C}"
-  "${CMAKE_SOURCE_DIR}/port/third_party/cjson/cJSON.c"
   ${GE_LUAU_SRC}
 )
 set_property(TARGET ge_mission PROPERTY INCLUDE_DIRECTORIES
@@ -60,6 +58,7 @@ set_property(TARGET ge_mission PROPERTY INCLUDE_DIRECTORIES
   "${GE_LUAU}/VM/include" "${GE_LUAU}/VM/src"
   "${GE_LUAU}/Compiler/include" "${GE_LUAU}/Compiler/src"
   "${GE_LUAU}/Ast/include" "${GE_LUAU}/Bytecode/include" "${GE_LUAU}/Common/include")
+target_link_libraries(ge_mission PUBLIC ge_assets)   # port/assets/assets.cmake: packages, PNG, texture resolution, cJSON
 set_property(TARGET ge_mission PROPERTY COMPILE_OPTIONS "")
 # mission_setup.c inflates the setup row (zlib; the game's own src/game/zlib.h is not on this target's include path)
 if(ZLIB_INCLUDE_DIR)

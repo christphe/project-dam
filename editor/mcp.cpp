@@ -21,7 +21,7 @@
 #include "mission_setup.h"
 #include "model_names.h"
 #include "script_props.h"
-#include "texpacks.h"
+#include "ge_texpacks.h"
 
 // ---------------------------------------------------------------------------------------------
 // JSON helpers

@@ -1,6 +1,6 @@
 /* Custom co-op missions: mission.json load/save/validate (format in mission.h). */
 #include "mission.h"
-#include "mission_pkg.h"
+#include "ge_pkg.h"
 #include "cJSON.h"
 
 #include <stdio.h>

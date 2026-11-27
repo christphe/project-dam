@@ -19,7 +19,7 @@
 #include "missions.h"
 #include "missions_priv.h"
 #include "mission_dir.h"
-#include "mission_pkg.h"
+#include "ge_pkg.h"
 #ifdef __SWITCH__
 extern unsigned int romfsMountSelf(const char *name);   /* libnx romfs.h (romfsInit); <switch.h> clashes with the N64 types */
 #endif
