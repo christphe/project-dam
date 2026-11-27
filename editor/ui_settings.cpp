@@ -60,6 +60,7 @@ void drawSettingsWindow(App &a)
     if (ImGui::Checkbox("draw through an offscreen frame (OpenGL)", &a.prefOffscreen)) savePrefs(a);
     ImGui::EndDisabled();
     ImGui::TextDisabled("Avoids half-drawn frames on some drivers. Applies at the next start.");
+    texturePackCombo(a);
 
     ImGui::SeparatorText("MCP server");
     bool changed = ImGui::Checkbox("enable the MCP server", &a.prefMcp);

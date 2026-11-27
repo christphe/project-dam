@@ -89,11 +89,12 @@ The `key` decides it:
 |---|---|---|
 | `Video.*`, `Input.*`, `Game.*`, `Audio.*` | `ge007.ini` (`config.c`) | the row table in `optionsoverlay.c` (`rowByKey`) |
 | `Bond.*` | the selected save file (the game's watch settings, per profile) | `watchsettings.c` |
-| `__Name` (value) | computed: `__DisplayMode`, `__Resolution`, `__BondFile`, `Audio.Device` | `optionsMenuGet` / `optionsMenuSet` |
+| `__Name` (value) | computed: `__DisplayMode`, `__Resolution`, `__BondFile`, `__TexturePack`, `Audio.Device` | `optionsMenuGet` / `optionsMenuSet` |
 | `__Name` (action) | — | `optionsMenuAction` (`__QuitToDesktop`, `__RestartGame`, `__UpdateCheck`, `__AssignDevices`, `__ResetBindings`…) |
 
-Lists only the game knows (resolutions, audio devices) are filled at run time with
-`menu::setOptionLabels`.
+Lists only the game knows (resolutions, audio devices, texture packs) are filled at run time with
+`menu::setOptionLabels`. `__TexturePack` is the chosen pack's place in that list (0 = None); the
+file name is stored in `Video.TexturePack` (`port/src/texpack.c`).
 
 ## Defaults and the ini
 

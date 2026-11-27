@@ -538,6 +538,71 @@ def uuid_checks(exe, export, work):
         s.close()
 
 
+def texture_checks(exe, export, work):
+    """textures: the decor's textures, a mod's textures/<n>.png and a .ptexpack texture pack (mod first, then the pack)."""
+    import io
+    import shutil
+    import struct
+    import tarfile
+    import zlib
+
+    def png(w, h, rgb):
+        raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
+        def chunk(t, d):
+            return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+        return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+    moddir = os.path.join(work, "mods", "texmod")
+    shutil.rmtree(moddir, ignore_errors=True)
+    src = os.path.join(work, "mine.png")
+    open(src, "wb").write(png(16, 16, (200, 20, 20)))
+    packs = os.path.join(export, "texturepacks")   # next to the game's data folder (GE_EDITOR_DATA = <export>/data)
+    shutil.rmtree(packs, ignore_errors=True)
+    os.makedirs(packs)
+    with tarfile.open(os.path.join(packs, "smoke.ptexpack"), "w", format=tarfile.USTAR_FORMAT) as tf:
+        for name, data in (("pack.json", b'{"name": "Smoke pack"}'), ("textures/1.png", png(32, 32, (20, 200, 20)))):
+            ti = tarfile.TarInfo(name)
+            ti.size = len(data)
+            tf.addfile(ti, io.BytesIO(data))
+
+    s = Stdio(exe, export)
+    s.call("initialize", {"protocolVersion": "2025-06-18"})
+    names = [t["name"] for t in s.call("tools/list")["result"]["tools"]]
+    for want in ("textures", "mod_set_texture", "set_texture_pack"):
+        check(want in names, "tools/list has " + want)
+    err, d = s.tool("textures")
+    check(not err and any(p["file"] == "smoke.ptexpack" and p["name"] == "Smoke pack" for p in d["packs"]), "textures lists the pack: " + json.dumps(d.get("packs")))
+    lt = {t["texnum"]: t for t in d.get("level_textures", [])}
+    if 1 not in lt:
+        print("  skip  texture sources: the export has no glTF decor with texture 1 (" + json.dumps(d)[:160] + ")")
+        s.close()
+        shutil.rmtree(packs, ignore_errors=True)
+        return
+    check(lt[1]["from"] == "level", "texture 1 is the level's own at first")
+    err, d = s.tool("mod_open", dir=moddir)
+    err, d = s.tool("mod_set_texture", texnum=1, png=src)
+    lt = {t["texnum"]: t for t in d.get("level_textures", [])} if not err else {}
+    check(not err and lt.get(1, {}).get("from") == "mod" and lt[1]["w"] == 16 and d["mod_textures"] == [1],
+          "mod_set_texture: drawn from the mod: " + json.dumps(d)[:200])
+    check(os.path.isfile(os.path.join(moddir, "textures", "1.png")), "the picture is the mod's textures/1.png")
+    err, d = s.tool("set_texture_pack", file="smoke.ptexpack")
+    lt = {t["texnum"]: t for t in d.get("level_textures", [])} if not err else {}
+    check(not err and lt.get(1, {}).get("from") == "mod", "the mod's texture wins over the pack's")
+    err, d = s.tool("mod_set_texture", texnum=1, remove=True)
+    lt = {t["texnum"]: t for t in d.get("level_textures", [])} if not err else {}
+    check(not err and lt.get(1, {}).get("from") == "pack" and lt[1]["w"] == 32, "without the mod's, the pack's (from the tar): " + json.dumps(d)[:200])
+    err, d = s.tool("set_texture_pack", file="nope.ptexpack")
+    check(err, "set_texture_pack refuses a pack that is not there")
+    err, d = s.tool("mod_set_texture", texnum=5000, png=src)
+    check(err, "mod_set_texture refuses a texture number over 4095")
+    err, d = s.tool("set_texture_pack", file="")
+    lt = {t["texnum"]: t for t in d.get("level_textures", [])} if not err else {}
+    check(not err and lt.get(1, {}).get("from") == "level", "no pack: the level's own again")
+    s.close()
+    shutil.rmtree(packs, ignore_errors=True)
+
+
 def mod_checks(exe, export, work):
     """mod (campaign): create, two missions, reorder, save, reload; environment block."""
     import shutil
@@ -933,6 +998,7 @@ def main():
     transform_checks(exe, export, work)
     duplicate_checks(exe, export, work)
     mod_checks(exe, export, work)
+    texture_checks(exe, export, work)
     validator_checks(exe, export, work)
     behavior_checks(exe, export, work)
     presence_checks(exe, export, work)

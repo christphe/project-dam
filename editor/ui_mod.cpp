@@ -5,6 +5,10 @@
 
 #include "png.h"
 
+extern "C" {
+#include "texpacks.h"
+}
+
 
 namespace ed {
 
@@ -265,6 +269,158 @@ static void missionsSection(App &a)
     ImGui::PopTextWrapPos();
 }
 
+// ---- textures: the mod's textures/<n>.png and the texture pack the decor is drawn with ----
+
+// What the decor draws for texture `texnum` (the mod's picture, the pack's or the level's own), as a GL texture; 0 when the
+// open level's decor does not use it.
+static uint32_t texPreview(App &a, int texnum, const DecorTex **info)
+{
+    *info = nullptr;
+    const int gen = a.doc.decorGen + a.doc.levelGen * 100000;
+    if (a.texPreviewGen != gen) {
+        for (auto &kv : a.texPreview) if (kv.second) editorGlDeleteTexture(kv.second);
+        a.texPreview.clear();
+        a.texPreviewGen = gen;
+    }
+    if (!a.doc.hasLevel || !a.doc.level.hasDecor) return 0;
+    const DecorTex *t = nullptr;
+    for (const DecorTex &d : a.doc.level.decor.tex) if (d.texnum == texnum) { t = &d; break; }
+    *info = t;
+    if (!t) return 0;
+    auto it = a.texPreview.find(texnum);
+    if (it != a.texPreview.end()) return it->second;
+    const uint32_t id = editorGlUploadTexture(t->w, t->h, t->rgba.data());
+    a.texPreview[texnum] = id;
+    return id;
+}
+
+// Where the decor's picture of a texture came from, in a few words.
+static const char *texSourceName(const App &a, const DecorTex *t)
+{
+    if (!t) return "not in this level";
+    if (t->source < 0) return "the level's own";
+    const std::vector<std::string> &r = a.doc.level.texRoots;
+    if (a.doc.hasMod && t->source == 0 && !r.empty() && r[0] == a.doc.modDir) return "the mod's";
+    return "the texture pack's";
+}
+
+void texturePackCombo(App &a)
+{
+    Doc &d = a.doc;
+    static std::vector<TexPackInfo> packs;
+    static std::string lastRoot;
+    static double lastScan = -10;
+    const std::string root = d.texturePacksRoot();
+    if (root != lastRoot || ImGui::GetTime() - lastScan > 2.0) {   // the folder is read again every two seconds at most
+        lastRoot = root; lastScan = ImGui::GetTime();
+        packs.assign(64, TexPackInfo());
+        const int n = texpackScan(root.c_str(), packs.data(), (int)packs.size());
+        packs.resize((size_t)std::min(n, 64));
+    }
+    std::string cur = "None";
+    for (const TexPackInfo &p : packs) if (d.texPack == p.file) cur = p.name;
+    if (!d.texPack.empty() && cur == "None") cur = d.texPack + " (missing)";
+    ImGui::TextUnformatted("Texture pack");
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##texpack", cur.c_str())) {
+        if (ImGui::Selectable("None", d.texPack.empty())) { d.texPack.clear(); savePrefs(a); }
+        for (const TexPackInfo &p : packs) {
+            if (ImGui::Selectable(p.name, d.texPack == p.file)) { d.texPack = p.file; savePrefs(a); }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s%s%s%s%s", p.file, p.author[0] ? "\nby " : "", p.author, p.description[0] ? "\n" : "", p.description);
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Draws the level with a texture pack from %s, as the game does with Video > Texture pack.\nThe open mod's own textures win over the pack's.", root.c_str());
+}
+
+static void texturesSection(App &a)
+{
+    Doc &d = a.doc;
+    const std::vector<int> mine = d.modTextures();
+    char head[64];
+    snprintf(head, sizeof head, "Textures (%d)###modtextures", (int)mine.size());
+    if (!ImGui::CollapsingHeader(head, ImGuiTreeNodeFlags_DefaultOpen)) return;
+    texturePackCombo(a);
+    if (!d.hasLevel || !d.level.hasDecor) ImGui::TextDisabled("The textures show on the glTF decor: open a level first.");
+    std::string err;
+    // the picked texture: what is drawn, where it comes from, replace / remove
+    ImGui::BeginDisabled(!d.hasLevel || !d.level.hasDecor);
+    if (ImGui::Button(a.pickTexture ? "Click a surface... (Esc cancels)" : "Pick a surface")) a.pickTexture = !a.pickTexture;
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Click a wall, floor or ceiling in the view to get its texture number");
+    if (a.pickTexture && ImGui::IsKeyPressed(ImGuiKey_Escape)) a.pickTexture = false;
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80);
+    ImGui::InputInt("##texnum", &a.texPicked, 0, 0);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The texture number (-1 none)");
+    if (a.texPicked > TEXPACK_MAX_TEXNUM) a.texPicked = TEXPACK_MAX_TEXNUM;
+    if (a.texPicked < -1) a.texPicked = -1;
+    if (a.texPicked >= 0) {
+        const DecorTex *t = nullptr;
+        const uint32_t tex = texPreview(a, a.texPicked, &t);
+        if (tex) ImGui::Image((ImTextureID)(intptr_t)tex, ImVec2(64, 64));
+        else ImGui::Dummy(ImVec2(64, 64));
+        ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(90, 90, 100, 255));
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+        ImGui::Text("Texture %d: %s", a.texPicked, texSourceName(a, t));
+        if (t) {
+            if (t->source >= 0) ImGui::TextDisabled("%dx%d (the level's: %dx%d)", t->w, t->h, t->origW, t->origH);
+            else ImGui::TextDisabled("%dx%d: a picture of the same proportions maps the same way", t->w, t->h);
+        }
+        ImGui::BeginDisabled(!fileDialogAvailable());
+        if (ImGui::SmallButton("Replace...")) {
+            std::string src;
+            if (fileDialogOpenImage("", src)) {
+                if (d.modSetTexture(a.texPicked, src, err)) a.say("texture %d: the mod's textures/%d.png", a.texPicked, a.texPicked);
+                else a.say("texture: %s", err.c_str());
+            }
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("A PNG of your own (any size), copied as the mod's textures/%d.png. Only pictures you made, never the game's own.", a.texPicked);
+        if (std::find(mine.begin(), mine.end(), a.texPicked) != mine.end()) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Remove##picked")) {
+                if (d.modRemoveTexture(a.texPicked, err)) a.say("texture %d: the mod no longer replaces it", a.texPicked);
+                else a.say("texture: %s", err.c_str());
+            }
+        }
+        ImGui::EndGroup();
+    }
+    // the mod's replacements
+    ImGui::Spacing();
+    if (mine.empty()) ImGui::TextDisabled("The mod replaces no texture yet.");
+    int del = -1;
+    for (int n : mine) {
+        ImGui::PushID(n);
+        const DecorTex *t = nullptr;
+        const uint32_t tex = texPreview(a, n, &t);
+        if (tex) ImGui::Image((ImTextureID)(intptr_t)tex, ImVec2(32, 32));
+        else ImGui::Dummy(ImVec2(32, 32));
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        char lab[48];
+        snprintf(lab, sizeof lab, "textures/%d.png", n);
+        if (ImGui::Selectable(lab, a.texPicked == n, 0, ImVec2(140, 0))) a.texPicked = n;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", t ? "Used by the open level" : "Not used by the open level");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Remove")) del = n;
+        ImGui::PopID();
+    }
+    if (del >= 0 && !d.modRemoveTexture(del, err)) a.say("texture: %s", err.c_str());
+    for (const std::string &w : d.level.decor.texWarnings) {
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "%s", w.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextDisabled("textures/<n>.png replaces texture n in every mission of the mod, over the player's texture pack. Use pictures you made yourself: a mod never holds the game's own data.");
+    ImGui::PopTextWrapPos();
+}
+
 // The right panel's Mod tab: the mod's properties and its missions.
 void drawModTab(App &a)
 {
@@ -294,6 +450,7 @@ void drawModTab(App &a)
     }
     propertiesSection(a);
     missionsSection(a);
+    texturesSection(a);
 }
 
 } // namespace ed

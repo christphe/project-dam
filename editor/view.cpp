@@ -329,17 +329,18 @@ Hit pickScene(const Doc &d, const Vec3 &org, const Vec3 &dir)
     Hit best;
     best.t = 1e30f;
     // room geometry first: it hides what is behind it
-    float surf = 1e30f; int surfRoom = -1;
+    float surf = 1e30f; int surfRoom = -1, surfTex = -1;
     if (d.hasLevel) {
         for (const LTri &t : d.level.roomTris) {
             float tt;
-            if (rayTri(org, dir, t.a, t.b, t.c, t.cull, tt) && tt < surf) { surf = tt; surfRoom = t.room; }
+            if (rayTri(org, dir, t.a, t.b, t.c, t.cull, tt) && tt < surf) { surf = tt; surfRoom = t.room; surfTex = t.texnum; }
         }
     }
     if (surf < 1e29f) {
         best.hasSurface = true;
         best.surfacePoint = add(org, mulf(dir, surf));
         best.room = surfRoom;
+        best.texnum = surfTex;
     }
     const float limit = surf + 5.0f;
 

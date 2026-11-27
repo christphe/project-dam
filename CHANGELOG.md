@@ -9,6 +9,7 @@
 - PC: the first launch measures the GPU for about a second (shown on screen) and lowers the sky and sea detail, the anti-aliasing and alpha-to-coverage only where they cost frames; settings you changed are left alone. Sky and sea detail gets a Quarter (fastest) level
 - PC: the options menu names the buttons of the controller in use: the Nintendo letters for a Switch Pro controller, the cross, circle, square and triangle for a PlayStation one (on the controller drawing and in the button hints)
 
+- Texture packs: `.ptexpack` files in `texturepacks/` next to `data/` (on the Switch `sdmc:/switch/project-dam/texturepacks/`) replace the game's textures with pictures of any size; Video > Texture pack picks one, and the change shows at once, also during a mission. The Project Dam editor draws a level with the pack of your choice, and a mod can give a level's walls, floors and ceilings pictures of its own (Mod tab > Textures), drawn over the pack's while its missions are played. Format and rules in `docs/modding/`
 - Rounder heads: the conversion subdivides the characters' heads (and the heads built into bodies such as Boris or Natalya) up close, with the original mesh as the far level of detail; bodies keep their detailed mesh at every distance instead of switching to the simplified one. The models are converted again once at the next launch
 
 ### Changed

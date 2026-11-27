@@ -1,5 +1,7 @@
 /*
  * mission_pkg.h -- mod packages (issue #139): a mod is a `.pmod`, a plain uncompressed ustar tar of its source folder.
+ * A texture pack is a `.ptexpack`, the same kind of tar (pack.json + textures/<texnum>.png); everything below about
+ * ".pmod" holds for ".ptexpack" too.
  *
  * One read layer for everything the game, the editor and the tests read from a mod. A path is an ordinary path unless
  * one of its components ends in ".pmod" and the path up to there is a regular FILE: then the rest of the path names an
@@ -28,6 +30,11 @@ int pkgReadFile(const char *path, uint8_t **out, size_t *len);
 int pkgExists(const char *path);
 
 void pkgFree(void *p);
+
+/* Every regular-file entry of the package file `pkgFile` (a tar, not a folder): cb(u, name, offset of its data in the
+ * file, size). Built afresh, without the shared index cache, so the caller may keep the offsets and read them from another
+ * thread with its own FILE. 1 on success, 0 if it is not a readable tar. */
+int pkgForEachEntry(const char *pkgFile, void (*cb)(void *u, const char *name, long long off, long long size), void *u);
 
 /* Tar the folder `srcDir` into `outFile` (written to outFile.tmp, then renamed over it). Recursive, sorted, regular
  * files only; dotfiles and dot-folders (.git, .gitignore) and a top-level dist/ are skipped; times and owners are

@@ -41,6 +41,11 @@
         { "id": "crop", "show": "dispMode == 'custom'", "key": "Video.SafeAreaCrop", "label": "Crop overscan", "type": "toggle", "dev": "switch"},
         { "id": "reset_display", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
       ] },
+      { "name": "Texture pack", "controls": [
+        { "id": "texpack", "key": "__TexturePack", "label": "Texture pack", "type": "select", "default": "0",
+          "options": [ { "id": "0", "label": "None" } ],
+          "help": "Replacement textures: the .ptexpack files in the texturepacks folder next to the game. A mod's own textures win over the pack's." }
+      ] },
       { "name": "Performance", "show": "platform == 'pc' || dev", "controls": [
         { "id": "msaaHandheld", "key": "Video.MSAAHandheld", "label": "Anti-aliasing (handheld)", "type": "slider", "dev": "switch",
           "show": "dispMode == 'custom' && (platform == 'switch')", "options": [ { "id": "Off", "value": 1 }, { "id": "2x", "value": 2 }, { "id": "4x", "value": 4 } ],

@@ -79,6 +79,13 @@ void applyClick(App &a, const Hit &h)
     std::string err;
     if (scriptPickClick(a, h)) return;      // picking a script's target / property in the view
     if (zoneToolClick(a, h)) return;        // the Zone tool
+    if (a.pickTexture) {                    // Mod tab > Textures > Pick a surface
+        a.pickTexture = false;
+        if (!h.hasSurface || h.texnum < 0) { a.say("textures: no textured surface there (the decor must come from the glTF export)"); return; }
+        a.texPicked = h.texnum;
+        a.say("texture %d picked (room %d)", h.texnum, h.room);
+        return;
+    }
     if (a.pickSpawn && (h.kind == Hit::PAD || h.kind == Hit::MPAD || h.kind == Hit::ITEM)) {   // Mission tab > Start and test > pick in the view
         PadSpec ps;
         if (padFromHit(a, h, ps)) {
@@ -402,6 +409,7 @@ void loadPrefs(App &a)
     if (!prefGet(text, "mcp").empty()) a.prefMcp = prefGet(text, "mcp") != "0";
     const int port = atoi(prefGet(text, "mcpport").c_str());
     if (port > 0 && port < 65536) a.prefMcpPort = port;
+    a.doc.texPack = prefGet(text, "texpack");
 }
 
 void savePrefs(App &a)
@@ -410,6 +418,7 @@ void savePrefs(App &a)
     FILE *f = fopen(a.prefsFile.c_str(), "wb");
     if (!f) return;
     fprintf(f, "coop=%d\noffscreen=%d\nrenderer=%s\nmcp=%d\nmcpport=%d\n", a.playCoop ? 1 : 0, a.prefOffscreen ? 1 : 0, a.prefRenderer ? "vk" : "gl", a.prefMcp ? 1 : 0, a.prefMcpPort);
+    fprintf(f, "texpack=%s\n", a.doc.texPack.c_str());
     fclose(f);
 }
 

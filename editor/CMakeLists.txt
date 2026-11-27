@@ -95,7 +95,7 @@ endif()
 add_executable(test_decor "${ED_DIR}/tools/test_decor.cpp" "${ED_DIR}/decor.cpp" "${ED_DIR}/png.cpp")
 set_property(TARGET test_decor PROPERTY CXX_STANDARD 17)
 set_property(TARGET test_decor PROPERTY RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
-set_property(TARGET test_decor PROPERTY INCLUDE_DIRECTORIES "${ED_DIR}" "${ED_DIR}/tools" "${CMAKE_SOURCE_DIR}/port/export"
+set_property(TARGET test_decor PROPERTY INCLUDE_DIRECTORIES "${ED_DIR}" "${ED_DIR}/tools" "${CMAKE_SOURCE_DIR}/port/export" "${CMAKE_SOURCE_DIR}/port/mission"
   "${CMAKE_SOURCE_DIR}/port/third_party/cgltf" "${CMAKE_SOURCE_DIR}/port/third_party/cjson")
 set_property(TARGET test_decor PROPERTY COMPILE_OPTIONS "")
 set_property(TARGET test_decor PROPERTY COMPILE_DEFINITIONS "")

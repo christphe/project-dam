@@ -145,6 +145,11 @@ struct App {
     std::map<std::string, MissionInfo> infoCache;
     // the Mission tab: picking the play spawn in the view, and the text-field undo snapshot
     bool pickSpawn = false;
+    // the Mod tab's Textures: picking a surface in the view gives its texture number; previews of the decor's textures
+    bool pickTexture = false;
+    int texPicked = -1;
+    std::map<int, uint32_t> texPreview;   // texture number -> GL texture of what the decor draws (rebuilt when the decor reloads)
+    int texPreviewGen = -1;
     std::string fieldSnap;
     // ---- thumbnail (Mission tab): the last capture (or the loaded thumb.png), contrast / brightness, the previews ----
     std::vector<uint8_t> thumbBase;    // RGBA 320x240, as captured (before contrast / brightness)
@@ -342,6 +347,7 @@ void drawRightPanel(App &a, float x, float y, float w, float h);   // the tab ba
 void drawSelectionTab(App &a);
 void drawMissionTab(App &a);
 void drawModTab(App &a);
+void texturePackCombo(App &a);   // the texture pack the decor is drawn with (Mod tab > Textures, Tools > Settings)
 void doSaveMod(App &a);
 void doCheckMod(App &a);
 void doPublishMod(App &a);                                    // Mod > Publish...: opens the dialog

@@ -64,6 +64,7 @@ struct TextureCacheValue {
     uint32_t texture_id;
     uint8_t cms, cmt;
     bool linear_filter;
+    bool pack_mips;   /* a texture pack's picture (port/src/texpack.c): sampled with its mip chain */
 
     std::list<struct TextureCacheMapIter>::iterator lru_location;
 };

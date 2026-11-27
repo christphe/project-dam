@@ -36,6 +36,7 @@
 #include "input.h"
 #include "mixer.h"
 #include "crash.h"
+#include "texpack.h"
 #include "thread_config.h"
 #if defined(PLATFORM_SWITCH)
 #include "nxmem.h"
@@ -325,6 +326,7 @@ int main(int argc, char **argv)
     configLoad();
     defaultsMigrate();   /* an ini older than defaults.json's version: bring its values forward */
     videoApplySteamDeckPreset();
+    texpackInit();   /* Video.TexturePack: the texture pack in use (port/src/texpack.c) */
     updateCheckStart();   /* opt-in (Game.CheckUpdates, default off); no-op otherwise */
     atexit(portAtExit);   /* persist config + window geometry on clean exit */
 

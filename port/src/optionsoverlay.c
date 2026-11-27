@@ -60,6 +60,7 @@ extern MENU current_menu;
 #include "watchsettings.h"
 #include "audio.h"
 #include "updatecheck.h"
+#include "texpack.h"
 #include "../fast3d/gfx_api.h"
 
 /* file2.c; same extern as watchsettings.c (not in a header). */
@@ -2673,6 +2674,13 @@ int optionsMenuGet(const char *key, double *out)
 {
     if (!strcmp(key, "__DisplayMode")) { *out = videoGetDisplayMode(); return 1; }
     if (!strcmp(key, "__Resolution")) { *out = s_resSel; return 1; }
+    if (!strcmp(key, "__TexturePack")) {   /* the selected pack's place in the list, 0 = none */
+        static char files[64][128], names[64][64];
+        const int n = texpackListPacks(files, names, 64);
+        *out = 0;
+        for (int i = 0; i < n; i++) if (!strcmp(files[i], texpackSelected())) { *out = i + 1; break; }
+        return 1;
+    }
     if (!strcmp(key, "__BondFile")) {   /* the save file the profile settings are read from */
         const int f = watchSettingsActiveFolder();
         *out = f < 0 ? 0 : f;
@@ -2706,6 +2714,13 @@ void optionsMenuSet(const char *key, double value)
         else if (k - 1 < audioDeviceRefresh()) audioDeviceRequest(audioDeviceName(k - 1));
         return;
     }
+    if (!strcmp(key, "__TexturePack")) {
+        static char files[64][128], names[64][64];
+        const int k = (int)lround(value), n = texpackListPacks(files, names, 64);
+        texpackSelect(k >= 1 && k <= n ? files[k - 1] : "");
+        configSave();
+        return;
+    }
     if (!strcmp(key, "__Resolution")) {
         const int k = (int)lround(value);
         if (k < 0 || k >= s_resFitN || k == s_resSel) return;
@@ -2719,6 +2734,19 @@ void optionsMenuSet(const char *key, double value)
 }
 
 int optionsMenuResCount(void) { return s_resFitN; }
+
+/* The texture pack list for the menu: "None", then the packs in texturepacks/ (display names). */
+int optionsMenuTexPackCount(void)
+{
+    static char files[64][128], names[64][64];
+    return texpackListPacks(files, names, 64) + 1;
+}
+const char *optionsMenuTexPackLabel(int i)
+{
+    static char files[64][128], names[64][64];
+    const int n = texpackListPacks(files, names, 64);
+    return i <= 0 || i > n ? "None" : names[i - 1];
+}
 
 #ifndef GE_MENU_RUN_STAGE
 #define GE_MENU_RUN_STAGE 11   /* the same value input.c uses for current_menu while a mission runs */

@@ -253,9 +253,9 @@ void Level::loadDecor()
     decorNeedsExport = false;
     decor = Decor();
     roomTris = roomTrisRec;
-    if (!hasRec || name.empty()) { decorNote = "decor: level.rec"; printf("[editor] %s\n[editor] floor: level.json (no level.rec)\n", decorNote.c_str()); return; }
+    if (!hasRec || name.empty()) { decorNote = "decor: level.rec"; fprintf(stderr, "[editor] %s\n[editor] floor: level.json (no level.rec)\n", decorNote.c_str()); return; }
     const char *force = getenv("GE_EDITOR_DECOR");
-    if (force && std::string(force) == "rec") { decorNote = "decor: level.rec (GE_EDITOR_DECOR=rec)"; printf("[editor] %s\n[editor] floor: level.json (GE_EDITOR_DECOR=rec)\n", decorNote.c_str()); fflush(stdout); return; }
+    if (force && std::string(force) == "rec") { decorNote = "decor: level.rec (GE_EDITOR_DECOR=rec)"; fprintf(stderr, "[editor] %s\n[editor] floor: level.json (GE_EDITOR_DECOR=rec)\n", decorNote.c_str()); fflush(stderr); return; }
     namespace fs = std::filesystem;
     // the glTF export sits in a folder of its own beside the per-level exports (<game dir>/data/exports/gltf/<level>/), or in gltf/ inside one
     std::vector<std::string> roots;
@@ -266,20 +266,21 @@ void Level::loadDecor()
     for (const std::string &root : roots) {
         const std::string path = (fs::path(root) / name / (name + ".gltf")).string();
         std::string msg;
-        const DecorResult r = decorLoad(path, exportGltfVersion(), decor, msg);
+        const DecorResult r = decorLoad(path, exportGltfVersion(), decor, msg, texRoots);
         if (r == DECOR_MISSING) continue;
         if (r == DECOR_OK) {
             hasDecor = true;
             decorNote = "decor: " + msg + " (" + path + ")";
-            printf("[editor] %s\n", decorNote.c_str());
-            if (!decor.stan.empty()) printf("[editor] floor: glTF collision (%zu tiles)\n", decor.stan.size());
-            else printf("[editor] floor: level.json (the glTF has no collision)\n");
-            fflush(stdout);
+            fprintf(stderr, "[editor] %s\n", decorNote.c_str());
+            if (!decor.stan.empty()) fprintf(stderr, "[editor] floor: glTF collision (%zu tiles)\n", decor.stan.size());
+            else fprintf(stderr, "[editor] floor: level.json (the glTF has no collision)\n");
+            fflush(stderr);
             roomTris.clear();
             for (const DecorPrim &p : decor.prims) {
                 const DecorMaterial &m = decor.materials[(size_t)p.material];
                 for (size_t i = 0; i + 2 < p.idx.size(); i += 3) {
                     LTri t; t.room = p.room; t.cull = m.doubleSided ? 0 : 1;
+                    t.texnum = (m.tex >= 0 && !p.uv.empty()) ? decor.tex[(size_t)m.tex].texnum : -1;
                     Vec3 *dst[3] = { &t.a, &t.b, &t.c };
                     for (int k = 0; k < 3; k++) { const float *v = &p.pos[(size_t)p.idx[i + (size_t)k] * 3]; *dst[k] = { v[0], v[1], v[2] }; }
                     roomTris.push_back(t);
@@ -294,7 +295,7 @@ void Level::loadDecor()
     }
     if (!hasDecor && note == "decor: level.rec (no glTF export)") decorNeedsExport = true;
     decorNote = note;
-    printf("[editor] %s\n[editor] floor: level.json (no usable glTF export)\n", note.c_str()); fflush(stdout);
+    fprintf(stderr, "[editor] %s\n[editor] floor: level.json (no usable glTF export)\n", note.c_str()); fflush(stderr);
 }
 
 const LPad *Level::pad(int num) const
@@ -333,8 +334,14 @@ void Doc::reloadDecor()
 {
     if (!hasLevel) return;
     level.gltfRoot = gameExe.empty() ? "" : gltfDirFor(gameExe);
+    level.texRoots = textureRoots();
     level.loadDecor();
     decorGen++;
+}
+
+void Doc::syncModTextures()
+{
+    if (hasLevel && level.texRoots != textureRoots()) reloadDecor();
 }
 
 bool Doc::openLevel(const std::string &dir, std::string &err)
@@ -345,6 +352,7 @@ bool Doc::openLevel(const std::string &dir, std::string &err)
     hasLevel = false;
     level.dataDir = gameDataDir();
     level.gltfRoot = gameExe.empty() ? "" : gltfDirFor(gameExe);
+    level.texRoots = textureRoots();
     if (!level.load(dir, err)) return false;
     hasLevel = true;
     levelGen++;
