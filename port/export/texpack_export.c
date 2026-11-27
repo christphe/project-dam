@@ -1,6 +1,7 @@
 /* texpack_export.c -- the game's base texture pack, ge007.ptexpack (docs/specs/texture-packs.md).
  * CLEAN ROOM: written from docs/specs/ only. */
 #include "export_common.h"
+#include "ge_png.h"
 
 #include <stdlib.h>
 #ifdef _WIN32
@@ -65,7 +66,7 @@ int ex_export_textures(const char *rom_path, const char *pack_dir, ExLogFn log, 
         ok = ex_tex_decode(&tbl, n, &t, &derr) == 0 && t.rgba && t.width > 0 && t.height > 0;
         if (ok) {
             snprintf(path, sizeof path, "%s/textures/%d.png", pack_dir, n);
-            if (ex_png_write(path, t.width, t.height, t.rgba)) {
+            if (!gePngWrite(path, t.width, t.height, t.rgba, 0)) {
                 ex_logf(log, user, "texture pack: cannot write %s", path);
                 bad++; ok = 0;
             } else nfiles++;

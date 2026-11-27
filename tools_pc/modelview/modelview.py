@@ -104,7 +104,7 @@ def build(env):
     os.makedirs(odir, exist_ok=True); os.makedirs(DATA, exist_ok=True)
     e = dict(os.environ, PATH=os.path.dirname(gxx) + os.pathsep + os.environ.get("PATH", ""))
     objs = []
-    mission = os.path.join(REPO, "port", "mission")   # the texture-pack layer shared with the game: folders and tars, textures.json
+    assets = os.path.join(REPO, "port", "assets")   # ge_assets, shared with the game and the editor: packages, PNG, textures.json, texture resolution
 
     def obj(cc, src, flags):   # cached by modification time
         o = os.path.join(odir, os.path.basename(src) + ".o")
@@ -120,8 +120,8 @@ def build(env):
     for f in ("imgui.cpp", "imgui_draw.cpp", "imgui_tables.cpp", "imgui_widgets.cpp"):
         obj(gxx, os.path.join(imgui, f), ["-std=c++17", "-I", imgui, "-w"])
     obj(gcc, os.path.join(third, "cjson", "cJSON.c"), ["-w"])
-    for f in ("texpacks.c", "mission_pkg.c"):   # no zlib here: modelview decodes the PNGs itself
-        obj(gcc, os.path.join(mission, f), ["-I", mission, "-I", os.path.join(third, "cjson"), "-DTEXPACK_NO_PNG", "-w"])
+    for f in ("ge_pkg.c", "ge_png.c", "ge_texpacks.c", "ge_tex.c"):   # plain C; no zlib in this toolchain: ge_png.c uses its built-in inflate and stored deflate (GE_PNG_NO_ZLIB)
+        obj(gcc, os.path.join(assets, f), ["-I", assets, "-I", os.path.join(third, "cjson"), "-DGE_PNG_NO_ZLIB", "-w"])
 
     exe = os.path.join(bdir, "modelview.exe")
     if os.path.exists(exe):
@@ -131,7 +131,7 @@ def build(env):
             exe = os.path.join(bdir, "modelview_new.exe")
             print("modelview: modelview.exe is running, building", exe)
     srcs = [os.path.join(pc, f) for f in ("modelview.cpp", "mv_imgui.cpp", "mv_subdiv.cpp", "mv_mannequin.cpp", "mv_export.cpp", "mv_zlib.cpp", "mv_head.cpp")]
-    cmd = [gxx, "-O2", "-std=c++17", "-Wall", "-I", imgui, "-I", conv, "-I", os.path.join(third, "cgltf"), "-I", os.path.join(third, "cjson"), "-I", mission,
+    cmd = [gxx, "-O2", "-std=c++17", "-Wall", "-I", imgui, "-I", conv, "-I", os.path.join(third, "cgltf"), "-I", os.path.join(third, "cjson"), "-I", assets,
            "-o", exe] + srcs + objs + ["-lopengl32", "-lgdi32", "-luser32", "-limm32", "-static"]
     if subprocess.run(cmd, env=e).returncode != 0:
         sys.exit("modelview: the viewer did not build")

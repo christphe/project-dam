@@ -1,6 +1,6 @@
-/* Texture packs (.ptexpack): see texpacks.h. */
-#include "texpacks.h"
-#include "mission_pkg.h"
+/* Texture packs (.ptexpack): see ge_texpacks.h. */
+#include "ge_texpacks.h"
+#include "ge_pkg.h"
 #include "cJSON.h"
 
 #include <dirent.h>
@@ -8,9 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#ifndef TEXPACK_NO_PNG   /* modelview decodes PNGs itself and has no zlib */
-#include <zlib.h>
-#endif
 
 #define SUFFIX ".ptexpack"
 #define SUFFIX_LEN 9
@@ -181,98 +178,6 @@ int texpackIndexRead(const TexPackIndex *ix, int texnum, uint8_t **out, size_t *
     return 1;
 }
 
-#ifndef TEXPACK_NO_PNG
-/* ---- PNG ---------------------------------------------------------------------------------------------------------- */
-
-static uint32_t be32(const uint8_t *p) { return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]; }
-static int iabs(int v) { return v < 0 ? -v : v; }
-
-int texpackDecodePng(const uint8_t *file, size_t len, int *outW, int *outH, uint8_t **outRgba)
-{
-    uint8_t *idat = NULL, *raw = NULL, *pix = NULL, *rgba = NULL;
-    uint8_t plte[256 * 3], trns[256];
-    uint32_t w = 0, h = 0, pos = 8, idatn = 0, ch, stride, nplte = 0, ntrns = 0;
-    int ctype = -1, ok = 0;
-    z_stream z;
-    *outRgba = NULL;
-    *outW = *outH = 0;
-    memset(trns, 255, sizeof trns);
-    if (!file || len < 33 || len > 0x7FFFFFFF || memcmp(file, "\x89PNG\r\n\x1a\n", 8) != 0) return 0;
-    idat = (uint8_t *)malloc(len);
-    if (!idat) return 0;
-    while ((size_t)pos + 12 <= len) {
-        const uint32_t clen = be32(file + pos);
-        const uint8_t *type = file + pos + 4, *d = file + pos + 8;
-        if ((size_t)pos + 12 + clen > len) goto done;
-        if (!memcmp(type, "IHDR", 4) && clen >= 13) {
-            w = be32(d); h = be32(d + 4);
-            if (d[8] != 8 || d[12] != 0) goto done;   /* 8-bit, not interlaced */
-            ctype = d[9];
-        } else if (!memcmp(type, "PLTE", 4) && clen <= sizeof plte) {
-            memcpy(plte, d, clen); nplte = clen / 3;
-        } else if (!memcmp(type, "tRNS", 4) && clen <= sizeof trns) {
-            memcpy(trns, d, clen); ntrns = clen;
-        } else if (!memcmp(type, "IDAT", 4)) {
-            memcpy(idat + idatn, d, clen); idatn += clen;
-        } else if (!memcmp(type, "IEND", 4)) {
-            break;
-        }
-        pos += 12 + clen;
-    }
-    (void)ntrns;
-    ch = ctype == 0 ? 1 : ctype == 2 ? 3 : ctype == 3 ? 1 : ctype == 4 ? 2 : ctype == 6 ? 4 : 0;
-    if (!ch || !w || !h || w > 8192 || h > 8192 || !idatn || (ctype == 3 && !nplte)) goto done;
-    stride = w * ch;
-    raw = (uint8_t *)malloc((size_t)(stride + 1) * h);
-    pix = (uint8_t *)malloc((size_t)stride * h);
-    rgba = (uint8_t *)malloc((size_t)w * h * 4);
-    if (!raw || !pix || !rgba) goto done;
-    memset(&z, 0, sizeof z);
-    if (inflateInit(&z) != Z_OK) goto done;
-    z.next_in = idat; z.avail_in = idatn;
-    z.next_out = raw; z.avail_out = (uInt)((size_t)(stride + 1) * h);
-    if (inflate(&z, Z_FINISH) != Z_STREAM_END || z.avail_out != 0) { inflateEnd(&z); goto done; }
-    inflateEnd(&z);
-    for (uint32_t y = 0; y < h; y++) {   /* unfilter */
-        const uint8_t *src = raw + (size_t)y * (stride + 1) + 1;
-        uint8_t *dst = pix + (size_t)y * stride, *up = y ? dst - stride : NULL;
-        const int ft = raw[(size_t)y * (stride + 1)];
-        for (uint32_t x = 0; x < stride; x++) {
-            const int a = x >= ch ? dst[x - ch] : 0, b = up ? up[x] : 0, c = (up && x >= ch) ? up[x - ch] : 0;
-            int v = src[x];
-            switch (ft) {
-            case 0: break;
-            case 1: v += a; break;
-            case 2: v += b; break;
-            case 3: v += (a + b) / 2; break;
-            case 4: { const int p = a + b - c, pa = iabs(p - a), pb = iabs(p - b), pc = iabs(p - c);
-                      v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c); break; }
-            default: goto done;
-            }
-            dst[x] = (uint8_t)v;
-        }
-    }
-    for (size_t i = 0; i < (size_t)w * h; i++) {
-        const uint8_t *s = pix + i * ch;
-        uint8_t *o = rgba + i * 4;
-        switch (ctype) {
-        case 0: o[0] = o[1] = o[2] = s[0]; o[3] = 255; break;
-        case 4: o[0] = o[1] = o[2] = s[0]; o[3] = s[1]; break;
-        case 2: o[0] = s[0]; o[1] = s[1]; o[2] = s[2]; o[3] = 255; break;
-        case 6: memcpy(o, s, 4); break;
-        case 3:
-            if (s[0] >= nplte) goto done;
-            o[0] = plte[s[0] * 3]; o[1] = plte[s[0] * 3 + 1]; o[2] = plte[s[0] * 3 + 2]; o[3] = trns[s[0]];
-            break;
-        }
-    }
-    *outW = (int)w; *outH = (int)h; *outRgba = rgba; rgba = NULL;
-    ok = 1;
-done:
-    free(idat); free(raw); free(pix); free(rgba);
-    return ok;
-}
-#endif /* TEXPACK_NO_PNG */
 
 /* ---- textures.json ------------------------------------------------------------------------------------------------- */
 

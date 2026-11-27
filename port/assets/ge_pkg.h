@@ -1,5 +1,5 @@
 /*
- * mission_pkg.h -- mod packages (issue #139): a mod is a `.pmod`, a plain uncompressed ustar tar of its source folder.
+ * ge_pkg.h -- mod packages, in ge_assets (issue #139): a mod is a `.pmod`, a plain uncompressed ustar tar of its source folder.
  * A texture pack is a `.ptexpack`, the same kind of tar (pack.json + textures/<texnum>.png); everything below about
  * ".pmod" holds for ".ptexpack" too.
  *
@@ -12,8 +12,8 @@
  *
  * Not thread-safe (one index cache): call it from one thread at a time.
  */
-#ifndef MISSION_PKG_H
-#define MISSION_PKG_H
+#ifndef GE_PKG_H
+#define GE_PKG_H
 
 #include <stddef.h>
 #include <stdint.h>

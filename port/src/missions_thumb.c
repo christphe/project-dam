@@ -11,7 +11,7 @@
  * own photo stays. Textures are cached by source address, so the cache key carries a salt that changes with the
  * mod: leaving the screen or the mod brings the original photos back.
  *
- * PNG: 8-bit grey / grey+alpha / RGB / RGBA, not interlaced (what the editor writes), inflated with the host zlib.
+ * PNG: ge_assets' reader (port/assets/ge_png.h): 8-bit grey / grey+alpha / RGB / RGBA / palette, not interlaced.
  */
 #include "platform.h"
 #include <stdlib.h>
@@ -23,10 +23,9 @@
 #include "fs.h"
 #include "missions.h"
 #include "missions_priv.h"
-#include "mission_pkg.h"
-#include "realzlib.h"
+#include "ge_pkg.h"
+#include "ge_png.h"
 
-static int iabs(int v) { return v < 0 ? -v : v; }   /* the game's stdlib.h shadows the host one: no abs() */
 #include "mission_thumb.h"
 #include "game/front.h"   /* current_menu, MENU_MISSION_SELECT */
 
@@ -39,73 +38,19 @@ static uint8_t s_pix[20][FULL_W * FULL_H];   /* the thumb as grey, 320x240 (what
 static int     s_have[20];
 static unsigned s_gen = 1;
 
-static uint32_t be32(const uint8_t *p) { return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]; }
-
 /* Decode `path` into a w*h grey image (area average). 1 on success. */
 static int pngGray(const char *path, int dw, int dh, uint8_t *out)
 {
-    uint8_t *file = NULL, *idat = NULL, *raw = NULL, *pix = NULL;
+    uint8_t *file = NULL, *rgba = NULL;
     size_t flen = 0;
-    int32_t fsz;
-    uint32_t w = 0, h = 0, idatn = 0, pos = 8, ch, bpp, stride;
-    int ctype = -1, ok = 0;
-    z_stream z;
+    int w = 0, h = 0, ok = 0;
     if (!pkgReadFile(path, &file, &flen)) return 0;   /* the package layer: the PNG may be inside a .pmod */
-    fsz = (int32_t)flen;
-    if (fsz < 33 || memcmp(file, "\x89PNG\r\n\x1a\n", 8)) goto done;
-    idat = (uint8_t *)malloc((size_t)fsz);
-    if (!idat) goto done;
-    while (pos + 12 <= (uint32_t)fsz) {
-        uint32_t len = be32(file + pos);
-        const uint8_t *type = file + pos + 4, *d = file + pos + 8;
-        if (pos + 12 + len > (uint32_t)fsz) goto done;
-        if (!memcmp(type, "IHDR", 4) && len >= 13) {
-            w = be32(d); h = be32(d + 4);
-            if (d[8] != 8 || d[12] != 0) goto done;       /* 8-bit, not interlaced */
-            ctype = d[9];
-        } else if (!memcmp(type, "IDAT", 4)) {
-            memcpy(idat + idatn, d, len);
-            idatn += len;
-        } else if (!memcmp(type, "IEND", 4)) {
-            break;
-        }
-        pos += 12 + len;
+    if (gePngDecode(file, flen, &w, &h, &rgba)) {     /* ge_assets' reader: RGBA8 */
+        mthumbGrey(rgba, w, h, 4, dw, dh, out);       /* grey, area average */
+        ok = 1;
     }
-    ch = ctype == 0 ? 1 : ctype == 2 ? 3 : ctype == 4 ? 2 : ctype == 6 ? 4 : 0;
-    if (!ch || !w || !h || w > 8192 || h > 8192 || !idatn) goto done;
-    bpp = ch;
-    stride = w * ch;
-    raw = (uint8_t *)malloc((size_t)(stride + 1) * h);
-    pix = (uint8_t *)malloc((size_t)stride * h);
-    if (!raw || !pix) goto done;
-    memset(&z, 0, sizeof z);
-    if (inflateInit(&z) != Z_OK) goto done;
-    z.next_in = idat; z.avail_in = idatn;
-    z.next_out = raw; z.avail_out = (stride + 1) * h;
-    if (inflate(&z, Z_FINISH) != Z_STREAM_END || z.avail_out != 0) { inflateEnd(&z); goto done; }
-    inflateEnd(&z);
-    for (uint32_t y = 0; y < h; y++) {                      /* unfilter */
-        const uint8_t *src = raw + (size_t)y * (stride + 1) + 1;
-        uint8_t *dst = pix + (size_t)y * stride, *up = y ? dst - stride : NULL;
-        int ft = raw[(size_t)y * (stride + 1)];
-        for (uint32_t x = 0; x < stride; x++) {
-            int a = x >= bpp ? dst[x - bpp] : 0, b = up ? up[x] : 0, c = (up && x >= bpp) ? up[x - bpp] : 0, v = src[x];
-            switch (ft) {
-            case 1: v += a; break;
-            case 2: v += b; break;
-            case 3: v += (a + b) / 2; break;
-            case 4: { int p = a + b - c, pa = iabs(p - a), pb = iabs(p - b), pc = iabs(p - c);
-                      v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c); break; }
-            case 0: break;
-            default: goto done;
-            }
-            dst[x] = (uint8_t)v;
-        }
-    }
-    mthumbGrey(pix, (int)w, (int)h, (int)ch, dw, dh, out);   /* grey, area average */
-    ok = 1;
-done:
-    free(file); free(idat); free(raw); free(pix);
+    pkgFree(file);
+    free(rgba);
     return ok;
 }
 

@@ -10,7 +10,7 @@
         the port's bullet-hole clusters on a real wall texture per material, game vs port, plus DIR/index.html
   python tools_pc/fxview/fxview.py tabshots --out DIR [--backend vk|gl]
         the Muzzle, Tracers, Blood/smoke/debris and Explosions tabs (game vs port) at fixed times, plus the decal texture sheets, plus DIR/index.html
-  python tools_pc/fxview/fxview.py selftest                    texture codecs, puff frame stepping, effect files; no ROM, no window
+  python tools_pc/fxview/fxview.py selftest                    PNG codec, puff frame stepping, effect files; no ROM, no window
 
 Viewer options (the same on PC and Switch, see ge/fxview.cpp): --mode sprite|decal|cluster|muzzle|tracer|burst|explosion, --kind tracer|laser|watchlaser|wallpuff|
 bloodpuff|scatter|impact, --impact 0..19, --age TICKS, --angle RAD, --view side|split|orig|fx, --split F, --backdrop grey|dark|checker|wall,
@@ -20,7 +20,8 @@ to the log), --shot FILE.png, --w N --h N, --rom FILE.z64; tabs: --t SECONDS --t
 metal|wood|glass|water|snow|dirt|stone|blood --explo 0..20 (and --mrate --mscale --mvis --trrange --trperiod --bperiod --etail --tyaw --tpitch --tzoom --twall --twalltex --tseed);
 decal --view sheet [--page N]. Settings are saved to <out>/fxview.ini (loaded unless --shot/--probe/--dump; arguments win).
 
-The ROM: --rom, else FXVIEW_ROM / MODELVIEW_ROM / N64_ROM (environment or <repo>/.env, the main checkout's in a worktree), else the game's
+The textures come from ge007.ptexpack (ge_assets): --pack, else FXVIEW_PACK, else texturepacks/ beside the game (build-win/...), else it is written from the
+ROM into the output folder once. The ROM: --rom, else FXVIEW_ROM / MODELVIEW_ROM / N64_ROM (environment or <repo>/.env, the main checkout's in a worktree), else the game's
 data/ folder (build-win/data, the Ryujinx SD's switch/project-dam/data). Nothing ROM-derived is written into the repo: shots and
 decalshots refuse an output dir inside it (except tools_pc/fxview/data/, git-ignored).
 The effect shaders are port/shaders/fx/*.glsl: the packs (deko3d, Vulkan) are built from them, so a change rebuilds the pack on the next
@@ -71,6 +72,16 @@ def load_env():
 
 def find_rom(env):
     return devenv.find_rom(env, ("FXVIEW_ROM", "MODELVIEW_ROM"))
+
+
+def find_pack(env):
+    """ge007.ptexpack: FXVIEW_PACK (environment), else a build folder of this checkout (or the main one) that has texturepacks/ge007.ptexpack; None = the viewer writes it from the ROM"""
+    c = [os.environ["FXVIEW_PACK"]] if os.environ.get("FXVIEW_PACK") else []
+    c += [os.path.join(r, b, "texturepacks", "ge007.ptexpack") for r in devenv.roots() for b in ("build-win", "build-linux", "build-pc")]
+    for p in c:
+        if os.path.isdir(p) or os.path.isfile(p):
+            return os.path.abspath(p)
+    return None
 
 
 def inside(path, root):
@@ -127,6 +138,10 @@ def cmd_win(env, a):
             extra += ["--rom", rom]
     if "--shaders" not in extra:
         extra += ["--shaders", os.path.join(REPO, "port", "shaders", "fx")]
+    if "--pack" not in extra:
+        pack = find_pack(env)
+        if pack:
+            extra += ["--pack", pack]
     subprocess.Popen([exe, "--out", DATA + os.sep] + extra, cwd=os.path.join(REPO, "build-win"))
 
 
@@ -144,7 +159,8 @@ def _batch(env, a, name, shots, common_extra, caption, width):
     rom = a.rom or find_rom(env)
     if not rom:
         sys.exit("fxview: no ROM: pass --rom, or set N64_ROM in .env")
-    common = ["--rom", os.path.abspath(rom), "--shaders", os.path.join(REPO, "port", "shaders", "fx"), "--out", out + os.sep, "--backend", a.backend, "--ui", "0", "--w", str(a.w), "--h", str(a.h)] + common_extra
+    pack = find_pack(env)
+    common = (["--pack", pack] if pack else []) + ["--rom", os.path.abspath(rom), "--shaders", os.path.join(REPO, "port", "shaders", "fx"), "--out", out + os.sep, "--backend", a.backend, "--ui", "0", "--w", str(a.w), "--h", str(a.h)] + common_extra
     ok = {}
     for stem, args, cap in shots:
         png = os.path.join(out, stem + ".png")

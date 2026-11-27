@@ -17,8 +17,8 @@ extern "C" {
 #include "texset.h"
 
 extern "C" {
-#include "mission_pkg.h"
-#include "texpacks.h"
+#include "ge_pkg.h"
+#include "ge_tex.h"
 }
 
 static float linearToSrgb(float c)
@@ -70,46 +70,20 @@ static bool extrasString(const cgltf_extras &ex, const char *key, std::string &o
     return ok;
 }
 
-// A picture whose alpha is 255 everywhere under alpha "luminance" gets (299 R + 587 G + 114 B) / 1000 as alpha (the spec's rule).
-static void applyLuminanceAlpha(std::vector<uint8_t> &rgba)
-{
-    for (size_t i = 3; i < rgba.size(); i += 4) if (rgba[i] != 255) return;
-    for (size_t i = 0; i + 3 < rgba.size(); i += 4)
-        rgba[i + 3] = (uint8_t)((299 * rgba[i] + 587 * rgba[i + 1] + 114 * rgba[i + 2]) / 1000);
-}
-
-// The picture of texture `key` through the mod over the pack: true when a source had it and it decoded (rgba, w, h, path, source, surface set).
-// A mod picture that does not decode is skipped with a warning and the pack's is tried.
+// The picture of texture `key` through the mod over the pack (ge_assets' geTexResolve, port/assets/ge_tex.h): true when a source had it and
+// it decoded (rgba, w, h, path, source, surface set). A mod picture that does not decode is skipped with a warning and the pack's is tried.
 static bool resolveTexture(const TexSet &texs, const std::string &key, DecorTex &dt, std::vector<std::string> &warn)
 {
-    const TexPackSrc *mod = texs.mod(), *pack = texs.pack();
-    for (int pass = 0; pass < 2; pass++) {
-        const TexPackSrc *m = pass == 0 ? mod : nullptr;
-        if (pass == 1 && !mod) break;
-        TexPackResolved r;
-        if (!texpackResolve(m, pack, key.c_str(), &r)) continue;
-        if (r.modImageMissing) warn.push_back("texture " + key + ": the mod names a picture it does not hold (" + std::string(texpackSrcRoot(mod)) + ")");
-        if (r.imageFrom == TEXPACK_FROM_NONE) continue;
-        const TexPackSrc *src = r.imageFrom == TEXPACK_FROM_MOD ? mod : pack;
-        const std::string path = std::string(texpackSrcRoot(src)) + "/" + r.tex.image;
-        uint8_t *file = nullptr, *px = nullptr;
-        size_t len = 0;
-        if (!texpackResolvedRead(m, pack, &r, &file, &len)) { warn.push_back(path + ": cannot be read"); continue; }
-        int w = 0, h = 0;
-        const int ok = texpackDecodePng(file, len, &w, &h, &px);
-        free(file);
-        if (!ok) { warn.push_back(path + ": not readable (an 8-bit PNG, not interlaced, is expected)"); continue; }
-        dt.rgba.assign(px, px + (size_t)w * h * 4);
-        free(px);
-        if (r.tex.alphaLuminance) applyLuminanceAlpha(dt.rgba);
-        dt.w = w; dt.h = h; dt.path = path;
-        dt.origW = (r.tex.fields & TEXPACK_F_WIDTH) && r.tex.width > 0 ? r.tex.width : w;
-        dt.origH = (r.tex.fields & TEXPACK_F_HEIGHT) && r.tex.height > 0 ? r.tex.height : h;
-        dt.surface = r.tex.surface;
-        dt.source = r.imageFrom == TEXPACK_FROM_MOD ? 0 : (pack && texpackSrcMeta(pack)->base ? -1 : 1);
-        return true;
-    }
-    return false;
+    GeTexImage im;
+    auto onWarn = [](void *u, const char *msg) { static_cast<std::vector<std::string> *>(u)->push_back(msg); };
+    if (!geTexResolve(texs.handle(), key.c_str(), &im, onWarn, &warn)) return false;
+    dt.rgba.assign(im.rgba, im.rgba + (size_t)im.w * im.h * 4);
+    dt.w = im.w; dt.h = im.h; dt.path = im.path;
+    dt.origW = (im.tex.fields & TEXPACK_F_WIDTH) && im.tex.width > 0 ? im.tex.width : im.w;
+    dt.origH = (im.tex.fields & TEXPACK_F_HEIGHT) && im.tex.height > 0 ? im.tex.height : im.h;
+    dt.surface = im.tex.surface;
+    dt.source = im.source;
+    return true;
 }
 
 DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out, std::string &msg, const TexSet *texs, bool model)

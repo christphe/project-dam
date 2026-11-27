@@ -14,7 +14,9 @@ sources:
   - tools_pc/modelview/README.md
   - tools_pc/modelview/pc/mv_export.cpp
   - tools_pc/modelview/pc/modelview.cpp
-  - port/mission/texpacks.h
+  - port/assets/ge_texpacks.h
+  - port/assets/ge_tex.h
+  - port/assets/ge_png.c
 verified: 5f029f7b
 ---
 
@@ -96,8 +98,8 @@ ever tracked, and `shots` refuses an output directory inside the repo outside `d
   `textures/<key>.png` and `textures.json` merge field by field) over the chosen texture pack (`--texpack`, complete;
   `ge007.ptexpack`, the export's own, by default), [docs/specs/texture-packs.md](../specs/texture-packs.md). The game folder
   with `texturepacks/` and `mods/` comes from `--game`, `MODELVIEW_GAME` or a build folder of the checkout; the panel's
-  **Mod** and **Pack** lists show its entries, a pack that lacks textures of ge007 greyed out. The parser is the game's
-  `port/mission/texpacks.c`, built without its PNG decoder (`TEXPACK_NO_PNG`).
+  **Mod** and **Pack** lists show its entries, a pack that lacks textures of ge007 greyed out. The resolution is `ge_assets`' (`port/assets/ge_tex.h`, the same call
+  the editor uses), compiled without zlib (`GE_PNG_NO_ZLIB`: its own inflate).
 - `modelview.py selftest` checks the PNG reader, the pose maths and the HEAD method without an
   export. `modelview.py shots --out DIR` renders a grid of model (`BODY+HEAD`) × method.
 - Controls, flags and the panel: [tools_pc/modelview/README.md](../../tools_pc/modelview/README.md).

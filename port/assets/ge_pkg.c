@@ -1,5 +1,5 @@
-/* Mod packages (.pmod = ustar tar): see mission_pkg.h. */
-#include "mission_pkg.h"
+/* Mod packages (.pmod = ustar tar): see ge_pkg.h. */
+#include "ge_pkg.h"
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>

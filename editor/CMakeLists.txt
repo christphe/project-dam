@@ -82,6 +82,7 @@ add_executable(make_test_rec "${ED_DIR}/tools/make_test_rec.cpp")
 set_property(TARGET make_test_rec PROPERTY CXX_STANDARD 17)
 set_property(TARGET make_test_rec PROPERTY RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set_property(TARGET make_test_rec PROPERTY INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/port/levelrec" "${CMAKE_SOURCE_DIR}/port/export" "${ED_DIR}/tools")
+target_link_libraries(make_test_rec PRIVATE ge_assets)   # the PNG writer (the synthetic export's pictures)
 set_property(TARGET make_test_rec PROPERTY COMPILE_OPTIONS "")
 set_property(TARGET make_test_rec PROPERTY COMPILE_DEFINITIONS "")
 if(NOT WIN32)
@@ -92,7 +93,7 @@ elseif(MINGW)
 endif()
 
 # ---- glTF decor loader test (editor/decor.cpp on a synthetic glTF written by the test; no ROM) ----------
-add_executable(test_decor "${ED_DIR}/tools/test_decor.cpp" "${ED_DIR}/decor.cpp" "${ED_DIR}/png.cpp" "${ED_DIR}/texset.cpp")
+add_executable(test_decor "${ED_DIR}/tools/test_decor.cpp" "${ED_DIR}/decor.cpp" "${ED_DIR}/texset.cpp")
 set_property(TARGET test_decor PROPERTY CXX_STANDARD 17)
 set_property(TARGET test_decor PROPERTY RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set_property(TARGET test_decor PROPERTY INCLUDE_DIRECTORIES "${ED_DIR}" "${ED_DIR}/tools" "${CMAKE_SOURCE_DIR}/port/export" "${CMAKE_SOURCE_DIR}/port/mission"

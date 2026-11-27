@@ -1,20 +1,20 @@
 // The texture sources the editor resolves a texture through (docs/specs/texture-packs.md): the open mod (partial, merged field by
 // field) over the chosen texture pack (complete). ge007.ptexpack, the game's own pack, is the default and the reference the other
-// packs are checked against. Pure CPU, no GL.
+// packs are checked against. A thin C++ face of ge_assets' GeTexSet (port/assets/ge_tex.h), which does the work. Pure CPU, no GL.
 #pragma once
 
-#include <memory>
 #include <string>
 #include <vector>
 
 extern "C" {
-#include "texpacks.h"
+#include "ge_tex.h"
 }
 
 // The sources opened for one (mod, pack) choice. Read-only once open; decorLoad and the model library take a pointer to it.
 class TexSet {
 public:
-    TexSet() = default;
+    TexSet() : m_set(geTexSetNew()) {}
+    ~TexSet() { geTexSetFree(m_set); }
     TexSet(const TexSet &) = delete;
     TexSet &operator=(const TexSet &) = delete;
 
@@ -22,20 +22,19 @@ public:
     // pack, `baseRoot` ge007.ptexpack (both "" when there is none). A chosen pack that is not complete against the base is refused:
     // the base is used instead and note() says why. Without any base or pack, pack() is null (the glTF's own pictures are used).
     void open(const std::string &modRoot, const std::string &packRoot, const std::string &baseRoot);
-    const TexPackSrc *mod() const { return m_mod.get(); }
-    const TexPackSrc *pack() const { return m_pack.get(); }
-    const TexPackSrc *base() const { return m_base.get(); }
+    const TexPackSrc *mod() const { return geTexSetMod(m_set); }
+    const TexPackSrc *pack() const { return geTexSetPack(m_set); }
+    const TexPackSrc *base() const { return geTexSetBase(m_set); }
     const std::string &note() const { return m_note; }
     // What the open sources were made from, to see whether another choice needs a reload.
     std::string signature() const { return m_modRoot + "|" + m_packRoot + "|" + m_baseRoot; }
     static std::string signatureOf(const std::string &mod, const std::string &pack, const std::string &base) { return mod + "|" + pack + "|" + base; }
+    // The ge_assets set (its picture cache is mutable behind a const TexSet: decorLoad resolves through it).
+    GeTexSet *handle() const { return m_set; }
 
 private:
-    struct Closer { void operator()(TexPackSrc *s) const { texpackSrcClose(s); } };
-    std::unique_ptr<TexPackSrc, Closer> m_mod;
-    std::shared_ptr<TexPackSrc> m_pack, m_base;
+    GeTexSet *m_set;
     std::string m_modRoot, m_packRoot, m_baseRoot, m_note;
-    bool m_opened = false;
 };
 
 // One entry of the pack list.

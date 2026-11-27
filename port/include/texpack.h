@@ -2,7 +2,7 @@
 #define PORT_TEXPACK_H
 
 /*
- * texpack.h -- the game side of texture packs (port/mission/texpacks.h has the format): Video.TexturePack names one
+ * texpack.h -- the game side of texture packs (port/assets/ge_texpacks.h has the format): Video.TexturePack names one
  * <game>/texturepacks/X.ptexpack, and its textures/<n>.png replace texture n wherever the game draws it.
  *
  * The N64 display lists carry addresses, not texture numbers: texLoad (src/game/image.c, #ifdef PORT) tells this file

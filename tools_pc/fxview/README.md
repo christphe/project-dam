@@ -19,7 +19,7 @@ python tools/dev.py tools fxview nx [options]         # the NRO to the console o
 python tools/dev.py tools fxview shots --out <dir> [--backend vk|gl] [--backdrop grey|dark|checker|wall] [--bgtex N] [--fc N]
 python tools/dev.py tools fxview decalshots --out <dir> [--backend vk|gl] [--holes N] [--yaw DEG] [--pitch DEG]
 python tools/dev.py tools fxview tabshots --out <dir> [--backend vk|gl]     # the four tabs at fixed times, and the decal texture sheets
-python tools/dev.py tools fxview selftest             # texture codecs, puff frame stepping, the effect files; no ROM, no window
+python tools/dev.py tools fxview selftest             # PNG codec, puff frame stepping, the effect files; no ROM, no window
 ```
 
 `shots` writes one side-by-side PNG per effect (tracer, laser, watch laser; wall, blood and scatter puffs at several ages; nine bullet-hole
@@ -86,9 +86,17 @@ and does not write it, so shots are reproducible.
 ## The ROM
 
 Same lookup as the game, nothing ROM-derived is written anywhere: `--rom`, else `FXVIEW_ROM` / `N64_ROM` (environment; `python ... win` also reads
-`<repo>/.env`), else the game's data folder (PC: `./data`, `../data`; Switch: `sdmc:/switch/project-dam/data`). The sprite tables and every texture are decoded
-with modelview's decoder (`tools_pc/modelview/pc/mv_tex.cpp`, `mv_zlib.cpp`) plus `ge/fx_tex.cpp` for the codecs it lacks. The US image list and the table offsets are
-embedded at build time (CMake reads `imagelist.u.csv`, `port/src/romassets_u.s`, `src/game/image_bank.c`), so the Switch build needs no repo files. Only the US ROM is supported.
+`<repo>/.env`), else the game's data folder (PC: `./data`, `../data`; Switch: `sdmc:/switch/project-dam/data`). The sprite tables (which textures each effect uses) and the guards' weapon
+models are read from it; the textures themselves are not decoded from the ROM (see below). The table offsets are embedded at build time (CMake reads
+`port/src/romassets_u.s`, `src/game/image_bank.c`), so the Switch build needs no repo files. Only the US ROM is supported.
+
+## The textures
+
+Through `ge_assets` (`port/assets/ge_tex.h`, the resolution the editor and the game use): the mod (`--mod PATH`) over the chosen texture pack (`--texpack NAME|PATH`)
+over `ge007.ptexpack`, by texture number. `ge007.ptexpack` is `--pack`, else `FXVIEW_PACK`, else `texturepacks/ge007.ptexpack` beside the game (PC: `./texturepacks`,
+`../texturepacks`, next to the ROM's `data/` folder; Switch: `sdmc:/switch/project-dam/texturepacks`; `fxview.py` also looks in the checkout's `build-win`, `build-linux`);
+when none is found and a ROM is, it is written once into `--out` with the exporter (`ex_ensure_base_pack`). Every texture fxview shows is a texture-bank number, so all of
+them come from the pack. The log says `texture pack: <root>, 2698 textures`.
 
 ## Hot reload of the effect shaders (PC)
 
@@ -116,5 +124,5 @@ the Lights block rebuilds (r near 0 = no inverse projection), `coverage` the hol
 
 ## Files
 
-`fxview.py` (launcher: Docker builds, `shots`, `decalshots`, `selftest`), `ge/fxview.cpp` (the viewer), `ge/fx_rom.*` (ROM and image tables), `ge/fx_tex.*` (texture codecs),
+`fxview.py` (launcher: Docker builds, `shots`, `decalshots`, `selftest`), `ge/fxview.cpp` (the viewer), `ge/fx_rom.*` (ROM and image tables), `ge/fx_tex.*` (textures through ge_assets),
 `ge/fx_tabs.inc` (the four tabs), `ge/fx_reload.*` (PC hot reload), `combiners.txt` + `shaders/diag.glsl` (tool-only combiners), `CMakeLists.txt`.

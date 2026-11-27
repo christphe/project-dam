@@ -1,5 +1,5 @@
 /*
- * texpacks.h -- texture packs: replacement pictures for the game's textures, shared by the game and the editor.
+ * ge_texpacks.h -- texture packs: replacement pictures for the game's textures, shared by the game and the tools (ge_assets).
  *
  * A texture pack is a `.ptexpack`: a plain uncompressed ustar tar (the .pmod format, mission_pkg.h) holding
  *
@@ -13,8 +13,8 @@
  * The newer format (textures.json: one entry per texture key, a complete base pack ge007.ptexpack, mods merged over a pack) is the
  * parsed-pack API further down; docs/specs/texture-packs.md. The picture index above is the game's reader and does not use it.
  *
- * Plain C, no game headers. Not thread-safe (the package layer has one index cache). Built with -DTEXPACK_NO_PNG, texpackDecodePng
- * is left out (a reader without zlib, modelview, decodes the PNGs itself).
+ * Plain C, no game headers. Not thread-safe (the package layer has one index cache). The pictures are PNG files: ge_png.h decodes them;
+ * ge_tex.h resolves a texture key to pixels through a mod over a pack over ge007.ptexpack.
  */
 #ifndef TEXPACKS_H
 #define TEXPACKS_H
@@ -57,10 +57,6 @@ int texpackIndexCount(const TexPackIndex *ix);      /* how many texture numbers 
 int texpackIndexHas(const TexPackIndex *ix, int texnum);
 /* The PNG file of texture `texnum`: *out malloc'd (free()), *len bytes. 1 on success. */
 int texpackIndexRead(const TexPackIndex *ix, int texnum, uint8_t **out, size_t *len);
-
-/* PNG -> RGBA8 (top-down). 8-bit grey / grey+alpha / RGB / RGBA / palette (with tRNS), not interlaced. 1 on success;
- * *rgba is malloc'd (free with free()). Sizes over 8192 on a side are refused. */
-int texpackDecodePng(const uint8_t *file, size_t len, int *w, int *h, uint8_t **rgba);
 
 
 /* ---- the texture-pack format with textures.json (docs/specs/texture-packs.md) ----

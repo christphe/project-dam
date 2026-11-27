@@ -1,6 +1,6 @@
 // The Luau runtime of a custom mission: see mission_lua.h.
 #include "mission_lua.h"
-#include "mission_pkg.h"
+#include "ge_pkg.h"
 
 #include <algorithm>
 #include <chrono>

@@ -56,10 +56,7 @@ void ex_tex_table_close(ExTexTable *t);
 int ex_tex_decode(const ExTexTable *t, int texnum, ExTexture *out, const char **err);
 void ex_tex_free(ExTexture *tex);
 
-/* Writes an 8-bit RGBA PNG (zlib-compressed IDAT, no filter needed). 0 on success. */
-int ex_png_write(const char *path, int width, int height, const uint8_t *rgba);
-/* Same, into memory (malloc'd *out, *out_len bytes). 0 on success. */
-int ex_png_encode(int width, int height, const uint8_t *rgba, uint8_t **out, size_t *out_len);
+/* PNG: the exporter writes its pictures with ge_assets' writer (port/assets/ge_png.h: gePngWrite / gePngEncode). */
 
 typedef void (*ExLogFn)(void *user, const char *line);
 

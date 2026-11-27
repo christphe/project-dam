@@ -1,5 +1,6 @@
 /* test_export_tex.c -- PNG writer self-test + whole-bank texture decode (issue #150). */
 #include "export.h"
+#include "ge_png.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,7 +23,7 @@ static void test_png(void)
     int saw_ihdr = 0, saw_iend = 0;
     uLongf rawlen;
     for (i = 0; i < sizeof img; i++) img[i] = (uint8_t)(i * 37 + 11);
-    CHECK(ex_png_encode(W, H, img, &png, &len) == 0, "png encode");
+    CHECK(gePngEncode(W, H, img, 0, &png, &len) == 1, "png encode");
     if (!png) return;
     CHECK(len > 8 && memcmp(png, "\x89PNG\r\n\x1a\n", 8) == 0, "png signature");
     idat = (uint8_t *)malloc(len);
@@ -119,7 +120,7 @@ static void test_rom(const char *path, const char *region)
                 if (dir) {
                     char name[512];
                     snprintf(name, sizeof name, "%s/%d.png", dir, i);
-                    if (ex_png_write(name, tx.width, tx.height, tx.rgba)) printf("  could not write %s\n", name);
+                    if (!gePngWrite(name, tx.width, tx.height, tx.rgba, 0)) printf("  could not write %s\n", name);
                 }
             }
             ex_tex_free(&tx);

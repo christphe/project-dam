@@ -37,7 +37,7 @@ add_library(ge007_export STATIC ${EXPORT_SRC})
 target_include_directories(ge007_export PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(ge007_export PRIVATE "${ZLIB_INCLUDE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_options(ge007_export PRIVATE -O2 -Wall -Wextra)
-target_link_libraries(ge007_export PUBLIC ge007_convert m)
+target_link_libraries(ge007_export PUBLIC ge007_convert ge_assets m)   # ge_assets (port/assets): the PNG writer
 
 if(NOT GE_SWITCH)
   add_executable(ge007-export ge007_export_cli.c)

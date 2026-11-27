@@ -6,7 +6,7 @@
 #include "png.h"
 
 extern "C" {
-#include "texpacks.h"
+#include "ge_texpacks.h"
 }
 
 

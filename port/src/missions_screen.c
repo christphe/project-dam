@@ -26,7 +26,7 @@
 #include "fs.h"
 #include "mission.h"
 #include "mission_dir.h"
-#include "mission_pkg.h"
+#include "ge_pkg.h"
 #include "missions.h"
 #include "missions_priv.h"
 #include "realzlib.h"

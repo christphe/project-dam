@@ -12,58 +12,16 @@
 #include <string>
 #include <vector>
 
-namespace synth {
-
-inline uint32_t crc32(const uint8_t *p, size_t n, uint32_t c = 0)
-{
-    c = ~c;
-    for (size_t i = 0; i < n; i++) {
-        c ^= p[i];
-        for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
-    }
-    return ~c;
+extern "C" {
+#include "ge_png.h"
 }
 
-// An RGBA8 PNG with stored (uncompressed) deflate blocks: no zlib needed to write it.
-inline bool writePngStored(const std::string &path, int w, int h, const std::vector<uint8_t> &rgba)
+namespace synth {
+
+// An RGBA8 PNG (ge_assets' writer).
+inline bool writePng(const std::string &path, int w, int h, const std::vector<uint8_t> &rgba)
 {
-    std::vector<uint8_t> raw;
-    for (int y = 0; y < h; y++) {
-        raw.push_back(0);   // filter: none
-        raw.insert(raw.end(), rgba.begin() + (size_t)y * w * 4, rgba.begin() + (size_t)(y + 1) * w * 4);
-    }
-    std::vector<uint8_t> z = { 0x78, 0x01 };
-    for (size_t off = 0; off < raw.size();) {
-        const size_t n = std::min<size_t>(65535, raw.size() - off);
-        z.push_back(off + n == raw.size() ? 1 : 0);
-        z.push_back((uint8_t)(n & 255)); z.push_back((uint8_t)(n >> 8));
-        z.push_back((uint8_t)(~n & 255)); z.push_back((uint8_t)((~n >> 8) & 255));
-        z.insert(z.end(), raw.begin() + (long)off, raw.begin() + (long)(off + n));
-        off += n;
-    }
-    uint32_t a = 1, b = 0;
-    for (uint8_t v : raw) { a = (a + v) % 65521; b = (b + a) % 65521; }
-    const uint32_t ad = b << 16 | a;
-    for (int s = 24; s >= 0; s -= 8) z.push_back((uint8_t)(ad >> s));
-    FILE *f = fopen(path.c_str(), "wb");
-    if (!f) return false;
-    auto be32 = [&](uint32_t v) { const uint8_t b4[4] = { (uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v }; fwrite(b4, 1, 4, f); };
-    auto chunk = [&](const char *type, const std::vector<uint8_t> &d) {
-        be32((uint32_t)d.size());
-        std::vector<uint8_t> td(type, type + 4);
-        td.insert(td.end(), d.begin(), d.end());
-        fwrite(td.data(), 1, td.size(), f);
-        be32(crc32(td.data(), td.size()));
-    };
-    static const uint8_t sig[8] = { 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a };
-    fwrite(sig, 1, 8, f);
-    std::vector<uint8_t> ihdr = { (uint8_t)(w >> 24), (uint8_t)(w >> 16), (uint8_t)(w >> 8), (uint8_t)w,
-                                  (uint8_t)(h >> 24), (uint8_t)(h >> 16), (uint8_t)(h >> 8), (uint8_t)h, 8, 6, 0, 0, 0 };
-    chunk("IHDR", ihdr);
-    chunk("IDAT", z);
-    chunk("IEND", {});
-    fclose(f);
-    return true;
+    return rgba.size() >= (size_t)w * h * 4 && gePngWrite(path.c_str(), w, h, rgba.data(), 0) != 0;
 }
 
 inline float toLinear(float s) { return s <= 0.04045f ? s / 12.92f : powf((s + 0.055f) / 1.055f, 2.4f); }
@@ -88,7 +46,7 @@ inline bool writeGltf(const std::string &root, const std::string &level, int exp
         const bool c = ((x / 2) + (y / 2)) & 1;
         p[0] = c ? 200 : 40; p[1] = c ? 190 : 90; p[2] = c ? 60 : 120; p[3] = 255;
     }
-    if (!writePngStored((dir / "textures" / "1.png").string(), 8, 8, tex)) return false;
+    if (!writePng((dir / "textures" / "1.png").string(), 8, 8, tex)) return false;
 
     std::vector<Room> rooms = {
         { 1, { 100.f, 0.f, 0.f }, { { -200, -200, 200, 200, 0, { 1, 1, 1 }, 1, 0 }, { -200, 200, 200, 200, 120, { 0.5f, 0.1f, 0.1f }, 1, 1 },

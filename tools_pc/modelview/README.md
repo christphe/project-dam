@@ -99,9 +99,9 @@ where you run the command. `shots` takes `--mod` and `--texpack` too.
 
 `pc/mv_mesh.h` (the data model: joint-local vertices, UV, RGBA, joint id, layer; joints with a rest offset; materials
 with the export's image), `pc/mv_export.h/.cpp` (the export: `characters.json` through cJSON, the glTF through
-cgltf, body + head assembly, posing from `animations/<name>.gltf` retargeted by node name, a PNG reader, and the texture
-sources `mv_tex_*`: the mod over the pack through `port/mission/texpacks.c` + `mission_pkg.c`, built with `-DTEXPACK_NO_PNG`), `pc/mv_subdiv.h/.cpp` (the method
+cgltf, body + head assembly, posing from `animations/<name>.gltf` retargeted by node name, and the texture
+sources `mv_tex_*`: the mod over the pack through `ge_assets` (`port/assets/`: `ge_pkg.c`, `ge_png.c`, `ge_texpacks.c`, `ge_tex.c`, built without zlib, `GE_PNG_NO_ZLIB`)), `pc/mv_subdiv.h/.cpp` (the method
 interface, edge classification, FLAT, PN through `conv_subdiv.c`, PHONG, BUTTERFLY, LOOP), `pc/mv_head.cpp` (HEAD),
 `pc/mv_mannequin.cpp` (the test model), `pc/modelview.cpp` (window, GL, the ImGui panel, `.ini`),
 `pc/mv_imgui.h/.cpp` (ImGui renderer and input; ImGui, cgltf and cJSON are `port/third_party`), `pc/mv_zlib.cpp` +
-`pc/shim/zlib.h` (inflate), `pc/mv_png.h` (PNG writer, copied from seaview).
+`pc/shim/zlib.h` (inflate), `pc/mv_png.h` (PNG writer: `ge_png.c`).
