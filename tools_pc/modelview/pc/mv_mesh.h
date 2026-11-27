@@ -21,8 +21,8 @@ struct MvVertex {
     bool head = false; // in the head region (the converter: CvSdVert.head); only head triangles are subdivided by GAME
 };
 
-// A texture + wrap modes (0 wrap, 1 clamp, 2 mirror), from a display-list texture marker.
-struct MvMaterial { int texnum = -1; int wrapS = 0, wrapT = 0; };
+// A texture + wrap modes (0 wrap, 1 clamp, 2 mirror): the export's PNG (image) and its texture number.
+struct MvMaterial { int texnum = -1; int wrapS = 0, wrapT = 0; std::string image; };
 
 struct MvMesh {
     std::string name;

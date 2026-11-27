@@ -1,6 +1,8 @@
 // modelview: compare mesh subdivision methods on a model (original | subdivided).
 // UI: Dear ImGui panel on the left. Mouse (outside the panel): left-drag orbit, right- or middle-drag pan, wheel zoom. Keys: R / Home reset camera, F12 screenshot, Esc quit.
-// args: --shot f.png --w n --h n --method FLAT|PN|PHONG|BUTTERFLY|LOOP --passes 1|2 --crease deg --view side|split|sub|orig
+// The characters come from the static export (characters/characters.json + glTF, docs/specs/characters.md): --export DIR.
+// args: --export DIR --body FILE --head FILE --specs 0|1 --hair 0|1 --shot f.png --w n --h n --method FLAT|PN|PHONG|BUTTERFLY|LOOP|HEAD
+//       --passes 1|2 --crease deg --view side|split|sub|orig
 //       --wire 0|1 --edges 0|1 --checker 0|1 --normals 0|1 --light 0|1 --smooth 0|1   (the command line wins over data/modelview.ini)
 #include <windows.h>
 #include <GL/gl.h>
@@ -14,9 +16,7 @@
 #include "mv_mesh.h"
 #include "mv_subdiv.h"
 #include "mv_png.h"
-#include "mv_rom.h"
-#include "mv_anim.h"
-#include "mv_tex.h"
+#include "mv_export.h"
 #include <map>
 #include "mv_imgui.h"
 #include "imgui.h"
@@ -53,7 +53,7 @@ out vec4 o;
 void main() {
     vec3 base = uVCol != 0 ? vC.rgb : vec3(0.75);
     if (uMode == 1) base = texture(uTex, vUV).rgb;   // checker: 1 UV unit = 32 texels
-    else if (uMode == 2) { vec4 t = texture(uTex, vUV * 32.0 / uTexSize); if (t.a < 0.1) discard; base = t.rgb * (uVCol != 0 ? vC.rgb : vec3(1.0)); }
+    else if (uMode == 2) { vec4 t = texture(uTex, vUV); if (t.a < 0.1) discard; base = t.rgb * (uVCol != 0 ? vC.rgb : vec3(1.0)); }
     if (uHilite != 0 && vC.a < 0.75) base = mix(base, vec3(1.0, 0.35, 0.2), 0.45);   // a head triangle (alpha 0.5)
     float shade = 1.0;
     if (uLight != 0) {
@@ -132,12 +132,18 @@ struct Gpu { GLuint vaoT = 0, vboT = 0, vaoL = 0, vboL = 0, vaoN = 0, vboN = 0; 
 static Gpu g_gOrig, g_gSub;
 static GLuint g_pMesh = 0, g_pLine = 0, g_tChecker = 0;
 
-static std::string g_modelName;   // "" = the test mannequin, else a C* file of the ROM
+// the character, like the game's makeonebody: a body and a head (C* file names of the export; both "" = the test mannequin)
+static std::string g_bodyName, g_headName;
+static bool g_specs = false, g_hair = true;   // the head's switches: sunglasses (part 0), hair (part 1)
+static bool g_bodyScale = true;               // the table's body scale (0.95 for one body, 1 for the others)
+static bool g_sameSex = false;                // the head list: only heads of the body's sex (the game's random pick)
 static int g_tier = 0;            // 0 near (detailed), 1 far (simplified)
-static std::string g_loadErr, g_animNote, g_texInfo;
+static std::string g_loadErr, g_animNote, g_texInfo, g_exportErr;
+static MvCharInfo g_charInfo;
 static bool g_tex = true;                                  // draw the model's textures
 static int g_animIdx = -1; static bool g_animOn = true, g_play = false; static float g_frame = 0, g_speed = 1; static std::string g_animName = "idle";
-static std::map<int, std::pair<GLuint, std::pair<int, int>>> g_texGL;   // texnum -> GL texture, size (0 = not decodable)
+static std::map<std::string, std::pair<GLuint, std::pair<int, int>>> g_texGL;   // image path -> GL texture, size (0 = not decodable)
+static bool isMannequin() { return g_bodyName.empty() && g_headName.empty(); }
 static void frameModel() {   // the camera target and distance from the model's bounding box
     const std::vector<MvVec3> jw = mv_joint_worlds(g_orig);
     float lo[3] = { 1e30f, 1e30f, 1e30f }, hi[3] = { -1e30f, -1e30f, -1e30f };
@@ -152,10 +158,14 @@ static void frameModel() {   // the camera target and distance from the model's 
 }
 static void resetCamera() { g_yaw = 25; g_pitch = 12; frameModel(); }
 static void applyPose() {   // skin the model with the chosen animation frame (the subdivision stays in the rest pose)
-    if (g_modelName.empty() || !mv_rom_ready()) { g_orig.pose.clear(); g_sub.pose.clear(); g_dirtyGpu = true; return; }   // animations: not enabled in this build step
-    int ns = 0, nt = 0; const std::vector<uint8_t>& img = mv_rom_model_image(&ns, &nt);
+    g_animNote.clear();
+    if (isMannequin() || !g_animOn || g_bodyName.empty() || g_animIdx < 0) {   // the bind pose: joint offsets only
+        g_orig.pose.clear(); g_sub.pose.clear(); g_dirtyGpu = true;
+        if (!isMannequin() && g_bodyName.empty()) g_animNote = "a head on its own is not animated: pick a body";
+        return;
+    }
     std::vector<float> pose;
-    mv_anim_pose(img, ns, nt, g_modelName, g_animOn ? g_animIdx : -1, (int)g_frame, (int)g_orig.joints.size(), pose, g_animNote);
+    if (!mv_export_pose(g_animIdx, g_frame, (int)g_orig.joints.size(), pose)) g_animNote = "animation not found in this body";
     g_orig.pose = pose;
     if (g_sub.joints.size() == g_orig.joints.size()) g_sub.pose = pose;
     g_dirtyGpu = true;
@@ -221,18 +231,29 @@ static void upload(const MvMesh& m, const std::vector<uint8_t>& flags, Gpu& g) {
 }
 
 static std::string g_methodNote;
-static bool loadModel(const std::string& name) {   // "" = the mannequin; keeps the old model on failure
-    MvMesh m; std::string err;
-    if (name.empty()) m = mv_make_mannequin();
-    else if (!mv_rom_load(name, g_tier, m, err)) { g_loadErr = name + ": " + err; fprintf(stderr, "model %s\n", g_loadErr.c_str()); return false; }
-    g_loadErr.clear(); g_orig = m; g_modelName = name; g_dirtyMesh = true;
+static int animFind(const std::string& n) { const std::vector<MvAnimInfo>& al = mv_export_anims(); for (size_t i = 0; i < al.size(); i++) if (al[i].name == n) return (int)i; return -1; }
+// Builds the character from g_bodyName / g_headName / the switches (both names empty = the mannequin); keeps the old model on failure.
+static bool loadCharacter(bool reframe = true) {
+    MvMesh m; std::string err; MvCharInfo info;
+    if (isMannequin()) m = mv_make_mannequin();
+    else {
+        MvCharSpec sp; sp.tier = g_tier; sp.sunglasses = g_specs; sp.hair = g_hair;
+        sp.body = g_bodyName.empty() ? -1 : mv_export_find(g_bodyName); sp.head = g_headName.empty() ? -1 : mv_export_find(g_headName);
+        const std::string what = g_bodyName + (g_headName.empty() ? "" : (g_bodyName.empty() ? "" : " + ") + g_headName);
+        if (!mv_export_ready()) err = "no export";
+        else if ((!g_bodyName.empty() && sp.body < 0) || (!g_headName.empty() && sp.head < 0)) err = "not in the export";
+        if (!err.empty() || !mv_export_build(sp, m, info, err)) { g_loadErr = what + ": " + err; fprintf(stderr, "model %s\n", g_loadErr.c_str()); return false; }
+        if (!g_bodyScale && sp.body >= 0) m.scale = 0.01f;
+    }
+    g_loadErr.clear(); g_charInfo = info; g_orig = m; g_dirtyMesh = true;
     g_sub = MvMesh();
-    g_animIdx = g_animName.empty() ? -1 : mv_anim_find(g_animName);
-    applyPose(); frameModel();
-    {   // textures: how many decode (the GL textures are made at draw time)
+    g_animIdx = g_animName.empty() ? -1 : animFind(g_animName);
+    if (g_animIdx >= 0 && g_frame >= mv_export_anims()[(size_t)g_animIdx].frames) g_frame = 0;
+    applyPose(); if (reframe) frameModel();
+    {   // textures: how many load (the GL textures are made at draw time)
         int ok = 0, bad = 0; std::string why;
-        for (const MvMaterial& mt : g_orig.materials) { MvTexImage ti; if (mv_rom_texture(mt.texnum, ti)) ok++; else { bad++; if (why.size() < 90) why += (why.empty() ? "" : "; ") + std::to_string(mt.texnum) + ": " + ti.note; } }
-        g_texInfo = std::to_string(ok) + " of " + std::to_string(ok + bad) + " textures decoded" + (why.empty() ? "" : " (" + why + ")");
+        for (const MvMaterial& mt : g_orig.materials) { int w, h; std::vector<uint8_t> px; if (mv_export_image(mt.image, w, h, px)) ok++; else { bad++; if (why.size() < 90) why += (why.empty() ? "" : "; ") + std::to_string(mt.texnum); } }
+        g_texInfo = std::to_string(ok) + " of " + std::to_string(ok + bad) + " textures loaded" + (why.empty() ? "" : " (missing: " + why + ")");
     }
     fprintf(stderr, "model %s: %d vertices, %d triangles\n", m.name.c_str(), (int)m.verts.size(), (int)m.triCount());
     return true;
@@ -270,15 +291,15 @@ static void drawMesh(const Gpu& g, const float* vp) {
         int mode = g_checker ? 1 : 0; float tw = 1, th = 1;
         if (d.mat >= 0 && d.mat < (int)mesh.materials.size() && !g_checker && g_tex) {
             const MvMaterial& mt = mesh.materials[(size_t)d.mat];
-            auto it = g_texGL.find(mt.texnum);
-            if (it == g_texGL.end()) {   // decode once, upload once; a texture that cannot be decoded stays untextured
-                MvTexImage ti; GLuint id = 0;
-                if (mv_rom_texture(mt.texnum, ti)) {
+            auto it = g_texGL.find(mt.image);
+            if (it == g_texGL.end()) {   // decode once, upload once; a texture that cannot be read stays untextured
+                int tw0 = 0, th0 = 0; std::vector<uint8_t> px; GLuint id = 0;
+                if (mv_export_image(mt.image, tw0, th0, px)) {
                     glGenTextures(1, &id); glBindTexture(GL_TEXTURE_2D, id);
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, ti.w, ti.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, ti.rgba.data());
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, tw0, th0, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
                 }
-                it = g_texGL.emplace(mt.texnum, std::make_pair(id, std::make_pair(ti.w, ti.h))).first;
+                it = g_texGL.emplace(mt.image, std::make_pair(id, std::make_pair(tw0, th0))).first;
             }
             if (it->second.first) {
                 static const GLint wrap[3] = { GL_REPEAT, GL_CLAMP_TO_EDGE, GL_MIRRORED_REPEAT };
@@ -347,9 +368,9 @@ static bool shotTo(const std::string& path, int W, int H) {   // through an offs
 static void saveIni(const char* path) {
     FILE* f = fopen(path, "w"); if (!f) return;
     fprintf(f, "method=%s\ncrease=%g\nsplit_joint_edges=%d\npasses=%d\nphong_alpha=%g\nview=%d\nsplit=%g\nwire=%d\nedge_colours=%d\nchecker=%d\nnormals=%d\nlight=%d\nsmooth=%d\n"
-               "vcol=%d\nhilite=%d\nyaw=%g\npitch=%g\ndist=%g\ntarget=%g,%g,%g\nmodel=%s\ntier=%d\npn_clamp=%g\nanim=%s\nframe=%g\ntextures=%d\ntexfeat=%d\nneckpin=%d\ntaubin=%d\n",
+               "vcol=%d\nhilite=%d\nyaw=%g\npitch=%g\ndist=%g\ntarget=%g,%g,%g\nbody=%s\nhead=%s\nspecs=%d\nhair=%d\nbodyscale=%d\nsamesex=%d\ntier=%d\npn_clamp=%g\nanim=%s\nframe=%g\ntextures=%d\ntexfeat=%d\nneckpin=%d\ntaubin=%d\n",
             MV_METHOD_NAMES[g_method], g_par.crease_deg, g_par.split_joint_edges, g_par.passes, g_par.phong_alpha, g_view, g_split, g_wire, g_edgeCol, g_checker, g_normals, g_light, g_smooth,
-            g_vcol, g_hilite, g_yaw, g_pitch, g_dist, g_tgt[0], g_tgt[1], g_tgt[2], g_modelName.c_str(), g_tier, g_par.pn_clamp, g_animName.c_str(), g_frame, g_tex, (int)g_par.head_tex_features, (int)g_par.neck_pin, g_par.taubin_iters);
+            g_vcol, g_hilite, g_yaw, g_pitch, g_dist, g_tgt[0], g_tgt[1], g_tgt[2], g_bodyName.c_str(), g_headName.c_str(), g_specs, g_hair, g_bodyScale, g_sameSex, g_tier, g_par.pn_clamp, g_animName.c_str(), g_frame, g_tex, (int)g_par.head_tex_features, (int)g_par.neck_pin, g_par.taubin_iters);
     fclose(f);
 }
 static int methodByName(const char* s) { if (!_strnicmp(s, "GAME", 4)) return MV_GAME; for (int i = 0; i < MV_METHOD_COUNT; i++) if (!_stricmp(s, MV_METHOD_NAMES[i])) return i; return atoi(s) % MV_METHOD_COUNT; }
@@ -369,8 +390,17 @@ static void setKey(const char* k, const char* v) {
     else if (!strcmp(k, "light")) g_light = i != 0;
     else if (!strcmp(k, "smooth")) g_smooth = i != 0;
     else if (!strcmp(k, "yaw")) g_yaw = f; else if (!strcmp(k, "pitch")) g_pitch = f; else if (!strcmp(k, "dist")) g_dist = f;
-    else if (!strcmp(k, "model")) g_modelName = v;
-    else if (!strcmp(k, "anim")) { g_animName = v; g_animOn = true; if (v[0] >= '0' && v[0] <= '9' && mv_anim_list().size() > (size_t)i) g_animName = mv_anim_list()[(size_t)i].name; if (!strcmp(v, "none")) g_animName.clear(); }
+    else if (!strcmp(k, "body")) g_bodyName = v;
+    else if (!strcmp(k, "head")) g_headName = v;
+    else if (!strcmp(k, "model")) {   // one file (a body or a head: sorted out once the export is open), or "BODY+HEAD"
+        const char* plus = strchr(v, '+');
+        if (plus) { g_bodyName.assign(v, plus); g_headName = plus + 1; } else { g_bodyName = v; g_headName.clear(); }
+    }
+    else if (!strcmp(k, "specs")) g_specs = i != 0;
+    else if (!strcmp(k, "hair")) g_hair = i != 0;
+    else if (!strcmp(k, "bodyscale")) g_bodyScale = i != 0;
+    else if (!strcmp(k, "samesex")) g_sameSex = i != 0;
+    else if (!strcmp(k, "anim")) { g_animName = v; g_animOn = true; if (!strcmp(v, "none")) g_animName.clear(); }
     else if (!strcmp(k, "frame")) g_frame = f < 0 ? 0 : f;
     else if (!strcmp(k, "textures")) g_tex = i != 0;
     else if (!strcmp(k, "vcol")) g_vcol = i != 0;
@@ -408,17 +438,6 @@ static void menuBar() {
         if (ImGui::MenuItem("Quit", "Esc")) PostQuitMessage(0);
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Model")) {
-        if (ImGui::MenuItem("Test mannequin", nullptr, g_modelName.empty())) loadModel("");
-        if (!mv_rom_ready()) ImGui::MenuItem("Characters (no ROM: --rom or MODELVIEW_ROM)", nullptr, false, false);
-        for (int pass = 0; pass < 2 && mv_rom_ready(); pass++) {
-            if (!ImGui::BeginMenu(pass ? "Heads" : "Bodies")) continue;
-            for (const MvModelEntry& e : mv_rom_models())
-                if (e.head == (pass == 1) && ImGui::MenuItem(e.name.c_str(), nullptr, g_modelName == e.name)) loadModel(e.name);
-            ImGui::EndMenu();
-        }
-        ImGui::EndMenu();
-    }
     if (ImGui::BeginMenu("View")) {
         if (ImGui::MenuItem("Side by side", nullptr, g_view == VIEW_SIDE)) g_view = VIEW_SIDE;
         if (ImGui::MenuItem("Split slider", nullptr, g_view == VIEW_SPLIT)) g_view = VIEW_SPLIT;
@@ -440,30 +459,114 @@ static void menuBar() {
     }
     ImGui::EndMainMenuBar();
 }
+// A character combo with a filter field: kind "body" or "head"; the first row is `none` (the mannequin / no head).
+// Returns true when the pick changed.
+static bool charCombo(const char* label, const char* kind, const char* none, std::string& pick, bool disabled, int sexOf) {
+    const int cur = pick.empty() ? -1 : mv_export_find(pick);
+    const std::vector<MvCharEntry>& cs = mv_export_chars();
+    auto title = [](const MvCharEntry& e) { return (e.label.empty() ? e.name : e.label) + "  (" + e.file + ")"; };
+    const std::string preview = cur >= 0 ? title(cs[(size_t)cur]) : (pick.empty() ? std::string(none) : pick + " (not in the export)");
+    bool changed = false;
+    ImGui::BeginDisabled(disabled);
+    if (ImGui::BeginCombo(label, preview.c_str(), ImGuiComboFlags_HeightLarge)) {
+        static char filter[64] = ""; static const char* filterOf = nullptr;
+        if (filterOf != label) { filter[0] = 0; filterOf = label; }
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        ImGui::SetNextItemWidth(-1); ImGui::InputTextWithHint("##filter", "filter (name, label, file)", filter, sizeof filter);
+        auto match = [&](const MvCharEntry& e) {
+            if (!filter[0]) return true;
+            std::string hay = e.label + " " + e.name + " " + e.file, nd = filter;
+            for (char& c : hay) c = (char)tolower((unsigned char)c);
+            for (char& c : nd) c = (char)tolower((unsigned char)c);
+            return hay.find(nd) != std::string::npos;
+        };
+        if (!filter[0] && ImGui::Selectable(none, pick.empty())) { pick.clear(); changed = true; }
+        for (size_t i = 0; i < cs.size(); i++) {
+            const MvCharEntry& e = cs[i];
+            if (e.kind != kind || !match(e)) continue;
+            if (sexOf >= 0 && e.isMale != (sexOf == 1)) continue;
+            ImGui::BeginDisabled(!e.exported());
+            if (ImGui::Selectable(title(e).c_str(), (int)i == cur)) { pick = e.file; changed = true; }
+            ImGui::EndDisabled();
+            if ((int)i == cur) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    return changed;
+}
+static void characterPanel() {
+    if (!ImGui::CollapsingHeader("Character", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    if (!mv_export_ready()) {
+        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "No character export: test mannequin only.");
+        ImGui::TextWrapped("%s", g_exportErr.empty() ? "Pass --export DIR, or run: modelview.py export" : g_exportErr.c_str());
+        return;
+    }
+    const int bi = g_bodyName.empty() ? -1 : mv_export_find(g_bodyName);
+    const MvCharEntry* body = bi >= 0 ? &mv_export_chars()[(size_t)bi] : nullptr;
+    const std::string oldBody = g_bodyName;
+    bool ch = charCombo("Body", "body", "None (test mannequin if no head)", g_bodyName, false, -1);
+    const bool ownHead = body && body->hasHead;
+    ch |= charCombo("Head", "head", "None", g_headName, ownHead, g_sameSex && body ? (body->isMale ? 1 : 0) : -1);
+    if (ownHead) ImGui::TextDisabled("This body has its own head (has_head).");
+    if (ImGui::Checkbox("Only heads of the body's sex", &g_sameSex) && g_sameSex && body && !g_headName.empty()) {
+        const int hi = mv_export_find(g_headName);
+        if (hi >= 0 && mv_export_chars()[(size_t)hi].isMale != body->isMale) { g_headName.clear(); ch = true; }
+    }
+    ImGui::Text("Tier"); ImGui::SameLine();
+    if (ImGui::RadioButton("near", g_tier == 0)) { g_tier = 0; ch = true; } ImGui::SameLine();
+    if (ImGui::RadioButton("far (simplified)", g_tier == 1)) { g_tier = 1; ch = true; }
+    // the game's parameters of this pair (makeonebody, the character table)
+    const int hi = g_headName.empty() || ownHead ? -1 : mv_export_find(g_headName);
+    if (hi >= 0) {
+        ImGui::BeginDisabled(!g_charInfo.hasSpecs);
+        if (ImGui::Checkbox(g_charInfo.hasSpecs ? "Sunglasses (head part 0)" : "Sunglasses (none on this head)", &g_specs)) ch = true;
+        ImGui::EndDisabled();
+        ImGui::BeginDisabled(!g_charInfo.hasHair);
+        if (ImGui::Checkbox(g_charInfo.hasHair ? "Hair (head part 1)" : "Hair (no separate part)", &g_hair)) ch = true;
+        ImGui::EndDisabled();
+    }
+    if (body) {
+        if (ImGui::Checkbox("Body scale from the table", &g_bodyScale)) ch = true;
+        ImGui::TextDisabled("body scale %.3g, pov %.4g (root motion), %s", body->bodyScale, body->pov, body->isMale ? "male" : "female");
+    }
+    if (!g_charInfo.note.empty()) ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "%s", g_charInfo.note.c_str());
+    if (!isMannequin()) {
+        ImGui::Text("Triangles: body %d, head %d", g_charInfo.bodyTris, g_charInfo.headTris);
+        if (g_charInfo.specsTris || g_charInfo.hairTris) ImGui::Text("  sunglasses %d, hair %d", g_charInfo.specsTris, g_charInfo.hairTris);
+        ImGui::TextWrapped("%s", g_texInfo.c_str());
+    }
+    if (ch) loadCharacter(g_bodyName != oldBody || g_bodyName.empty());   // a new body (or a head alone) frames the camera again
+}
 static void panel(int H) {
     ImGui::SetNextWindowPos(ImVec2(0, (float)g_menuH)); ImGui::SetNextWindowSize(ImVec2((float)g_panelW, (float)(H - g_menuH)));
     ImGui::Begin("modelview", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings);
-    ImGui::PushItemWidth(-110);
-    ImGui::Text("Model: %s", g_modelName.empty() ? "Test mannequin" : g_modelName.c_str());
+    ImGui::PushItemWidth(-60);
+    characterPanel();
     if (!g_loadErr.empty()) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", g_loadErr.c_str());
-    if (!g_modelName.empty()) {
-        ImGui::Text("Tier"); ImGui::SameLine();
-        if (ImGui::RadioButton("near", g_tier == 0)) { g_tier = 0; loadModel(g_modelName); } ImGui::SameLine();
-        if (ImGui::RadioButton("far (simplified)", g_tier == 1)) { g_tier = 1; loadModel(g_modelName); }
-    }
-    if (!g_modelName.empty()) ImGui::TextWrapped("%s", g_texInfo.c_str());
-    if (!g_modelName.empty() && !mv_anim_list().empty() && ImGui::CollapsingHeader("Animation", ImGuiTreeNodeFlags_DefaultOpen)) {
-        bool ch = ImGui::Checkbox("Pose with an animation", &g_animOn);
-        const std::vector<MvAnimInfo>& al = mv_anim_list();
+    ImGui::PopItemWidth(); ImGui::PushItemWidth(-110);
+    if (!isMannequin() && ImGui::CollapsingHeader("Animation", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const std::vector<MvAnimInfo>& al = mv_export_anims();
+        bool ch = ImGui::Checkbox("Pose with an animation (off = bind pose)", &g_animOn);
         if (g_animIdx >= 0 && g_animIdx < (int)al.size()) {
             const int last = al[(size_t)g_animIdx].frames - 1;
-            if (ImGui::SliderFloat("Frame", &g_frame, 0.0f, (float)(last > 0 ? last : 0), "%.0f")) ch = true;
+            if (ImGui::SliderFloat("Frame", &g_frame, 0.0f, (float)(last > 0 ? last : 0), "%.1f")) ch = true;
             ImGui::Checkbox("Play", &g_play); ImGui::SameLine(); ImGui::SliderFloat("Speed", &g_speed, 0.1f, 3.0f, "%.1fx");
         }
-        if (ImGui::BeginListBox("##anims", ImVec2(-1, 130))) {
-            for (int i = 0; i < (int)al.size(); i++)
-                if (ImGui::Selectable(al[(size_t)i].name.c_str(), i == g_animIdx)) { g_animIdx = i; g_animName = al[(size_t)i].name; g_frame = 0; ch = true; }
-            ImGui::EndListBox();
+        if (!al.empty()) {
+            const std::string prev = g_animIdx >= 0 && g_animIdx < (int)al.size() ? al[(size_t)g_animIdx].name : std::string("(none)");
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::BeginCombo("##anim", prev.c_str())) {
+                for (int i = 0; i < (int)al.size(); i++) {
+                    char l[160]; snprintf(l, sizeof l, "%s  (%d frames, %g fps%s)", al[(size_t)i].name.c_str(), al[(size_t)i].frames, al[(size_t)i].fps, al[(size_t)i].loop ? ", loop" : "");
+                    if (ImGui::Selectable(l, i == g_animIdx)) { g_animIdx = i; g_animName = al[(size_t)i].name; g_frame = 0; ch = true; }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+            if (al.size() < 10) ImGui::TextWrapped("%d animations: an older export without the animations folder; run modelview.py export for all 170", (int)al.size());
+            else ImGui::TextWrapped("%d animations (animations/<name>.gltf, retargeted by node name)", (int)al.size());
+            ImGui::PopStyleColor();
         }
         if (!g_animNote.empty()) ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "%s", g_animNote.c_str());
         if (ch) applyPose();
@@ -552,11 +655,9 @@ static LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 }
 
 int main(int argc, char** argv) {
-    std::string shot, romPath, repo; bool selftest = false; int W = 1280, H = 720;
-    for (int i = 1; i + 1 < argc; i++) if (!strcmp(argv[i], "--repo")) repo = argv[i + 1];
+    std::string shot, exportDir; bool selftest = false; int W = 1280, H = 720;
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--selftest")) selftest = true;
-    if (selftest) { const int r1 = mv_tex_selftest(), r2 = mv_anim_selftest(), r3 = mv_head_selftest(); return r1 | r2 | r3; }
-    if (!repo.empty() && !mv_anim_init(repo)) fprintf(stderr, "no animation data under %s/assets\n", repo.c_str());
+    if (selftest) { const int r1 = mv_export_selftest(), r2 = mv_head_selftest(); return r1 | r2; }
     g_orig = mv_make_mannequin();
     {   // the mannequin must be closed and outward-facing: its signed volume is positive
         const std::vector<MvVec3> jw = mv_joint_worlds(g_orig); double vol = 0;
@@ -575,18 +676,21 @@ int main(int argc, char** argv) {
         else if (a == "--view") setKey("view", nx()); else if (a == "--wire") setKey("wire", nx()); else if (a == "--edges") setKey("edges", nx());
         else if (a == "--checker") setKey("checker", nx()); else if (a == "--normals") setKey("normals", nx()); else if (a == "--light") setKey("light", nx());
         else if (a == "--smooth") setKey("smooth", nx()); else if (a == "--vcol") setKey("vcol", nx()); else if (a == "--hilite") setKey("hilite", nx()); else if (a == "--texfeat") setKey("texfeat", nx()); else if (a == "--neckpin") setKey("neckpin", nx()); else if (a == "--taubin") setKey("taubin", nx()); else if (a == "--clean") setKey("clean", nx());
-        else if (a == "--rom") romPath = nx(); else if (a == "--model") setKey("model", nx()); else if (a == "--tier") setKey("tier", nx());
-        else if (a == "--repo") repo = nx(); else if (a == "--selftest") selftest = true;
+        else if (a == "--export") exportDir = nx(); else if (a == "--model") setKey("model", nx()); else if (a == "--tier") setKey("tier", nx());
+        else if (a == "--body") setKey("body", nx()); else if (a == "--head") setKey("head", nx());
+        else if (a == "--specs") setKey("specs", nx()); else if (a == "--hair") setKey("hair", nx()); else if (a == "--bodyscale") setKey("bodyscale", nx());
+        else if (a == "--selftest") selftest = true;
         else if (a == "--anim") setKey("anim", nx()); else if (a == "--frame") setKey("frame", nx()); else if (a == "--texture") setKey("textures", nx());
         else if (a == "--clamp") setKey("pn_clamp", nx()); else if (a == "--splitjoint") setKey("split_joint_edges", nx());
     }
 
-    if (!romPath.empty()) { std::string err; if (!mv_rom_open(romPath, err)) fprintf(stderr, "ROM: %s\n", err.c_str()); }
-    if (mv_rom_ready() && !repo.empty()) {
-        const std::string il = repo + "/imagelist." + mv_rom_region_letter() + ".csv";
-        if (!mv_tex_set_imagelist(il)) fprintf(stderr, "no image list %s: models stay untextured\n", il.c_str());
+    if (!exportDir.empty() && !mv_export_open(exportDir, g_exportErr)) fprintf(stderr, "export: %s\n", g_exportErr.c_str());
+    if (mv_export_ready()) fprintf(stderr, "export: %s (exporter version %d, %d characters)\n", mv_export_dir().c_str(), mv_export_version(), (int)mv_export_chars().size());
+    {   // --model / model= named one file: a head goes to the head slot
+        const int b = g_bodyName.empty() ? -1 : mv_export_find(g_bodyName);
+        if (b >= 0 && mv_export_chars()[(size_t)b].kind == "head" && g_headName.empty()) { g_headName = g_bodyName; g_bodyName.clear(); }
     }
-    if (!g_modelName.empty() && !loadModel(g_modelName)) g_modelName.clear();
+    if (!isMannequin() && !loadCharacter()) { const std::string e = g_loadErr; g_bodyName.clear(); g_headName.clear(); loadCharacter(); g_loadErr = e; }
     WNDCLASSA wc = {}; wc.lpfnWndProc = wndProc; wc.hInstance = GetModuleHandleA(0); wc.lpszClassName = "modelview"; wc.hCursor = LoadCursor(0, IDC_ARROW); RegisterClassA(&wc);
     RECT r = { 0, 0, W, H }; AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, TRUE);
     HWND hwnd = CreateWindowA("modelview", "modelview", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, r.right - r.left, r.bottom - r.top, 0, 0, wc.hInstance, 0);
@@ -630,11 +734,11 @@ int main(int argc, char** argv) {
     while (run) {
         while (PeekMessageA(&msg, 0, 0, 0, PM_REMOVE)) { if (msg.message == WM_QUIT) run = false; TranslateMessage(&msg); DispatchMessageA(&msg); }
         if (!run) break;
-        {   // animation playback: 30 frames per second at speed 1
+        {   // animation playback: at the animation's own rate (fps) times the speed
             static DWORD last = GetTickCount(); const DWORD now = GetTickCount(); const float dt = (now - last) / 1000.0f; last = now;
-            if (g_play && g_animIdx >= 0 && g_animIdx < (int)mv_anim_list().size()) {
-                const float n = (float)mv_anim_list()[(size_t)g_animIdx].frames;
-                g_frame += dt * 30.0f * g_speed; if (n > 0 && g_frame >= n) g_frame = fmodf(g_frame, n);
+            if (g_play && g_animIdx >= 0 && g_animIdx < (int)mv_export_anims().size()) {
+                const MvAnimInfo& ai = mv_export_anims()[(size_t)g_animIdx]; const float n = (float)ai.frames;
+                g_frame += dt * ai.fps * g_speed; if (n > 1 && g_frame >= n - 1) g_frame = fmodf(g_frame, n - 1);
                 applyPose();
             }
         }
