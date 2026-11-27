@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define EX_EXPORTER_VERSION 7   /* written to every glTF (asset.extras.exporter_version); bump on any output change */
+#define EX_EXPORTER_VERSION 8   /* written to every glTF (asset.extras.exporter_version); bump on any output change */
 
 /* ---- textures (tex_decode.c, docs/specs/textures.md) --------------------- */
 
@@ -66,6 +66,7 @@ typedef void (*ExLogFn)(void *user, const char *line);
 
 /* Exports every decor file of the ROM (the levels of level-decor.md) into
  * <out_dir>/<level>/<level>.gltf + <level>.bin + textures/<texnum>.png and
+ * <out_dir>/<level>/setup.json + setup_mp.json (setup_export.c, docs/specs/setup.md) and
  * <out_dir>/<level>/report.txt (opcode census, skipped commands, warnings).
  * The ROM must pass cv_romcheck. Returns the number of levels that failed
  * (0 = all exported). `log` may be NULL. */

@@ -8,6 +8,11 @@ accessor fits the .bin; index values are below the vertex count; POSITION
 min/max match the data; every image file exists and is a valid PNG; every
 referenced material / texture / sampler / image exists. Prints rooms /
 primitives / triangles / textures per level; exits non-zero on any error.
+
+For every <out_dir>/<level>/setup.json and setup_mp.json (docs/specs/setup.md): the
+schema (format, version, header, pads, props, ...), every record's `raw` has the size
+of its type, every link / pad / waypoint / tag reference resolves, and every AI list's
+byte range lies inside the file.
 """
 import json
 import os
@@ -262,6 +267,162 @@ def check_level(root, name, report=True):
     return errs, stats
 
 
+# record size by propDef type (docs/specs/setup.md); END (48) has no entry in props
+SETUP_SIZES = {1: 256, 2: 8, 3: 128, 4: 132, 5: 128, 6: 236, 7: 132, 8: 136, 9: 28, 10: 256, 11: 596, 12: 128, 13: 216,
+               14: 12, 17: 128, 18: 12, 19: 16, 20: 180, 21: 136, 22: 16, 23: 16, 24: 4, 25: 8, 26: 8, 27: 8, 28: 8,
+               29: 8, 30: 16, 31: 4, 32: 16, 33: 20, 34: 12, 35: 16, 36: 128, 37: 40, 38: 16, 39: 176, 40: 180,
+               42: 128, 43: 128, 44: 20, 45: 224, 46: 28, 47: 148}
+SETUP_OBJ = {1, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 17, 20, 21, 36, 39, 40, 42, 43, 45, 47}
+SETUP_INTRO = {0: 12, 1: 16, 2: 16, 3: 32, 4: 8, 5: 8, 6: 40, 7: 12, 8: 8, 9: 4}
+SETUP_COUNT = {}   # file path -> (pads, bound pads, props, ailists) for the summary
+
+
+def check_setup(path):
+    """Validates one setup.json; returns a list of error strings."""
+    errs = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            j = json.load(f)
+    except Exception as e:  # noqa: BLE001
+        return ["setup: %s" % e]
+
+    def err(m):
+        if len(errs) < 40:
+            errs.append(m)
+
+    for k in ("format", "version", "level", "stage", "mode", "setup", "region", "file", "level_scale", "scale", "header",
+              "pads", "bound_pads", "waypoint_names", "group_names", "props", "objectives", "briefing", "ailists",
+              "waypoints", "waypoint_groups", "patrol_paths", "intro", "credits"):
+        if k not in j:
+            err("missing key %s" % k)
+    if errs:
+        return errs
+    if j["format"] != "ge007-setup" or j["version"] != 1:
+        err("format/version")
+    if j["mode"] not in ("solo", "multi"):
+        err("mode")
+    fsize = j["file"]["size"]
+    if len(j["header"]) != 10 or any(not (0 <= h <= fsize) for h in j["header"]):
+        err("header words outside the file")
+    if abs(j["scale"] * j["level_scale"] - 1.0) > 1e-5:
+        err("scale * level_scale != 1")
+    if len(j["file"]["sha1"]) != 40:
+        err("file.sha1")
+    npads, nb = len(j["pads"]), len(j["bound_pads"])
+    for i, p in enumerate(j["pads"]):
+        if p["num"] != i:
+            err("pad %d: num %d" % (i, p["num"]))
+    for i, p in enumerate(j["bound_pads"]):
+        if p["num"] != 10000 + i or "bbox" not in p or len(p["file_bbox"]) != 6:
+            err("bound pad %d: num/bbox" % i)
+    for p in j["pads"] + j["bound_pads"]:
+        for k in ("pos", "file_pos", "up", "look"):
+            if len(p[k]) != 3:
+                err("pad %d: %s" % (p["num"], k))
+        if p["stan_id"] is not None and not (0 <= p["stan_id"] <= 0xFFFFFF):
+            err("pad %d: stan_id" % p["num"])
+        if (p["tile"] == "") != (p["stan_id"] is None):
+            err("pad %d: tile/stan_id" % p["num"])
+    for k in ("waypoint_names", "group_names"):
+        if j[k] is not None and not all(isinstance(x, str) for x in j[k]):
+            err(k)
+    if j["waypoint_names"] is not None and len(j["waypoint_names"]) != len(j["waypoints"]):
+        err("waypoint_names length != waypoints")
+    if j["group_names"] is not None and len(j["group_names"]) != len(j["waypoint_groups"]):
+        err("group_names length != waypoint_groups")
+
+    def pad_ok(v, plain_only=False):
+        if v < 10000:
+            return 0 <= v < npads
+        return not plain_only and 10000 <= v < 10000 + nb
+
+    props = j["props"]
+    n = len(props)
+
+    def ref_ok(v):
+        return v is None or (isinstance(v, int) and 0 <= v < n)
+
+    guards = set()
+    lastend = 0
+    for i, r in enumerate(props):
+        t = r["type"]
+        if r["prop"] != i:
+            err("prop %d: index %d" % (i, r["prop"]))
+        if t not in SETUP_SIZES:
+            err("prop %d: type %d" % (i, t))
+            continue
+        if len(r["raw"]) != 2 * SETUP_SIZES[t] or r["raw"][6:8] != "%02x" % t:
+            err("prop %d: raw size / type byte" % i)
+        if r["offset"] < lastend or r["offset"] + SETUP_SIZES[t] > fsize:
+            err("prop %d: offset %d" % (i, r["offset"]))
+        lastend = r["offset"] + SETUP_SIZES[t]
+        if "fields" not in r:
+            err("prop %d: fields" % i)
+        for rk, rv in (r.get("refs") or {}).items():
+            if not ref_ok(rv):
+                err("prop %d: refs.%s = %r" % (i, rk, rv))
+        if t == 9:
+            guards.add(r["chr"])
+            if not pad_ok(r["pad"], True):
+                err("prop %d: guard pad %d" % (i, r["pad"]))
+            if r["ai"] != r["ailist"]:
+                err("prop %d: ai != ailist" % i)
+        elif t in SETUP_OBJ:
+            for k in ("model", "pad", "pad_raw", "load_on"):
+                if k not in r:
+                    err("prop %d: %s" % (i, k))
+            if r.get("pad") is None:
+                if "inside" not in (r.get("refs") or {}) and "carrier" not in r:
+                    err("prop %d: no pad, no inside, no carrier" % i)
+            elif t == 1 and not pad_ok(r["pad"]):
+                err("prop %d: door pad %d" % (i, r["pad"]))
+            if set(r.get("load_on", {})) != {"agent", "secret", "00", "007", "multi", "2p", "3p", "4p"}:
+                err("prop %d: load_on" % i)
+    for i, r in enumerate(props):   # carriers are chr numbers (some belong to guards the AI creates: not in the file)
+        if r.get("carrier") is not None and not (0 <= r["carrier"] < 0x8000):
+            err("prop %d: carrier %d" % (i, r["carrier"]))
+    for o in j["objectives"]:
+        if not (0 <= o["prop"] < n) or props[o["prop"]]["type"] != 23:
+            err("objective at prop %d" % o["prop"])
+        for c in o["conditions"]:
+            if not (0 <= c["prop"] < n) or props[c["prop"]]["type"] != c["type"]:
+                err("objective condition at prop %d" % c["prop"])
+            if "object" in c and not ref_ok(c["object"]):
+                err("objective condition %d: object" % c["prop"])
+    for b in j["briefing"]:
+        if not (0 <= b["prop"] < n) or props[b["prop"]]["type"] != 35:
+            err("briefing at prop %d" % b["prop"])
+    for a in j["ailists"]:
+        if a["offset"] + a["size"] > fsize or len(a["raw"]) != 2 * a["size"] or not a["raw"].endswith("04"):
+            err("ailist %d: byte range" % a["id"])
+        if a["class"] not in ("global", "chr", "bg"):
+            err("ailist %d: class" % a["id"])
+    nwp, ngr = len(j["waypoints"]), len(j["waypoint_groups"])
+    for i, w in enumerate(j["waypoints"]):
+        if not (0 <= w["pad"] < npads) or not (0 <= w["group"] < max(ngr, 1)) \
+                or any(not (0 <= x < nwp) for x in w["neighbours"]):
+            err("waypoint %d: pad/group/neighbours" % i)
+    for i, g in enumerate(j["waypoint_groups"]):
+        if any(not (0 <= x < nwp) for x in g["waypoints"]) or any(not (0 <= x < ngr) for x in g["neighbours"]):
+            err("waypoint group %d" % i)
+    for i, p in enumerate(j["patrol_paths"]):
+        if any(not (0 <= x < nwp) for x in p["waypoints"]) or len(p["pads"]) != len(p["waypoints"]) \
+                or any(p["pads"][k] != j["waypoints"][x]["pad"] for k, x in enumerate(p["waypoints"])):
+            err("patrol path %d" % i)
+    if not j["intro"] or j["intro"][-1]["type"] != 9:
+        err("intro does not end with END")
+    for r in j["intro"]:
+        if len(r["raw"]) != 2 * SETUP_INTRO[r["type"]]:
+            err("intro record at %d: raw size" % r["offset"])
+        if r["type"] == 0 and not (0 <= r["pad"] < npads):
+            err("intro spawn pad %d" % r["pad"])
+    has8 = any(r["type"] == 8 for r in j["intro"])
+    if has8 != (j["credits"] is not None):
+        err("credits block vs intro credits record")
+    SETUP_COUNT[path] = (npads, nb, n, len(j["ailists"]))
+    return errs
+
+
 def check_models(mroot):
     """Models export (issue #119): <mroot>/<model>/<model>.gltf for every entry of models.json."""
     try:
@@ -475,6 +636,16 @@ def main():
             print("%-10s collision: %d tiles in %d rooms, %d triangles (hidden scene 1)" % ((n,) + COLL[n]))
         for e in errs:
             print("    ERROR:", e)
+        for sf in ("setup.json", "setup_mp.json"):
+            sp = os.path.join(root, n, sf)
+            if not os.path.isfile(sp):
+                continue
+            serrs = check_setup(sp)
+            if sp in SETUP_COUNT:
+                print("%-10s %-13s pads %3d bound pads %3d propDefs %4d AI lists %2d" % ((n, sf) + SETUP_COUNT[sp]))
+            for e in serrs:
+                print("    ERROR:", sf, e)
+            errs = errs + serrs
         if errs:
             bad += 1
     print("%d levels checked, %d with errors; rooms %d primitives %d triangles %d textures %d"
