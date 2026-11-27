@@ -31,6 +31,13 @@ Third-party code vendored into the port layer keeps its own license:
   * port/third_party/cgltf/ - glTF 2.0 parser (cgltf 1.15, single header), MIT,
     Copyright (c) 2018-2021 Johannes Kuhlmann; see port/third_party/cgltf/LICENSE.
     Used by the mission editor only (editor/decor.cpp).
+  * port/third_party/tinysoundfont/ - SoundFont 2 synthesizer (tsf.h, TinySoundFont, MIT)
+    and MIDI file loader (tml.h, TinyMidiLoader, zlib license), single-header
+    libraries by Bernhard Schelling (tsf.h Copyright (C) 2017-2025, tml.h Copyright
+    (C) 2017, 2018, 2020); see
+    port/third_party/tinysoundfont/LICENSE (tsf.h) and the license text in
+    the header of tml.h. Used only by the audio-export check player
+    (tools_pc/midiplay/), never linked into the game.
 
 Runtime libraries bundled in the downloads (not in this repository) keep
 their own licenses; each license text ships in the download's licenses/ folder:
