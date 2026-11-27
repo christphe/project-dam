@@ -8,9 +8,14 @@
 // file in the same sidecar format into OUTDIR/data/pccg-ntsc-final/ (manifest.csv + pccg.bin); point the
 // editor at it with GE_EDITOR_DATA=OUTDIR/data.
 //
+// It also writes a synthetic glTF decor into OUTDIR/gltf/bunker1/ (tools/synth_gltf.h; the editor looks in <export>/gltf/ too), which the
+// editor draws instead of level.rec's rooms (GE_EDITOR_DECOR=rec shows level.rec's).
+//
 //   make_test_rec OUTDIR            (OUTDIR is created by the caller)
 
+#include "export.h"      // EX_EXPORTER_VERSION: the synthetic glTF decor carries the version this build reads
 #include "levelrec.h"
+#include "synth_gltf.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -266,5 +271,7 @@ int main(int argc, char **argv)
         printf("wrote the synthetic setup %s (set GE_EDITOR_DATA=%s/data)\n", sdir.c_str(), dir.c_str());
     }
     printf("wrote %s and %s (%zu runs, %zu textures)\n", recPath.c_str(), jsonPath.c_str(), runs.size(), texs.size());
+    if (!synth::writeGltf(dir + "/gltf", "bunker1", EX_EXPORTER_VERSION)) { fprintf(stderr, "cannot write the synthetic glTF under %s/gltf\n", dir.c_str()); return 1; }
+    printf("wrote the synthetic glTF decor %s/gltf/bunker1/bunker1.gltf\n", dir.c_str());
     return 0;
 }

@@ -45,7 +45,7 @@ void drawSettingsWindow(App &a)
         ImGui::SameLine();
         if (a.reexportTotal > 0) ImGui::TextDisabled("%d of %d done%s%s", a.reexportTotal - (int)a.reexportQueue.size() - (a.job.running ? 1 : 0), a.reexportTotal,
                                                      a.job.running ? ", exporting " : "", a.job.running ? a.job.level.c_str() : "");
-        else ImGui::TextDisabled("runs the game once per level, in the background");
+        else ImGui::TextDisabled("runs the game once per level, and once for the glTF decor, in the background");
     }
 
     ImGui::SeparatorText("Rendering");

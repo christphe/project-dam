@@ -169,6 +169,15 @@ void portAllUnlockedApply(void)
 #endif
 }
 
+/* --export-levels: one summary line per level to stdout and the log. */
+static void exportLevelsLog(void *user, const char *line)
+{
+    (void)user;
+    printf("%s\n", line);
+    fflush(stdout);
+    sysLogPrintf(LOG_INFO, "export-levels: %s", line);
+}
+
 int main(int argc, char **argv)
 {
 #if defined(PLATFORM_SWITCH) && defined(NX_LINKSTDIO)
@@ -242,6 +251,31 @@ int main(int argc, char **argv)
     if (sysArgCheck("--help") || sysArgCheck("-h")) {
         portPrintHelp(argv[0]);
         return 0;
+    }
+
+    /* --export-levels DIR (issue #150): ROM -> every level's decor mesh as glTF,
+     * port/export/ (clean room). Runs before the log file, the window, audio or
+     * any level start, and exits with the number of failed levels. */
+    {
+        const char *exdir = sysArgGetString("--export-levels");
+        if (exdir) {
+            extern int ex_export_levels(const char *rom_path, const char *out_dir,
+                                        void (*log)(void *user, const char *line), void *user);
+            static const char *const locs[3] = { "$S/", "$E/", "./" };
+            char rom[1024] = "";
+            for (int li = 0; li < 3 && !rom[0]; li++) {
+                char cand[256];
+                snprintf(cand, sizeof(cand), "%sge007." GE007_ROMID ".z64", locs[li]);
+                FILE *f = fopen(sysResolvePath(cand), "rb");
+                if (f) { fclose(f); snprintf(rom, sizeof(rom), "%s", sysResolvePath(cand)); }
+            }
+            if (!rom[0]) {
+                fprintf(stderr, "--export-levels: no ge007." GE007_ROMID ".z64 in the data dir, next to the exe or here\n");
+                return 1;
+            }
+            int failed = ex_export_levels(rom, exdir, exportLevelsLog, NULL);
+            return failed > 254 ? 254 : failed;
+        }
     }
 
     /* D576: also log to $S/ge007.log (next to the ini) -- on a normal

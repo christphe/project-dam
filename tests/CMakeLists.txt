@@ -61,6 +61,12 @@ ge_add_pure_test(test_saymarker test_saymarker.c ${CMAKE_SOURCE_DIR}/port/src/sa
 # Character-model subdivision (port/convert/conv_subdiv.c): pure, no core.
 ge_add_pure_test(test_subdiv test_subdiv.c ${CMAKE_SOURCE_DIR}/port/convert/conv_subdiv.c)
 
+# Static level export, textures + PNG (port/export/, #150). Built in port/export/'s freestanding
+# scope (CMakeLists.txt there); registered here. The PNG self-test always runs; the whole texture
+# bank is decoded only when GE_TEST_ROM points at a retail .z64 (skipped otherwise).
+add_test(NAME test_export_tex COMMAND test_export_tex)
+set_tests_properties(test_export_tex PROPERTIES TIMEOUT 60)
+
 # The retail ROM check (port/convert/conv_romcheck.c): pure, no core.
 ge_add_pure_test(test_romcheck test_romcheck.c ${CMAKE_SOURCE_DIR}/port/convert/conv_romcheck.c)
 

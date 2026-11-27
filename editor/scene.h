@@ -40,6 +40,19 @@ private:
         bool usable = false;
     };
     void drawRun(int runIndex, const Mat4 &vp, const Mat4 &placement);
+    // The glTF decor (Level::decor): one mesh per primitive, drawn as "texture x shade colour" (see scene.cpp).
+    struct DecorDraw {
+        uint32_t mesh = 0;
+        ShaderProgram *prg = nullptr;
+        int tex = -1;                // index into m_decorTex
+        int cms = 0, cmt = 0, zmode = 0;
+        uint32_t nverts = 0;
+        bool doubleSided = false, blend = false;
+    };
+    void drawDecor(bool blendPass, const Mat4 &vp);
+    bool m_useDecor = false;
+    std::vector<uint32_t> m_decorTex;
+    std::vector<DecorDraw> m_decor;
 
     const Level *m_level = nullptr;
     std::vector<uint32_t> m_tex;

@@ -58,6 +58,10 @@ struct App {
     std::string spawn;
     char pickLevel[32] = "bunker1";   // Mission tab > level
     ExportJob job;                    // the game exporting a level for us
+    ExportJob gltfJob;                // the game writing the static glTF export of every level (decor, issue #150)
+    bool gltfTried = false;           // the editor started that export once this session: not again on its own
+    int gltfCheckedGen = -1;          // the doc.levelGen the glTF export was last checked for
+    int seenDecorGen = 0;
     std::string autoTried;
     ImVec2 gizC{}, gizTip[3]{};       // last frame's gizmo on screen (the --mouse-drag test aid aims at it)
     bool gizOk = false;
@@ -293,6 +297,10 @@ void viewCenterRay(const App &a, Vec3 &org, Vec3 &dir);      // the ray through 
 void reloadLevelGpu(App &a);
 void requestLevel(App &a, const std::string &lvl, bool reexport);
 void pollLevel(App &a);
+// Runs `<game> --export-levels <cache>/gltf` in the background (once on its own when the open level has no current glTF export;
+// force: also when it has, Settings > Re-export all). The open level reloads its decor when it is done.
+void startGltfExport(App &a, bool force);
+void reloadDecorGpu(App &a);
 void doPlay(App &a);
 void doValidate(App &a);
 void doSave(App &a);

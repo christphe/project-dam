@@ -160,11 +160,19 @@ void duplicateSelected(App &a, const Vec3 &org, const Vec3 &dir)
     a.say("duplicated");
 }
 
+void reloadDecorGpu(App &a)
+{
+    a.scene.setLevel(a.doc.hasLevel ? &a.doc.level : nullptr);   // the owners are unchanged: the thumbnails and the camera stay
+    a.seenDecorGen = a.doc.decorGen;
+    if (a.doc.hasLevel) a.say("%s", a.doc.level.decorNote.c_str());
+}
+
 void reloadLevelGpu(App &a)
 {
     clearOwnerThumbs(a);
     a.scene.setLevel(a.doc.hasLevel ? &a.doc.level : nullptr);
     a.seenLevelGen = a.doc.levelGen;
+    a.seenDecorGen = a.doc.decorGen;
     if (a.doc.hasLevel) {
         a.cam.frame(a.doc.level.mn, a.doc.level.mx);
         a.cam.zfar = std::max(50000.0f, 4.0f * (a.doc.level.mx[0] - a.doc.level.mn[0] + a.doc.level.mx[2] - a.doc.level.mn[2]));
@@ -194,9 +202,31 @@ void requestLevel(App &a, const std::string &lvl, bool reexport)
     else a.say("export %s: %s", lvl.c_str(), err.c_str());
 }
 
+void startGltfExport(App &a, bool force)
+{
+    std::string err;
+    if (a.gltfJob.running) return;
+    if (!force && a.gltfTried) return;
+    if (!a.gameExe[0]) return;   // no game: the view keeps level.rec's rooms
+    a.gltfTried = true;
+    if (exportStartGltf(a.gltfJob, a.gameExe, err)) a.say("exporting the glTF decor of every level: the game reads the ROM and closes");
+    else a.say("glTF export: %s", err.c_str());
+}
+
 void pollLevel(App &a)
 {
     std::string err;
+    // the glTF decor export: once, when the open level has none (or an older exporter's)
+    if (a.gltfJob.running) {
+        const int r = exportPoll(a.gltfJob, err);
+        if (r == 1) {
+            a.say("glTF export done");
+            if (a.doc.hasLevel) { a.doc.gameExe = a.gameExe; a.doc.reloadDecor(); }
+        } else if (r < 0) a.say("glTF export: %s", err.c_str());
+    } else if (a.doc.hasLevel && a.doc.levelGen != a.gltfCheckedGen) {
+        a.gltfCheckedGen = a.doc.levelGen;
+        if (a.doc.level.decorNeedsExport && a.gameExe[0] && !a.gltfTried) startGltfExport(a, false);
+    }
     if (a.job.running) {
         int r = exportPoll(a.job, err);
         if (r == 1) {
@@ -697,6 +727,7 @@ void startReexportAll(App &a)
         if (exportPresent(exportDirFor(a.gameExe, n))) a.reexportQueue.push_back(n);
     }
     a.reexportTotal = (int)a.reexportQueue.size();
+    startGltfExport(a, true);   // the decor too
     if (!a.reexportTotal) a.say("no cached level exports to redo");
     else a.say("re-exporting %d cached level(s), one after another", a.reexportTotal);
 }

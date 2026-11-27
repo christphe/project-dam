@@ -242,7 +242,56 @@ bool Level::load(const std::string &exportDir, std::string &err)
         }
     }
     if (mn[0] > mx[0]) { mn = { -100, -100, -100 }; mx = { 100, 100, 100 }; }
+    roomTrisRec = roomTris;
+    loadDecor();
     return true;
+}
+
+void Level::loadDecor()
+{
+    hasDecor = false;
+    decorNeedsExport = false;
+    decor = Decor();
+    roomTris = roomTrisRec;
+    if (!hasRec || name.empty()) { decorNote = "decor: level.rec"; printf("[editor] %s\n", decorNote.c_str()); return; }
+    const char *force = getenv("GE_EDITOR_DECOR");
+    if (force && std::string(force) == "rec") { decorNote = "decor: level.rec (GE_EDITOR_DECOR=rec)"; printf("[editor] %s\n", decorNote.c_str()); fflush(stdout); return; }
+    namespace fs = std::filesystem;
+    // the glTF export sits in a folder of its own beside the per-level exports (<game dir>/data/exports/gltf/<level>/), or in gltf/ inside one
+    std::vector<std::string> roots;
+    roots.push_back((fs::path(dir).parent_path() / "gltf").string());
+    roots.push_back((fs::path(dir) / "gltf").string());
+    if (!gltfRoot.empty()) roots.push_back(gltfRoot);   // the game cache last: a glTF beside the export folder wins
+    std::string note = "decor: level.rec (no glTF export)";
+    for (const std::string &root : roots) {
+        const std::string path = (fs::path(root) / name / (name + ".gltf")).string();
+        std::string msg;
+        const DecorResult r = decorLoad(path, exportGltfVersion(), decor, msg);
+        if (r == DECOR_MISSING) continue;
+        if (r == DECOR_OK) {
+            hasDecor = true;
+            decorNote = "decor: " + msg + " (" + path + ")";
+            printf("[editor] %s\n", decorNote.c_str()); fflush(stdout);
+            roomTris.clear();
+            for (const DecorPrim &p : decor.prims) {
+                const DecorMaterial &m = decor.materials[(size_t)p.material];
+                for (size_t i = 0; i + 2 < p.idx.size(); i += 3) {
+                    LTri t; t.room = p.room; t.cull = m.doubleSided ? 0 : 1;
+                    Vec3 *dst[3] = { &t.a, &t.b, &t.c };
+                    for (int k = 0; k < 3; k++) { const float *v = &p.pos[(size_t)p.idx[i + (size_t)k] * 3]; *dst[k] = { v[0], v[1], v[2] }; }
+                    roomTris.push_back(t);
+                }
+            }
+            return;
+        }
+        decor = Decor();
+        note = "decor: level.rec (" + msg + ")";
+        if (r == DECOR_STALE) decorNeedsExport = true;
+        break;
+    }
+    if (!hasDecor && note == "decor: level.rec (no glTF export)") decorNeedsExport = true;
+    decorNote = note;
+    printf("[editor] %s\n", note.c_str()); fflush(stdout);
 }
 
 const LPad *Level::pad(int num) const
@@ -277,6 +326,14 @@ std::string Doc::gameDataDir() const
     return (s == std::string::npos ? std::string(".") : gameExe.substr(0, s)) + "/data";
 }
 
+void Doc::reloadDecor()
+{
+    if (!hasLevel) return;
+    level.gltfRoot = gameExe.empty() ? "" : gltfDirFor(gameExe);
+    level.loadDecor();
+    decorGen++;
+}
+
 bool Doc::openLevel(const std::string &dir, std::string &err)
 {
     // Level owns the file buffer and is not movable: rebuild the member in place.
@@ -284,6 +341,7 @@ bool Doc::openLevel(const std::string &dir, std::string &err)
     new (&level) Level();
     hasLevel = false;
     level.dataDir = gameDataDir();
+    level.gltfRoot = gameExe.empty() ? "" : gltfDirFor(gameExe);
     if (!level.load(dir, err)) return false;
     hasLevel = true;
     levelGen++;

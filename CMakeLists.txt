@@ -967,6 +967,11 @@ set(SRC
 add_subdirectory(port/convert)
 list(INSERT LIBS 0 ge007_convert)
 
+# Static level export (port/export/, issue #150, clean room): the game links it for
+# `--export-levels DIR`; the standalone `ge007-export` CLI is built off Switch.
+add_subdirectory(port/export)
+list(INSERT LIBS 0 ge007_export)
+
 set(BIN_NAME "ge007${BIN_REGION}.${TARGET_ARCH}")
 
 # Off the Switch the game is an OBJECT library (everything but main) plus the
