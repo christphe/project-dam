@@ -769,6 +769,28 @@ static int texnumOfImage(uintptr_t w1)
     return -1;
 }
 
+/* The level's material of an impact, from the hit texture (one scan): the event's own comes from the impact type,
+ * which several materials share. Run once per impact, before the hole and the particles use it. */
+void fxClustersResolveMaterial(PortEvImpact *ev)
+{
+    if (!portFxUserOn) return;
+    if (ev->prop != NULL || ev->tricmd == NULL || ev->impact_type < 0 || ev->impact_type > 19) return;
+    if (ev->material == PMAT_WATER || ev->material == PMAT_CHR) return;
+    const uintptr_t timg = surfaceScan(NULL, ev->room, ev->tricmd);
+    const int tn = texnumOfImage(timg);
+    static int logOn = -1;
+    if (logOn < 0) logOn = getenv("GE_FXCLLOG") != NULL;
+    if (logOn) {
+        sysLogPrintf(LOG_NOTE, "FXCL level hit: room %d timg %llx texnum %d hitTexture %d type %d", ev->room,
+                     (unsigned long long)timg, tn, tn >= 0 && tn < (int)NUM_TEXTURES ? (int)g_Textures[tn].hitTexture : -1,
+                     ev->impact_type);
+    }
+    if (tn >= 0 && tn < NUM_TEXTURES) {
+        ev->material = (int)g_Textures[tn].hitTexture;
+    }
+}
+
+/* The event carries the level's material (fxClustersResolveMaterial, run when it was emitted). */
 void fxClustersAddImpact(const PortEvImpact *e0)
 {
     PortEvImpact ev = *e0;
@@ -783,26 +805,13 @@ void fxClustersAddImpact(const PortEvImpact *e0)
         return;
     }
     if (e->impact_type < 0 || e->impact_type > 19) return;
-    if (e->tricmd != NULL) {   /* the level's material, from the hit texture */
-        const uintptr_t timg = surfaceScan(NULL, e->room, e->tricmd);
-        const int tn = texnumOfImage(timg);
-        static int logOn = -1;
-        if (logOn < 0) logOn = getenv("GE_FXCLLOG") != NULL;
-        if (logOn) {
-            sysLogPrintf(LOG_NOTE, "FXCL level hit: room %d timg %llx texnum %d hitTexture %d type %d", e->room,
-                         (unsigned long long)timg, tn, tn >= 0 && tn < (int)NUM_TEXTURES ? (int)g_Textures[tn].hitTexture : -1,
-                         e->impact_type);
-        }
-        if (tn >= 0 && tn < NUM_TEXTURES) {
-            ev.material = (int)g_Textures[tn].hitTexture;
-            const struct image_sound *snd = g_HitTypeSounds[ev.material];
-            int listed = 0;   /* a hole of that material (the game picked one from the default list) */
-            for (int i = 0; snd != NULL && i < snd->thing2_len; i++) listed |= snd->thing2[i] == ev.impact_type;
-            if (!listed && snd != NULL && snd->thing2_len > 0) {
-                const int t = snd->thing2[(int)(rnd01() * snd->thing2_len) % snd->thing2_len];
-                if (t >= 0 && t <= 19) ev.impact_type = t;
-            }
-            if (ev.material == PMAT_WATER) return;
+    if (e->tricmd != NULL && e->material >= 0 && e->material < PMAT_COUNT) {
+        const struct image_sound *snd = g_HitTypeSounds[e->material];
+        int listed = 0;   /* a hole of that material (the game picked one from the default list) */
+        for (int i = 0; snd != NULL && i < snd->thing2_len; i++) listed |= snd->thing2[i] == ev.impact_type;
+        if (!listed && snd != NULL && snd->thing2_len > 0) {
+            const int t = snd->thing2[(int)(rnd01() * snd->thing2_len) % snd->thing2_len];
+            if (t >= 0 && t <= 19) ev.impact_type = t;
         }
     }
     const int m = matOf(e->material);
