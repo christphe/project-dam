@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <set>
 
 #include "editor_gl.h"
 #include "ge_render.h"
@@ -37,6 +38,8 @@ void Scene::setLevel(const Level *lv)
     for (uint32_t t : m_tex) a->delete_texture(t);
     for (auto &d : m_decor) if (d.mesh) a->mesh_delete(d.mesh);
     for (uint32_t t : m_decorTex) a->delete_texture(t);
+    clearModels();
+    m_propsLogged = false;
     m_runs.clear(); m_tex.clear(); m_runsOfOwner.clear();
     m_decor.clear(); m_decorTex.clear(); m_useDecor = false;
     m_cur = nullptr;
@@ -76,12 +79,37 @@ void Scene::setLevel(const Level *lv)
     // OPAQUE draws no alpha at all (3-float inputs), MASK discards below 0.5 (SHADER_OPT_TEXTURE_EDGE), BLEND blends.
     if (!lv->hasDecor) return;
     m_useDecor = true;
-    const Decor &dc = lv->decor;
+    buildDraws(lv->decor, m_decorTex, m_decor);
+}
+
+void Scene::clearModels()
+{
+    GfxRenderingAPI *a = api();
+    for (auto &kv : m_models) {
+        for (auto &d : kv.second.draws) if (d.mesh) a->mesh_delete(d.mesh);
+        for (uint32_t t : kv.second.tex) a->delete_texture(t);
+    }
+    m_models.clear();
+}
+
+const Scene::ModelGpu *Scene::modelGpu(int model)
+{
+    auto it = m_models.find(model);
+    if (it != m_models.end()) return it->second.draws.empty() ? nullptr : &it->second;
+    ModelGpu &g = m_models[model];
+    const Decor *dc = m_level ? m_level->models.get(model) : nullptr;
+    if (dc) buildDraws(*dc, g.tex, g.draws);
+    return g.draws.empty() ? nullptr : &g;
+}
+
+void Scene::buildDraws(const Decor &dc, std::vector<uint32_t> &texIds, std::vector<DecorDraw> &out)
+{
+    GfxRenderingAPI *a = api();
     for (const DecorTex &t : dc.tex) {
         uint32_t id = a->new_texture();
         a->select_texture(0, id, true);
         a->upload_texture(t.rgba.data(), (uint32_t)t.w, (uint32_t)t.h, true);
-        m_decorTex.push_back(id);
+        texIds.push_back(id);
     }
     for (const DecorPrim &p : dc.prims) {
         const DecorMaterial &m = dc.materials[(size_t)p.material];
@@ -116,15 +144,15 @@ void Scene::setLevel(const Level *lv)
         d.nverts = (uint32_t)p.idx.size();
         d.doubleSided = m.doubleSided;
         d.blend = m.alphaMode == 2;
-        m_decor.push_back(d);
+        out.push_back(d);
     }
 }
 
-void Scene::drawDecor(bool blendPass, const Mat4 &vp)
+void Scene::drawDraws(const std::vector<DecorDraw> &draws, const std::vector<uint32_t> &texIds, bool blendPass, const Mat4 &mtx)
 {
     GfxRenderingAPI *a = api();
     static GfxMeshDraw d;   // large: keep it off the stack
-    for (const DecorDraw &g : m_decor) {
+    for (const DecorDraw &g : draws) {
         if (g.blend != blendPass) continue;
         if (g.prg != m_cur) {
             if (m_cur) a->unload_shader(m_cur);
@@ -132,7 +160,7 @@ void Scene::drawDecor(bool blendPass, const Mat4 &vp)
             m_cur = g.prg;
         }
         if (g.tex >= 0) {
-            a->select_texture(0, m_decorTex[(size_t)g.tex], true);
+            a->select_texture(0, texIds[(size_t)g.tex], true);
             a->set_sampler_parameters(0, true, (uint32_t)g.cms, (uint32_t)g.cmt, true);
         }
         a->set_depth_mode(true, !g.blend, true, false, (uint16_t)g.zmode);   // blended: tested, never written; a decal gets the depth offset
@@ -142,7 +170,7 @@ void Scene::drawDecor(bool blendPass, const Mat4 &vp)
         d.nmtx = 1;
         d.cull = g.doubleSided ? 0 : 1;   // glTF: counter-clockwise is the front, as the game's
         d.noise_scale = 1.0f;
-        memcpy(d.mtx[0], vp.m, sizeof vp.m);
+        memcpy(d.mtx[0], mtx.m, sizeof mtx.m);
         a->mesh_draw(g.mesh, &d);
         m_drawn++;
     }
@@ -220,13 +248,45 @@ void Scene::render(const Doc &doc, const Camera &cam, int winW, int winH, int vx
                     for (int run : m_runsOfOwner[o]) drawRun(run, vp, ident);
     }
 
-    if (showProps)
+    if (showProps) {
+        // An object prop is drawn from its glTF model (model units: scale, then the pad placement) when the model export has it, else
+        // from level.rec's runs; guards always from level.rec.
+        std::vector<PropInst> insts;
+        int placed = 0;
+        std::set<int> fallback;
         for (const Item &it : doc.items()) {
-            if (it.removed || !it.hasPos || it.owner < 0 || (size_t)it.owner >= m_runsOfOwner.size()) continue;
+            if (it.removed || !it.hasPos) continue;
+            const Decor *dec; float sc;
+            if (!it.guard) placed++;
+            if (itemGltf(doc, it, dec, sc)) {
+                if (const ModelGpu *g = modelGpu(it.model)) {
+                    Mat4 S = mat4Identity();
+                    S.m[0] = S.m[5] = S.m[10] = sc;
+                    insts.push_back({ g, mat4Mul(vp, mat4Mul(itemPlacement(doc, it), S)) });
+                    continue;
+                }
+            }
+            if (!it.guard && m_level->useModels) fallback.insert(it.model);
+            if (it.owner < 0 || (size_t)it.owner >= m_runsOfOwner.size()) continue;
             const Mat4 place = itemPlacement(doc, it);
             for (int run : m_runsOfOwner[(size_t)it.owner]) drawRun(run, vp, place);
         }
+        for (const PropInst &in : insts) drawDraws(in.g->draws, in.g->tex, false, in.m);
+        m_propModels = std::move(insts);
+        if (!m_propsLogged) {
+            m_propsLogged = true;
+            std::string fb;
+            for (int m : fallback) fb += (fb.empty() ? "" : ",") + std::to_string(m);
+            if (m_level->useModels)
+                printf("[editor] props: glTF models (%d placed, %zu from glTF, %d fallback%s%s)\n", placed, m_propModels.size(), placed - (int)m_propModels.size(),
+                       fb.empty() ? "" : ": models ", fb.c_str());
+            else
+                printf("[editor] props: level.rec models (%d placed; %s)\n", placed, m_level->models.isOpen() ? "GE_EDITOR_MODELS=rec" : "no model export");
+            fflush(stdout);
+        }
+    }
     if (showRooms && m_useDecor) drawDecor(true, vp);   // translucent decor last: tested against props, not written
+    if (showProps) for (const PropInst &in : m_propModels) drawDraws(in.g->draws, in.g->tex, true, in.m);
     if (m_cur) { a->unload_shader(m_cur); m_cur = nullptr; }
     editorGlScissorOff();
 }
@@ -258,6 +318,40 @@ bool Scene::renderOwner(int owner, int winW, int winH, int size, std::vector<uin
     cam.zfar = dist + radius * 3.0f;
     const Mat4 vp = mat4Mul(cam.proj(1.0f), cam.view());
     for (int run : m_runsOfOwner[(size_t)owner]) drawRun(run, vp, mat4Identity());
+    if (m_cur) { a->unload_shader(m_cur); m_cur = nullptr; }
+    ge_render_end_frame();
+    editorGlScissorOff();
+    return editorGlReadFrame(m_offscreen, winH, 0, winH - size, size, size, rgba);
+}
+
+bool Scene::renderModel(int model, int winW, int winH, int size, std::vector<uint8_t> &rgba)
+{
+    const Decor *dc = m_level ? m_level->models.get(model) : nullptr;
+    const ModelGpu *g = dc ? modelGpu(model) : nullptr;
+    if (!g || size > winW || size > winH) return false;
+    GfxRenderingAPI *a = api();
+    m_drawn = 0;
+    m_cur = nullptr;
+    ge_render_begin_frame();   // between two frames of the main loop: its own
+    a->start_draw_to_framebuffer(0, 1.0f);
+    if (m_offscreen) editorOffscreenBind(winW, winH);
+    editorGlClear(winW, winH, 0.16f, 0.17f, 0.20f);
+    editorGlScissor(0, 0, size, size);
+    a->set_viewport(0, 0, size, size);
+    a->set_scissor(0, 0, size, size);
+    // the model faces +z: look at it from the front, a little from the side and above (as renderOwner), in model units
+    Camera cam;
+    const Vec3 c = { (dc->mn[0] + dc->mx[0]) * 0.5f, (dc->mn[1] + dc->mx[1]) * 0.5f, (dc->mn[2] + dc->mx[2]) * 0.5f };
+    const float dx = dc->mx[0] - dc->mn[0], dy = dc->mx[1] - dc->mn[1], dz = dc->mx[2] - dc->mn[2];
+    const float radius = std::max(1.0f, 0.5f * sqrtf(dx * dx + dy * dy + dz * dz));
+    cam.yaw = -2.1f; cam.pitch = -0.35f;
+    const float dist = radius / sinf(cam.fov * 0.5f) * 1.05f;
+    cam.lookAtPoint(c, dist);
+    cam.znear = std::max(radius * 0.01f, dist - radius * 1.5f);
+    cam.zfar = dist + radius * 3.0f;
+    const Mat4 vp = mat4Mul(cam.proj(1.0f), cam.view());
+    drawDraws(g->draws, g->tex, false, vp);
+    drawDraws(g->draws, g->tex, true, vp);
     if (m_cur) { a->unload_shader(m_cur); m_cur = nullptr; }
     ge_render_end_frame();
     editorGlScissorOff();

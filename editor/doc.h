@@ -15,6 +15,7 @@ extern "C" {
 }
 #include "decor.h"
 #include "levelrec.h"
+#include "models.h"
 #include "script_check.h"
 
 typedef std::array<float, 3> Vec3;
@@ -62,6 +63,10 @@ struct Level {
     std::vector<std::string> texRoots; // replacement sources for the decor's textures, first wins: the open mod, the chosen texture pack
     std::string decorNote;             // what decor is drawn and why (for the log)
     bool decorNeedsExport = false;     // there is no current glTF export: the editor may run the game to write it
+    // The static model export (<gltf root>/models/, issue #119): the props are drawn from it when `useModels`, else from level.rec's
+    // model runs (GE_EDITOR_MODELS=rec forces that). Guards always come from level.rec. The library is also the Props browser's "All models".
+    ModelLib models;
+    bool useModels = false;
     Vec3 mn{}, mx{};                   // bounds of everything
 
     Level() = default;
@@ -72,6 +77,9 @@ struct Level {
     bool load(const std::string &exportDir, std::string &err);
     // (Re)reads the glTF decor and sets roomTris. Never fails: without a usable glTF export level.rec's rooms stay.
     void loadDecor();
+    // (Re)opens the model export next to the decor's folders; called by loadDecor.
+    void loadModels();
+    std::vector<std::string> gltfRoots() const;   // where <level>/<level>.gltf and models/ are looked for, best first
     const LPad *pad(int num) const;
     const LProp *prop(int index) const;
     // The recorded owner of a guard body or an object model (level.json "models"), -1 none. Body and

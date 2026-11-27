@@ -3,8 +3,11 @@
 // The models the open level uses (the export's models table): each one is rendered once, alone, with the same fast3d
 // replay as the view (Scene::renderOwner, between two frames), cached as a texture, and shown in a grid. A cell can be
 // dragged onto the 3D view: it drops an object (or guard) with that model at the point under the mouse, placed like Ctrl+V.
-// Only the level's own models are listed: the game's other models are not in the export.
+// "Level" lists the models the open level uses (an object's thumbnail is its glTF model when the model export has it, else level.rec's);
+// "All models" lists every model of the static model export (models.json), placeable like the others.
 #include "ui_app.h"
+
+#include <climits>
 
 namespace ed {
 
@@ -29,7 +32,8 @@ void processOwnerQueue(App &a, int winW, int winH)
         if (a.ownerTex.count(owner)) continue;
         std::vector<uint8_t> px;
         uint32_t tex = 0;
-        if (a.scene.renderOwner(owner, winW, winH, kThumb, px)) tex = editorGlUploadTexture(kThumb, kThumb, px.data());
+        const bool ok = owner < 0 ? a.scene.renderModel(-owner - 1, winW, winH, kThumb, px) : a.scene.renderOwner(owner, winW, winH, kThumb, px);
+        if (ok) tex = editorGlUploadTexture(kThumb, kThumb, px.data());
         a.ownerTex[owner] = tex;
         n++;
     }
@@ -97,10 +101,15 @@ void drawPropsWindow(App &a)
         return;
     }
     const std::vector<ModelUse> models = a.doc.levelModels();
-    ImGui::SetNextItemWidth(-60);
-    ImGui::InputTextWithHint("##pf", "search: model id, guard, object, type", a.propFilter, sizeof a.propFilter);
+    const ModelLib &lib = a.doc.level.models;
+    if (ImGui::RadioButton("Level", a.propCat == 0)) a.propCat = 0;
     ImGui::SameLine();
-    ImGui::TextDisabled("%zu", models.size());
+    if (ImGui::RadioButton("All models", a.propCat == 1)) a.propCat = 1;
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-60);
+    ImGui::InputTextWithHint("##pf", a.propCat ? "search: model number or name" : "search: model id, guard, object, type", a.propFilter, sizeof a.propFilter);
+    ImGui::SameLine();
+    ImGui::TextDisabled("%zu", a.propCat ? lib.entries().size() : models.size());
     ImGui::PushTextWrapPos(0);
     ImGui::TextDisabled("Drag a model onto the view to place it; click to make it the default of the Guard / Object tool.");
     ImGui::PopTextWrapPos();
@@ -109,6 +118,52 @@ void drawPropsWindow(App &a)
     const float avail = ImGui::GetContentRegionAvail().x;
     const int perRow = std::max(1, (int)(avail / (kCell + ImGui::GetStyle().ItemSpacing.x)));
     int col = 0;
+    // one cell: its thumbnail key (-1 none), the labels, and what a click or a drag does
+    auto cell = [&](int pushId, int thumbKey, bool guard, int model, int type, int item, const char *label, const std::string &tip) {
+        ImGui::PushID(pushId);
+        ImGui::BeginGroup();
+        auto it = a.ownerTex.find(thumbKey);
+        const ImVec2 sz(kCell, kCell);
+        if (it != a.ownerTex.end() && it->second) ImGui::ImageButton("##m", (ImTextureID)(intptr_t)it->second, sz);
+        else {
+            ImGui::Button(it != a.ownerTex.end() || thumbKey == INT_MIN ? "n/a" : "...", sz);
+            if (thumbKey != INT_MIN && it == a.ownerTex.end() && ImGui::IsItemVisible() &&
+                std::find(a.ownerQueue.begin(), a.ownerQueue.end(), thumbKey) == a.ownerQueue.end()) a.ownerQueue.push_back(thumbKey);
+        }
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+            if (guard) a.gModel = model;
+            else { a.oModel = model; a.oType = type > 0 ? type : 3; a.oItem = item; }
+            a.say("%s tool: model %d%s", guard ? "Guard" : "Object", model, guard ? "" : (" (type " + std::to_string(a.oType) + ")").c_str());
+        }
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            ModelPayload m = { guard ? 1 : 0, model, type, item };
+            ImGui::SetDragDropPayload("GE_MODEL", &m, sizeof m);
+            ImGui::Text("%s %d", guard ? "guard" : "object", model);
+            ImGui::EndDragDropSource();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip.c_str());
+        ImGui::TextDisabled("%s", label);
+        ImGui::EndGroup();
+        ImGui::PopID();
+        if (++col < perRow) ImGui::SameLine(); else col = 0;
+    };
+    if (a.propCat == 1) {
+        if (!lib.isOpen()) ImGui::TextDisabled("No model export found (models/models.json beside the glTF decor): re-export the cached levels in Tools > Settings.");
+        std::string f = a.propFilter;
+        for (char &c : f) c = (char)tolower((unsigned char)c);
+        for (const ModelEntry &e : lib.entries()) {
+            if (!f.empty()) {
+                std::string t = std::to_string(e.model) + " " + e.name + " " + e.file;
+                for (char &c : t) c = (char)tolower((unsigned char)c);
+                if (t.find(f) == std::string::npos) continue;
+            }
+            char label[64];
+            snprintf(label, sizeof label, "%d %.9s", e.model, e.name.c_str());
+            cell(200000 + e.model, e.exported ? -e.model - 1 : INT_MIN, false, e.model, 0, -1, label,
+                 "object model " + std::to_string(e.model) + " (" + e.file + ")\n" + std::to_string(e.triangles) + " triangles" + (e.exported ? "" : ", not exported"));
+        }
+        if (col) { ImGui::NewLine(); col = 0; }
+    } else
     for (int pass = 0; pass < 2; pass++) {   // objects, then guards
         bool head = false;
         for (const ModelUse &u : models) {
@@ -118,33 +173,12 @@ void drawPropsWindow(App &a)
                 ImGui::TextColored(ImVec4(0.7f, 0.8f, 1, 1), "%s", pass ? "Guards" : "Objects");
                 head = true;
             }
-            ImGui::PushID(pass * 100000 + u.model);
-            ImGui::BeginGroup();
-            auto it = a.ownerTex.find(u.owner);
-            const ImVec2 sz(kCell, kCell);
-            if (it != a.ownerTex.end() && it->second) ImGui::ImageButton("##m", (ImTextureID)(intptr_t)it->second, sz);
-            else {
-                ImGui::Button(it != a.ownerTex.end() ? "n/a" : "...", sz);
-                if (it == a.ownerTex.end() && ImGui::IsItemVisible() &&
-                    std::find(a.ownerQueue.begin(), a.ownerQueue.end(), u.owner) == a.ownerQueue.end()) a.ownerQueue.push_back(u.owner);
-            }
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-                if (u.guard) a.gModel = u.model;
-                else { a.oModel = u.model; a.oType = u.type; a.oItem = u.item; }
-                a.say("%s tool: model %d%s", u.guard ? "Guard" : "Object", u.model, u.guard ? "" : (" (type " + std::to_string(u.type) + ")").c_str());
-            }
-            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-                ModelPayload m = { u.guard ? 1 : 0, u.model, u.type, u.item };
-                ImGui::SetDragDropPayload("GE_MODEL", &m, sizeof m);
-                ImGui::Text("%s %d", u.guard ? "guard" : "object", u.model);
-                ImGui::EndDragDropSource();
-            }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s model %d%s\nused by %d setup prop(s)", u.guard ? "guard body" : "object", u.model,
-                                                          u.guard ? "" : (" (type " + std::to_string(u.type) + ")").c_str(), u.count);
-            ImGui::TextDisabled("%d", u.model);
-            ImGui::EndGroup();
-            ImGui::PopID();
-            if (++col < perRow) ImGui::SameLine(); else col = 0;
+            const bool gl = !u.guard && a.doc.level.useModels && lib.get(u.model);
+            char label[16];
+            snprintf(label, sizeof label, "%d", u.model);
+            cell(pass * 100000 + u.model, gl ? -u.model - 1 : u.owner, u.guard, u.model, u.type, u.item, label,
+                 std::string(u.guard ? "guard body" : "object") + " model " + std::to_string(u.model) +
+                 (u.guard ? "" : " (type " + std::to_string(u.type) + ")") + "\nused by " + std::to_string(u.count) + " setup prop(s)");
         }
         if (col) { ImGui::NewLine(); col = 0; }
     }

@@ -178,8 +178,36 @@ Vec3 rotYaw(const Vec3 &v, float yawDeg)
     return { v[0] * c + v[2] * s, v[1], -v[0] * s + v[2] * c };
 }
 
-static const OwnerInfo *ownerOf(const Doc &d, const Item &it)
+bool itemGltf(const Doc &d, const Item &it, const Decor *&dec, float &scale)
 {
+    if (it.guard || !d.hasLevel || !d.level.useModels || it.model < 0) return false;
+    const ModelEntry *e = d.level.models.entry(it.model);
+    if (!e) return false;
+    dec = d.level.models.get(it.model);
+    if (!dec) return false;
+    scale = e->baseScale;
+    const MissionField *fl = nullptr;
+    const int n = missionRecFields(it.type, &fl);
+    for (int i = 0; i < n; i++)
+        if (strcmp(fl[i].name, "extrascale") == 0) {
+            if ((it.f.set >> i) & 1u && it.f.v[i] > 0) scale *= (float)(it.f.v[i] / 256.0);   // u8.8: 0x0100 = 1.0
+            break;
+        }
+    return true;
+}
+
+// The owner's recorded bounds, or (an object drawn from glTF) those of its glTF model in world units: `tmp` holds them.
+static const OwnerInfo *ownerOf(const Doc &d, const Item &it, OwnerInfo &tmp, bool *gltf = nullptr)
+{
+    const Decor *dec; float sc;
+    if (gltf) *gltf = false;
+    if (itemGltf(d, it, dec, sc)) {
+        for (int i = 0; i < 3; i++) { tmp.mn[i] = dec->mn[i] * sc; tmp.mx[i] = dec->mx[i] * sc; }
+        tmp.anchor = { (tmp.mn[0] + tmp.mx[0]) * 0.5f, tmp.mn[1], (tmp.mn[2] + tmp.mx[2]) * 0.5f };
+        tmp.valid = true;
+        if (gltf) *gltf = true;
+        return &tmp;
+    }
     if (d.hasLevel && it.owner >= 0 && (size_t)it.owner < d.level.owners.size() && d.level.owners[(size_t)it.owner].valid)
         return &d.level.owners[(size_t)it.owner];
     return nullptr;
@@ -224,7 +252,8 @@ static bool doorBox(const Doc &d, const Item &it, Vec3 &mn, Vec3 &mx)
 // bounds sit around some door's box.
 static bool doorSourceBox(const Doc &d, const Item &it, Vec3 &c, Vec3 &size)
 {
-    const OwnerInfo *o = ownerOf(d, it);
+    OwnerInfo tmp;
+    const OwnerInfo *o = ownerOf(d, it, tmp);
     if (!o) return false;
     c = { (o->mn[0] + o->mx[0]) * 0.5f, (o->mn[1] + o->mx[1]) * 0.5f, (o->mn[2] + o->mx[2]) * 0.5f };
     size = { o->mx[0] - o->mn[0], o->mx[1] - o->mn[1], o->mx[2] - o->mn[2] };
@@ -233,7 +262,9 @@ static bool doorSourceBox(const Doc &d, const Item &it, Vec3 &c, Vec3 &size)
 
 Mat4 itemPlacement(const Doc &d, const Item &it)
 {
-    const OwnerInfo *o = ownerOf(d, it);
+    OwnerInfo tmp;
+    bool gltf = false;
+    const OwnerInfo *o = ownerOf(d, it, tmp, &gltf);
     if (!it.hasPos || !o) return mat4Identity();
     if (isDoor(it)) {
         Vec3 mn, mx, c, sz;
@@ -246,7 +277,7 @@ Mat4 itemPlacement(const Doc &d, const Item &it)
         auto transposed = [](Mat4 m) { Mat4 t = m; for (int r = 0; r < 3; r++) for (int k = 0; k < 3; k++) t.m[k * 4 + r] = m.m[r * 4 + k]; return t; };
         // 1. the recorded model is how the game placed ONE of the level's doors of this model (a source pad whose box it sits in): move it
         //    from that box to this one (centre, frame, per-axis size)
-        {
+        if (!gltf) {   // (a glTF door is in model space: step 2)
             const LPad *best = nullptr; float bestD = 1e30f;
             for (const LProp &p : d.level.props) {
                 if (p.type != 1 || p.owner != it.owner) continue;
@@ -291,7 +322,8 @@ bool itemLocalBox(const Doc &d, const Item &it, Vec3 &mn, Vec3 &mx)
 {
     if (!it.hasPos) return false;
     if (isDoor(it)) { Vec3 m0, m1; if (doorBox(d, it, m0, m1)) { mn = m0; mx = m1; return true; } }   // the bound pad's own box, in the pad frame
-    if (const OwnerInfo *o = ownerOf(d, it)) {
+    OwnerInfo tmp;
+    if (const OwnerInfo *o = ownerOf(d, it, tmp)) {
         for (int i = 0; i < 3; i++) { mn[i] = o->mn[i] - o->anchor[i]; mx[i] = o->mx[i] - o->anchor[i]; }
         return true;
     }

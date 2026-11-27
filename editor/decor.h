@@ -62,8 +62,10 @@ enum DecorResult { DECOR_OK, DECOR_MISSING, DECOR_STALE, DECOR_BAD };
 // the picture textures/<n>.png is read from <root>/textures/<n>.png when it is there (a .pmod / .ptexpack tar or a folder,
 // texpacks.h), at any size: the glTF's texture coordinates are 0..1 of the picture. An unreadable one is skipped and listed in
 // Decor::texWarnings.
+// `model`: a static model export (models/<name>/<name>.gltf, issue #119): no version check, only the default scene's nodes, vertices in
+// model units with the rest pose of their joints applied (node transforms), no stan, no rooms.
 DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out, std::string &msg,
-                      const std::vector<std::string> &texRoots = {});
+                      const std::vector<std::string> &texRoots = {}, bool model = false);
 
 // The texture number of a picture file name "<n>.png" (any folder before it), -1 when it is not one.
 int decorTexnumOfFile(const std::string &name);

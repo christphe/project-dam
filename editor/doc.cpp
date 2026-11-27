@@ -247,8 +247,32 @@ bool Level::load(const std::string &exportDir, std::string &err)
     return true;
 }
 
+std::vector<std::string> Level::gltfRoots() const
+{
+    namespace fs = std::filesystem;
+    // the glTF export sits in a folder of its own beside the per-level exports (<game dir>/data/exports/gltf/<level>/), or in gltf/ inside one
+    std::vector<std::string> roots;
+    roots.push_back((fs::path(dir).parent_path() / "gltf").string());
+    roots.push_back((fs::path(dir) / "gltf").string());
+    if (!gltfRoot.empty()) roots.push_back(gltfRoot);   // the game cache last: a glTF beside the export folder wins
+    return roots;
+}
+
+void Level::loadModels()
+{
+    useModels = false;
+    models.open(gltfRoots());
+    const char *force = getenv("GE_EDITOR_MODELS");
+    const bool rec = force && std::string(force) == "rec";
+    if (!models.isOpen()) { printf("[editor] models: no model export (models/models.json) beside the glTF decor: props from level.rec\n"); fflush(stdout); return; }
+    useModels = !rec;
+    printf("[editor] models: %zu models in %s%s\n", models.entries().size(), models.dir().c_str(), rec ? " (GE_EDITOR_MODELS=rec: props from level.rec)" : "");
+    fflush(stdout);
+}
+
 void Level::loadDecor()
 {
+    loadModels();
     hasDecor = false;
     decorNeedsExport = false;
     decor = Decor();
@@ -257,11 +281,7 @@ void Level::loadDecor()
     const char *force = getenv("GE_EDITOR_DECOR");
     if (force && std::string(force) == "rec") { decorNote = "decor: level.rec (GE_EDITOR_DECOR=rec)"; fprintf(stderr, "[editor] %s\n[editor] floor: level.json (GE_EDITOR_DECOR=rec)\n", decorNote.c_str()); fflush(stderr); return; }
     namespace fs = std::filesystem;
-    // the glTF export sits in a folder of its own beside the per-level exports (<game dir>/data/exports/gltf/<level>/), or in gltf/ inside one
-    std::vector<std::string> roots;
-    roots.push_back((fs::path(dir).parent_path() / "gltf").string());
-    roots.push_back((fs::path(dir) / "gltf").string());
-    if (!gltfRoot.empty()) roots.push_back(gltfRoot);   // the game cache last: a glTF beside the export folder wins
+    const std::vector<std::string> roots = gltfRoots();
     std::string note = "decor: level.rec (no glTF export)";
     for (const std::string &root : roots) {
         const std::string path = (fs::path(root) / name / (name + ".gltf")).string();
