@@ -8,7 +8,7 @@ name: CI
 # This file replaced upstream's ci.yml (and selfhosted.yml was removed): GitHub
 # keeps a workflow's enabled/disabled state by path, and upstream's ci.yml had
 # been disabled on this fork, so after this file first lands on main run
-# `gh workflow enable CI --repo christphe/project-dam-nx`.
+# `gh workflow enable CI --repo christphe/project-dam`.
 
 on:
   push:

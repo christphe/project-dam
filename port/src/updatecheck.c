@@ -8,7 +8,7 @@
  * WinHTTP, LoadLibrary'd at runtime (never linked); elsewhere `curl` is run
  * through popen() (skipped if missing).
  * No telemetry: the request carries only a fixed User-Agent.
- * Checks this fork's releases (christphe/project-dam-nx) against
+ * Checks this fork's releases (christphe/project-dam) against
  * PDAM_VERSION; a release without a PC asset is ignored.
  */
 
@@ -36,9 +36,9 @@
 #define UC_HOST      "api.github.com"
 /* /releases/latest deliberately excludes drafts and pre-releases (maintainer
  * decision): a pre-release never prompts anyone to update. */
-#define UC_PATH      "/repos/christphe/project-dam-nx/releases/latest"
+#define UC_PATH      "/repos/christphe/project-dam/releases/latest"
 #define UC_URL       "https://" UC_HOST UC_PATH
-#define UC_RELEASES  "https://github.com/christphe/project-dam-nx/releases"
+#define UC_RELEASES  "https://github.com/christphe/project-dam/releases"
 #define UC_UA        "project-dam"
 #define UC_BODY_MAX  (256 * 1024)
 
@@ -146,7 +146,7 @@ static int fetchLatest(char *buf, size_t cap)
     }
     return nxHttpGet(UC_URL, buf, cap);
 #else
-    FILE *f = popen("curl -q -fsS --proto =https --max-time 5 -A '" UC_UA "' '" UC_URL "' 2>/dev/null", "r");
+    FILE *f = popen("curl -q -fsSL --proto =https --proto-redir =https --max-time 5 -A '" UC_UA "' '" UC_URL "' 2>/dev/null", "r");
     if (!f) return 0;
     size_t got;
     while (len + 1 < cap && (got = fread(buf + len, 1, cap - 1 - len, f)) > 0) len += got;

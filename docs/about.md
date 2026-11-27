@@ -5,16 +5,19 @@ description: Release history, how the GoldenEye 007 PC port was made, how it wor
 
 # About the project
 
-- [Release history](#release-history)
+- [Upstream release history](#upstream-release-history)
 - [Status in detail](#status-in-detail)
 - [How it was made](#how-it-was-made)
 - [How it works](#how-it-works)
 - [How this differs from the other GoldenEye PC projects](#how-this-differs-from-the-other-goldeneye-pc-projects)
 
 
-## Release history
+## Upstream release history
 
-The full notes for each version are on the [Releases page](https://github.com/jkdansereau/goldeneye-pc-port/releases).
+The releases of the [GoldenEye 007 PC Port](https://github.com/jkdansereau/goldeneye-pc-port)
+this project is forked from; the full notes for each version are on its
+[Releases page](https://github.com/jkdansereau/goldeneye-pc-port/releases).
+Project Dam's own releases are in [`CHANGELOG.md`](../CHANGELOG.md).
 
 - **2026-10-13** — **v0.6.0** ([release notes](https://github.com/jkdansereau/goldeneye-pc-port/releases/tag/v0.6.0)):
   - **Frame rates above 60.** `Video.FpsCap` now offers 90, 120, 144, 165 and
@@ -100,7 +103,7 @@ to end, at Agent difficulty on Windows, Linux and the Deck, for v0.4.0.
 Split-screen was played live in 2P on every multiplayer map and in 4P on
 Temple.
 
-**Known issues:** see the **[known-issues table](ROADMAP.md#known-issues)**
+**Known issues:** see the **GitHub issues**
 (what you'll notice, impact, workarounds). The short version: NTSC-U ROMs
 only in the release packages, and the Apple Silicon macOS download is
 experimental and not notarized. On the Steam Deck at 90 fps, Bunker 1/2
@@ -113,13 +116,9 @@ than other levels.
 > those are not repaired; if you used it on an older build, keep a backup of
 > `data/ge007.eep`.
 
-What a release installs (no networking unless you turn on the opt-in update check, which is off by default and makes one HTTPS request to GitHub per launch; no telemetry, no ROM or game assets)
-and how faithfully the port tracks the original game's logic:
-[Security](security.md) and [fidelity](fidelity.md) status.
-The binaries are not code-signed; from v0.5.0 on each release artifact also
-carries a GitHub build-provenance attestation you can check with
-`gh attestation verify <file> --repo jkdansereau/goldeneye-pc-port`
-(see [SECURITY.md](../.github/SECURITY.md)).
+A release installs no ROM or game assets, has no telemetry, and makes no
+network request unless you turn on the opt-in update check (off by default).
+The binaries are not code-signed. Details: [SECURITY.md](../.github/SECURITY.md).
 
 ## How it was made
 

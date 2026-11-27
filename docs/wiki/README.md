@@ -13,7 +13,7 @@ Start at [index.md](index.md). What changed and when: [log.md](log.md).
 | How a subsystem works now, how to change it | **this wiki** |
 | A trap: a root cause someone would otherwise rediscover | `docs/dev/findings/` (one file each) |
 | A recurring N64 -> PC bug class | `docs/porting-notes.md` |
-| Open work | `docs/ROADMAP.md` and the issues |
+| Open work | the GitHub issues |
 | The history of a feature, its measurements | the PR |
 | The original port's architecture (§1–§10) | `docs/internals.md` |
 

@@ -60,7 +60,7 @@ static const struct { const char *name; const char *num; } kSoloLevels[] = {
 
 static void portPrintVersion(void)
 {
-    printf("GoldenEye 007 PC port\n"
+    printf("Project Dam\n"
            "  rom      : %s\n"
            "  platform : %s\n"
            "  build    : %s (%s)\n"
@@ -298,7 +298,7 @@ int main(int argc, char **argv)
      * be the file's first line. */
     sysLogOpenFile();
 
-    sysLogPrintf(LOG_INFO, "GoldenEye 007 PC port starting "
+    sysLogPrintf(LOG_INFO, "Project Dam starting "
                 "(%s, %s %s) -- %s",
                 GE007_ROMID, GE007_VERSION_HASH, GE007_VERSION_CODENAME,
                 GE007_ORIGIN_URL);

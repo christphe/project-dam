@@ -1,6 +1,6 @@
 ---
 title: User guide
-description: Controls, settings, files, ROM check, updating, emulator saves, macOS setup and troubleshooting for Project Dam, a Switch-first fork of the GoldenEye 007 PC port.
+description: Controls, settings, files, ROM check, updating, emulator saves and troubleshooting for Project Dam, a Switch-first fork of the GoldenEye 007 PC port.
 ---
 
 # User guide
@@ -12,7 +12,6 @@ controls, every setting and file, and fixes for common problems.
 - [Feature list](#feature-list)
 - [Settings and files](#settings-and-files)
 - [What's a ROM?](#whats-a-rom)
-- [macOS (Apple Silicon, experimental)](#macos-apple-silicon-experimental)
 - [Updating](#updating) · [Using an emulator save](#using-an-emulator-save) · [Uninstalling](#uninstalling)
 - [Troubleshooting](#troubleshooting)
 
@@ -133,11 +132,7 @@ Backspace.
 - **Frame rates above 60:** 90, 120, 144, 165 or 240 fps, or **Auto** to match
   your display (up to 240). Extra frames are blended between game ticks (the game still runs at
   its original rate), at the cost of one tick of latency. It has no effect on
-  a 60 Hz display, and the *Original* display mode keeps 60. See
-  [framerate and pacing](framerate-and-pacing.md).
-- **macOS (Apple Silicon), experimental:** the upstream port ships a
-  `macos-arm64` download; this fork ships none, so build from source (see
-  [macOS](#macos-apple-silicon-experimental)).
+  a 60 Hz display, and the *Original* display mode keeps 60.
 - **Graphics options:** resolution, borderless or exclusive fullscreen,
   a Center window action while windowed, MSAA (up to 16×), anisotropic
   filtering, and nearest, bilinear, trilinear or the N64's own 3-point
@@ -159,7 +154,7 @@ Backspace.
 - **N64 progression by default.** Opt-in extras: *Skip intro* and
   *All unlocked* (every level, 007 mode and the full cheat menu, without
   touching your save), and *Check for updates* (off
-  by default; one request to GitHub per launch when on, see [Security](security.md)).
+  by default; one request to GitHub per launch when on, see [SECURITY.md](../.github/SECURITY.md)).
   On the Switch, an available update can be installed from the first menu.
 - **Saves in a plain file** next to the game, so backing up is a file copy;
   1964 and Project64 saves load directly ([details](#using-an-emulator-save)).
@@ -235,47 +230,12 @@ needs the big-endian `.z64` format, and supports the US version today:
 | Region | ROM filename (in `data/`) | SHA-1 | Supported |
 |--------|---------------------------|-------|-----------|
 | NTSC-U (US) | `ge007.ntsc-final.z64` | `abe01e4aeb033b6c0836819f549c791b26cfde83` | yes |
-| PAL (EU)    | `ge007.pal-final.z64`  | `167c3c433dec1f1eb921736f7d53fac8cb45ee31` | not yet ([#85](https://github.com/jkdansereau/goldeneye-pc-port/issues/85)) |
-| NTSC-J (JP) | `ge007.jpn-final.z64`  | `2a5dade32f7fad6c73c659d2026994632c1b3174` | not yet ([#85](https://github.com/jkdansereau/goldeneye-pc-port/issues/85)) |
+| PAL (EU)    | `ge007.pal-final.z64`  | `167c3c433dec1f1eb921736f7d53fac8cb45ee31` | not yet |
+| NTSC-J (JP) | `ge007.jpn-final.z64`  | `2a5dade32f7fad6c73c659d2026994632c1b3174` | not yet |
 
 To check which file you have, compute its SHA-1: on Windows,
 `certutil -hashfile ge007.ntsc-final.z64 SHA1`; on Linux,
-`sha1sum ge007.ntsc-final.z64`; on macOS, `shasum ge007.ntsc-final.z64`.
-
-## macOS (Apple Silicon, experimental)
-
-This section is the upstream port's: this fork ships no macOS build, so the
-download below comes from
-[upstream's releases](https://github.com/jkdansereau/goldeneye-pc-port/releases).
-
-**Download:** `goldeneye-pc-port-<version>-macos-arm64.tar.gz` from the release
-page, for Apple Silicon (M1 or later), macOS 14 or newer. It bundles SDL2 and the
-C++ runtime, so Homebrew is not needed. The app is experimental and **not
-signed with an Apple Developer ID or notarized**, so Gatekeeper blocks it when
-it comes from a download. Unpack it, then run `xattr -dr com.apple.quarantine <folder>` in Terminal once, before the first launch:
-
-```sh
-xattr -dr com.apple.quarantine goldeneye-pc-port-<version>-macos-arm64
-```
-
-**Or skip the quarantine step** by downloading in Terminal instead of a browser
-(`curl` does not mark the file, so Gatekeeper never checks it):
-
-```sh
-curl -L https://github.com/jkdansereau/goldeneye-pc-port/releases/download/v<version>/goldeneye-pc-port-<version>-macos-arm64.tar.gz | tar xz
-```
-
-**Without Terminal:** after macOS blocks the first launch, open System Settings →
-Privacy & Security, scroll down to the message about `ge007.aarch64` and click
-**Open Anyway** (macOS 15 removed the old right-click → Open bypass).
-
-Then set up `data/` with your ROM as in the package README and run
-`./ge007.aarch64` from that folder in Terminal. If you launch it first, the process
-stalls before the window appears (it never reached `main` in my test; that is
-most likely Gatekeeper, and clearing the flag afterwards did not unstick that
-copy), so re-extract the archive and clear the flag before launching. I have run
-the package on one M3 Mac only, so test reports (what Mac, what macOS, what
-happened) are very welcome.
+`sha1sum ge007.ntsc-final.z64`.
 
 ## Updating
 
@@ -338,7 +298,7 @@ want to keep your progress.
 - **Where are my saves?** `data/ge007.eep`. Copy it somewhere safe while the
   game is not running to back it up.
 - **The game crashes:** open an
-  [issue](https://github.com/christphe/project-dam-nx/issues/new)
+  [issue](https://github.com/christphe/project-dam/issues/new)
   and attach `ge007.crash.log` (in the folder you launched from), the output of
   `--version`, your OS, your GPU and your ROM's SHA-1. **Never attach the ROM
   itself.**

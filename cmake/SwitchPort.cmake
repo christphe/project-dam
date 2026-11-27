@@ -219,14 +219,13 @@ macro(switch_package target)
     # libc's. Rename it there; callers get newlib's standard strtol.
     set_source_files_properties("${CMAKE_SOURCE_DIR}/src/str.c"
       PROPERTIES COMPILE_DEFINITIONS "strtol=n64_strtol")
-    # Shown in the homebrew menu. Project Dam is a Switch port of the
-    # GoldenEye 007 PC port (https://github.com/jkdansereau/goldeneye-pc-port).
+    # Shown in the homebrew menu.
     if(NOT PROJECT_DAM_VERSION)
       set(PROJECT_DAM_VERSION "dev-${VERSION_HASH}")
     endif()
     nx_generate_nacp(ge007.nacp
       NAME    "Project Dam"
-      AUTHOR  "Switch port of jkdansereau/goldeneye-pc-port"
+      AUTHOR  "christphe"
       VERSION "${PROJECT_DAM_VERSION}")
     set(_ge_nx_icon "${CMAKE_SOURCE_DIR}/port/switch/icon.jpg")
     if(NOT EXISTS "${_ge_nx_icon}")

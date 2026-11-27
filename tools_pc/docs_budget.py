@@ -9,7 +9,7 @@ Usage:
 For each tracked doc it prints path, bytes, lines, approx_tokens (bytes // 4),
 the per-file budget in approx tokens, and OK/OVER. Missing files are reported
 as "missing" and are not an error (docs/HANDOFF.md is optional). It then sums
-the "tier 1" set (CLAUDE.md, AGENTS.md, docs/HANDOFF.md, docs/ROADMAP.md)
+the "tier 1" set (CLAUDE.md, AGENTS.md, docs/HANDOFF.md)
 against TIER1_BUDGET. Exit code is 1 if any file or the tier-1 total is OVER,
 else 0.
 """
@@ -25,12 +25,11 @@ BUDGETS = {
     "CLAUDE.md": 4000,
     "AGENTS.md": 6000,
     "docs/HANDOFF.md": 3000,
-    "docs/ROADMAP.md": 12000,
     "docs/porting-notes.md": 60000,
 }
 
 # Files whose approx tokens are summed for the tier-1 total.
-TIER1_FILES = ["CLAUDE.md", "AGENTS.md", "docs/HANDOFF.md", "docs/ROADMAP.md"]
+TIER1_FILES = ["CLAUDE.md", "AGENTS.md", "docs/HANDOFF.md"]
 TIER1_BUDGET = 25000
 
 

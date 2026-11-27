@@ -68,7 +68,7 @@ binutils), `make`, `git`, and `python3`. They build a small host-compiled
 `tools/extractor` and slice blobs straight out of the ROM; **no IDO / IRIX
 toolchain is involved in extraction or in the PC build.** (The IDO toolchain is
 only needed to build the N64 ROM itself, and its proprietary SGI binaries are
-not distributed here; see [`SetupGuide.md`](https://github.com/jkdansereau/goldeneye-pc-port/blob/main/docs/SetupGuide.md) "Recompile IDO".)
+not distributed here; see [`SetupGuide.md`](SetupGuide.md) "Recompile IDO".)
 On Windows this is easiest under WSL or a Linux VM. Full details and
 alternatives (Docker) are in `SetupGuide.md`.
 
@@ -95,7 +95,7 @@ and run:
 (US extraction is a prerequisite for the others.)
 
 This populates `assets/` with the generated `.bin` blobs the build needs. See
-[`SetupGuide.md`](https://github.com/jkdansereau/goldeneye-pc-port/blob/main/docs/SetupGuide.md) for the in-depth build/asset pipeline.
+[`SetupGuide.md`](SetupGuide.md) for the in-depth build/asset pipeline.
 
 ---
 
@@ -322,7 +322,7 @@ from it on first launch if they are missing. `ge007.ini` is written under `data/
 | `GE_PCDUMP="first-last:step"` | dump rendered frames as PPM (debugging) |
 
 More diagnostic switches are cataloged in
-[`dev/GE-ENV-PROBES.md`](https://github.com/jkdansereau/goldeneye-pc-port/blob/main/docs/dev/GE-ENV-PROBES.md).
+[`dev/GE-ENV-PROBES.md`](dev/GE-ENV-PROBES.md).
 
 ## Windows build environment troubleshooting
 

@@ -260,8 +260,7 @@ Honest notes, for anyone weighing whether this transfers.
   couldn't close.
 
 **Still outstanding:** see
-[`docs/ROADMAP.md`](https://github.com/jkdansereau/goldeneye-pc-port/blob/main/docs/ROADMAP.md),
-the single tracker for open work.
+the GitHub issues.
 
 ## Since the two-agent phase
 
