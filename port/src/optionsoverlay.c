@@ -61,6 +61,8 @@ extern MENU current_menu;
 #include "audio.h"
 #include "updatecheck.h"
 #include "texpack.h"
+#include "ge_assetstack.h"
+void menuRefreshAssetPacks(void);   /* menu_game.cpp: the list labels again */
 #include "../fast3d/gfx_api.h"
 
 /* file2.c; same extern as watchsettings.c (not in a header). */
@@ -2670,15 +2672,87 @@ void optionsOverlayBack(void)
 
 int optionsOverlayMouseActive(void) { return s_mouseActive; }   /* D567 */
 
+/* The asset packs as the menu lists them: the enabled ones first, in their order, then the others (by file name). */
+#define PACKS_VIEW_MAX 64
+typedef struct {
+    int n, nOn;
+    char files[PACKS_VIEW_MAX][128], names[PACKS_VIEW_MAX][64];
+    int on[PACKS_VIEW_MAX];
+} PacksView;
+static int s_packSel;   /* the highlighted row of the asset-pack list */
+
+static void packsView(PacksView *v)
+{
+    static char found[PACKS_VIEW_MAX][128], fnames[PACKS_VIEW_MAX][64];
+    static char list[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
+    const int nf = texpackListPacks(found, fnames, PACKS_VIEW_MAX);
+    const int nl = assetPackListParse(texpackPacks(), list, ASSETPACK_MAX);
+    v->n = v->nOn = 0;
+    for (int i = 0; i < nl && v->n < PACKS_VIEW_MAX; i++) {   /* enabled, in order; a pack that is gone shows by its file name */
+        const char *name = list[i];
+        for (int k = 0; k < nf; k++) if (!strcmp(found[k], list[i])) { name = fnames[k]; break; }
+        snprintf(v->files[v->n], 128, "%s", list[i]);
+        snprintf(v->names[v->n], 64, "%s", name);
+        v->on[v->n++] = 1;
+        v->nOn++;
+    }
+    for (int k = 0; k < nf && v->n < PACKS_VIEW_MAX; k++) {
+        if (assetPackListFind(list, nl, found[k]) >= 0) continue;
+        snprintf(v->files[v->n], 128, "%s", found[k]);
+        snprintf(v->names[v->n], 64, "%s", fnames[k]);
+        v->on[v->n++] = 0;
+    }
+}
+
+static void packsApply(const PacksView *v)
+{
+    static char list[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
+    char text[ASSETPACK_LIST_LEN];
+    int n = 0;
+    for (int i = 0; i < v->n && n < ASSETPACK_MAX; i++) if (v->on[i]) snprintf(list[n++], ASSETPACK_FILE_LEN, "%s", v->files[i]);
+    assetPackListFormat(list, n, text, sizeof text);
+    texpackSetPacks(text);
+    configSave();
+    menuRefreshAssetPacks();
+}
+
+/* Enables row `i` (it goes last among the enabled ones) or disables it; the highlight follows the pack. */
+static void packsSetEnabled(PacksView *v, int i, int on)
+{
+    char file[128];
+    if (v->on[i] == on) return;
+    snprintf(file, sizeof file, "%s", v->files[i]);
+    v->on[i] = on;
+    packsApply(v);
+    packsView(v);
+    for (int k = 0; k < v->n; k++) if (!strcmp(v->files[k], file)) s_packSel = k;
+}
+
+/* Moves the highlighted enabled pack up (-1) or down (+1) in the order. */
+static void packsMove(int dir)
+{
+    PacksView v;
+    packsView(&v);
+    const int i = s_packSel, j = s_packSel + dir;
+    if (i < 0 || i >= v.nOn || j < 0 || j >= v.nOn) return;
+    {
+        char f[128], nm[64];
+        memcpy(f, v.files[i], sizeof f); memcpy(v.files[i], v.files[j], sizeof f); memcpy(v.files[j], f, sizeof f);
+        memcpy(nm, v.names[i], sizeof nm); memcpy(v.names[i], v.names[j], sizeof nm); memcpy(v.names[j], nm, sizeof nm);
+    }
+    s_packSel = j;
+    packsApply(&v);
+}
+
 int optionsMenuGet(const char *key, double *out)
 {
     if (!strcmp(key, "__DisplayMode")) { *out = videoGetDisplayMode(); return 1; }
     if (!strcmp(key, "__Resolution")) { *out = s_resSel; return 1; }
-    if (!strcmp(key, "__TexturePack")) {   /* the selected pack's place in the list, 0 = none */
-        static char files[64][128], names[64][64];
-        const int n = texpackListPacks(files, names, 64);
-        *out = 0;
-        for (int i = 0; i < n; i++) if (!strcmp(files[i], texpackSelected())) { *out = i + 1; break; }
+    if (!strcmp(key, "__AssetPackSel")) { *out = s_packSel; return 1; }
+    if (!strcmp(key, "__AssetPackOn")) {   /* the highlighted pack is enabled */
+        PacksView v;
+        packsView(&v);
+        *out = s_packSel < v.n && v.on[s_packSel];
         return 1;
     }
     if (!strcmp(key, "__BondFile")) {   /* the save file the profile settings are read from */
@@ -2714,11 +2788,18 @@ void optionsMenuSet(const char *key, double value)
         else if (k - 1 < audioDeviceRefresh()) audioDeviceRequest(audioDeviceName(k - 1));
         return;
     }
-    if (!strcmp(key, "__TexturePack")) {
-        static char files[64][128], names[64][64];
-        const int k = (int)lround(value), n = texpackListPacks(files, names, 64);
-        texpackSelect(k >= 1 && k <= n ? files[k - 1] : "");
-        configSave();
+    if (!strcmp(key, "__AssetPackSel")) {
+        PacksView v;
+        packsView(&v);
+        s_packSel = (int)lround(value);
+        if (s_packSel < 0 || s_packSel >= v.n) s_packSel = 0;
+        return;
+    }
+    if (!strcmp(key, "__AssetPackOn")) {   /* enable: last in the order; disable: out of the list */
+        PacksView v;
+        packsView(&v);
+        if (s_packSel >= v.n) return;
+        packsSetEnabled(&v, s_packSel, lround(value) != 0);
         return;
     }
     if (!strcmp(key, "__Resolution")) {
@@ -2736,16 +2817,24 @@ void optionsMenuSet(const char *key, double value)
 int optionsMenuResCount(void) { return s_resFitN; }
 
 /* The texture pack list for the menu: "None", then the packs in texturepacks/ (display names). */
-int optionsMenuTexPackCount(void)
+/* The asset-pack list for the menu: "1. HD", "2. GoldenEye 007" for the enabled packs in their order, then the others
+ * by name ("No asset pack" when the folders hold none). */
+int optionsMenuAssetPackCount(void)
 {
-    static char files[64][128], names[64][64];
-    return texpackListPacks(files, names, 64) + 1;
+    PacksView v;
+    packsView(&v);
+    return v.n ? v.n : 1;
 }
-const char *optionsMenuTexPackLabel(int i)
+const char *optionsMenuAssetPackLabel(int i)
 {
-    static char files[64][128], names[64][64];
-    const int n = texpackListPacks(files, names, 64);
-    return i <= 0 || i > n ? "None" : names[i - 1];
+    static char label[96];
+    PacksView v;
+    packsView(&v);
+    if (!v.n) return "No asset pack";
+    if (i < 0 || i >= v.n) return "";
+    if (v.on[i]) snprintf(label, sizeof label, "%d. %s", i + 1, v.names[i]);
+    else snprintf(label, sizeof label, "%s", v.names[i]);
+    return label;
 }
 
 #ifndef GE_MENU_RUN_STAGE
@@ -2810,6 +2899,8 @@ void optionsMenuAction(const char *key)
     if (!strcmp(key, "__UpdateOpen")) { updateCheckOpenReleases(); return; }
     if (!strcmp(key, "__UpdateInstall")) { updateInstall(); return; }   /* Switch: download, check, replace; PC: the page */
     if (!strcmp(key, "__UpdateCheck")) { updateCheckRun(); return; }
+    if (!strcmp(key, "__AssetPackUp")) { packsMove(-1); return; }
+    if (!strcmp(key, "__AssetPackDown")) { packsMove(1); return; }
     if (!strcmp(key, "__RestartGame")) {   /* D443: the orderly D344 quit, then main.c relaunches */
         sysLogPrintf(LOG_INFO, "menu: restart game requested");
         configSave();

@@ -1,5 +1,5 @@
 /*
- * texpack.c -- texture packs in the game (port/include/texpack.h; the format is port/assets/ge_texpacks.h).
+ * texpack.c -- asset packs in the game: their textures (port/include/texpack.h; the stack is port/assets/ge_assetstack.h).
  *
  * Two tables, one lock:
  *  - address -> texture number, filled by texLoad on the game thread (the texture pool is a ring: a reused address is
@@ -8,10 +8,11 @@
  *  - texture number -> the pack's decoded picture, filled on the render thread the first time fast3d uploads that texture
  *    (one PNG decode, then fast3d's own texture cache keeps it on the GPU). Pictures are kept up to a byte budget and the
  *    oldest dropped past it; a dropped one is decoded again if fast3d ever uploads it again.
- * The pack itself is read through its own index (texpackIndexOpen): never through the package layer's shared cache, which
- * the game thread uses for mods.
- * The mod of the active mission (texpackSetMod) is a second source with the same layout (textures/<n>.png in X.pmod), looked
- * up before the pack. Stopgap until the game draws its levels from the glTF export: the editor already resolves a mod's
+ * The enabled packs (Video.AssetPacks, in the player's order) are read through the stack's own indexes (assetStackOpen):
+ * never through the package layer's shared cache, which the game thread uses for mods. Every pack may be partial: a texture
+ * no pack and no mod has is the game's own.
+ * The mod of the active mission (texpackSetMod) is a source with the same layout (textures/<n>.png in X.pmod), looked up
+ * before the packs: it always wins. Stopgap until the game draws its levels from the glTF export: the editor already resolves a mod's
  * textures there (editor/decor.cpp), and this mod lookup goes away with the texLoad hook then.
  */
 #include "platform.h"
@@ -25,6 +26,7 @@
 #include "portaddr.h"
 #include "texpack.h"
 #include "ge_texpacks.h"
+#include "ge_assetstack.h"
 #include "ge_png.h"
 
 #define REG_SIZE 16384            /* registered textures kept; cleared when full */
@@ -37,9 +39,10 @@
 #define FMT_IA 3                  /* G_IM_FMT_IA (PR/gbi.h) */
 #define FMT_I 4                   /* G_IM_FMT_I */
 
-static char s_cfgPack[TEXPACK_FILE_LEN];   /* Video.TexturePack */
-static char s_inUse[TEXPACK_FILE_LEN];
-static TexPackIndex *s_ix;
+static char s_cfgList[ASSETPACK_LIST_LEN];  /* Video.AssetPacks: the enabled packs, in order */
+static char s_cfgLegacy[TEXPACK_FILE_LEN];  /* Video.TexturePack: the one pack of older versions, migrated by texpackInit */
+static char s_inUse[ASSETPACK_LIST_LEN];
+static AssetStack *s_stack;
 static TexPackIndex *s_modIx;     /* the active mission's mod: its textures/ come first */
 static char s_modDir[600];
 static unsigned s_gen = 1;
@@ -63,14 +66,18 @@ static unsigned s_picGen;         /* the s_gen the pictures belong to: the rende
 
 PD_CONSTRUCTOR static void texpackConfigInit(void)
 {
-    configRegisterString("Video.TexturePack", s_cfgPack, sizeof s_cfgPack);
+    configRegisterString("Video.AssetPacks", s_cfgList, sizeof s_cfgList);
+    configRegisterString("Video.TexturePack", s_cfgLegacy, sizeof s_cfgLegacy);
 }
 
-static const char *packsDir(void)
+/* The folders packs are found in: assetpacks/, then the older texturepacks/ (a file name found in both: assetpacks/ wins). */
+static const char *const *packsDirs(void)
 {
-    static char dir[600];
-    snprintf(dir, sizeof dir, "%s", sysResolvePath("$S/../texturepacks"));
-    return dir;
+    static char a[600], t[600];
+    static const char *dirs[2] = { a, t };
+    snprintf(a, sizeof a, "%s", sysResolvePath("$S/../assetpacks"));
+    snprintf(t, sizeof t, "%s", sysResolvePath("$S/../texturepacks"));
+    return dirs;
 }
 
 static uintptr_t normAddr(const void *p)
@@ -95,24 +102,35 @@ static void picsClear(void)
     s_picBytes = 0;
 }
 
-void texpackSelect(const char *file)
+void texpackSetPacks(const char *list)
 {
-    char root[900];
-    TexPackIndex *ix = NULL;
-    if (!file) file = "";
-    snprintf(s_cfgPack, sizeof s_cfgPack, "%s", file);
-    if (file[0]) {
-        snprintf(root, sizeof root, "%s/%s", packsDir(), file);
-        ix = texpackIndexOpen(root);
-        if (!ix) sysLogPrintf(LOG_WARNING, "texture pack: cannot read %s (a .ptexpack tar or folder expected)", root);
-        else sysLogPrintf(LOG_INFO, "texture pack: %s, %d textures", root, texpackIndexCount(ix));
-    } else if (s_ix) {
-        sysLogPrintf(LOG_INFO, "texture pack: none");
+    static char files[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
+    static AssetPackInfo info[ASSETPACK_MAX * 2];
+    static char rootBuf[ASSETPACK_MAX][800];
+    const char *roots[ASSETPACK_MAX];
+    char text[ASSETPACK_LIST_LEN];
+    const int n = assetPackListParse(list ? list : "", files, ASSETPACK_MAX);
+    int found = assetPackScan(packsDirs(), 2, info, ASSETPACK_MAX * 2);
+    AssetStack *st;
+    if (found > ASSETPACK_MAX * 2) found = ASSETPACK_MAX * 2;
+    for (int i = 0; i < n; i++) {   /* a pack in the list but not found keeps its place: it may come back */
+        const char *dir = packsDirs()[0];
+        for (int k = 0; k < found; k++) if (!strcmp(info[k].file, files[i])) { dir = info[k].dir; break; }
+        snprintf(rootBuf[i], sizeof rootBuf[i], "%s/%s", dir, files[i]);
+        roots[i] = rootBuf[i];
     }
+    assetPackListFormat(files, n, text, sizeof text);
+    snprintf(s_cfgList, sizeof s_cfgList, "%s", text);
+    st = assetStackOpen(roots, n);
+    for (int i = 0; i < n; i++) {
+        if (!assetStackOpened(st, i)) sysLogPrintf(LOG_WARNING, "asset packs: cannot read %s (a .passets tar or folder expected)", roots[i]);
+        else sysLogPrintf(LOG_INFO, "asset packs: %d. %s, %d textures", i + 1, roots[i], assetStackTextureCount(st, i));
+    }
+    if (!n && assetStackCount(s_stack)) sysLogPrintf(LOG_INFO, "asset packs: none");
     pthread_mutex_lock(&s_lock);
-    texpackIndexClose(s_ix);
-    s_ix = ix;
-    snprintf(s_inUse, sizeof s_inUse, "%s", ix ? file : "");
+    assetStackClose(s_stack);
+    s_stack = st;
+    snprintf(s_inUse, sizeof s_inUse, "%s", text);
     s_gen++;   /* new cache keys: fast3d uploads every replaced texture again; the render thread drops the old pictures */
     pthread_mutex_unlock(&s_lock);
 }
@@ -125,7 +143,7 @@ void texpackSetMod(const char *dir)
     if (dir[0]) {
         ix = texpackIndexOpen(dir);
         if (ix && texpackIndexCount(ix) == 0) { texpackIndexClose(ix); ix = NULL; }
-        if (ix) sysLogPrintf(LOG_INFO, "texture pack: the mod %s replaces %d textures", dir, texpackIndexCount(ix));
+        if (ix) sysLogPrintf(LOG_INFO, "asset packs: the mod %s replaces %d textures", dir, texpackIndexCount(ix));
     }
     pthread_mutex_lock(&s_lock);
     texpackIndexClose(s_modIx);
@@ -135,27 +153,30 @@ void texpackSetMod(const char *dir)
     pthread_mutex_unlock(&s_lock);
 }
 
-/* The source of texture n: the mod's index, then the pack's (NULL: neither has it). Under s_lock. */
-static TexPackIndex *sourceOf(int n)
+/* 1 when the mod or an enabled pack has texture n. Under s_lock. */
+static int hasSource(int n)
 {
-    if (texpackIndexHas(s_modIx, n)) return s_modIx;
-    if (texpackIndexHas(s_ix, n)) return s_ix;
-    return NULL;
+    return assetStackTextureFrom(s_stack, s_modIx, n) != ASSET_FROM_NONE;
 }
 
 void texpackInit(void)
 {
-    char want[TEXPACK_FILE_LEN];
-    snprintf(want, sizeof want, "%s", s_cfgPack);
-    if (want[0]) texpackSelect(want);
+    char want[ASSETPACK_LIST_LEN];
+    if (!s_cfgList[0] && s_cfgLegacy[0]) {   /* an older ini: its one texture pack becomes the list */
+        sysLogPrintf(LOG_INFO, "asset packs: Video.TexturePack %s moves to Video.AssetPacks", s_cfgLegacy);
+        snprintf(s_cfgList, sizeof s_cfgList, "%s", s_cfgLegacy);
+    }
+    s_cfgLegacy[0] = 0;
+    snprintf(want, sizeof want, "%s", s_cfgList);
+    if (want[0]) texpackSetPacks(want);
 }
 
-const char *texpackSelected(void) { return s_inUse; }
+const char *texpackPacks(void) { return s_inUse; }
 
 int texpackListPacks(char (*files)[128], char (*names)[64], int max)
 {
-    TexPackInfo info[64];
-    int n = texpackScan(packsDir(), info, 64);
+    static AssetPackInfo info[64];
+    int n = assetPackScan(packsDirs(), 2, info, 64);
     if (n > 64) n = 64;
     if (n > max) n = max;
     for (int i = 0; i < n; i++) {
@@ -209,13 +230,13 @@ unsigned texpackSalt(const void *addr, int fromTile, int *texnum, uint32_t *offs
     unsigned salt = 0;
     *texnum = -1;
     *offset = 0;
-    if (!s_ix && !s_modIx) return 0;   /* no pack, no mod textures: one unlocked test per import */
+    if (!s_modIx && !assetStackCount(s_stack)) return 0;   /* no pack, no mod textures: one unlocked test per import */
     pthread_mutex_lock(&s_lock);
     if (s_picGen != s_gen) { picsClear(); s_picGen = s_gen; }
     {
         uint32_t off = 0;
         const int n = lookupLocked(normAddr(addr), fromTile, &off);
-        if (n >= 0 && sourceOf(n) && !s_pic[n].failed) {
+        if (n >= 0 && hasSource(n) && !s_pic[n].failed) {
             *texnum = n;
             *offset = off;
             salt = ((0x5EA70000u ^ (s_gen * 2654435761u)) + (unsigned)n * 40503u + off * 2246822519u) | 1u;
@@ -244,13 +265,13 @@ const uint8_t *texpackPixels(int texnum, int fmt, int maxSize, int *w, int *h)
     pthread_mutex_lock(&s_lock);
     if (s_picGen != s_gen) { picsClear(); s_picGen = s_gen; }
     p = &s_pic[texnum];
-    if (!p->rgba && !p->failed && sourceOf(texnum)) {
+    if (!p->rgba && !p->failed && hasSource(texnum)) {
         uint8_t *file = NULL, *rgba = NULL;
         size_t len = 0;
         int pw = 0, ph = 0;
-        if (texpackIndexRead(sourceOf(texnum), texnum, &file, &len) && gePngDecode(file, len, &pw, &ph, &rgba)) {
+        if (assetStackReadTexture(s_stack, s_modIx, texnum, &file, &len) && gePngDecode(file, len, &pw, &ph, &rgba)) {
             if (pw > maxSize || ph > maxSize) {
-                sysLogPrintf(LOG_WARNING, "texture pack: textures/%d.png is %dx%d, over this GPU's %d: the game's own is drawn", texnum, pw, ph, maxSize);
+                sysLogPrintf(LOG_WARNING, "asset packs: textures/%d.png is %dx%d, over this GPU's %d: the game's own is drawn", texnum, pw, ph, maxSize);
                 free(rgba);
                 p->failed = 1;
             } else {
@@ -262,7 +283,7 @@ const uint8_t *texpackPixels(int texnum, int fmt, int maxSize, int *w, int *h)
                 s_picBytes += n * 4;
             }
         } else {
-            sysLogPrintf(LOG_WARNING, "texture pack: textures/%d.png is not readable (an 8-bit PNG, not interlaced, is expected): the game's own is drawn", texnum);
+            sysLogPrintf(LOG_WARNING, "asset packs: textures/%d.png is not readable (an 8-bit PNG, not interlaced, is expected): the game's own is drawn", texnum);
             p->failed = 1;
         }
         free(file);
