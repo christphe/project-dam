@@ -84,24 +84,20 @@ jobs:
           python3 tools_pc/gen_convert_data.py --check
           python3 tools_pc/gen_menudata.py --check
 
+      - name: Build image reference is consistent
+        run: python3 tools/check_build_image.py
+
   # Host (Linux) build of the game core plus the CTest binaries (tests/): no
   # ROM, no window, no audio device. Runs in parallel with the NRO build.
   tests:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    # Same pinned image as the nro job (devkitA64 image = Ubuntu with the host
-    # toolchain available); the host libraries are installed as in Dockerfile.build.
-    container: docker.io/devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+    # The published build image (Dockerfile.build, built by build-image.yml),
+    # pinned by digest: devkitA64, libnx, portlibs, patched uam and the host
+    # toolchain and libraries.
+    container: ghcr.io/christphe/project-dam-build@sha256:7ba869fa0ea8b7195b7dcab3b23f87ae2e3065fac1001bd89ca817771dcc7baf
     steps:
-      - name: Tools
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build python3 libsdl2-dev libgl1-mesa-dev \
-            libvulkan-dev glslang-tools zlib1g-dev git
-          git config --system --add safe.directory '*'
-
       - uses: actions/checkout@v7
 
       - name: Build
@@ -116,17 +112,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    # Same pinned image as Dockerfile.build: devkitA64, libnx and the Switch
-    # portlibs (SDL2, mesa, zlib).
-    container: docker.io/devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+    # The published build image (Dockerfile.build, built by build-image.yml),
+    # pinned by digest: devkitA64, libnx, Switch portlibs, patched uam.
+    container: ghcr.io/christphe/project-dam-build@sha256:7ba869fa0ea8b7195b7dcab3b23f87ae2e3065fac1001bd89ca817771dcc7baf
     steps:
-      - name: Tools
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            cmake git ninja-build python3 zip
-          git config --system --add safe.directory '*'
-
       - uses: actions/checkout@v7
 
       - name: Version

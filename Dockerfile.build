@@ -1,8 +1,13 @@
 # project-dam build environment: Nintendo Switch cross-compilation + a Linux
 # reference build of the PC port.
 #
-#   docker compose build          # once
+#   docker compose pull           # once (the published, digest-pinned image)
 #   docker compose run --rm switch
+#
+# This file is built by .github/workflows/build-image.yml and published to
+# ghcr.io/christphe/project-dam-build; ci.yml, compose.yaml and the dev scripts
+# pin the result by digest (tools/check_build_image.py keeps them in sync).
+# To test a change locally first: `docker compose build image-local`.
 #
 # devkitPro's devkitA64 image (pinned) carries devkitA64, libnx and the
 # Switch portlibs this port links (SDL2, mesa, zlib). The release workflow
@@ -10,7 +15,39 @@
 #
 # (The repository's own Dockerfile / docker-compose.yml are upstream's N64
 # matching-build environment and are left untouched.)
+
+# Stage 1: uam, the deko3d shader compiler, built from our fork. devkitPro's
+# uam 1.1.0 leaves Mesa's STATE_FB_WPOS_Y_TRANSFORM at 0 in the generated
+# constant buffer, so every dFdy is 0 on deko3d (issue #141). The fork's
+# `project-dam` branch is devkitPro master plus a small fix; the commit is
+# pinned. uam is zlib licensed (Mesa-imported files MIT).
+FROM docker.io/devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282 AS uam-build
+ARG UAM_REPO=https://github.com/christphe/uam.git
+ARG UAM_COMMIT=163451e67481c4f4b4991832f97991afab3f2e14
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        bison \
+        build-essential \
+        ca-certificates \
+        flex \
+        git \
+        meson \
+        ninja-build \
+        pkg-config \
+        python3 \
+        python3-mako \
+        python3-setuptools \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone "$UAM_REPO" /uam \
+    && cd /uam \
+    && git checkout "$UAM_COMMIT" \
+    && test "$(git rev-parse HEAD)" = "$UAM_COMMIT" \
+    && meson setup build --buildtype=release \
+    && ninja -C build
+
+# Stage 2: the build environment.
 FROM docker.io/devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+LABEL org.opencontainers.image.source="https://github.com/christphe/project-dam-nx"
 
 # CMake/Ninja for the build, Python for the asset converter (make_sd.sh), and
 # the host (Linux) libraries for the reference PC build (docs/building.md).
@@ -30,6 +67,10 @@ RUN apt-get update \
         zip \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# The patched uam replaces devkitPro's (see stage 1).
+COPY --from=uam-build /uam/build/uam /opt/devkitpro/tools/bin/uam
+RUN uam --version
 
 ENV DEVKITPRO=/opt/devkitpro \
     DEVKITA64=/opt/devkitpro/devkitA64 \

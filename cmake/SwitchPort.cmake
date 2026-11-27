@@ -189,6 +189,7 @@ macro(switch_deko3d_shaders target)
               "${CMAKE_SOURCE_DIR}/port/ge_render/include/gfx_cc.h"
               "${CMAKE_SOURCE_DIR}/port/ge_render/src/gfx_dk_layout.h"
               "${CMAKE_SOURCE_DIR}/cmake/SwitchPort.cmake"
+              "${DK_UAM}"   # a new uam (the build image's patched one, #141) recompiles every shader
       COMMENT "deko3d shader pack (dkshgen + uam)"
       VERBATIM)
     set(_dk_s "${CMAKE_SOURCE_DIR}/port/ge_render/src/gfx_dk_pack.S")

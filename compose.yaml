@@ -2,7 +2,7 @@
 # ROM asset symbols are pre-generated (port/src/romassets_<region>.s) and the
 # game reads the user's ROM at run time.
 #
-#   docker compose build                 # once
+#   docker compose pull                  # once (the published, digest-pinned image)
 #   docker compose run --rm linux        # Linux reference build -> build-linux/
 #   docker compose run --rm switch       # Switch build -> build-switch/
 #   docker compose run --rm windows      # Windows cross-build -> build-win/
@@ -16,12 +16,15 @@
 # its own <folder>_default network and Docker runs out of address pools.
 name: project-dam
 
+# The build image: Dockerfile.build, published by .github/workflows/build-image.yml
+# and pinned by digest. tools/check_build_image.py keeps this, ci.yml, dev.py and
+# fxview.py on the same reference (`--set <ref>` after a new publish).
+x-build-image: &build_image ghcr.io/christphe/project-dam-build@sha256:7ba869fa0ea8b7195b7dcab3b23f87ae2e3065fac1001bd89ca817771dcc7baf
+
 services:
   linux:
-    build:
-      context: .
-      dockerfile: Dockerfile.build
-    image: local/project-dam-build:latest
+    image: *build_image
+    pull_policy: missing
     working_dir: /src
     volumes:
       - .:/src
@@ -31,7 +34,8 @@ services:
       - -c
       - cmake -S . -B build-linux -G Ninja -DROMID=ntsc-final && cmake --build build-linux
   switch:
-    image: local/project-dam-build:latest
+    image: *build_image
+    pull_policy: missing
     working_dir: /src
     volumes:
       - .:/src
@@ -75,8 +79,18 @@ services:
         -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-arm64.cmake -DGE_ARM64=ON
         -DGE_VULKAN=OFF -DGE007_BUILD_TESTS=OFF
         && cmake --build build-arm64
-  shell:
+  # Only to test a Dockerfile.build change before publishing it:
+  # `docker compose build image-local`, then DOCKER_IMAGE=local/project-dam-build:latest
+  # (tools/dev.py, .env) or `docker run` it directly.
+  image-local:
+    build:
+      context: .
+      dockerfile: Dockerfile.build
     image: local/project-dam-build:latest
+    profiles: ["local"]
+  shell:
+    image: *build_image
+    pull_policy: missing
     working_dir: /src
     volumes:
       - .:/src

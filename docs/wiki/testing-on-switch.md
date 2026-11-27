@@ -62,7 +62,7 @@ mkdir -p build-switch-link/romfs/mods
 tar -cf build-switch-link/romfs/mods/michel.pmod -C <repos>/project-dam-mods/michel --exclude=.gitignore --exclude=README.md --exclude=dist .
 tar -cf build-switch-link/romfs/mods/formula.pmod -C docs/modding/samples/formula .
 python tools/dev.py build link        # once, if build-switch-link is not configured yet
-MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/src" -v project-dam-ccache:/ccache -w /src local/project-dam-build:latest \
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/src" -v project-dam-ccache:/ccache -w /src "$(python tools/check_build_image.py --print)" \
   sh -c 'cmake build-switch-link -DNX_ROMFS_DIR=/src/build-switch-link/romfs && cmake --build build-switch-link'
 python tools/switch/nxlink.py <switch ip> build-switch-link/ge007.aarch64.nro switch/project-dam/project-dam-test.nro \
   build-switch-link/nx.log NX_TEST_SECS=86400
