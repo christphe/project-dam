@@ -154,7 +154,7 @@ translucent layers in room 30, not a window.)
 
 ### Texture generation (reflections)
 
-Geometry-mode bit `0x40000` turns on **texture generation** (with `0x20000`,
+Geometry-mode bit `0x40000` turns on **texture generation** (with `0x80000`,
 its linear variant): the texture coordinates of the vertices are not used;
 the hardware computes them per vertex from the vertex **normal** at draw time
 (a reflection that follows the view). While it is on, the four colour bytes
@@ -164,7 +164,7 @@ of the room's vertices hold a normal, not a colour: x, y, z as signed bytes
 For the glTF, a texture-generated primitive gets: COLOR_0 = white (alpha
 from the alpha byte), and TEXCOORD_0 computed once from the normal as
 `u = 0.5 + 0.5 * nx`, `v = 0.5 - 0.5 * ny` (a fixed reflection, as seen from
-the front), and extras `texgen: true` (plus `texgen_linear` when `0x20000`
+the front), and extras `texgen: true` (plus `texgen_linear` when `0x80000`
 is set) so a renderer that can do real reflections knows. Measured: Bunker
 1, room 6, texture 1196 (54x54, intensity) is the round "eye" window; drawn
 with its stored coordinates and the normals as colours, it came out black.

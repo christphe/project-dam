@@ -56,7 +56,7 @@ def check_png(path):
     return None
 
 
-def check_level(root, name):
+def check_level(root, name, report=True):
     errs = []
     d = os.path.join(root, name)
     gp = os.path.join(d, name + ".gltf")
@@ -153,10 +153,65 @@ def check_level(root, name):
             e = check_png(ip)
             if e:
                 errs.append("png %s: %s" % (im["uri"], e))
-    if not os.path.isfile(os.path.join(d, "report.txt")):
+    if report and not os.path.isfile(os.path.join(d, "report.txt")):
         errs.append("report.txt missing")
     stats = (len(g.get("nodes", [])), nprim, ntri, nimg, nmat)
     return errs, stats
+
+
+def check_models(mroot):
+    """Models export (issue #119): <mroot>/<model>/<model>.gltf for every entry of models.json."""
+    try:
+        with open(os.path.join(mroot, "models.json"), encoding="utf-8") as f:
+            idx = json.load(f)
+    except Exception as e:  # noqa: BLE001
+        print("models: models.json: %s" % e)
+        return 1
+    bad, tot, ntri_all = 0, [0, 0, 0, 0], 0
+    ents = idx.get("models", [])
+    nums = [e.get("model") for e in ents]
+    if nums != list(range(len(ents))):
+        print("models: ERROR: model numbers are not 0..%d in order" % (len(ents) - 1))
+        bad += 1
+    for e in ents:
+        if e.get("status") == "failed":
+            print("model %d %s: FAILED %s" % (e["model"], e.get("file"), e.get("notes")))
+            bad += 1
+            continue
+        name = os.path.dirname(e["gltf"])
+        errs, st = check_level(mroot, name, report=False)
+        if st is None:
+            errs = errs or ["no stats"]
+        else:
+            for i in range(4):
+                tot[i] += st[i + 0] if i < 3 else st[3]
+            try:
+                with open(os.path.join(mroot, e["gltf"]), encoding="utf-8") as f:
+                    g = json.load(f)
+                sc = g["scenes"]
+                nn = len(g["nodes"])
+                for si in sc:
+                    for ni in si["nodes"]:
+                        if ni >= nn:
+                            errs.append("scene node %d out of range" % ni)
+                for nd in g["nodes"]:
+                    for c in nd.get("children", []):
+                        if c >= nn:
+                            errs.append("child %d out of range" % c)
+                if g["asset"]["extras"].get("model") != e["model"]:
+                    errs.append("asset.extras.model != models.json")
+                ntri_all += st[2]
+                if st[2] != e["triangles_all"]:
+                    errs.append("triangles_all %d != gltf %d" % (e["triangles_all"], st[2]))
+            except Exception as ex:  # noqa: BLE001
+                errs.append("gltf: %s" % ex)
+        for er in errs:
+            print("model %d %s: ERROR: %s" % (e["model"], e.get("file"), er))
+        if errs:
+            bad += 1
+    print("%d models checked, %d with errors; nodes %d primitives %d triangles %d textures %d"
+          % (len(ents), bad, tot[0], tot[1], tot[2], tot[3]))
+    return 1 if bad or not ents else 0
 
 
 def main():
@@ -164,7 +219,7 @@ def main():
         print(__doc__)
         return 2
     root = sys.argv[1]
-    levels = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n)))
+    levels = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n)) and n != "models")
     bad = 0
     tot = [0, 0, 0, 0]
     for n in levels:
@@ -182,7 +237,8 @@ def main():
             bad += 1
     print("%d levels checked, %d with errors; rooms %d primitives %d triangles %d textures %d"
           % (len(levels), bad, tot[0], tot[1], tot[2], tot[3]))
-    return 1 if bad or not levels else 0
+    mbad = check_models(os.path.join(root, "models")) if os.path.isdir(os.path.join(root, "models")) else 0
+    return 1 if bad or mbad or not levels else 0
 
 
 if __name__ == "__main__":

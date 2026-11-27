@@ -1,4 +1,4 @@
-/* ge007_export_cli.c -- ge007-export: ROM -> every level's decor mesh as glTF 2.0. */
+/* ge007_export_cli.c -- ge007-export: ROM -> every level's decor mesh and every object model as glTF 2.0. */
 #include "export.h"
 
 #include <stdio.h>
@@ -18,6 +18,9 @@ int main(int argc, char **argv)
                         "  for every level. Exit code = number of levels that failed.\n");
         return 255;
     }
+    char mdir[1100];
     int failed = ex_export_levels(argv[1], argv[2], say, NULL);
+    snprintf(mdir, sizeof mdir, "%s/models", argv[2]);
+    failed += ex_export_models(argv[1], mdir, say, NULL);
     return failed > 254 ? 254 : failed;
 }
