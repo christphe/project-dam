@@ -1,7 +1,7 @@
 Project Dam @VERSION@ -- GoldenEye 007, Windows build
 =====================================================
 
-The PC build of Project Dam (https://github.com/christphe/project-dam-nx),
+The PC build of Project Dam (https://github.com/christphe/project-dam),
 a fork of the GoldenEye 007 PC port by jkdansereau and contributors
 (https://github.com/jkdansereau/goldeneye-pc-port). Unofficial; not affiliated
 with Nintendo, Rare, Microsoft or MGM. No game content is included: you need
@@ -24,6 +24,6 @@ Install
 Settings, saves and logs live in data\ (ge007.ini, ge007.eep, ge007.log).
 F10 or a pad's Select button opens the options menu.
 
-Source and changelog: the project-dam-nx repository on GitHub.
+Source and changelog: the project-dam repository on GitHub.
 License: MIT for the port code (licenses\LICENSE); third-party components in
 licenses\NOTICE, with the texts of the bundled runtime libraries.

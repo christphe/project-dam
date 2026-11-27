@@ -9,10 +9,9 @@ description: Architecture behind the PC port; the software RSP-emulation approac
 > architecture reference. Sections 1–9 describe the design; section 10 lists
 > external references. The phased plan in section 8 is largely done through
 > Phase 2; for current status see the
-> [README](https://github.com/jkdansereau/goldeneye-pc-port#status) and
-> [`ROADMAP.md`](https://github.com/jkdansereau/goldeneye-pc-port/blob/main/docs/ROADMAP.md);
+> [README](../README.md#status) and the GitHub issues;
 > for the blow-by-blow finding log see
-> [`dev/findings.md`](https://github.com/jkdansereau/goldeneye-pc-port/blob/main/docs/dev/findings.md).
+> [`dev/findings/`](dev/findings/).
 
 This document captures the research done to plan a PC port of
 GoldenEye 007, based on the decompilation this repository is forked from

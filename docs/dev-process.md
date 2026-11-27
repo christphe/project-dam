@@ -84,7 +84,7 @@ Lewis's agents recorded generalisable IDO quirks in a learnings file; later
 agents read it and did better. Our equivalent is
 [`porting-notes.md`](porting-notes.md); the recurring N64→PC bug classes,
 each entry a terse index into the full
-[`dev/findings.md`](https://github.com/jkdansereau/goldeneye-pc-port/blob/main/docs/dev/findings.md)
+[`dev/findings/`](dev/findings/)
 log. Every investigation brief links it, and every investigation ends by
 appending any new generalisable quirk.
 

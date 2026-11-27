@@ -8,10 +8,9 @@
   - `docs/internals.md`: architecture, GE-specific RSP deltas, phased plan (§1–§10).
   - `docs/dev/findings/`: the finding log, one file per finding (`YYYY-MM-DD-slug.md`; older ones `YYYY-MM-DD-Dxx_slug.md`). A finding is a trap, not a feature log: `docs/dev/findings/README.md` says what qualifies. **Look findings up in the untracked `docs/dev/findings-index.csv` (build it with `tools_pc/gen_findings_index.py`), then read only that one file. Never read the directory.**
   - `docs/porting-notes.md`: the recurring N64→PC bug classes. Skim the headers and read what is relevant.
-- **Open work / known issues:** `docs/ROADMAP.md`, the single tracker. Add new items there; never start another backlog file.
+- **Open work / known issues:** the GitHub issues of this fork (sub-issues per phase). Never start a backlog file.
 - **Current status:** the README "Status" section. Current task and environment: `docs/HANDOFF.md` (rolling and local; may be absent).
 - **Dispatching subagents?** `docs/dev-process.md` (budgets, file partitioning, brief template). Every investigation subagent reads `docs/porting-notes.md` first and appends to it.
-- **Site pages** (`docs/index.md` and the other pure site pages) are a presentation layer that may go stale. Never use them as work information. Rules and the page list: `docs/dev/site-pages.md`.
 
 ## Non-negotiables
 
@@ -82,4 +81,4 @@ Run `/linkcheck`. Every symbol the compiled set references (`CMakeLists.txt` `SR
 
 ## Phase status
 
-Not kept here. Open work: `docs/ROADMAP.md`. Release state: the README "Status" section.
+Not kept here. Open work: the GitHub issues. Release state: the README "Status" section.

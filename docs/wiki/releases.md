@@ -41,4 +41,4 @@ update (#76) looks for these releases.
 
 `ci.yml` replaced upstream's workflow of the same name (and `selfhosted.yml` is gone). GitHub keeps
 a workflow's disabled state by path, and upstream's `ci.yml` was disabled here: if CI does not run
-on `main`, `gh workflow enable CI --repo christphe/project-dam-nx`.
+on `main`, `gh workflow enable CI --repo christphe/project-dam`.

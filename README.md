@@ -221,12 +221,12 @@ Project Dam is pre-1.0 and changes between versions: see the
 [CHANGELOG](CHANGELOG.md) for what is in the next release and what each one
 changed. The Switch is the primary target and is tested on Ryujinx and on a
 console; the PC build runs and is released for Windows from 0.4.0.
-Known issues are in the [known-issues table](docs/ROADMAP.md#known-issues).
+Known issues are tracked in the GitHub issues.
 
 ## Roadmap
 
-Open work is tracked in [`docs/ROADMAP.md`](docs/ROADMAP.md). If something
-matters to you, open an issue; it helps prioritize.
+Open work is tracked in the GitHub issues. If something matters to you,
+open an issue; it helps prioritize.
 
 ## Building from source
 
@@ -257,11 +257,10 @@ unmodified PC port.
 |---|---|
 | [User guide](docs/user-guide.md) | Controls, settings and files, ROM check, macOS setup, updating, emulator saves, troubleshooting. |
 | [About the project](docs/about.md) | Release history, testing status, how it was made, how it works. |
-| [Roadmap](docs/ROADMAP.md) | Open work and the known-issues table. |
 | [Building](docs/building.md) | Full build guide, and the ROM conversion. |
 | [Internals](docs/internals.md) | Architecture and the software RSP. |
 | [Porting notes](docs/porting-notes.md) | The recurring N64-to-PC bug classes, with fixes. |
-| [Security](docs/security.md) and [Fidelity](docs/fidelity.md) | What a release installs, and how closely the upstream port tracks the original game's logic (this fork departs from it on purpose). |
+| [Security](.github/SECURITY.md) | What a release installs and connects to, and how to report a vulnerability. |
 | [`docs/dev/`](docs/dev/) | The engineering record: the finding log and development process. |
 
 ## Credits
@@ -353,7 +352,7 @@ The repository is a fork of the public
 its contents (see [`NOTICE`](NOTICE) for what that includes). The few
 port-specific edits inside the decompiled code are marked `#ifdef PORT`.
 
-The project mark / favicon is original *generated* art -- a generic version
+The project mark is original *generated* art -- a generic version
 of the game's default aim cross (a circle with N/S/E/W lines crossing its
 edge), no game screenshots or logos in it.
 

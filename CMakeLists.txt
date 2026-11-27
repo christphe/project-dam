@@ -231,7 +231,7 @@ if(PROJECT_DAM_VERSION)
 else()
   set(PDAM_VERSION "dev")
 endif()
-set(ORIGIN_URL "https://github.com/jkdansereau/goldeneye-pc-port")
+set(ORIGIN_URL "https://github.com/christphe/project-dam")
 
 configure_file(
   "${CMAKE_SOURCE_DIR}/port/include/versioninfo.h.in"

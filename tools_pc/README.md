@@ -36,7 +36,6 @@ Run them through `python tools/dev.py tools [NAME [ARGS...]]` (lists them with n
 | `playtest.sh` | Launch a level for `docs/dev/LEVEL-PLAYTEST.md` human validation (WS6). |
 | `audiodebug.ps1` | Audio counterpart to `debug.ps1` (that one is for crashes; this one is for audio behaviour). Drives the `GE_D204` health monitor + `GE_AUDIOTRACE`/`GE_AUDIODUMP` and prints a pass/fail verdict: real-time ratio, queue starvation, dropped blocks, oversized blocks, plus a soundIndex histogram. `-Play` for an instrumented interactive playtest (the D202 workflow), `-Soak` for a 5-min stability run, `-SyncData` to mirror `./data` first. |
 | `debug.ps1` / `repro_gdb.sh` / `attach_animgen.sh` | Launch (or attach to) the game under gdb so a crash always leaves a backtrace. |
-| `bundle-win.sh` / `bundle-linux.sh` | Package a built tree as a distributable archive (exe + licenses). |
 | `romverify.c` | One-shot `.z64` integrity check against the repo's ground truths. |
 | `disasm.py` | Minimal MIPS disassembler for the BE ROM (RAM-addr → file offset). |
 | `ppm2bmp.py` | PPM → 24-bit BMP, no deps — eyeball `GE_PCDUMP` frames without PIL. |
@@ -73,6 +72,6 @@ of the others.
 
 ## Other
 
-- `dist/` — staged bundle README template (`README.md.in`) + tokens.
+- `dist/` — third-party license texts the Windows release zip ships.
 - `golden/` — per-level golden frames for `framediff.py` (Step 3 fills this out).
 - `__pycache__/` — ignored.

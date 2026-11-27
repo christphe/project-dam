@@ -29,7 +29,7 @@ keep the port faithful to the original game.
 
 ## Bug reports
 
-Open an [issue](https://github.com/jkdansereau/goldeneye-pc-port/issues/new/choose)
+Open an [issue](https://github.com/christphe/project-dam/issues/new)
 with:
 
 - `ge007.crash.log` if the game crashed (in the folder you launched from),
