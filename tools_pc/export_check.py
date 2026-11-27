@@ -691,7 +691,54 @@ def check_characters(croot):
             bad += 1
     print("%d characters checked (%d bodies, %d heads, %d hand skipped), %d with errors; body triangles (scene 0) %d, all %d"
           % (len(ents), nb, nh, nhand, bad, tri_def, tri_all))
+    bad += check_shared_animations(croot, idx)
     return 1 if bad or not ents else 0
+
+
+def check_shared_animations(croot, idx):
+    """animations/<name>.gltf: every used animation of characters.json, one animation on the guard rig per file."""
+    if not idx.get("animations_dir"):
+        print("characters: ERROR: characters.json names no animations_dir")
+        return 1
+    bad, n = 0, 0
+    for an in idx.get("animations", []):
+        errs = []
+        try:
+            if not an.get("gltf"):
+                raise ValueError("no gltf")
+            gp = os.path.join(croot, an["gltf"])
+            with open(gp, encoding="utf-8") as f:
+                g = json.load(f)
+            with open(os.path.join(os.path.dirname(gp), g["buffers"][0]["uri"]), "rb") as f:
+                binb = f.read()
+            nodes = g["nodes"]
+            for j in range(16):
+                if not any(nd.get("name", "").startswith("j%d_" % j) and "_half" not in nd["name"] for nd in nodes):
+                    errs.append("joint %d node missing" % j)
+            if any(nd.get("mesh") is not None for nd in nodes):
+                errs.append("the rig carries a mesh")
+            anims = g.get("animations", [])
+            if [a.get("name") for a in anims] != [an["name"]] or anims[0].get("extras", {}).get("number") != an["number"]:
+                errs.append("not exactly the animation %s (%d)" % (an["name"], an["number"]))
+            for a in anims:
+                for c in a["channels"]:
+                    if c["target"]["node"] >= len(nodes):
+                        errs.append("node out of range")
+                        break
+                    sm = a["samplers"][c["sampler"]]
+                    ti, _ = acc_vals(g, binb, sm["input"])
+                    vo, _ = acc_vals(g, binb, sm["output"])
+                    if len(ti) != an["frames"] or len(vo) != len(ti) * (3 if c["target"]["path"] == "translation" else 4):
+                        errs.append("sampler sizes")
+                        break
+        except Exception as ex:  # noqa: BLE001
+            errs.append("%s" % ex)
+        for er in errs:
+            print("animation %d %s: ERROR: %s" % (an.get("number", -1), an.get("name"), er))
+        bad += bool(errs)
+        n += 1
+    print("animations: %d files checked on the %s rig, %d with errors" % (n, idx.get("animations_rig"), bad))
+    return 1 if bad or not n else 0
 
 
 def acc_vals(g, binb, ai):

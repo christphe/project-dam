@@ -109,7 +109,7 @@ needs (g++, ROM, a converted `data/`). `tools NAME [ARGS...]` runs one:
 
 | Name | What | Default subcommand |
 |---|---|---|
-| `modelview` | models from the ROM: subdivision, textures, guard animations | `pc` (also `selftest`, `shots`) |
+| `modelview` | characters from the export (body + head pickers): subdivision, animations | `pc` (also `export`, `selftest`, `shots`) |
 | `fxview` | combat effects, and the GE+ sky/sea/water (`--mode sea`, `water`, `sky`) | `win` (also `ryujinx`, `nx`, `selftest`, `shots`, `decalshots`, `tabshots`) |
 | `menuview` | the options menu on its own | none (`--build` builds only) |
 | `verify` | `tools_pc/verify.sh`: headless capture vs the golden frames | none |

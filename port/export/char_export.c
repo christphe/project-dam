@@ -7,9 +7,10 @@
  *
  * Output layout (out_dir = <export dir>/characters):
  *   <out_dir>/<file name without the trailing Z>/<same>.gltf + .bin + textures/<n>.png     (one per body / head)
+ *   <out_dir>/animations/<name>.gltf + .bin     (one animation on the guard rig, shared by every body)
  *   <out_dir>/characters.json
- * Set GE007_EXPORT_ALL_ANIMATIONS=1 in the environment to export every animation into every body (default: idle,
- * walking, running, death_forward_face_down).
+ * Each body carries idle only (its rest pose); set GE007_EXPORT_ALL_ANIMATIONS=1 in the environment to put every
+ * animation into every body as well.
  */
 #include "export_common.h"
 #include "char_labels.h"
@@ -77,8 +78,14 @@ typedef struct {
     int nused;
 } AnimData;
 
-static void anim_name(int n, char *out, size_t sz)
+#include "anim_names.h"   /* generated from assets/animationtable_data.h: header offset -> name (port/export/CMakeLists.txt) */
+
+/* The name of animation `n` whose header lies at `off` in the headers range: the decompilation's name for that offset,
+ * else the few the spec lists by number, else anim_<n>. */
+static void anim_name(int n, uint32_t off, char *out, size_t sz)
 {
+    for (size_t i = 0; i < sizeof k_anim_names / sizeof k_anim_names[0]; i++)
+        if (k_anim_names[i].off == off) { snprintf(out, sz, "%s", k_anim_names[i].name); return; }
     static const struct { int n; const char *s; } known[] = {
         { 0, "idle" }, { 1, "fire_standing" }, { 26, "death_forward_face_down" }, { 40, "walking" }, { 41, "sprinting" },
         { 42, "running" }, { 106, "idle_unarmed" }, { 107, "walking_unarmed" }, { 114, "walking_female" },
@@ -149,7 +156,7 @@ static int anim_load(AnimData *ad, const uint8_t *rom, size_t rom_size, size_t r
     for (int i = 0; i < N_ANIMS; i++) {
         AnimEnt *a = &ad->a[i];
         uint32_t w = ex_be32(t + 4 * (size_t)i);
-        anim_name(i, a->name, sizeof a->name);
+        anim_name(i, w, a->name, sizeof a->name);
         if (w == 1) { unused++; continue; }
         if ((size_t)w + 20 > ad->heads_len) { snprintf(msg, msgsz, "animation %d: header outside the headers range", i); return -1; }
         const uint8_t *h = ad->heads + w;
@@ -966,8 +973,9 @@ static int cmp_int(const void *a, const void *b) { return *(const int *)a - *(co
 /* quaternion to a glTF [x y z w] float array */
 static void qf(const Q *q, float *o) { o[0] = (float)q->x; o[1] = (float)q->y; o[2] = (float)q->z; o[3] = (float)q->w; }
 
-/* One animation into the buffer; appends its JSON to `aj`. 0 ok, -1 OOM. */
-static int emit_animation(CX *x, CvBuf *aj, int first, const AnimData *ad, int n)
+/* One animation into the buffer; appends its JSON to `aj`. The root's translation is scaled by `pov` (the body's in a
+ * body file, 1 in the shared animations.gltf). 0 ok, -1 OOM. */
+static int emit_animation(CX *x, CvBuf *aj, int first, const AnimData *ad, int n, double pov)
 {
     const AnimEnt *a = &ad->a[n];
     int nf = a->nframes;
@@ -1017,7 +1025,7 @@ static int emit_animation(CX *x, CvBuf *aj, int first, const AnimData *ad, int n
     {
         float *tr = (float *)malloc((size_t)nf * 3 * sizeof(float));
         if (!tr) goto out;
-        double px = 0, pz = 0, hd = 0, pov = (double)x->ce->pov;
+        double px = 0, pz = 0, hd = 0;
         Q hprev = { 1, 0, 0, 0 };
         for (int f = 0; f < nf; f++) {
             int rx, ry, rz;
@@ -1214,7 +1222,7 @@ static int export_char(const CharEnt *ce, const AnimData *ad, const int *sel, co
             ex_jp(&skins, "],\"inverseBindMatrices\":%d,\"skeleton\":%d,\"name\":\"rig\"}", acc, x->jn[0]);
             for (int n = 0; n < N_ANIMS; n++) {
                 if (!sel[n] || !ad->a[n].used) continue;
-                if (emit_animation(x, &anims, nanim == 0, ad, n)) { cv_buf_free(&meshes); cv_buf_free(&skins); FAIL("out of memory"); }
+                if (emit_animation(x, &anims, nanim == 0, ad, n, (double)ce->pov)) { cv_buf_free(&meshes); cv_buf_free(&skins); FAIL("out of memory"); }
                 nanim++;
             }
         }
@@ -1319,6 +1327,82 @@ done:
 #undef FAIL
 }
 
+/* animations/<name>.gltf: one animation on the guard rig (the nodes of one body, `ce`, without its meshes), the root's
+ * translation in model units without any body's pov (a consumer multiplies it by the body's pov). Every body shares
+ * the skeleton and names its nodes the same, so a consumer retargets by node name; one file per animation, so a
+ * consumer can replace or add one by its name. 0 ok, else 1 (msg says why). */
+static int export_anim(const CharEnt *ce, const AnimData *ad, int n, const uint8_t *rom, size_t rom_size, const char *region,
+                       ExTexCache *tc, const char *anim_dir, char *msg, size_t msgsz)
+{
+    CX *x = (CX *)calloc(1, sizeof *x);
+    CvBuf fbuf, json, anims;
+    char path[1200];
+    int fail = 0;
+    const char *name = ad->a[n].name;
+    memset(&fbuf, 0, sizeof fbuf); memset(&json, 0, sizeof json); memset(&anims, 0, sizeof anims);
+    if (!x) { snprintf(msg, msgsz, "out of memory"); return 1; }
+    x->ce = ce; x->ad = ad; x->tc = tc; x->body = 1;
+    x->nparts = ce->nparts; x->ntex = ce->ntextures; x->nmat = ce->nmatrices;
+    x->mc.tc = tc; x->mc.env_rule = 0; x->mc.normal_mask = GEOM_LIGHTING; x->mc.emit_decal = 1;
+    for (int i = 0; i < 16; i++) { x->jn[i] = x->jh[i] = -1; x->jm0[i] = x->jm1[i] = -1; }
+    for (int i = 0; i < N_MATS; i++) x->mat_joint[i] = -1;
+    x->head_attach = -1;
+#define AFAIL(...) do { snprintf(msg, msgsz, __VA_ARGS__); fail = 1; goto done; } while (0)
+    if (ce->kind != K_BODY || !ce->row || ce->row->size < 16 || (size_t)ce->row->off + ce->row->size > rom_size) AFAIL("%s: not a body in the ROM", ce->file);
+    if (cv_rz_inflate(rom + ce->row->off, ce->row->size, &fbuf)) AFAIL("%s: does not decompress", ce->file);
+    x->f = fbuf.p; x->fsize = fbuf.len;
+    if (x->nmat > N_MATS) AFAIL("%s: %d matrices", ce->file, x->nmat);
+    x->root_off = 4u * (uint32_t)x->nparts + 12u * (uint32_t)x->ntex;
+    if ((size_t)x->root_off + 24 > x->fsize) AFAIL("%s: root node outside the file", ce->file);
+    x->seen = (uint8_t *)calloc(x->fsize + 1, 1);
+    if (!x->seen) AFAIL("out of memory");
+    walk(x, x->root_off, -1, -1, 0, 0, 0, 0);
+    if (x->oom || x->mc.oom) AFAIL("out of memory");
+    for (int j = 0; j < 16; j++) if (!x->have_j[j]) AFAIL("%s: joint %d is missing from the tree", ce->file, j);
+    {   /* the rest pose (frame 0 of idle) on the nodes, the root's height without pov */
+        double ang[45];
+        int rx, ry, rz;
+        double hd;
+        anim_angles(ad, 0, 0, ang);
+        for (int j = 1; j < 16; j++) {
+            Q q = euler_q(ang[ad->skel_a[j]], ang[ad->skel_a[j] + 1], ang[ad->skel_a[j] + 2]);
+            GNode *g = &x->gn[x->jn[j]];
+            g->has_r = 1; qf(&q, g->r);
+            if (x->jh[j] >= 0) { Q h = half_q(q); GNode *hg = &x->gn[x->jh[j]]; hg->has_r = 1; qf(&h, hg->r); }
+        }
+        anim_root(ad, 0, 0, &rx, &ry, &rz, &hd);
+        GNode *g = &x->gn[x->jn[0]];
+        g->has_t = 1; g->t[0] = 0.f; g->t[1] = (float)ry; g->t[2] = 0.f;
+        Q hq = qaxis(1, hd);
+        g->has_r = 1; qf(&hq, g->r);
+    }
+    if (emit_animation(x, &anims, 1, ad, n, 1.0)) AFAIL("out of memory");
+    ex_jp(&json, "{\"asset\":{\"version\":\"2.0\",\"generator\":\"project-dam export\",\"extras\":{\"exporter_version\":%d,\"rom_region\":",
+          EX_EXPORTER_VERSION);
+    ex_jstr(&json, region);
+    ex_jp(&json, ",\"rig\":"); ex_jstr(&json, ce->file);
+    ex_jp(&json, ",\"animation\":%d,\"units\":\"model units\",\"root_translation\":\"without pov: multiply by the body's pov "
+                 "(characters.json)\",\"retarget\":\"by node name (j<id>_<name>, j<id>_half): every body has the same skeleton\"}}", n);
+    ex_jp(&json, ",\"scene\":0,\"scenes\":[{\"name\":\"rig\",\"nodes\":[");
+    for (size_t i = 0; i < x->nroots; i++) ex_jp(&json, "%s%d", i ? "," : "", x->roots[i]);
+    ex_jp(&json, "]}],\"nodes\":[");
+    for (size_t i = 0; i < x->ngn; i++) node_json(x, &json, (int)i);
+    ex_jp(&json, "],\"animations\":["); cv_buf_put(&json, anims.p, anims.len); ex_jp(&json, "]");
+    ex_jp(&json, ",\"accessors\":["); cv_buf_put(&json, x->g.accs.p, x->g.accs.len);
+    ex_jp(&json, "],\"bufferViews\":["); cv_buf_put(&json, x->g.views.p, x->g.views.len); ex_jp(&json, "]");
+    ex_jp(&json, ",\"buffers\":[{\"uri\":\"%s.bin\",\"byteLength\":%zu}]}\n", name, x->g.bin.len);
+    snprintf(path, sizeof path, "%s/%s.gltf", anim_dir, name);
+    if (ex_write_file(path, json.p, json.len)) AFAIL("cannot write %s.gltf", name);
+    snprintf(path, sizeof path, "%s/%s.bin", anim_dir, name);
+    if (ex_write_file(path, x->g.bin.p, x->g.bin.len)) AFAIL("cannot write %s.bin", name);
+done:
+    cv_buf_free(&fbuf); cv_buf_free(&json); cv_buf_free(&anims);
+    x_free(x);
+    free(x);
+    return fail;
+#undef AFAIL
+}
+
 /* ------------------------------------------------------------------------ */
 /* all characters                                                           */
 /* ------------------------------------------------------------------------ */
@@ -1372,7 +1456,7 @@ int ex_export_characters(const char *rom_path, const char *out_dir, ExLogFn log,
         int all = allv && allv[0] && allv[0] != '0';
         memset(sel, 0, sizeof sel);
         if (all) for (int i = 0; i < N_ANIMS; i++) sel[i] = 1;
-        else sel[0] = sel[26] = sel[40] = sel[42] = 1;
+        else sel[0] = 1;   /* idle; every animation is in the shared animations.gltf */
 
         ExTexCache tc;
         ex_texcache_open(&tc, rom, rom_size, region, log, user);
@@ -1404,12 +1488,30 @@ int ex_export_characters(const char *rom_path, const char *out_dir, ExLogFn log,
             }
             if (tc.nt > 600) ex_texcache_clear(&tc);
         }
+        /* every animation into animations/<name>.gltf, on the camguard rig */
+        int nshared = 0, aok[N_ANIMS];
+        memset(aok, 0, sizeof aok);
+        {
+            char adir[1100];
+            snprintf(adir, sizeof adir, "%s/animations", out_dir);
+            if (ex_mkdir_p(adir)) { ex_logf(log, user, "cannot create %s", adir); nfailed++; }
+            else
+                for (int n = 0; n < N_ANIMS; n++) {
+                    char amsg[600] = "";
+                    if (!ad->a[n].used) continue;
+                    if (export_anim(&ce[0], ad, n, rom, rom_size, region, &tc, adir, amsg, sizeof amsg)) {
+                        nfailed++;
+                        ex_logf(log, user, "animation %3d %-28s FAILED: %s", n, ad->a[n].name, amsg);
+                    } else { aok[n] = 1; nshared++; }
+                }
+        }
         {
             CvBuf full;
             char path[1200];
             memset(&full, 0, sizeof full);
             ex_jp(&full, "{\"exporter_version\":%d,\"rom_region\":", EX_EXPORTER_VERSION);
             ex_jstr(&full, region);
+            if (nshared) ex_jp(&full, ",\"animations_dir\":\"animations\",\"animations_rig\":\"%s\"", ce[0].file);
             ex_jp(&full, ",\"animations\":[\n");
             {
                 int first = 1;
@@ -1418,8 +1520,10 @@ int ex_export_characters(const char *rom_path, const char *out_dir, ExLogFn log,
                     if (!a->used) continue;
                     ex_jp(&full, "%s{\"number\":%d,\"name\":", first ? "" : ",\n", n);
                     ex_jstr(&full, a->name);
-                    ex_jp(&full, ",\"frames\":%d,\"loop\":%s,\"fps\":%d,\"travel_x\":%.0f,\"travel_z\":%.0f,\"exported\":%s}", a->nframes,
+                    ex_jp(&full, ",\"frames\":%d,\"loop\":%s,\"fps\":%d,\"travel_x\":%.0f,\"travel_z\":%.0f,\"exported\":%s", a->nframes,
                           a->loop ? "true" : "false", a->fps, a->travel_x, a->travel_z, sel[n] ? "true" : "false");
+                    if (aok[n]) { ex_jp(&full, ",\"gltf\":\"animations/"); cv_buf_put(&full, a->name, strlen(a->name)); ex_jp(&full, ".gltf\""); }
+                    ex_jp(&full, "}");
                     first = 0;
                 }
             }
@@ -1430,8 +1534,8 @@ int ex_export_characters(const char *rom_path, const char *out_dir, ExLogFn log,
             if (ex_write_file(path, full.p, full.len)) { ex_logf(log, user, "cannot write %s", path); nfailed++; }
             cv_buf_free(&full);
         }
-        ex_logf(log, user, "characters: %d bodies, %d heads exported, %d failed, %llu triangles (default scenes) -> %s", nbody, nhead, nfailed,
-                (unsigned long long)gtris, out_dir);
+        ex_logf(log, user, "characters: %d bodies, %d heads exported, %d failed, %llu triangles (default scenes), %d animations in animations/ -> %s",
+                nbody, nhead, nfailed, (unsigned long long)gtris, nshared, out_dir);
         cv_buf_free(&index);
         ex_texcache_close(&tc);
         cv_buf_free(&cd);

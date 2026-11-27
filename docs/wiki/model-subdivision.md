@@ -12,6 +12,7 @@ sources:
   - tests/test_subdiv.c
   - tools_pc/modelview/modelview.py
   - tools_pc/modelview/README.md
+  - tools_pc/modelview/pc/mv_export.cpp
 verified: 5f029f7b
 ---
 
@@ -76,15 +77,21 @@ pass that grows the files re-sizes these from the new worst case
 
 ## modelview
 
-`python tools_pc/modelview/modelview.py pc` builds and opens the viewer; `--rom`, else
-`MODELVIEW_ROM`, else the main checkout's `build-win/data/*.z64`. It reads the models, their
-textures and the guard animations from the user's ROM at run time; nothing ROM-derived is ever
-tracked, and `shots` refuses an output directory inside the repo outside `data/`.
+`python tools_pc/modelview/modelview.py pc` builds and opens the viewer. It reads the
+characters from the character export (`characters/characters.json` + glTF,
+[docs/specs/characters.md](../specs/characters.md)): `--export DIR`, else `MODELVIEW_EXPORT`,
+else `tools_pc/modelview/data/export`, which `modelview.py export` writes from the user's ROM
+(`ge007-export` in the build image). The viewer never reads the ROM; nothing ROM-derived is
+ever tracked, and `shots` refuses an output directory inside the repo outside `data/`.
 
+- Drop-down lists pick a **body** and a **head**, put together as `makeonebody` does (the head
+  on the neck joint; a `has_head` body keeps its own), with the game's parameters: sunglasses,
+  hair, the table's body scale. The animations are the body glTF's.
 - **GAME** is the converter's own pass (it links `conv_subdiv.c`), so it shows what the game
-  gets. FLAT, PHONG, BUTTERFLY, LOOP and HEAD are viewer-only experiments.
-- `modelview.py selftest` checks the texture decoders, the animation maths and the HEAD
-  method without a ROM. `modelview.py shots --out DIR` renders a grid of model × method.
+  gets, here on the real neck seam. FLAT, PHONG, BUTTERFLY, LOOP and HEAD are viewer-only
+  experiments.
+- `modelview.py selftest` checks the PNG reader, the pose maths and the HEAD method without an
+  export. `modelview.py shots --out DIR` renders a grid of model (`BODY+HEAD`) × method.
 - Controls, flags and the panel: [tools_pc/modelview/README.md](../../tools_pc/modelview/README.md).
 
 ## Tests

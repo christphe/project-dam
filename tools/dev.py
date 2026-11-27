@@ -258,8 +258,8 @@ def cmd_editor(a):
 
 # name -> (script, what it is, its subcommands; the first one is the default when none is given)
 TOOLS = {
-    "modelview": ("tools_pc/modelview/modelview.py", "models from your ROM: subdivision, textures, guard animations",
-                  ["pc", "selftest", "shots"]),
+    "modelview": ("tools_pc/modelview/modelview.py", "characters from the export: body + head pickers, subdivision, animations",
+                  ["pc", "export", "selftest", "shots"]),
     "fxview":    ("tools_pc/fxview/fxview.py", "combat effects on ge_render: sprites, bullet holes, cluster scene, muzzle / tracer / burst / explosion tabs (win | ryujinx | nx)",
                   ["win", "ryujinx", "nx", "selftest", "shots", "decalshots", "tabshots"]),
     "menuview":  ("tools_pc/menuview/menuview.py", "the options menu on its own", []),

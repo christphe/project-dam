@@ -376,11 +376,14 @@ Names (the decompilation's, in index order; use them as glTF animation
 names): 0 `idle`, 1 `fire_standing`, ... 26 `death_forward_face_down`, ... 40
 `walking`, 41 `sprinting`, 42 `running`, ... 106 `idle_unarmed`, 107
 `walking_unarmed`, 114 `walking_female`, 115 `running_female`, ... 182
-`credits_natalya_kissing`. The full list is too long to repeat here and is a
-fact table: the implementer may copy the list of names from the editor or
-generate it once (it must not be derived from game code at build time).
-UNCERTAIN: no editor file holds it yet; until one does, name animations
-`anim_<number>` and add the names later.
+`credits_natalya_kissing`. The full list is a fact table, names only:
+`assets/animationtable_data.h` gives each `ANIM_DATA_<name>` its **header
+offset in the headers range**, the same value the animation table holds for
+that number, so the name of animation N is the one whose offset equals table
+word N (`port/export/CMakeLists.txt` turns the file into a generated
+offset -> name table at configure time; a number whose offset has no name is
+`anim_<number>`). Measured: all 170 get a name, all different, and each
+name's frame count in `assets/animationtable_data.c` equals the header's.
 
 ### The animation header (20 bytes, in the headers range)
 
@@ -505,17 +508,25 @@ Recommendation the implementer follows (Y up, model units, as models.md):
   identity transform (equivalently: bind every head vertex to the neck
   joint with weight 1). The body's placeholder becomes an empty node
   `head_attach` (extras `head_placeholder: true`) under `j3_neck`.
-- **Animations**: in each body file, the animations selected for export as
-  glTF animations named by animation name: per joint a `rotation` channel
-  (one key per frame), per half node a rotation channel of the half
-  quaternion, and on joint 0 a `translation` channel with the accumulated
-  root motion in model units (`x, z` summed per frame as above and multiplied
-  by `pov`, `y x pov`) and a `rotation` channel with the accumulated heading.
-  Keep `loop`, `frames`, `fps` in the animation's extras. Default selection:
-  `idle` (0), `walking` (40), `running` (42), `death_forward_face_down` (26);
-  an option exports all 170. A shared `animations.gltf` (the camguard rig
-  only, every animation, nodes named as above) lets a consumer retarget by
-  node name; this is optional.
+- **Animations**: glTF animations named by animation name: per joint a
+  `rotation` channel (one key per frame), per half node a rotation channel of
+  the half quaternion, and on joint 0 a `translation` channel with the
+  accumulated root motion in model units (`x, z` summed per frame as above and
+  multiplied by `pov`, `y x pov`) and a `rotation` channel with the
+  accumulated heading. Keep `loop`, `frames`, `fps` in the animation's extras.
+  **Every animation goes into a file of its own**, `animations/<name>.gltf`
+  (+ `.bin`) beside `characters.json`: the camguard rig's nodes (named as
+  above, no mesh, no skin, the rest pose on the nodes) and that one animation,
+  the root's translation **without** `pov` (a consumer multiplies it by the
+  body's `pov`). One file per animation lets a consumer replace one or add one
+  by its name (glTF cannot reference an animation in another file).
+  Every body has the same skeleton and the same node names, so a consumer
+  retargets by node name: the animated rotations (and the root's translation
+  x `pov`) on the body's nodes of the same name, the body's own joint origins
+  kept. `characters.json` names the folder (`animations_dir`, `animations_rig`)
+  and each animation's file (`gltf` in the animation list).
+  Each body file carries `idle` (0) only, its rest pose; an option
+  (`GE007_EXPORT_ALL_ANIMATIONS=1`) also puts all 170 into every body.
 - **`characters.json`**: one object per table id: `id`, `file`
   (`ColiveguardZ`), `name` (`oliveguard`), `label` (from
   `editor/model_names.h`), `kind` (`body` / `head` / `hand`), `gltf`,
@@ -523,8 +534,10 @@ Recommendation the implementer follows (Y up, model units, as models.md):
   skin joint count: 20 or 21 = `nmatrices`; 1 for heads), `triangles` (scene
   0; for heads with the sunglasses hidden, plus `triangles_specs`),
   `triangles_all`, `textures` (bank numbers used), `animations` (names
-  exported), `notes`. Top level: the animation list (`number`, `name`,
-  `frames`, `loop`, `fps`, root travel per cycle).
+  in the body file), `notes`. Top level: `animations_dir` (the folder of the
+  animation files), `animations_rig` (the body their nodes come from) and the
+  animation list (`number`, `name`, `frames`, `loop`, `fps`, root travel per
+  cycle, `gltf`: its file, `exported`: in the body files too).
 
 ## Verification
 
@@ -702,8 +715,8 @@ brosnansnow 213, 78 brosnan 209.
 
 ## Open questions
 
-- Retargeting one shared `animations.gltf` onto other bodies by node name is
-  a consumer convention, not a glTF feature; whether the editor wants that or
-  animations embedded per body (the default above) is the lead's choice.
+- Retargeting the animation files onto other bodies by node name is
+  a consumer convention, not a glTF feature (glTF cannot reference an
+  animation in another file); `tools_pc/modelview` does it.
 - The hat offset table (per head, a translation and a scale) would let the
   export place hats; out of scope here.
