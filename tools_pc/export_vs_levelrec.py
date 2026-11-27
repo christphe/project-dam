@@ -12,6 +12,13 @@ Checks:
   * geometry: triangles per room, glTF node "room_<n>" vs the level.rec runs
     owned by room n.
 
+  python tools_pc/export_vs_levelrec.py --models <models_dir> <levelrec_dir>
+
+compares every object model of the level.rec (owners of kind 1, "object <n>")
+with <models_dir>/models.json (ge007-export, issue #119): triangle count of the
+default scene and the set of textures (matched by pixels, padded copies
+included).
+
 Both inputs are ROM-derived and stay in the user's data folders. Stdlib only.
 """
 import json
@@ -108,7 +115,89 @@ def read_levelrec(path):
     return tex, tris_by_room
 
 
+def read_levelrec_models(path):
+    """-> (textures, {model: [triangles, set of texture indices]}) for the kind-1 owners "object <n>"."""
+    d = open(path, "rb").read()
+    ntex, nown, nruns = struct.unpack_from("<III", d, 8 + 64 + 32)
+    off = 8 + 64 + 32 + 12
+    tex = []
+    for _ in range(ntex):
+        hsh, w, h = struct.unpack_from("<QHH", d, off)
+        off += 12
+        tex.append((hsh, w, h, d[off:off + w * h * 4]))
+        off += w * h * 4
+    owners = []
+    for _ in range(nown):
+        kind, oid = struct.unpack_from("<Ii", d, off)
+        name = d[off + 8:off + 40].split(b"\0")[0].decode("latin1")
+        owners.append((kind, oid, name))
+        off += 8 + 32
+    run_fmt = "<IQI2i8B4BH4B6f96f2B3I"
+    run_size = struct.calcsize(run_fmt)
+    models = {}
+    for _ in range(nruns):
+        r = struct.unpack_from(run_fmt, d, off)
+        nverts, nmtx, nfloats = r[-3:]
+        off += run_size + nmtx * 64 + nfloats * 4
+        kind, oid, name = owners[r[0]]
+        if kind != 1:
+            continue
+        n = int(name.split()[-1]) if name.startswith("object ") else oid
+        m = models.setdefault(n, [0, set()])
+        m[0] += nverts // 3
+        for t in (r[3], r[4]):
+            if t >= 0:
+                m[1].add(t)
+    assert off == len(d), "level.rec parse did not end at EOF"
+    return tex, models
+
+
+def compare_models(mdir, rdir):
+    idx = json.load(open(os.path.join(mdir, "models.json")))["models"]
+    tex, rec = read_levelrec_models(os.path.join(rdir, "level.rec"))
+    bad = 0
+    print("model file                      tris(ours/capture)  textures(ours/capture)  match")
+    for n in sorted(rec):
+        e = idx[n]
+        e.setdefault("triangles", -1)
+        ctris, ctex = rec[n]
+        ours = []   # (texnum, hash, w, h, rgba)
+        for tn in e.get("textures", []):
+            w, h, rgba = read_png(os.path.join(mdir, os.path.dirname(e["gltf"]), "textures", "%d.png" % tn))
+            ours.append((tn, fnv(rgba, w, h), w, h, rgba))
+        matched, unmatched = set(), []
+        for tn, hs, w, h, rgba in ours:
+            hit = None
+            for i in ctex:
+                _, th, tw2, trgba = tex[i][0], tex[i][2], tex[i][1], tex[i][3]
+                if tex[i][0] == hs:
+                    hit = i
+                    break
+                tw, thh = tex[i][1], tex[i][2]
+                if tw >= w and thh >= h and all(tex[i][3][y * tw * 4:y * tw * 4 + w * 4] == rgba[y * w * 4:(y + 1) * w * 4]
+                                                for y in range(h)):
+                    hit = i
+                    break
+            if hit is None:
+                unmatched.append(tn)
+            else:
+                matched.add(hit)
+        extra_cap = sorted(set(ctex) - matched)
+        ok_t = not unmatched and not extra_cap
+        ok_g = e["triangles"] == ctris
+        print("%-4d %-26s %5d / %-5d %s  %2d / %-2d %s  %s" % (
+            n, e["file"], e["triangles"], ctris, "ok " if ok_g else "BAD", len(ours), len(ctex), "ok " if ok_t else "DIFF",
+            ("ours not in capture %s " % unmatched if unmatched else "") +
+            ("capture-only %d texture(s)" % len(extra_cap) if extra_cap else "")))
+        if not ok_g:
+            bad += 1
+    print("%d object models in the capture, %d with a different triangle count" % (len(rec), bad))
+    return 1 if bad else 0
+
+
 def main():
+    if sys.argv[1] == "--models":
+        return compare_models(sys.argv[2], sys.argv[3])
     gdir, rdir = sys.argv[1], sys.argv[2]
     level = os.path.basename(os.path.normpath(gdir))
     g = json.load(open(os.path.join(gdir, level + ".gltf")))

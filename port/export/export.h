@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define EX_EXPORTER_VERSION 4   /* written to every glTF (asset.extras.exporter_version); bump on any output change */
+#define EX_EXPORTER_VERSION 5   /* written to every glTF (asset.extras.exporter_version); bump on any output change */
 
 /* ---- textures (tex_decode.c, docs/specs/textures.md) --------------------- */
 
@@ -70,6 +70,16 @@ typedef void (*ExLogFn)(void *user, const char *line);
  * The ROM must pass cv_romcheck. Returns the number of levels that failed
  * (0 = all exported). `log` may be NULL. */
 int ex_export_levels(const char *rom_path, const char *out_dir, ExLogFn log, void *user);
+
+/* ---- object models (model_export.c, docs/specs/models.md) ---------------- */
+
+/* Exports every object model of the model-number table into
+ * <out_dir>/<file name without the trailing Z>/<same>.gltf + .bin + textures/<n>.png
+ * and <out_dir>/models.json (one entry per model number: file, base scale,
+ * bounding box, node and triangle counts, textures, notes). Returns the number
+ * of models that failed, or 1000 + the count when the model table is refused
+ * (its invariants do not hold for this ROM). `log` may be NULL. */
+int ex_export_models(const char *rom_path, const char *out_dir, ExLogFn log, void *user);
 
 #ifdef __cplusplus
 }
