@@ -188,14 +188,13 @@ non-opaque pixel, or under `"image"`, keeps its own alpha.
 
 ## Resolving a texture
 
-The sources, first wins: **the active mod, then the chosen pack**. There is
-always exactly one chosen pack; `ge007.ptexpack` is the default.
+The sources, first wins: **the active mod, then the enabled asset packs in the
+player's order** ([asset-packs.md](asset-packs.md): `.passets`, of which a
+`.ptexpack` is the textures-only form).
 
-- **Packs are complete.** A pack is usable only when its `textures.json`
-  has an entry for every key of `ge007.ptexpack`'s `textures.json` and each
-  entry whose base `image` is not null names a picture that exists in the
-  pack. A reader that finds a pack incomplete refuses it and says how many
-  textures are missing; it never mixes two packs.
+- **Packs may be partial.** A texture a pack does not have comes from the next
+  enabled pack. A tool that wants one pack to stand on its own can still count
+  what it lacks against `ge007.ptexpack` (`texpackMissing`).
 - **Mods are partial.** A mod entry is merged **field by field** over the
   chosen pack's entry with the same key: a mod entry `{"surface": "metal"}`
   changes only the surface, and the picture stays the pack's. A mod
@@ -211,11 +210,8 @@ always exactly one chosen pack; `ge007.ptexpack` is the default.
   (the pack's picture stays). A mod cannot remove a picture: `"image": null`
   in a mod is ignored.
 - A new mod key without `impact_sound` uses its `surface`.
-- A pack without `textures.json` (made before this format) is incomplete.
-  Completeness needs `ge007.ptexpack`: with no base pack at hand, no other
-  pack can be checked and none is usable.
-
-The pack's own key set is fixed by `ge007.ptexpack`; only a mod adds keys.
+- A pack without `textures.json` (made before this format) replaces pictures
+  only, as a mod's `textures/<key>.png` does.
 
 ## The base export
 

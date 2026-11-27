@@ -41,10 +41,16 @@
         { "id": "crop", "show": "dispMode == 'custom'", "key": "Video.SafeAreaCrop", "label": "Crop overscan", "type": "toggle", "dev": "switch"},
         { "id": "reset_display", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
       ] },
-      { "name": "Texture pack", "controls": [
-        { "id": "texpack", "key": "__TexturePack", "label": "Texture pack", "type": "select", "default": "0",
-          "options": [ { "id": "0", "label": "None" } ],
-          "help": "Replacement textures: the .ptexpack files in the texturepacks folder next to the game. A mod's own textures win over the pack's." }
+      { "name": "Asset packs", "controls": [
+        { "id": "packsel", "key": "__AssetPackSel", "label": "Pack", "type": "select", "default": "0",
+          "options": [ { "id": "0", "label": "No asset pack" } ],
+          "help": "Replacement textures and other assets: the .passets files in the assetpacks folder next to the game. The enabled packs are numbered: where two have the same texture, the lower number wins. The mod's own assets always win." },
+        { "id": "packon", "key": "__AssetPackOn", "label": "Enabled", "type": "toggle",
+          "help": "Use this pack. A pack enabled now goes last in the order." },
+        { "id": "packup", "key": "__AssetPackUp", "label": "Move up", "type": "action", "disabled": "!packon",
+          "help": "Give this pack priority over the one above it." },
+        { "id": "packdown", "key": "__AssetPackDown", "label": "Move down", "type": "action", "disabled": "!packon",
+          "help": "Let the pack below it win over this one." }
       ] },
       { "name": "Performance", "show": "platform == 'pc' || dev", "controls": [
         { "id": "msaaHandheld", "key": "Video.MSAAHandheld", "label": "Anti-aliasing (handheld)", "type": "slider", "dev": "switch",

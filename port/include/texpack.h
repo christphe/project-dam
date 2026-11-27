@@ -2,12 +2,13 @@
 #define PORT_TEXPACK_H
 
 /*
- * texpack.h -- the game side of texture packs (port/assets/ge_texpacks.h has the format): Video.TexturePack names one
- * <game>/texturepacks/X.ptexpack, and its textures/<n>.png replace texture n wherever the game draws it.
+ * texpack.h -- the game side of asset packs (port/assets/ge_assetstack.h, docs/specs/asset-packs.md): Video.AssetPacks lists the
+ * enabled packs in order (<game>/assetpacks/X.passets, or the older <game>/texturepacks/X.ptexpack), and the first one with a
+ * textures/<n>.png replaces texture n wherever the game draws it. The active mod's picture always wins.
  *
  * The N64 display lists carry addresses, not texture numbers: texLoad (src/game/image.c, #ifdef PORT) tells this file
  * which texture number it just unpacked at which address, and fast3d's import_texture asks for the address it is about
- * to upload. Game thread: texpackRegister, texpackSelect. Render thread: texpackSalt, texpackPixels.
+ * to upload. Game thread: texpackRegister, texpackSetPacks. Render thread: texpackSalt, texpackPixels.
  */
 #include <stdint.h>
 
@@ -15,13 +16,15 @@
 extern "C" {
 #endif
 
-void texpackInit(void);                    /* after configLoad: opens the pack Video.TexturePack names */
-void texpackSelect(const char *file);      /* "" none; also stored in Video.TexturePack */
-const char *texpackSelected(void);         /* the file name in use ("" none) */
+void texpackInit(void);                    /* after configLoad: opens the packs Video.AssetPacks lists (an older
+                                              Video.TexturePack migrates to it) */
+/* The enabled packs, file names in order separated by ';' ("" none); also stored in Video.AssetPacks. */
+void texpackSetPacks(const char *list);
+const char *texpackPacks(void);            /* the list in use */
 /* The active mission's mod (its folder or X.pmod; "" none): its textures/<n>.png come before the pack's. Stopgap until the
  * game draws its levels from glTF (port/src/missions.c calls it on activation and deactivation). */
 void texpackSetMod(const char *dir);
-/* The packs in texturepacks/ (sorted file names, display names), for the menu. Returns how many (up to max). */
+/* The packs in assetpacks/ and texturepacks/ (sorted file names, display names), for the menu. Returns how many (up to max). */
 int texpackListPacks(char (*files)[128], char (*names)[64], int max);
 
 void texpackRegister(const void *data, int texnum, int bytes);   /* texLoad: texture `texnum` unpacked at `data`, `bytes` long */

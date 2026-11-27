@@ -197,10 +197,12 @@ static PkgIndex *indexGet(const char *pkg)
     return slot;
 }
 
-/* A path component naming a package: *.pmod (a mod) or *.ptexpack (a texture pack), same tar format. */
+/* A path component naming a package: *.pmod (a mod), *.passets (an asset pack) or *.ptexpack (the older texture-pack name),
+ * same tar format. */
 static int isPkgName(const char *p, const char *q)
 {
-    return (q - p > 5 && !strncmp(q - 5, ".pmod", 5)) || (q - p > 9 && !strncmp(q - 9, ".ptexpack", 9));
+    return (q - p > 5 && !strncmp(q - 5, ".pmod", 5)) || (q - p > 8 && !strncmp(q - 8, ".passets", 8))
+        || (q - p > 9 && !strncmp(q - 9, ".ptexpack", 9));
 }
 
 /* Does `path` go through a regular file named *.pmod / *.ptexpack? Then pkg = that file and rest = the entry name inside it. */

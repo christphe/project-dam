@@ -393,8 +393,8 @@ void optionsMenuSet(const char* key, double value);
 int optionsMenuResCount(void);
 int optionsMenuAudioCount(void);
 const char* optionsMenuAudioLabel(int i);
-int optionsMenuTexPackCount(void);
-const char* optionsMenuTexPackLabel(int i);
+int optionsMenuAssetPackCount(void);
+const char* optionsMenuAssetPackLabel(int i);
 void optionsMenuSetSeat(int seat);
 void optionsMenuResLabel(int i, char* out, int n);
 const char* optionsMenuBindText(const char* key, int slot);
@@ -418,6 +418,14 @@ static const char* readout(const char* name, double cfg) {
     return buf;
 }
 
+/* The asset-pack list: the packs found now, the enabled ones numbered in their order (a pack added to the folders while
+ * the game runs shows the next time the list changes or after a restart). */
+extern "C" void menuRefreshAssetPacks(void) {
+    std::vector<std::string> packs;
+    for (int i = 0; i < optionsMenuAssetPackCount(); i++) packs.push_back(optionsMenuAssetPackLabel(i));
+    menu::setOptionLabels("packsel", packs);
+}
+
 extern "C" void menuBindGame(void) {   /* the menu reads and writes the game's values */
     std::vector<std::string> res;
     for (int i = 0; i < optionsMenuResCount(); i++) {
@@ -429,9 +437,7 @@ extern "C" void menuBindGame(void) {   /* the menu reads and writes the game's v
     std::vector<std::string> dev;
     for (int i = 0; i < optionsMenuAudioCount(); i++) dev.push_back(optionsMenuAudioLabel(i));
     if (!dev.empty()) menu::setOptionLabels("adev", dev);
-    std::vector<std::string> packs;   /* None + the packs found at start: a pack added later shows after a restart */
-    for (int i = 0; i < optionsMenuTexPackCount(); i++) packs.push_back(optionsMenuTexPackLabel(i));
-    menu::setOptionLabels("texpack", packs);
+    menuRefreshAssetPacks();
     menu::setBinding(bindGet, bindSet);
     menu::setKeyBinding(keyText, keyBegin, keyActive);
     menu::setActionHandler(doAction);
