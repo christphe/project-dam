@@ -130,13 +130,22 @@ static bool setOpt(Args &a, const std::string &name, const std::string &val) {
     return false;
 }
 
+// One setting from the command line or the .ini. The sky/sea mode's settings go to its module: its own keys (level, rep, scale, ...),
+// and the three keys fxview also has when the value is the mode's (mode sea|water|sky, view overview|pier|..., scene 0|1).
+static bool setSetting(Args &a, const std::string &name, const std::string &val) {
+    if (name == "mode" && seaTabSetting("mode", val.c_str())) { a.mode = "sea"; return true; }
+    if ((name == "view" || name == "scene") && seaTabSetting(name.c_str(), val.c_str())) return true;
+    if (setOpt(a, name, val)) return true;
+    return seaTabSetting(name.c_str(), val.c_str());
+}
+
 static void parseArgs(Args &a, const std::vector<std::string> &v) {
     for (size_t i = 0; i < v.size(); i++) {
         const std::string &k = v[i];
         const bool has = i + 1 < v.size();
         if (k == "--selftest") a.selftest = 1;
         else if (k == "--probe" && has) { int x = 0, y = 0; if (sscanf(v[++i].c_str(), "%d,%d", &x, &y) == 2) a.probes.push_back({ x, y }); }
-        else if (k.size() > 2 && k[0] == '-' && k[1] == '-' && has && setOpt(a, k.substr(2), v[i + 1])) i++;
+        else if (k.size() > 2 && k[0] == '-' && k[1] == '-' && has && setSetting(a, k.substr(2), v[i + 1])) i++;
     }
     if (a.scene == "cluster") a.mode = "cluster";
 }
@@ -151,6 +160,7 @@ static void saveIni(Args &a, const std::string &path) {
         else if (o.type == 'F') fprintf(f, "%s=%g\n", o.name, *(float *)o.p);
         else fprintf(f, "%s=%d\n", o.name, *(int *)o.p);
     }
+    seaTabWriteSettings(f);   // the sky/sea mode's settings: sea.<key>=value
     fclose(f);
 }
 static void loadIni(Args &a, const std::string &path) {
@@ -160,6 +170,11 @@ static void loadIni(Args &a, const std::string &path) {
     while (fgets(line, sizeof line, f)) {
         std::string s = line;
         while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
+        if (s.compare(0, 4, "sea.") == 0) {   // the sky/sea mode: a name may hold '=' (Bake from (0 = no bake)): the value is after the last one
+            const size_t q = s.rfind('=');
+            if (q != std::string::npos && q > 4) seaTabSetting(s.substr(4, q - 4).c_str(), s.substr(q + 1).c_str());
+            continue;
+        }
         const size_t q = s.find('=');
         if (q != std::string::npos) setOpt(a, s.substr(0, q), s.substr(q + 1));
     }
@@ -971,31 +986,14 @@ int main(int argc, char **argv) {
         parseArgs(a, av);
         a.out = out;
     }
-    {   // the sky/sea module takes its own arguments (--mode sea|water|sky, --level, --view, --cam, --rep ...); fxview shows it as mode "sea"
-        std::vector<std::string> sv;
-#ifdef __SWITCH__
-        for (const char *s : { "--data", "sdmc:/switch/project-dam/data", "--imagelist", "sdmc:/switch/project-dam/fxview/imagelist.u.csv" }) sv.push_back(s);
-#endif
-        if (!a.rom.empty()) { sv.push_back("--rom"); sv.push_back(a.rom); }
-        if (!a.mode.empty() && a.mode != "sea" && a.mode != "water" && a.mode != "sky") {   // another mode: only the module's own keys reach it
-            for (size_t i = 0; i < av.size(); i++)
-                if (av[i] == "--level" || av[i] == "--cam" || av[i] == "--rep" || av[i] == "--set") { sv.push_back(av[i]); if (i + 1 < av.size()) sv.push_back(av[++i]); }
-        } else {
-            sv.insert(sv.end(), av.begin(), av.end());
-        }
-        std::vector<char *> sa;
-        sa.push_back((char *)"fxview");
-        for (std::string &s : sv) sa.push_back((char *)s.c_str());
-        for (int i = 1; i < (int)sa.size();) if (!seaTabParseArg((int)sa.size(), sa.data(), &i)) i++;
-        if (a.mode == "water" || a.mode == "sky") a.mode = "sea";
-    }
     g_tPlay = a.play != 0;
     if (a.t >= 0) { g_tTime = a.t; g_tPlay = false; }
     g_tSpeed = a.tspeed;
     g_log = fopen((a.out + "fxview.log").c_str(), "w");
     logf("fxview: mode=%s backend=%s", a.mode.c_str(), a.backend.empty() ? "default" : a.backend.c_str());
+    std::string rom;
     {
-        const std::string rom = fxRomFind(a.rom);
+        rom = fxRomFind(a.rom);
         if (rom.empty()) logf("fxview: no ROM found (--rom, FXVIEW_ROM / N64_ROM, or the game's data dir): sprites show as untextured quads");
         else if (!fxRomOpen(rom, a.out)) logf("fxview: ROM %s: %s", rom.c_str(), fxRomNote().c_str());
         else logf("fxview: %s (%s)", fxRomNote().c_str(), rom.c_str());
@@ -1073,8 +1071,7 @@ int main(int argc, char **argv) {
 #ifdef SEA_HAVE_PACK
                 pack = ge007_sea_pack; packSize = (size_t)(ge007_sea_pack_end - ge007_sea_pack);
 #endif
-                seaLoaded = seaTabInit(pack, packSize);
-                seaTabLoadIni((a.out + "sea.ini").c_str());
+                seaLoaded = seaTabInit(pack, packSize, rom.c_str());   // its settings came with fxview.ini and the arguments
                 seaTabInitCam(&seaCam);
                 seaStarted = true;
                 logf("fxview: sky/sea module %s", seaLoaded ? "ready" : "failed (see the log)");
@@ -1124,6 +1121,10 @@ int main(int argc, char **argv) {
             seaTabMove(&seaCam, fwd * speed, right * speed, up * speed);
             const int vp[4] = { scene.x, 0, scene.w, H };
             if (seaLoaded) seaTabFrame(headless ? 1.0f / 60.0f : dt, &seaCam, vp);
+            {   // the status (variants, load, GPU time) in the log once a second: the console's numbers come back over nxlink
+                static auto seaLog = now;
+                if (seaLoaded && std::chrono::duration<float>(now - seaLog).count() >= 1.0f) { seaLog = now; logf("sea: %s", seaTabStatus()); }
+            }
             api()->set_viewport(0, 0, (int)w, (int)h);
             api()->set_scissor(0, 0, (int)w, (int)h);
             if (!showUi) labels.push_back({ scene, seaTabStatus() });
@@ -1244,7 +1245,6 @@ int main(int argc, char **argv) {
     }
     if (!headless) saveIni(a, g_iniPath);
     if (seaStarted) {
-        if (!headless) seaTabSaveIni((a.out + "sea.ini").c_str());
         seaTabShutdown();
     }
     ge_imgui_shutdown();

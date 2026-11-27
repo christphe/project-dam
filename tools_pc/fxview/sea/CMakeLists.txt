@@ -1,22 +1,7 @@
-# The sea and sky tab of fxview (issue #145): fxview_sea (the tab, a static library the fxview host links; its ImGui widgets need no
-# backend); fxview links it for its --mode sea. Included by the root
-# CMakeLists.txt inside the GE_TOOLS block.
-set(GE_IMGUI_DIR "${CMAKE_SOURCE_DIR}/port/third_party/imgui")
+# fxview's sky / sea mode (issue #145): the pieces fxview's own target cannot build itself, the game's environment records
+# (fxview_sea_env) and the tool pack of the viewer variants (fxview_sea_pack). sea_tab.cpp is compiled by fxview's target.
+# Included by the root CMakeLists.txt inside the GE_TOOLS block, before tools_pc/fxview.
 
-# Compiled like ge_imgui: the repo's include/ holds N64 SDK headers named like system ones (D66), so the directory's include paths
-# and the game's force-included header stay out; the library needs ImGui, ge_render's public headers and its own directory.
-get_directory_property(_sea_opts COMPILE_OPTIONS)
-list(FILTER _sea_opts EXCLUDE REGEX "^(-include|versioninfo[.]h)$")
-set(MV_DIR "${CMAKE_SOURCE_DIR}/tools_pc/modelview/pc")   # the shared texture decoder (GE's image.c codecs)
-add_library(fxview_sea STATIC sea_tab.cpp cloudtex.cpp "${MV_DIR}/mv_tex.cpp" "${MV_DIR}/mv_zlib.cpp" "${CMAKE_SOURCE_DIR}/port/src/skyplus_core.c")
-set_property(TARGET fxview_sea PROPERTY INCLUDE_DIRECTORIES "${GE_IMGUI_DIR}" "${GE_RENDER_DIR}/include" "${CMAKE_SOURCE_DIR}/port/include" "${CMAKE_CURRENT_SOURCE_DIR}" "${MV_DIR}")
-set_property(TARGET fxview_sea PROPERTY COMPILE_OPTIONS ${_sea_opts})
-set_property(TARGET fxview_sea PROPERTY COMPILE_DEFINITIONS "")
-if(GE_SWITCH)
-  set_property(TARGET fxview_sea PROPERTY POSITION_INDEPENDENT_CODE OFF)
-  target_compile_options(fxview_sea PRIVATE -fPIE)
-endif()
-target_include_directories(fxview_sea INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
 # The game's level environment records: cut out of src/game/bgfog.c at build time (sea_env.cmake) and compiled with the game's own
 # headers and defines (the directory's, so no override of the include paths here).
 set(_sea_env_inc "${CMAKE_CURRENT_BINARY_DIR}/sea_env_tables.inc")
@@ -29,7 +14,6 @@ if(GE_SWITCH)
   set_property(TARGET fxview_sea_env PROPERTY POSITION_INDEPENDENT_CODE OFF)
   target_compile_options(fxview_sea_env PRIVATE -fPIE)
 endif()
-target_link_libraries(fxview_sea PUBLIC ge_imgui fxview_sea_env)
 
 # The tool pack of the viewer variants (sea_pack.cmake): SPIR-V for the Vulkan backend, DKSH for deko3d. GL needs none.
 set(_sea_kind "")
@@ -61,5 +45,4 @@ if(_sea_kind)
     set_property(TARGET fxview_sea_pack PROPERTY POSITION_INDEPENDENT_CODE OFF)
     target_compile_options(fxview_sea_pack PRIVATE -fPIE)
   endif()
-  target_link_libraries(fxview_sea INTERFACE fxview_sea_pack)
 endif()
