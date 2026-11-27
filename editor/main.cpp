@@ -527,6 +527,7 @@ int main(int argc, char **argv)
         }
         drainJobs();
         pollLevel(app);
+        app.doc.syncModTextures();   // a mod opened or closed: its textures/ replace the decor's
         if (app.doc.levelGen != app.seenLevelGen) reloadLevelGpu(app);
         else if (app.doc.decorGen != app.seenDecorGen) reloadDecorGpu(app);
 

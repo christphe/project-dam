@@ -1508,6 +1508,8 @@ static bool gfx_tex_pitch_fix(void) {
 }
 
 extern "C" unsigned portThumbSalt(int fmt, int siz, int w, int h, const void* addr);   /* port/src/missions_thumb.c */
+#include "texpack.h"   /* texture packs: texpackSalt / texpackPixels (port/src/texpack.c) */
+static int s_max_tex_size = 0;   /* the GPU's largest texture side (capped at 8192), set with tex_upload_buffer */
 extern "C" const uint8_t* portThumbTexture(const void* addr, const uint8_t* cur, int fmt, int siz, int w, int h, int line);
 /* G_PORTTEX_EXT: bind port texture s_porttex[i] to unit i from the cache, keyed on its pixels and version
  * (a texture that changes gets a new version, so a new entry), or upload it. */
@@ -1699,6 +1701,12 @@ static void import_texture(int i, int tile, bool importReplacement) {
     const unsigned thumb_salt = portThumbSalt(fmt, siz, thumb_w, thumb_h, orig_addr);
     key.palette_hash ^= thumb_salt;
 
+    /* Texture packs: the texture texLoad unpacked at this address has a picture in the selected pack. The salt keeps
+     * it apart from the game's own in the cache (and changes with the pack). */
+    int pack_texnum = -1;
+    const unsigned pack_salt = thumb_salt ? 0u : texpackSalt(orig_addr, &pack_texnum);
+    key.palette_hash ^= pack_salt;
+
     /* Intro blood (M-201): textures the game regenerates IN PLACE in the
      * per-frame dynamic pool (dynAllocate, [g_VtxBuffers[0], g_VtxBuffers[2]))
      * -- e.g. the gun-barrel / death blood-drip image rebuilt by
@@ -1729,6 +1737,23 @@ static void import_texture(int i, int tile, bool importReplacement) {
     s_avg_addr = orig_addr;   /* gfx_upload_texture keeps its average colour */
     if (gfx_texture_cache_lookup(i, key) && !s_water_import && s_capture_id < 0) {
         return;   /* (a cache hit is decoded again when the water capture wants the image) */
+    }
+    if (pack_salt && !s_water_import && s_capture_id < 0) {
+        /* The pack's picture, at its own size: the vertex pass normalises texture coordinates by the tile's texel count
+         * and the repeat period follows the uploaded size, so a larger picture maps the same way (D615). Uploaded with
+         * a mip chain and sampled with it: a large picture would alias when minified. A CI tile drawn with the TLUT off
+         * reads as an intensity texture (D161), so it gets the same alpha rule. */
+        const int fmt_tex = (fmt == G_IM_FMT_CI && rdp.palette_fmt == G_TT_NONE) ? G_IM_FMT_I : fmt;
+        int pw = 0, ph = 0;
+        const uint8_t* px = texpackPixels(pack_texnum, fmt_tex, s_max_tex_size > 0 ? s_max_tex_size : 4096, &pw, &ph);
+        if (px) {
+            s_avg_addr = nullptr;
+            gfx_rapi->upload_texture(px, (uint32_t)pw, (uint32_t)ph, true);
+            gfx_rapi->set_sampler_parameters(i, false, 0, 0, true);
+            if (rendering_state.textures[i]) rendering_state.textures[i]->second.pack_mips = true;
+            return;
+        }
+        /* not readable: the game's own texture, under the salted key (texpack.c remembers the failure, the next salt is 0) */
     }
     s_tick_texmiss++;
     s_lr_unit = i;   /* level export: the unit gfx_upload_texture fills */
@@ -4764,7 +4789,7 @@ static inline void gfx_tri_state(TriState& ts) {
                 if (linear_filter != rendering_state.textures[i]->second.linear_filter ||
                     cms != rendering_state.textures[i]->second.cms || cmt != rendering_state.textures[i]->second.cmt) {
                     gfx_flush();
-                    gfx_rapi->set_sampler_parameters(i, linear_filter, cms, cmt, rdp.tex_lod);
+                    gfx_rapi->set_sampler_parameters(i, linear_filter, cms, cmt, rdp.tex_lod || rendering_state.textures[i]->second.pack_mips);
                     rendering_state.textures[i]->second.linear_filter = linear_filter;
                     rendering_state.textures[i]->second.cms = cms;
                     rendering_state.textures[i]->second.cmt = cmt;
@@ -7035,6 +7060,7 @@ extern "C" void gfx_init(const GfxInitSettings *settings) {
         // We cap texture max to 8k, because why would you need more?
         int max_tex_size = std::min(8192, gfx_rapi->get_max_texture_size());
         tex_upload_buffer = (uint8_t*)malloc(max_tex_size * max_tex_size * 4);
+        s_max_tex_size = max_tex_size;
     }
 
     /* D72: N64 boots with RSP memory zeroed — no lookat until gSPLookAt. */

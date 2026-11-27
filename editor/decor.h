@@ -16,7 +16,14 @@ struct DecorMaterial {
     int zmode = 0;               // the RDP z mode from extras.n64.othermode (0x000 opaque, 0x400 inter, 0x800 translucent, 0xC00 decal: depth offset)
 };
 
-struct DecorTex { int w = 0, h = 0; std::vector<uint8_t> rgba; };   // top-down RGBA8
+struct DecorTex {
+    int w = 0, h = 0;
+    std::vector<uint8_t> rgba;   // top-down RGBA8
+    int texnum = -1;             // the game's texture number (the image file is textures/<texnum>.png), -1 when the name is not one
+    int origW = 0, origH = 0;    // the exported picture's size (= w, h unless the mod replaces it)
+    std::string path;            // the file the pixels came from (a replacement, maybe inside a .ptexpack / .pmod, or the export's picture)
+    int source = -1;             // the index in decorLoad's texRoots the pixels came from, -1 the export's own picture
+};
 
 struct DecorPrim {
     int room = -1;               // node extras.room
@@ -41,6 +48,7 @@ struct Decor {
     std::vector<DecorMaterial> materials;
     std::vector<DecorTex> tex;
     std::vector<DecorPrim> prims;
+    std::vector<std::string> texWarnings;   // a replacement that could not be read (the next source, or the exported picture, is used)
     std::string level;
     int version = 0;
     float mn[3] = { 0, 0, 0 }, mx[3] = { 0, 0, 0 };
@@ -50,4 +58,12 @@ enum DecorResult { DECOR_OK, DECOR_MISSING, DECOR_STALE, DECOR_BAD };
 
 // Loads <path>.gltf with its .bin and PNGs. DECOR_MISSING: no such file; DECOR_STALE: asset.extras.exporter_version differs from
 // `expectVersion` (nothing else is read); DECOR_BAD: unreadable (msg says why). msg is also set for the other results.
-DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out, std::string &msg);
+// texRoots: replacement sources, first wins (the open mod's folder, then the chosen texture pack "<texturepacks>/X.ptexpack");
+// the picture textures/<n>.png is read from <root>/textures/<n>.png when it is there (a .pmod / .ptexpack tar or a folder,
+// texpacks.h), at any size: the glTF's texture coordinates are 0..1 of the picture. An unreadable one is skipped and listed in
+// Decor::texWarnings.
+DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out, std::string &msg,
+                      const std::vector<std::string> &texRoots = {});
+
+// The texture number of a picture file name "<n>.png" (any folder before it), -1 when it is not one.
+int decorTexnumOfFile(const std::string &name);

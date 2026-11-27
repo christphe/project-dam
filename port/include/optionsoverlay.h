@@ -52,6 +52,8 @@ int optionsMenuUpdateAvailable(void);
 int optionsMenuProfileAvailable(void);   /* a save file is selected (in a mission, or chosen on the file select screen) */   /* a newer release was found */
 int optionsMenuAudioCount(void);                       /* output devices, the system default first */
 const char *optionsMenuAudioLabel(int i);
+int optionsMenuTexPackCount(void);          /* None + the packs in texturepacks/ */
+const char *optionsMenuTexPackLabel(int i);
 void optionsMenuSetSeat(int seat);   /* the player who opened the menu: the controller rows edit that player */
 const char *optionsMenuBindText(const char *key, int slot);   /* the key or button of a binding slot ("" = none) */
 void optionsMenuBindBegin(const char *key, int slot);          /* wait for the next key or mouse button */

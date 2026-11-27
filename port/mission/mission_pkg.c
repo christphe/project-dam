@@ -197,14 +197,20 @@ static PkgIndex *indexGet(const char *pkg)
     return slot;
 }
 
-/* Does `path` go through a regular file named *.pmod? Then pkg = that file and rest = the entry name inside it. */
+/* A path component naming a package: *.pmod (a mod) or *.ptexpack (a texture pack), same tar format. */
+static int isPkgName(const char *p, const char *q)
+{
+    return (q - p > 5 && !strncmp(q - 5, ".pmod", 5)) || (q - p > 9 && !strncmp(q - 9, ".ptexpack", 9));
+}
+
+/* Does `path` go through a regular file named *.pmod / *.ptexpack? Then pkg = that file and rest = the entry name inside it. */
 static int splitPath(const char *path, char *pkg, size_t pkgn, char *rest, size_t restn)
 {
     const char *p = path;
     while (*p) {
         const char *q = p;
         while (*q && !isSep(*q)) q++;
-        if (q - p > 5 && !strncmp(q - 5, ".pmod", 5)) {
+        if (isPkgName(p, q)) {
             size_t plen = (size_t)(q - path);
             const char *r = q;
             while (isSep(*r)) r++;
@@ -271,6 +277,23 @@ int pkgExists(const char *path)
 }
 
 void pkgFree(void *p) { free(p); }
+
+int pkgForEachEntry(const char *pkgFile, void (*cb)(void *u, const char *name, long long off, long long size), void *u)
+{
+    PkgIndex ix;
+    long long fsize, mtime;
+    FILE *f;
+    int ok;
+    memset(&ix, 0, sizeof ix);
+    if (!isRegFile(pkgFile, &fsize, &mtime)) return 0;
+    f = fopen(pkgFile, "rb");
+    if (!f) return 0;
+    ok = indexBuild(&ix, f, fsize);
+    fclose(f);
+    if (ok) for (int i = 0; i < ix.n; i++) cb(u, ix.e[i].name, ix.e[i].off, ix.e[i].size);
+    indexClear(&ix);
+    return ok;
+}
 
 /* ---- the writer ------------------------------------------------------------------------------------------------- */
 

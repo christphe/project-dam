@@ -149,6 +149,84 @@ ToolResult toolModReorder(Doc &d, const cJSON *a)
     return okJson(modJson(d));
 }
 
+// ---- textures: the decor's textures, the mod's replacements (textures/<n>.png) and the texture pack ----
+
+ToolResult toolTextures(Doc &d, const cJSON *)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "texture_pack", d.texPack.c_str());
+    cJSON_AddStringToObject(o, "texture_packs_dir", d.texturePacksRoot().c_str());
+    {
+        std::vector<TexPackInfo> packs(64);
+        const int n = texpackScan(d.texturePacksRoot().c_str(), packs.data(), (int)packs.size());
+        cJSON *pa = cJSON_AddArrayToObject(o, "packs");
+        for (int i = 0; i < n && i < (int)packs.size(); i++) {
+            cJSON *p = cJSON_CreateObject();
+            cJSON_AddStringToObject(p, "file", packs[(size_t)i].file);
+            cJSON_AddStringToObject(p, "name", packs[(size_t)i].name);
+            if (packs[(size_t)i].author[0]) cJSON_AddStringToObject(p, "author", packs[(size_t)i].author);
+            cJSON_AddItemToArray(pa, p);
+        }
+    }
+    cJSON *mine = cJSON_AddArrayToObject(o, "mod_textures");
+    for (int n : d.modTextures()) cJSON_AddItemToArray(mine, cJSON_CreateNumber(n));
+    cJSON *arr = cJSON_AddArrayToObject(o, "level_textures");
+    if (d.hasLevel && d.level.hasDecor) {
+        const Decor &dc = d.level.decor;
+        for (size_t i = 0; i < dc.tex.size(); i++) {
+            const DecorTex &t = dc.tex[i];
+            std::set<int> rooms;
+            for (const DecorPrim &p : dc.prims)
+                if (p.material >= 0 && dc.materials[(size_t)p.material].tex == (int)i && !p.uv.empty()) rooms.insert(p.room);
+            cJSON *e = cJSON_CreateObject();
+            cJSON_AddNumberToObject(e, "texnum", t.texnum);
+            cJSON_AddNumberToObject(e, "w", t.w);
+            cJSON_AddNumberToObject(e, "h", t.h);
+            if (t.source >= 0) { cJSON_AddNumberToObject(e, "orig_w", t.origW); cJSON_AddNumberToObject(e, "orig_h", t.origH); }
+            const bool fromMod = t.source == 0 && d.hasMod && !d.level.texRoots.empty() && d.level.texRoots[0] == d.modDir;
+            cJSON_AddStringToObject(e, "from", t.source < 0 ? "level" : fromMod ? "mod" : "pack");
+            cJSON *ra = cJSON_AddArrayToObject(e, "rooms");
+            for (int r : rooms) cJSON_AddItemToArray(ra, cJSON_CreateNumber(r));
+            cJSON_AddItemToArray(arr, e);
+        }
+        cJSON *w = cJSON_AddArrayToObject(o, "warnings");
+        for (const std::string &s : dc.texWarnings) cJSON_AddItemToArray(w, cJSON_CreateString(s.c_str()));
+    } else {
+        cJSON_AddStringToObject(o, "note", d.hasLevel ? "the level has no glTF decor: its textures are not listed" : "no level is open");
+    }
+    return okJson(o);
+}
+
+ToolResult toolModSetTexture(Doc &d, const cJSON *a)
+{
+    std::string err;
+    if (!argHas(a, "texnum")) return fail("\"texnum\" (0..4095) is required: the texture number (textures lists the level's)");
+    const int n = argInt(a, "texnum", -1);
+    if (argHas(a, "remove") && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(a, "remove"))) {
+        if (!d.modRemoveTexture(n, err)) return fail(err);
+    } else {
+        const std::string png = argStr(a, "png");
+        if (png.empty()) return fail("\"png\" is required: a PNG of your own (8-bit, not interlaced, any size); or \"remove\": true");
+        if (!d.modSetTexture(n, png, err)) return fail(err);
+    }
+    return toolTextures(d, a);
+}
+
+ToolResult toolSetTexturePack(Doc &d, const cJSON *a)
+{
+    const std::string f = argStr(a, "file");
+    if (!f.empty()) {
+        std::vector<TexPackInfo> packs(64);
+        const int n = texpackScan(d.texturePacksRoot().c_str(), packs.data(), (int)packs.size());
+        bool found = false;
+        for (int i = 0; i < n && i < (int)packs.size(); i++) if (f == packs[(size_t)i].file) found = true;
+        if (!found) return fail("no texture pack " + f + " in " + d.texturePacksRoot() + " (textures lists them)");
+    }
+    d.texPack = f;
+    d.syncModTextures();
+    return toolTextures(d, a);
+}
+
 // ---- environment ----
 
 bool argRgb(const cJSON *a, const char *k, float out[3])

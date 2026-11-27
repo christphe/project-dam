@@ -134,6 +134,7 @@ option's position or its `value` in `menu.json`.
 | `Video.SafeAreaCrop` | 1 | 1 | Video > Display > Crop overscan |
 | `Video.SkyScale` | — | 0 | Video > Performance > Sky and sea detail |
 | `Video.TextureFilter` | 1 | 1 | Video > Performance > Texture filter |
+| `Video.TexturePack` | "" | "" | Video > Texture pack (a file name in `texturepacks/`; not in `defaults.json`: empty means none) |
 | `Video.VSync` | 1 | 1 | Video > Performance > VSync |
 | `Video.Visuals` | 2 | 2 | Video > Display > Visuals |
 

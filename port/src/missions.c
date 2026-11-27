@@ -21,6 +21,7 @@
 #include "mission_setup.h"
 #include "missions.h"
 #include "missions_priv.h"
+#include "texpack.h"   /* a mod's textures/ while its mission is active */
 #include "game/lv.h"   /* lvlGetSelectedDifficulty */
 
 extern char *setup_text_pointers[];   /* src/game/chraidata.c: stage number -> "Usetup<name>Z" */
@@ -179,6 +180,7 @@ static void dirOf(const char *file, char *out, size_t n)
 void missionsDeactivate(void)
 {
     modsUnbind();
+    texpackSetMod("");
     if (s_served[0]) {
         pccgRestoreRow(s_served);
         s_served[0] = 0;
@@ -217,6 +219,7 @@ int missionsActivateFile(const char *path, int spawn_pad, const char *mod_dir, i
     s_stage = missionLevelNumber(m.level);
     dirOf(path, s_dir, sizeof s_dir);
     snprintf(s_modDir, sizeof s_modDir, "%s", mod_dir ? mod_dir : "");
+    texpackSetMod(s_modDir);   /* the mod's textures/<n>.png, over the texture pack's */
     s_slot = slot;
     s_active = 1;
     sysLogPrintf(LOG_INFO, "missions: \"%s\" (%s, stage %d) from %s", s_m.name, s_m.level, s_stage, path);

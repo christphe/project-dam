@@ -1,8 +1,8 @@
 # Modding: custom missions and scripts
 
 A **mod** is a campaign: an ordered list of missions, each a small delta over one of the original solo levels
-(guards moved, added or removed, objects added, objectives, zones, Luau scripts). A mod holds numbers and text only,
-never game data, so it is safe to share. The format is documented in `port/mission/mission.h`.
+(guards moved, added or removed, objects added, objectives, zones, Luau scripts). A mod holds numbers, text and pictures
+of its own, never game data, so it is safe to share. The format is documented in `port/mission/mission.h`.
 
 ## Installing a mod
 
@@ -93,6 +93,42 @@ A mission's `thumb.png` is its image in the mission grid; the mod's `cover.png` 
 it, the first mission's thumb). Both are 320x240 RGB PNGs, made in the editor (Mission tab > Thumbnail > Capture or Import
 picture; Mod tab > Choose picture). The editor writes them compressed (per-row PNG filters, zlib level 9): a capture is
 a few tens of KB.
+
+## Textures
+
+A mod can give the level's walls, floors and ceilings pictures of its own: `textures/<n>.png` in the mod's folder replaces
+texture number `n` (0 to 4095, the game's own numbering) in every mission of the mod.
+
+**Only pictures you made yourself.** A texture taken from the game, even retouched, is game data: it never goes in a mod.
+
+- **In the editor:** Mod tab > Textures. *Pick a surface* and click a wall in the view to get its texture number (or type
+  it), then *Replace...* copies a PNG of yours as `textures/<n>.png`; *Remove* takes it out. The list shows the mod's
+  replacements; the view draws them at once. Over MCP: `textures` (the level's textures, where each drawn picture comes
+  from, the rooms using it), `mod_set_texture` (`texnum`, `png`, or `remove`).
+- **The picture:** a PNG, 8-bit (grey, grey + alpha, RGB, RGBA or palette), not interlaced, up to 4096 pixels on a side.
+  Any size works: the texture coordinates are a fraction of the picture, so a picture of the same proportions as the
+  original lays out the same way, and a larger one only adds detail. Keep the alpha of a see-through texture (a fence, a
+  grille): an opaque picture fills the holes.
+- **Where it shows:** in the editor's view, and in the game while one of the mod's missions is played, over the player's
+  texture pack (below). *Check mod* flags a file in `textures/` that is not `<number>.png` or not a readable PNG.
+
+## Texture packs
+
+A texture pack replaces the game's textures everywhere, for every level and mod. It is a `.ptexpack` file, a plain
+uncompressed `tar` like a `.pmod`, holding:
+
+```
+pack.json              optional: {"name": "...", "author": "...", "description": "..."}
+textures/<n>.png       the picture of texture n (same rules as a mod's textures above)
+```
+
+Put it in `texturepacks/` next to the game's `data/` folder (on the Switch `sdmc:/switch/project-dam/texturepacks/`) and
+choose it in the game's menu, Video > Texture pack (one pack at a time; *None* turns it off). The change shows at once,
+also in a mission. A mod's own textures win over the pack's. An unpacked folder `X.ptexpack/` works like the file. To make one: `tar -cf mine.ptexpack pack.json
+textures` from the pack's folder.
+
+The editor draws a level with the pack of your choice (Mod tab > Textures, or Tools > Settings), to see how a mission looks
+with the pack its players use; the mod's own textures are drawn over the pack's. Over MCP: `set_texture_pack`.
 
 ## Scripts
 

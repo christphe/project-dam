@@ -30,7 +30,7 @@ struct LProp { int index = 0, type = 0, pad = 0, model = -1, item = -1, ai = -1,
 };
 struct LPoly { int room = -1; std::vector<Vec3> v; };
 struct LPortal { int a = -1, b = -1; std::vector<Vec3> v; };
-struct LTri { Vec3 a, b, c; int room; int cull; };   // cull as recorded: 0 none, 1 back faces, 2 front faces
+struct LTri { Vec3 a, b, c; int room; int cull; int texnum = -1; };   // cull as recorded: 0 none, 1 back faces, 2 front faces; texnum: the glTF decor's texture number, -1 none / unknown
 
 struct OwnerInfo {
     Vec3 mn{}, mx{};          // bounds of all its runs, in world space as recorded
@@ -59,6 +59,7 @@ struct Level {
     bool hasDecor = false;
     Decor decor;
     std::string gltfRoot;              // the folder holding <level>/<level>.gltf; "" = look beside / inside the export folder
+    std::vector<std::string> texRoots; // replacement sources for the decor's textures, first wins: the open mod, the chosen texture pack
     std::string decorNote;             // what decor is drawn and why (for the log)
     bool decorNeedsExport = false;     // there is no current glTF export: the editor may run the game to write it
     Vec3 mn{}, mx{};                   // bounds of everything
@@ -202,8 +203,14 @@ struct Doc {
 
     // ---- files ----
     bool openLevel(const std::string &dir, std::string &err);
-    // Re-reads the open level's glTF decor (after the editor had the game write it).
+    // Re-reads the open level's glTF decor (after the editor had the game write it, or when the mod's textures changed).
     void reloadDecor();
+    // Reloads the decor when its texture sources changed (a mod opened or closed, another texture pack chosen).
+    void syncModTextures();
+    // ---- texture packs: <game>/texturepacks/X.ptexpack (texpacks.h); the one chosen here is drawn under the mod's textures ----
+    std::string texPack;                            // the chosen pack's file name ("hd.ptexpack"), "" none
+    std::string texturePacksRoot() const;           // the game's texturepacks folder: next to its data folder
+    std::vector<std::string> textureRoots() const;  // what Level::texRoots should be now
     std::string gameDataDir() const;               // <game exe dir>/data, or GE_EDITOR_DATA
     // Opens a solo level by name from the export cache next to the game (exportcache.h), running the
     // game's export first when it is missing or when reexport is set. Blocks until the game is done.
@@ -291,6 +298,12 @@ struct Doc {
     int openModOfOpenMission(std::string &err);
     std::string modsRoot() const;                                    // the game's mods folder: next to its data folder
     std::string modCoverPath() const;                                // <mod>/cover.png (the mod's own picture, optional)
+    // ---- the mod's textures: <mod>/textures/<texnum>.png replace the level's texture <texnum> (pictures of the modder's own) ----
+    std::string modTexturesDir() const;                              // <mod>/textures, "" when no mod is open
+    std::vector<int> modTextures() const;                            // the texture numbers the mod replaces, ascending
+    // Copies the PNG `src` (8-bit RGB / RGBA, not interlaced) as <mod>/textures/<texnum>.png and reloads the decor.
+    bool modSetTexture(int texnum, const std::string &src, std::string &err);
+    bool modRemoveTexture(int texnum, std::string &err);
     std::string modNotice;                                           // set by saveMod when it had to make an id
     bool modIdOk() const;
     bool saveMod(std::string &err);                                  // campaign.json (not required to be valid yet)

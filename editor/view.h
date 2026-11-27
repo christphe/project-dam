@@ -46,6 +46,7 @@ struct Hit {
     Vec3 surfacePoint{};    // where the ray meets room geometry (valid when hasSurface)
     bool hasSurface = false;
     int room = -1;
+    int texnum = -1;        // the texture number of the room surface the ray meets (glTF decor), -1 none / unknown
 };
 
 // The item's box in its own frame: relative to its pad position, before the pad's rotation (owner model bounds, or a

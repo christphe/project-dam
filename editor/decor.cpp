@@ -15,6 +15,11 @@ extern "C" {
 
 #include "png.h"
 
+extern "C" {
+#include "mission_pkg.h"
+#include "texpacks.h"
+}
+
 static float linearToSrgb(float c)
 {
     c = std::min(1.0f, std::max(0.0f, c));
@@ -46,7 +51,33 @@ static bool extrasInt(const cgltf_extras &ex, const char *key, int &out)
     return ok;
 }
 
-DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out, std::string &msg)
+int decorTexnumOfFile(const std::string &name)
+{
+    return texpackTexnumOfName(name.c_str());
+}
+
+// The replacement of texture `texnum` from the first source that has a readable one: 1 found (rgba, w, h, path, source set).
+static bool replacementFor(const std::vector<std::string> &roots, int texnum, DecorTex &dt, std::vector<std::string> &warn)
+{
+    for (size_t r = 0; r < roots.size(); r++) {
+        char path[1400];
+        texpackPicturePath(roots[r].c_str(), texnum, path, sizeof path);
+        uint8_t *file = nullptr, *px = nullptr;
+        size_t len = 0;
+        if (!pkgReadFile(path, &file, &len)) continue;
+        int w = 0, h = 0;
+        const int ok = texpackDecodePng(file, len, &w, &h, &px);
+        pkgFree(file);
+        if (!ok) { warn.push_back(std::string(path) + ": not readable (an 8-bit PNG, not interlaced, is expected)"); continue; }
+        dt.rgba.assign(px, px + (size_t)w * h * 4);
+        free(px);
+        dt.w = w; dt.h = h; dt.path = path; dt.source = (int)r;
+        return true;
+    }
+    return false;
+}
+
+DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out, std::string &msg, const std::vector<std::string> &texRoots)
 {
     out = Decor();
     FILE *probe = fopen(gltfPath.c_str(), "rb");
@@ -99,7 +130,12 @@ DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out
                     DecorTex dt;
                     int w = 0, h = 0;
                     const std::string p = dir + "/" + t->image->uri;
-                    if (readPng(p.c_str(), w, h, dt.rgba)) { dt.w = w; dt.h = h; out.tex.push_back(std::move(dt)); ti = texOfImage.emplace(t->image, (int)out.tex.size() - 1).first; }
+                    dt.texnum = decorTexnumOfFile(t->image->uri);
+                    if (readPng(p.c_str(), w, h, dt.rgba)) {
+                        dt.w = dt.origW = w; dt.h = dt.origH = h; dt.path = p;
+                        if (dt.texnum >= 0) replacementFor(texRoots, dt.texnum, dt, out.texWarnings);   // the mod's, then the pack's
+                        out.tex.push_back(std::move(dt)); ti = texOfImage.emplace(t->image, (int)out.tex.size() - 1).first;
+                    }
                     else ti = texOfImage.emplace(t->image, -1).first;   // missing picture: drawn untextured, not fatal
                 }
                 dm.tex = ti->second;
@@ -224,7 +260,10 @@ DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out
                 cJSON_Delete(j);
             }
         }
+    int replaced = 0;
+    for (const DecorTex &t : out.tex) replaced += t.source >= 0 ? 1 : 0;
     msg = "glTF decor: " + std::to_string(out.prims.size()) + " primitives, " + std::to_string(out.tex.size()) + " textures";
+    if (replaced) msg += " (" + std::to_string(replaced) + " replaced)";
     if (!out.stan.empty()) msg += ", " + std::to_string(out.stan.size()) + " collision tiles";
     return DECOR_OK;
 }

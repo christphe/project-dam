@@ -2,6 +2,7 @@
 // A mod is mods/<mod>/campaign.json plus one folder per mission (mission.json, thumb.png).
 #include "doc.h"
 #include "mission_pkg.h"
+#include "png.h"
 
 #include <algorithm>
 #include <cctype>
@@ -138,6 +139,67 @@ std::string Doc::modsRoot() const
 std::string Doc::modCoverPath() const
 {
     return hasMod ? modDir + "/cover.png" : "";
+}
+
+std::string Doc::modTexturesDir() const
+{
+    return hasMod ? modDir + "/textures" : "";
+}
+
+std::string Doc::texturePacksRoot() const
+{
+    const std::string m = modsRoot();   // <game>/mods -> <game>/texturepacks
+    return m.substr(0, m.size() - 4) + "texturepacks";
+}
+
+std::vector<std::string> Doc::textureRoots() const
+{
+    std::vector<std::string> r;
+    if (hasMod) r.push_back(modDir);
+    if (!texPack.empty()) r.push_back(texturePacksRoot() + "/" + texPack);
+    return r;
+}
+
+std::vector<int> Doc::modTextures() const
+{
+    std::vector<int> out;
+    std::error_code ec;
+    const std::string dir = modTexturesDir();
+    if (dir.empty() || !fs::is_directory(dir, ec)) return out;
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        const int n = decorTexnumOfFile(it->path().filename().string());
+        if (n >= 0 && it->is_regular_file(ec)) out.push_back(n);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+bool Doc::modSetTexture(int texnum, const std::string &src, std::string &err)
+{
+    if (!hasMod) { err = "no mod is open"; return false; }
+    if (texnum < 0 || texnum > 4095) { err = "texture numbers go from 0 to 4095"; return false; }
+    int w = 0, h = 0;
+    std::vector<uint8_t> px;
+    if (!readPng(src.c_str(), w, h, px)) { err = src + ": not readable (an 8-bit RGB or RGBA PNG, not interlaced, is expected)"; return false; }
+    if (w > 4096 || h > 4096) { err = src + ": " + std::to_string(w) + "x" + std::to_string(h) + " is over 4096 pixels on a side"; return false; }
+    std::error_code ec;
+    fs::create_directories(modTexturesDir(), ec);
+    const std::string dst = modTexturesDir() + "/" + std::to_string(texnum) + ".png";
+    if (fs::exists(dst, ec) && fs::equivalent(src, dst, ec)) { reloadDecor(); return true; }
+    fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+    if (ec) { err = "cannot write " + dst + ": " + ec.message(); return false; }
+    reloadDecor();
+    return true;
+}
+
+bool Doc::modRemoveTexture(int texnum, std::string &err)
+{
+    if (!hasMod) { err = "no mod is open"; return false; }
+    std::error_code ec;
+    const std::string p = modTexturesDir() + "/" + std::to_string(texnum) + ".png";
+    if (!fs::remove(p, ec)) { err = "the mod has no textures/" + std::to_string(texnum) + ".png"; return false; }
+    reloadDecor();
+    return true;
 }
 
 bool Doc::saveMod(std::string &err)
@@ -300,6 +362,18 @@ std::vector<std::string> Doc::validateMod() const
     if (!campaignValidate(&camp, e, sizeof e)) out.push_back(e);
     for (int i = 0; i < camp.nmissions; i++)
         if (!exists(modMissionPath(i))) out.push_back(std::string("mission folder '") + camp.missions[i] + "' has no mission.json");
+    std::error_code ec;   // textures/: only <texnum>.png, each a PNG the game and the editor read
+    const std::string td = modTexturesDir();
+    if (fs::is_directory(td, ec))
+        for (fs::directory_iterator it(td, ec), end; !ec && it != end; it.increment(ec)) {
+            const std::string fn = it->path().filename().string();
+            if (fn.empty() || fn[0] == '.') continue;
+            const int n = decorTexnumOfFile(fn);
+            int w = 0, h = 0;
+            std::vector<uint8_t> px;
+            if (n < 0 || n > 4095) out.push_back("textures/" + fn + ": not a texture number (textures/<0..4095>.png): ignored");
+            else if (!readPng(it->path().string().c_str(), w, h, px)) out.push_back("textures/" + fn + ": not an 8-bit RGB or RGBA PNG (not interlaced): the level's own texture is drawn");
+        }
     return out;
 }
 
