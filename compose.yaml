@@ -19,7 +19,7 @@ name: project-dam
 # The build image: Dockerfile.build, published by .github/workflows/build-image.yml
 # and pinned by digest. tools/check_build_image.py keeps this, ci.yml, dev.py and
 # fxview.py on the same reference (`--set <ref>` after a new publish).
-x-build-image: &build_image ghcr.io/christphe/project-dam-build@sha256:0000000000000000000000000000000000000000000000000000000000000000
+x-build-image: &build_image ghcr.io/christphe/project-dam-build@sha256:7ba869fa0ea8b7195b7dcab3b23f87ae2e3065fac1001bd89ca817771dcc7baf
 
 services:
   linux:

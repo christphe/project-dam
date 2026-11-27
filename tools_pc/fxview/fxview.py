@@ -82,7 +82,7 @@ def inside(path, root):
 
 
 # ---- fxview on ge_render (issue #144): the CMake target `fxview` (GE_TOOLS=ON), built in Docker, run on PC, in Ryujinx or on the console
-IMAGE = "ghcr.io/christphe/project-dam-build@sha256:0000000000000000000000000000000000000000000000000000000000000000"   # the published build image (tools/check_build_image.py keeps it in sync)
+IMAGE = "ghcr.io/christphe/project-dam-build@sha256:7ba869fa0ea8b7195b7dcab3b23f87ae2e3065fac1001bd89ca817771dcc7baf"   # the published build image (tools/check_build_image.py keeps it in sync)
 IMAGE = os.environ.get("DOCKER_IMAGE") or devenv.load_env().get("DOCKER_IMAGE") or IMAGE   # as tools/dev.py: DOCKER_IMAGE (environment or .env) wins
 GE_BUILDS = {   # kind -> (build dir, cmake configure extras, output)
     "win": ("build-win", None, "build-win/tools_pc/fxview/fxview.exe"),

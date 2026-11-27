@@ -96,7 +96,7 @@ jobs:
     # The published build image (Dockerfile.build, built by build-image.yml),
     # pinned by digest: devkitA64, libnx, portlibs, patched uam and the host
     # toolchain and libraries.
-    container: ghcr.io/christphe/project-dam-build@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    container: ghcr.io/christphe/project-dam-build@sha256:7ba869fa0ea8b7195b7dcab3b23f87ae2e3065fac1001bd89ca817771dcc7baf
     steps:
       - uses: actions/checkout@v7
 
@@ -114,7 +114,7 @@ jobs:
     runs-on: ubuntu-24.04
     # The published build image (Dockerfile.build, built by build-image.yml),
     # pinned by digest: devkitA64, libnx, Switch portlibs, patched uam.
-    container: ghcr.io/christphe/project-dam-build@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    container: ghcr.io/christphe/project-dam-build@sha256:7ba869fa0ea8b7195b7dcab3b23f87ae2e3065fac1001bd89ca817771dcc7baf
     steps:
       - uses: actions/checkout@v7
 
