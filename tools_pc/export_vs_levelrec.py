@@ -19,6 +19,14 @@ with <models_dir>/models.json (ge007-export, issue #119): triangle count of the
 default scene and the set of textures (matched by pixels, padded copies
 included).
 
+  python tools_pc/export_vs_levelrec.py --setup <setup.json> <levelrec_dir>
+
+compares a setup.json (docs/specs/setup.md) with the capture's level.json: `scale`,
+the set of object model numbers (plus ammo box slot models with a quantity) against
+the `models[]` entries with guard false, the guard `body` values against the
+guard true entries; and, when that level.json has `pads`, every pad within float32
+precision.
+
 Both inputs are ROM-derived and stay in the user's data folders. Stdlib only.
 """
 import json
@@ -240,7 +248,53 @@ def compare_stan(g, rdir):
     return 1 if (room_bad or pt_bad or len(mine) != len(ref) or unresolved or bad_nb) else 0
 
 
+def compare_setup(sp, rdir):
+    """setup.json against level.json of a capture: scale, object model set, guard bodies (and pads when present)."""
+    s = json.load(open(sp))
+    ref = json.load(open(os.path.join(rdir, "level.json")))
+    bad = 0
+    sc = abs(s["scale"] - ref["scale"]) <= 1e-6 * abs(ref["scale"]) + 1e-6
+    print("setup scale: setup.json %.7g, level.json %.7g  %s" % (s["scale"], ref["scale"], "ok" if sc else "DIFF"))
+    bad += not sc
+    models, bodies = set(), set()
+    for r in s["props"]:
+        if r["type"] == 9:
+            if r["body"] != 0xFFFF:
+                bodies.add(r["body"])
+        elif "model" in r:
+            models.add(r["model"])
+            if r["type"] == 20:
+                g = r["fields"]["ammo"]
+                for k in range(13):
+                    if g["slot%d_model" % k] != 0xFFFF and g["slot%d_qty" % k]:
+                        models.add(g["slot%d_model" % k])
+    rm = {m["model"] for m in ref["models"] if not m["guard"]}
+    rb = {m["model"] for m in ref["models"] if m["guard"]}
+    print("setup object models: %d in setup.json, %d in level.json; only setup %s, only level.json %s"
+          % (len(models), len(rm), sorted(models - rm), sorted(rm - models)))
+    print("setup guard bodies: setup.json %s, level.json %s" % (sorted(bodies), sorted(rb)))
+    bad += (models != rm) + (bodies != rb)
+    if "pads" in ref:
+        worst, nbad = 0.0, 0
+        mine = {p["num"]: p for p in s["pads"] + s["bound_pads"]}
+        for p in ref["pads"]:
+            m = mine.get(p.get("num"))
+            if m is None:
+                nbad += 1
+                continue
+            d = max(abs(a - b) - 2.4e-7 * abs(b) for a, b in zip(m["pos"], p["pos"]))
+            worst = max(worst, d)
+            nbad += d > 1e-3
+        print("setup pads: %d compared, %d differ (max difference %.6f)" % (len(ref["pads"]), nbad, worst))
+        bad += nbad > 0
+    else:
+        print("setup pads: this level.json has no pads (the editor reads them from the setup): not compared")
+    return 1 if bad else 0
+
+
 def main():
+    if sys.argv[1] == "--setup":
+        return compare_setup(sys.argv[2], sys.argv[3])
     if sys.argv[1] == "--models":
         return compare_models(sys.argv[2], sys.argv[3])
     gdir, rdir = sys.argv[1], sys.argv[2]

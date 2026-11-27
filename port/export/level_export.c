@@ -8,6 +8,7 @@
 #include "export_common.h"
 #include "conv_romcheck.h"
 #include "stan_export.h"
+#include "setup_export.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -439,6 +440,13 @@ static int export_level(LC *lc, const CvFileRow *row, const char *file, const ch
                   "  - secondary list: shade alpha -> env alpha (baseColorFactor[3], COLOR_0 alpha 1.0) when the last-cycle alpha equation is X*SHADE or plain SHADE\n"
                   "  - base texture is always the referenced (main) texture; type-1 detail number/shifts go to extras.detail\n"
                   "  - texture generation (0x40000): COLOR_0 white with the alpha byte, TEXCOORD_0 = 0.5+0.5*nx, 0.5-0.5*ny from the colour bytes as a signed normal\n");
+    }
+    /* ---- the level's stage setup (setup.json / setup_mp.json, setup.md) ---- */
+    {
+        char smsg[300];
+        smsg[0] = 0;
+        if (ex_setup_export(lc->rom, lc->rom_size, lc->rd, lc->region, name, scale, dir, &rpt, smsg, sizeof smsg))
+            FAIL("setup: %s", smsg);
     }
     snprintf(path, sizeof path, "%s/report.txt", dir);
     if (write_file(path, rpt.p, rpt.len)) FAIL("cannot write %s", path);
