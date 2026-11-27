@@ -22,50 +22,42 @@ faster than its predecessor. That project bit-matches compiler output;
 this one matches runtime behavior, so the mechanics differ; but the
 project-structure lessons carry over directly.
 
-### Non-negotiable #2 in full
+### `src/game` may be changed (non-negotiable #2 withdrawn 2026-11-27)
 
-`AGENTS.md` carries the short form; this is the full rule.
+The decompiled code is being moved out of the project and removed, so
+`src/game` is no longer frozen: it is edited or deleted like any other
+code, and there is no sign-off procedure any more. Two habits stay:
 
-**Game logic is unmodified.** The decomp's control flow and behavior are ground truth for 1:1 fidelity — never change them. All N64 *hardware* dependencies are satisfied by the `port/` layer; if a game file seems to need a behavioral change, stop and check the exception below before assuming the fix belongs in `port/`. **Diagnosis is never restricted — only the fix.** Trace a bug as deep into `src/game` state as the evidence leads, and name the exact struct/field/logic responsible, before deciding which of three buckets it falls in (framing in the next section). **Narrow exception (ABI/layout only):** the 32→64-bit pointer-width transition forces a small class of mechanical, semantics-preserving edits that cannot be isolated in `port/` — **any struct-layout or pointer-width-driven misread caused by 32→64-bit widening**, whether in a ROM-serialized record (a struct with a 32-bit-pointer field misaligns when read as 64-bit) or a **live runtime struct/union** (a raw-byte offset alias into a union arm whose true field shifted because an earlier member in the same union widened — the D209/D210/D255 pattern; see `docs/porting-notes.md` §A1 for the full catalogue and its diagnostic tells). These follow the PD ground-truth pattern (store the embedded address as `u32` and cast to a real pointer at the use site; or read the correctly-named/typed field instead of a raw-offset/mistyped alias), change no logic or behavior, and are each documented in `docs/dev/findings/` (D3x), cross-tagged to §A1 where that pattern applies. **A genuine behavioral difference** — the decomp's byte-identical code, given verified-correct inputs, still diverging from real N64 behavior — is not covered by this exception and requires the rule-2 sign-off procedure (§7 below) before any `src/game` edit. No other game-code edits are permitted.
+- **Diagnose to the exact cause first.** Trace a bug as deep into game
+  state as the evidence leads and name the struct, field or logic
+  responsible before choosing where to fix it. The 32→64-bit layout
+  traps (`docs/porting-notes.md` §A1) are still the most common cause of
+  "game state looks wrong".
+- **State behaviour changes.** A fix that changes what the game does is
+  said so in its PR: what it did before, what it does now.
 
-### Diagnosis is unrestricted; only the fix is constrained
+### Clean-room porting (AGENTS.md rule 7)
 
-AGENTS.md non-negotiable #2 restricts *changing* `src/game` behavior. It
-has never restricted *investigating* it. An agent that stops short of
-naming the exact `src/game` struct, field, or logic responsible for a bug
-— because touching that file "feels" off-limits — is doing worse
-diagnosis than the rules require, not better compliance with them.
-Several of this port's hardest, highest-impact bugs (D209, D210, D255)
-were exactly this shape: a `src/game` state variable reading wrong,
-root-caused only by tracing fully into the game file that owned it.
+The decompiled code is being replaced, not copied. Porting a piece of game
+logic or a data format follows two steps with two different agents:
 
-Every investigation should end able to say which of three buckets
-applies:
+1. **Spec.** An agent that may read the decomp writes what the code does as
+   facts in prose, in a page of `docs/specs/` (byte layouts, fields, rules,
+   constants, measured values, edge cases), following
+   `docs/specs/README.md`. No code is pasted or paraphrased line by line, and
+   decomp function or variable names are not needed to read the page. The lead
+   reviews the page before step 2.
+2. **Implementation.** A different agent, whose brief says MAY NOT READ:
+   `src/`, `include/`, `rsp/`, `PR/gbi.h`, libultra, `port/fast3d/` and any
+   tool derived from them, writes the code from the spec pages only. When the
+   spec is silent or ambiguous, it stops and reports the question; the spec
+   agent answers by amending the page. The implementation agent never looks
+   the answer up in the decomp, and the lead never passes decomp code or names
+   in a brief.
 
-- **(a) ABI/layout-class.** The true cause is a struct-layout or
-  pointer-width misread introduced by the 32→64-bit transition — in a
-  ROM-serialized record or a live runtime struct/union alike. Fixable
-  under the narrow exception, entirely inside the game file under
-  `#ifdef PORT`, no sign-off needed. Check `docs/porting-notes.md` §A1
-  first (the pattern's tells + worked examples) — this is the most
-  common shape a "`src/game` behavior looks wrong" report turns out to
-  have.
-- **(b) Port-layer bug that merely manifests through game state.** The
-  game code is reading state that's correct for what N64 would have
-  produced; something in `port/` (a shim, fast3d, frame timing, an
-  uninitialized or mis-ordered port-owned value) is what actually
-  differs. Fixable entirely in `port/`, no `src/game` touch, no sign-off
-  needed.
-- **(c) Genuine game-logic behavior difference.** The decomp's
-  byte-identical control flow, given verified-correct inputs, provably
-  diverges from real N64 behavior. Rare, and requires the rule-2
-  sign-off procedure (§7 below) before any `src/game` edit.
-
-Bucket (c) is rare by design — most bugs that look like (c) turn out to
-be (a) or (b) in disguise — but ruling it in or out requires actually
-tracing the state to its source, not stopping at the file boundary.
-"This state lives in `src/game`" is a reason to keep tracing, not a
-reason to stop.
+Verification compares the new code's output with the old code's (a capture,
+an export check, a pixel diff), never its source. `port/export/` (issue #150)
+is the worked example: specs in `docs/specs/`, code written from them.
 
 ## 1. Every investigation task gets a visible budget
 
@@ -199,65 +191,11 @@ justifies. Rules:
   (capture output dirs are gitignored — keep them on disk, untracked), and
   one batched commit per session rather than one per approved fix.
 
-## 7. The rule-2 sign-off procedure (genuine `src/game` behavior changes)
+## 7. (withdrawn) The rule-2 sign-off procedure
 
-Use this only for bucket (c) from the diagnosis framing above — never for
-the ABI/layout exception (§A1-class fixes need no sign-off, only
-documentation) and never for anything expressible in `port/`.
-
-**To request sign-off, the write-up must state:**
-
-1. The exact `src/game` file:line and the specific behavior being
-   proposed for change.
-2. **Proof of divergence.** Given verified-correct inputs — i.e. every
-   upstream ABI/layout suspect (§A1) and every port-layer suspect has
-   been checked and ruled out, with the ruling-out cited — the
-   byte-identical decomp code still produces behavior that differs from
-   real N64 reference behavior. Name the reference (a capture, documented
-   prior N64 behavior, a cited external source). "It looks wrong" is not
-   proof; "it disagrees with `<reference>`, verified by `<method>`" is.
-3. Why the fix cannot be expressed in `port/`, and why it does not
-   qualify under the ABI/layout exception — the two questions that must
-   be answered "no" before this procedure applies at all.
-4. The proposed fix, scoped as tightly as possible to the one named
-   behavior, plus a same-engine precedent if one exists — the Perfect
-   Dark port is the standing reference; cite the analogous PD change the
-   way `docs/dev/WIDESCREEN-FOV-PLAN.md`'s "Rule #2 exception framing"
-   section did.
-
-**Granting.** The user reviews the above and replies with an explicit
-go-ahead in-thread. There is no implicit or inferred sign-off: silence,
-"seems reasonable," a prior similar grant, or approval of a *different*
-behavior in the same file do not carry over to a new request.
-
-**Recording.** Every sign-off gets its own finding file in
-`docs/dev/findings/` (`YYYY-MM-DD-rule-2-signoff-<what>.md`), tagged
-**`RULE-2-SIGNOFF`** on its first line, and recording: the request as stated
-above, the grant (quoted or summarized, with date), and the resulting diff.
-Chat history is not the record of approval; the finding file is.
-
-**Constraints that still apply after approval:**
-
-- Still `#ifdef PORT` — the N64 build is untouched, and the `#else` arm
-  (or the file's un-PORT-guarded default) still matches the original
-  decomp exactly.
-- Still scoped to the one named behavior — a grant is not a standing
-  license; a different behavior difference in the same file needs its own
-  request, even if related.
-- Still fully documented in the `RULE-2-SIGNOFF` finding entry — that
-  entry is the permanent record of *why* this specific exception to
-  non-negotiable #2 exists.
-- If the fix would visibly change behavior at *default*
-  settings/difficulty/region beyond the one bug being fixed, treat that
-  as a signal the scope drifted mid-implementation — stop and go back for
-  a fresh sign-off on the wider scope rather than shipping it under the
-  narrower original grant.
-
-This generalizes the ad hoc precedent in
-`docs/dev/WIDESCREEN-FOV-PLAN.md`'s "Rule #2 exception framing" section (a
-real, already-granted case, kept as historical record) into a reusable
-process; new requests cite this section rather than re-deriving the case
-for a process each time.
+Withdrawn on 2026-11-27 with non-negotiable #2: `src/game` may be
+changed (see the top of this file). Existing `RULE-2-SIGNOFF` findings
+stay as history.
 
 ## 8. LLM session discipline (model tiers, data-before-edit, context resets)
 
@@ -326,16 +264,9 @@ PRE-FLIGHT ATTACHED: <probe output, baseline capture, PD-port pointer>.
 MODEL: <tier + model id, per §8 — planning/diagnosis on the strong
   model; mechanical labor delegated to the pi/ subagent roles>.
 BUDGET: <N build->run cycles / ~M min>. On expiry: revert probes, write up with confidence.
-CONSTRAINTS: diagnosis may trace as deep into src/game state as the evidence
-  needs — name the exact struct/field/logic responsible before concluding
-  which bucket applies (see "Diagnosis is unrestricted" above). The FIX is
-  still constrained: no src/game behavior changes unless (a) it's an
-  ABI/layout-class struct-layout or pointer-width misread — check
-  docs/porting-notes.md §A1 first; #ifdef PORT; documented in the finding
-  log under §F/D3x — or (b) it's fixable entirely in port/ (no src/game
-  touch). A genuine game-logic behavior difference (bucket c) is NOT
-  authorized by this brief — stop and write up a rule-2 sign-off request
-  per docs/dev-process.md §7 instead of applying it.
+CONSTRAINTS: <files, scope>. Name the exact cause (struct/field/logic) before
+  fixing; check docs/porting-notes.md §A1 for 32→64-bit layout traps. State
+  any change in game behaviour in the report (before / after).
 VERIFY: <the exact tools_pc/verify.sh (or probe) invocation that proves this done; or, if runtime verification is impossible in this environment, say so and name what a human must run>.
 REPORT: (a) root cause + file:line evidence  (b) fix diff, or why not
         (c) probes left in tree  (d) confidence.
