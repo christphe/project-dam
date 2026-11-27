@@ -87,6 +87,11 @@ ${_uo}${_ue}")
     list(GET _f 2 _base)
     _vk_spv(vert "${VK_OUT}/glsl/${_base}.vert.glsl" "${VK_OUT}/glsl/${_base}.vert.spv")
     _vk_spv(vert "${VK_OUT}/glsl/${_base}.mesh.vert.glsl" "${VK_OUT}/glsl/${_base}.mesh.vert.spv")
+    if(VK_FX_LOWCOST)   # GE_FX_LOWCOST: the Switch's cheaper effects (FX_LOWCOST, cmake/SwitchPort.cmake), to see them on PC
+      file(READ "${VK_OUT}/glsl/${_base}.frag.glsl" _lt)
+      string(REPLACE "#version 460" "#version 460\n#define FX_LOWCOST" _lt "${_lt}")
+      file(WRITE "${VK_OUT}/glsl/${_base}.frag.glsl" "${_lt}")
+    endif()
     _vk_spv(frag "${VK_OUT}/glsl/${_base}.frag.glsl" "${VK_OUT}/glsl/${_base}.frag.spv")
     string(APPEND _pack "${_id0} ${_id1} ${VK_OUT}/glsl/${_base}.vert.spv ${VK_OUT}/glsl/${_base}.frag.spv ${VK_OUT}/glsl/${_base}.mesh.vert.spv
 ")
@@ -120,6 +125,7 @@ macro(vulkan_shaders target)
             "-DVK_SRC=${CMAKE_SOURCE_DIR}" "-DVK_OUT=${CMAKE_BINARY_DIR}/spv"
             "-DVK_LIST=${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt"
             ${_vk_tool} "-DVK_PACK=${_vk_pack}" "-DVK_GLSLANG=${VK_GLSLANG}" "-DVK_HOST_CXX=${VK_HOST_CXX}"
+            "-DVK_FX_LOWCOST=${GE_FX_LOWCOST}"
             -P "${CMAKE_SOURCE_DIR}/cmake/VulkanShaders.cmake"
     DEPENDS "${CMAKE_SOURCE_DIR}/port/shaders/combiners.txt" "${CMAKE_SOURCE_DIR}/port/shaders/fx/combiners.txt"
             ${_vk_glsl}

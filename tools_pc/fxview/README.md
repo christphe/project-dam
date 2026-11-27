@@ -12,7 +12,8 @@ the older Win32/WGL viewer (that one had its own GL copy of the shaders).
 ## Commands
 
 ```sh
-python tools/dev.py tools fxview win [options]        # build (Docker, GE_TOOLS=ON), open on PC: Vulkan, or --backend gl
+python tools/dev.py tools fxview win [options]        # build (Docker, GE_TOOLS=ON), open on PC: Vulkan, or --backend gl;
+                                                       # --lowcost: the Vulkan pack with the Switch's cheaper effects (FX_LOWCOST)
 python tools/dev.py tools fxview ryujinx [options]    # build the NRO, copy it to Ryujinx's SD (switch/project-dam/fxview.nro), start Ryujinx
 python tools/dev.py tools fxview nx [options]         # the NRO to the console over nxlink (the options are its argv)
 python tools/dev.py tools fxview shots --out <dir> [--backend vk|gl] [--backdrop grey|dark|checker|wall] [--bgtex N] [--fc N]
@@ -40,7 +41,7 @@ On the Switch the options come from the nxlink argv, else from one line in `sdmc
 | `--mode burst` | `--burst metal\|wood\|glass\|water\|snow\|dirt\|stone\|blood`, `--bperiod F` (loop, s) |
 | `--mode explosion` | `--explo 0..20` (g_ExplosionTypes), `--etail F` (pause after, s) |
 | tabs (all four) | `--t SECONDS` (freezes the clock; a shot is reproducible at a given `--t` and `--tseed`), `--tspeed F`, `--tshow game\|port\|side`, `--tyaw DEG --tpitch DEG --tzoom F`, `--twall 0\|1`, `--twalltex N`, `--tseed N`, `--play 0\|1`, `--nearest 0\|1` |
-| `--mode cluster` (#141 repro) | `--dist N`, `--holes N`, `--cmat 0..6`, `--holesize F`, `--seed N`, `--fov DEG`, `--sun 0\|1`, `--diag coverage\|veye\|uv\|pom\|pomalpha\|deriv` |
+| `--mode cluster` (#141 repro) | `--dist N`, `--holes N`, `--cmat 0..6`, `--holesize F`, `--seed N`, `--fov DEG`, `--sun 0\|1`, `--diag coverage\|veye\|uv\|pom\|pomalpha\|deriv`; `--bench 1 [--rep N]`: GPU time of `fxClusterPom` against coverage only, the cluster filling the window's height, in 120-frame phases (`BENCH` log lines) |
 | `--mode sea` (also `water`, `sky`) | the GE+ sky, sea and level water (#145): `--level`, `--view`, `--cam`, `--rep`, `--scale`, ... — see `sea/README.md` |
 | common | `--backend gl\|vk\|deko3d`, `--w N --h N`, `--frames N`, `--ui 0\|1`, `--out DIR`, `--rom FILE.z64`, `--shaders DIR`, `--shot FILE.png`, `--dump FILE.ppm`, `--probe X,Y` (repeat), `--probeframe N`, `--hold N`, `--selftest` |
 
@@ -49,6 +50,7 @@ On the Switch the options come from the nxlink argv, else from one line in `sdmc
 deko3d sizes its window itself: 1280x720 when `--w <= 1280` (handheld), else 1920x1080 (docked); `--w/--h` do not resize it.
 
 The viewer panel (ImGui, `ge_imgui`; pad navigation on the Switch) has the same settings; F12 / the button saves `shot_NNN.png`; Esc (Start on the Switch) quits.
+Mouse in the scene (PC, decal mode and the tabs): left drag orbits, the wheel zooms; in decal mode middle drag pans and right drag moves the point light.
 The panel is drawn with the Lights block cleared (the scene's lights do not wash it out), and the pane captions wrap to the pane.
 
 ### The tabs
@@ -102,14 +104,14 @@ A file that does not compile keeps the previous shader; the log (file named `N(l
 - **The GL backend has no `Lights` block** (`set_lights` is null; `vEye` and the lights are the Vulkan and deko3d shaders'): on GL the lit decal wall, the
   bullet-hole cluster (`fxClusterPom` needs `vEye`), the muzzle light and the explosion light draw plain. This is the game's GL path, not a viewer bug; compare
   lighting on Vulkan, deko3d or in Ryujinx.
-- **#141** (`dFdy` is 0 in Ryubing's deko3d): reproduced, not fixed here. The cluster scene's `--diag deriv` / `veye` views show it (below).
+- **#141** (`dFdy` was 0 on deko3d: devkitPro's uam never fills the y-sign constant it multiplies by) is fixed in the patched uam the build image carries (`docs/porting-notes.md` D79); `--diag deriv` reads the same on deko3d and Vulkan.
 - Only the US ROM. The Muzzle tab needs the guards' weapon models from the ROM; without a ROM it says so and draws nothing.
 
 ## Diagnostics: tool-only effect kinds
 
 PORTFX kinds 8..13 (`tools_pc/fxview/combiners.txt`, `shaders/diag.glsl`) are the cluster's combiner with a diagnostic output instead of the colour (hole coverage, `vEye`, uv,
 the shader's colour with alpha 1, its alpha, the derivatives). They exist only in GE_TOOLS packs. Used for #141: see `docs/porting-notes.md` D73.
-`--mode cluster --diag deriv` shows the derivatives the parallax steps start from (r = |dFdx(vEye)|, g = |dFdy(vEye)|, b = |dFdy(uv)|: g and b are 0 where Ryubing's deko3d reads `dFdy` as 0), `veye` the eye position
+`--mode cluster --diag deriv` shows the derivatives the parallax steps start from (r = |dFdx(vEye)|, g = |dFdy(vEye)|, b = |dFdy(uv)|: g and b were 0 on deko3d before the #141 fix), `veye` the eye position
 the Lights block rebuilds (r near 0 = no inverse projection), `coverage` the hole mask, `uv`, `pom` / `pomalpha` the parallax colour and its alpha. Read a value with `--probe X,Y`.
 
 ## Files

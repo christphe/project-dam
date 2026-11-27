@@ -119,7 +119,9 @@ static void fxc_template(FxcTemplate *t, int mat, int var)
             } else {
                 /* stone, tile, dirt, wood: a deep flat pit in a cone; little relief, the striations are in the colour */
                 const float pitR = mat == FXC_WOOD ? 0.26f : 0.32f;
-                float cone = 0.55f * __builtin_powf(1.0f - fxc_ss(pitR, 1.0f, c), 1.3f);
+                /* the slope is a bevel round the pit only (pitR .. pitR + 0.3); the splash beyond is flat, on the wall: a cone
+                 * over the whole splash put the painted streaks below the wall, and the parallax slid them over it */
+                float cone = 0.55f * __builtin_powf(1.0f - fxc_ss(pitR, pitR + 0.3f, c), 1.3f);
                 /* radial streaks: noise on the direction from the centre (seamless around the circle), two scales */
                 const float dl = rad > 1e-4f ? rad : 1e-4f, dx = px / dl, dy = py / dl;
                 const float streak = 0.6f * fxc_noise(dx * 7.0f + ox, dy * 7.0f + oy + c * 0.6f) + 0.4f * fxc_noise(dx * 19.0f + oy, dy * 19.0f + ox + c * 1.5f);

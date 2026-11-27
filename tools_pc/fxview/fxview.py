@@ -91,14 +91,14 @@ GE_BUILDS = {   # kind -> (build dir, cmake configure extras, output)
 }
 
 
-def ge_build(kind):
+def ge_build(kind, lowcost=False):
     """build fxview for `kind` in Docker with GE_TOOLS=ON; returns the output path. A changed port/shaders file rebuilds the packs (cmake dependency)."""
     d, extra, out = GE_BUILDS[kind]
     envv = dict(os.environ, MSYS_NO_PATHCONV="1")
     if kind == "win":   # the compose service (the offline MinGW image) and its script, with the tools on
         cmd = ["docker", "compose", "run", "--rm", "-e", "CMAKE_EXTRA=-DGE_TOOLS=ON", "windows", "sh", "-c",
                "SDL2DIR=/usr/x86_64-w64-mingw32/sys-root/mingw cmake -S . -B build-win -G Ninja -DROMID=ntsc-final -DCMAKE_BUILD_TYPE=RelWithDebInfo "
-               "-DCMAKE_TOOLCHAIN_FILE=/usr/share/mingw/toolchain-mingw64.cmake -DGE_TOOLS=ON && cmake --build build-win --target fxview"]
+               "-DCMAKE_TOOLCHAIN_FILE=/usr/share/mingw/toolchain-mingw64.cmake -DGE_TOOLS=ON -DGE_FX_LOWCOST=" + ("ON" if lowcost else "OFF") + " && cmake --build build-win --target fxview"]
         r = subprocess.run(cmd, cwd=REPO, env=envv)
     else:
         sh = (f"cmake -S . -B {d} -G Ninja -DROMID=ntsc-final {' '.join(extra)} -DGE_TOOLS=ON && cmake --build {d} --target {'fxview_nro' if kind == 'switch' else 'fxview'}")
@@ -113,14 +113,14 @@ def win_exe(a):
     """the Windows fxview.exe next to the DLLs (build-win), built in Docker unless --nobuild"""
     exe = os.path.join(REPO, "build-win", "fxview.exe")
     if not getattr(a, "nobuild", False) or not os.path.exists(exe):
-        shutil.copy(ge_build("win"), exe)
+        shutil.copy(ge_build("win", "--lowcost" in a.extra), exe)   # --lowcost: the Switch's cheaper effects (FX_LOWCOST) in the Vulkan pack
     return exe
 
 
 def cmd_win(env, a):
     exe = win_exe(a)
     os.makedirs(DATA, exist_ok=True)
-    extra = list(a.extra)
+    extra = [x for x in a.extra if x != "--lowcost"]
     if "--rom" not in extra:
         rom = find_rom(env)
         if rom:

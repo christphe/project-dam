@@ -14,7 +14,17 @@ vec4 fxImpact(vec4 c, vec2 uv) {
 // the quad's uv units, x 4 (port/src/fxcluster.c, tools_pc/fxview fx_cluster.h). Parallax occlusion over the
 // fused depth (the deepest hole already won per texel), then the relief lit by the sun or a light from above
 // and the dynamic lights, as a ratio to the flat wall's light, with the rim's shadow.
+// FX_LOWCOST (deko3d: cmake/SwitchPort.cmake defines it for the shaders uam compiles): fewer march, refine and shadow
+// steps. One full-height pass of the full shader costs ~5 ms of GPU at 720p on the Switch (fxview --bench).
+#ifdef FX_LOWCOST
+#define FXC_STEPS 10
+#define FXC_REFINE 3
+#define FXC_SHADOW 3
+#else
 #define FXC_STEPS 24
+#define FXC_REFINE 5
+#define FXC_SHADOW 8
+#endif
 float fxcDepth(vec2 uv) { return textureLod(uTex1, uv, 0.0).r; }
 float fxcLight(vec3 n, vec3 L) {
     float s = 0.45 + 0.8 * max(dot(n, L), 0.0);
@@ -30,8 +40,12 @@ float fxcLight(vec3 n, vec3 L) {
 vec4 fxClusterPom(vec4 vc) {
     vec2 uv0 = vTexCoord0;
     float depthUV = vc.r * 0.25;
-    vec3 sx = dFdx(vEye), sy = dFdy(vEye);
-    mat2 Ji = inverse(mat2(dFdx(uv0), dFdy(uv0)));
+    vec3 sx = dFdx(vEye), sy = dFdy(vEye);   // derivatives first, in uniform control flow (the early out below diverges)
+    vec2 ux = dFdx(uv0), uy = dFdy(uv0);
+    // Flat wall here (depth 0): the ray meets the surface at t = 0, so uv = uv0. With no coverage there either, the result
+    // is transparent: most of a cluster's quad is wall between the holes, and this skips its whole march and lighting.
+    if (fxcDepth(uv0) <= 0.0 && textureLod(uTex0, uv0, 0.0).a <= 0.0) return vec4(0.0);
+    mat2 Ji = inverse(mat2(ux, uy));
     vec3 Tp = sx * Ji[0][0] + sy * Ji[0][1];
     vec3 Bp = sx * Ji[1][0] + sy * Ji[1][1];
     vec3 N = normalize(cross(Tp, Bp));
@@ -40,12 +54,19 @@ vec4 fxClusterPom(vec4 vc) {
     vec3 V = normalize(-vEye);
     vec3 Vp = vec3(dot(V, Tp) / (LT * LT), dot(V, Bp) / (LB * LB), max(dot(V, N), 0.15) / LT);
     float tMax = depthUV / Vp.z, tPrev = 0.0, tHit = tMax;
-    for (int i = 1; i <= FXC_STEPS; i++) {
+    // LOD: the largest parallax shift (uv) against one screen pixel's footprint (uv). Below a pixel the march cannot
+    // show (a far hole, or one seen straight on): it is drawn at uv0, with no march or refine.
+    float pix = max(length(ux), length(uy));
+    // A pixel on the wall itself (depth ~0 at uv0) meets the surface at t = 0: the march below starts at t > 0 and would
+    // carry a pixel next to a hole into it, so the hole slid over the wall towards the eye (seen "under the rim").
+    bool lod = length(Vp.xy) * tMax < pix || fxcDepth(uv0) <= 0.01;
+    if (lod) tHit = 0.0;
+    for (int i = 1; i <= (lod ? 0 : FXC_STEPS); i++) {
         float t = tMax * float(i) / float(FXC_STEPS);
         if (fxcDepth(uv0 - Vp.xy * t) * depthUV <= Vp.z * t) { tHit = t; break; }
         tPrev = t;
     }
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < (lod ? 0 : FXC_REFINE); i++) {
         float t = 0.5 * (tPrev + tHit);
         if (fxcDepth(uv0 - Vp.xy * t) * depthUV <= Vp.z * t) tHit = t; else tPrev = t;
     }
@@ -62,8 +83,9 @@ vec4 fxClusterPom(vec4 vc) {
     vec3 L = dot(sun_dir.xyz, sun_dir.xyz) > 0.0 ? normalize(sun_dir.xyz) : normalize(vec3(0.3, 0.9, 0.3));
     vec3 Lp = vec3(dot(L, Tp) / (LT * LT), dot(L, Bp) / (LB * LB), max(dot(L, N), 0.05) / LT);
     float dHit = fxcDepth(uv) * depthUV, lit = 1.0;
-    for (int i = 1; i <= 8; i++) {
-        float t = (dHit / Lp.z) * float(i) / 8.0;
+    bool lodShadow = length(Lp.xy) * dHit / Lp.z < pix;   // the rim shadow's own LOD: its shift along the light, below a pixel
+    for (int i = 1; i <= (lodShadow ? 0 : FXC_SHADOW); i++) {
+        float t = (dHit / Lp.z) * float(i) / float(FXC_SHADOW);
         if (fxcDepth(uv + Lp.xy * t) * depthUV < dHit - Lp.z * t - depthUV * 0.03) { lit = mix(lit, 0.4, 0.5); }
     }
     float f = clamp(fxcLight(Np, L) * lit / max(fxcLight(N, L), 0.05), 0.3, 1.7);

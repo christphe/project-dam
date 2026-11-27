@@ -93,7 +93,7 @@ void main() {
      * cradle). */
     bool below = !(d.y > 0.0);
     /* the sea point under this pixel, p = eye - h * d.xz / d.y, and its change
-     * per screen pixel. dFdy came out 0 in this pass (Ryujinx, 2026-11-17), so
+     * per screen pixel. dFdy came out 0 in this pass (Ryujinx, 2026-11-17; cause: D79), so
      * the wave reads picked mips as if the sea were not seen at a grazing
      * angle, and the far sea was a pixel noise flickering with the view: the
      * change per pixel row is computed analytically (the ray d is linear on
