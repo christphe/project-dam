@@ -11,6 +11,7 @@
 #include "bondtypes.h"
 #include "game/tex.h"
 #include "portevents.h"
+#include "fxclusters.h"
 #include "portfx.h"
 #include "system.h"
 
@@ -126,6 +127,7 @@ void portEvImpact(struct coord3d *pos, struct coord3d *normal, s16 type, s16 roo
     e.room = room;
     e.prop = prop;
     e.tricmd = s_pendingTri;
+    fxClustersResolveMaterial(&e);   /* the level's material from its hit texture, shared by the holes and the particles */
     {
         extern s32 g_NumImpactEntries;   /* src/game/explosion.c: the slot the impact is written to */
         e.slot = g_NumImpactEntries;
