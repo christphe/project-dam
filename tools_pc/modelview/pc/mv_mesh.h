@@ -21,8 +21,8 @@ struct MvVertex {
     bool head = false; // in the head region (the converter: CvSdVert.head); only head triangles are subdivided by GAME
 };
 
-// A texture + wrap modes (0 wrap, 1 clamp, 2 mirror): the export's PNG (image) and its texture number.
-struct MvMaterial { int texnum = -1; int wrapS = 0, wrapT = 0; std::string image; };
+// A texture + wrap modes (0 wrap, 1 clamp, 2 mirror): its texture key and number, and the glTF's own PNG (image).
+struct MvMaterial { int texnum = -1; int wrapS = 0, wrapT = 0; std::string image; std::string key; };   // key: the texture key (extras.texture), the picture is resolved through the mod and the chosen pack; image: the glTF's own URI, the fallback
 
 struct MvMesh {
     std::string name;

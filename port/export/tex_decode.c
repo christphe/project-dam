@@ -92,12 +92,14 @@ int ex_tex_table_open(ExTexTable *t, const uint8_t *rom, size_t rom_size, const 
     if (cnt != TEX_COUNT) { free(cd); *err = "size table entry count mismatch"; return -1; }
     t->offset = (uint32_t *)malloc((cnt + 1) * sizeof(uint32_t));
     t->word1 = (uint32_t *)malloc(cnt * sizeof(uint32_t));
-    if (!t->offset || !t->word1) { free(cd); ex_tex_table_close(t); *err = "out of memory"; return -1; }
+    t->cls = (uint8_t *)malloc(cnt);
+    if (!t->offset || !t->word1 || !t->cls) { free(cd); ex_tex_table_close(t); *err = "out of memory"; return -1; }
     for (i = 0; i < cnt; i++) {
         const uint8_t *e = cd + toff + i * 8;
         t->offset[i] = (uint32_t)sum;
         sum += be32(e) & 0xFFFFFFu;
         t->word1[i] = be32(e + 4);
+        t->cls[i] = (uint8_t)(be32(e) >> 24);
     }
     t->offset[cnt] = (uint32_t)sum;
     free(cd);
@@ -113,6 +115,7 @@ void ex_tex_table_close(ExTexTable *t)
 {
     free(t->offset);
     free(t->word1);
+    free(t->cls);
     memset(t, 0, sizeof *t);
 }
 

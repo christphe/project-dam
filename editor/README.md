@@ -222,12 +222,16 @@ level's own models (an object of type 3 with that model, item none).
   with thumbnail, name and level: open, reorder, remove (the folder stays), *New mission...*, *Add the open mission*
   (saved into the mod's folder); *Save mod* / *Check mod* / *Publish...*. `thumb.png` of a mission in the open mod is next
   to its `mission.json`; any other mission uses the folder of its file.
-* **Textures (Mod tab).** `<mod>/textures/<n>.png` replace texture `n` of the glTF decor (`decorLoad` takes the sources in
-  order: the open mod's folder, then the chosen texture pack `<game>/texturepacks/X.ptexpack`, a tar or a folder; the
-  format is `port/mission/texpacks.h`). *Pick a surface* puts the texture number of the clicked decor triangle in the
-  field (`LTri::texnum`, `Hit::texnum`); *Replace...* / *Remove*; the texture pack combo (also in Tools > Settings) is kept
-  in the prefs file (`texpack=`). MCP: `textures`, `mod_set_texture`, `set_texture_pack`. The decor log lines go to stderr
-  (stdout is the MCP channel in `--mcp-stdio`).
+* **Textures (Mod tab).** Decor and props (`models.cpp`) resolve each texture by its key (material `extras.texture`; an older
+  glTF: the number in the image file name) through the open mod, merged field by field over the chosen texture pack, and read
+  the glTF's own picture only when no source has the key (`TexSet` in `texset.h`, `decorLoad`; the format is
+  `docs/specs/texture-packs.md`, parsed by `port/mission/texpacks.h`). Exactly one pack is chosen: `ge007.ptexpack` (the game's own,
+  `<game>/texturepacks/ge007.ptexpack` else the export's copy) by default, or another complete `<game>/texturepacks/X.ptexpack`,
+  a tar or a folder; one that lacks textures of ge007 is greyed out in the list with the reason and cannot be chosen. The mod's
+  `textures/<n>.png` replace the picture of texture `n`, its `textures.json` changes other fields. *Pick a surface* puts the
+  texture number of the clicked decor triangle in the field (`LTri::texnum`, `Hit::texnum`); *Replace...* / *Remove*; the texture
+  pack combo (also in Tools > Settings) is kept in the prefs file (`texpack=`, empty = ge007). MCP: `textures`, `mod_set_texture`,
+  `set_texture_pack`. The decor log lines go to stderr (stdout is the MCP channel in `--mcp-stdio`).
 * **Packages (.pmod).** The game loads a mod as `mods/<mod>.pmod`, a plain `tar` of the mod's source folder (the source folder
   is the one you open in the Mod tab, kept outside `mods/`, usually a git repository of its own). *Play* on a mission of an
   open mod first writes `<mods>/<mod>.pmod` (the whole folder, so its scripts and pictures are what the game reads) and

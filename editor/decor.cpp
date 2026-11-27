@@ -14,6 +14,7 @@ extern "C" {
 #include "cgltf.h"
 
 #include "png.h"
+#include "texset.h"
 
 extern "C" {
 #include "mission_pkg.h"
@@ -56,28 +57,62 @@ int decorTexnumOfFile(const std::string &name)
     return texpackTexnumOfName(name.c_str());
 }
 
-// The replacement of texture `texnum` from the first source that has a readable one: 1 found (rgba, w, h, path, source set).
-static bool replacementFor(const std::vector<std::string> &roots, int texnum, DecorTex &dt, std::vector<std::string> &warn)
+static bool extrasString(const cgltf_extras &ex, const char *key, std::string &out)
 {
-    for (size_t r = 0; r < roots.size(); r++) {
-        char path[1400];
-        texpackPicturePath(roots[r].c_str(), texnum, path, sizeof path);
+    if (!ex.data) return false;
+    cJSON *j = cJSON_Parse(ex.data);
+    if (!j) return false;
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, key);
+    bool ok = false;
+    if (cJSON_IsString(v) && v->valuestring && v->valuestring[0]) { out = v->valuestring; ok = true; }
+    else if (cJSON_IsNumber(v)) { out = std::to_string((long long)v->valuedouble); ok = true; }
+    cJSON_Delete(j);
+    return ok;
+}
+
+// A picture whose alpha is 255 everywhere under alpha "luminance" gets (299 R + 587 G + 114 B) / 1000 as alpha (the spec's rule).
+static void applyLuminanceAlpha(std::vector<uint8_t> &rgba)
+{
+    for (size_t i = 3; i < rgba.size(); i += 4) if (rgba[i] != 255) return;
+    for (size_t i = 0; i + 3 < rgba.size(); i += 4)
+        rgba[i + 3] = (uint8_t)((299 * rgba[i] + 587 * rgba[i + 1] + 114 * rgba[i + 2]) / 1000);
+}
+
+// The picture of texture `key` through the mod over the pack: true when a source had it and it decoded (rgba, w, h, path, source, surface set).
+// A mod picture that does not decode is skipped with a warning and the pack's is tried.
+static bool resolveTexture(const TexSet &texs, const std::string &key, DecorTex &dt, std::vector<std::string> &warn)
+{
+    const TexPackSrc *mod = texs.mod(), *pack = texs.pack();
+    for (int pass = 0; pass < 2; pass++) {
+        const TexPackSrc *m = pass == 0 ? mod : nullptr;
+        if (pass == 1 && !mod) break;
+        TexPackResolved r;
+        if (!texpackResolve(m, pack, key.c_str(), &r)) continue;
+        if (r.modImageMissing) warn.push_back("texture " + key + ": the mod names a picture it does not hold (" + std::string(texpackSrcRoot(mod)) + ")");
+        if (r.imageFrom == TEXPACK_FROM_NONE) continue;
+        const TexPackSrc *src = r.imageFrom == TEXPACK_FROM_MOD ? mod : pack;
+        const std::string path = std::string(texpackSrcRoot(src)) + "/" + r.tex.image;
         uint8_t *file = nullptr, *px = nullptr;
         size_t len = 0;
-        if (!pkgReadFile(path, &file, &len)) continue;
+        if (!texpackResolvedRead(m, pack, &r, &file, &len)) { warn.push_back(path + ": cannot be read"); continue; }
         int w = 0, h = 0;
         const int ok = texpackDecodePng(file, len, &w, &h, &px);
-        pkgFree(file);
-        if (!ok) { warn.push_back(std::string(path) + ": not readable (an 8-bit PNG, not interlaced, is expected)"); continue; }
+        free(file);
+        if (!ok) { warn.push_back(path + ": not readable (an 8-bit PNG, not interlaced, is expected)"); continue; }
         dt.rgba.assign(px, px + (size_t)w * h * 4);
         free(px);
-        dt.w = w; dt.h = h; dt.path = path; dt.source = (int)r;
+        if (r.tex.alphaLuminance) applyLuminanceAlpha(dt.rgba);
+        dt.w = w; dt.h = h; dt.path = path;
+        dt.origW = (r.tex.fields & TEXPACK_F_WIDTH) && r.tex.width > 0 ? r.tex.width : w;
+        dt.origH = (r.tex.fields & TEXPACK_F_HEIGHT) && r.tex.height > 0 ? r.tex.height : h;
+        dt.surface = r.tex.surface;
+        dt.source = r.imageFrom == TEXPACK_FROM_MOD ? 0 : (pack && texpackSrcMeta(pack)->base ? -1 : 1);
         return true;
     }
     return false;
 }
 
-DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out, std::string &msg, const std::vector<std::string> &texRoots, bool model)
+DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out, std::string &msg, const TexSet *texs, bool model)
 {
     out = Decor();
     FILE *probe = fopen(gltfPath.c_str(), "rb");
@@ -100,7 +135,8 @@ DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out
     if (cgltf_load_buffers(&opt, data, gltfPath.c_str()) != cgltf_result_success) { msg = "cannot read the .bin of " + gltfPath; return DECOR_BAD; }
 
     const std::string dir = dirOf(gltfPath);
-    std::map<const cgltf_image *, int> texOfImage;
+    std::map<std::string, int> texOfImage;   // texture key (or image uri) -> index in out.tex
+    std::vector<std::string> noSource;       // keys no mod or pack had: the glTF's own picture was used
     std::map<const cgltf_material *, int> matIndex;
 
     auto materialFor = [&](const cgltf_material *m) -> int {
@@ -125,18 +161,27 @@ DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out
             }
             const cgltf_texture *t = m->has_pbr_metallic_roughness ? m->pbr_metallic_roughness.base_color_texture.texture : nullptr;
             if (t && t->image && t->image->uri) {
-                auto ti = texOfImage.find(t->image);
+                std::string key;   // extras.texture, else (an older export) the number in the picture's file name
+                if (!extrasString(m->extras, "texture", key)) { const int n = decorTexnumOfFile(t->image->uri); if (n >= 0) key = std::to_string(n); }
+                const std::string id = key.empty() ? std::string("uri:") + t->image->uri : "key:" + key;
+                auto ti = texOfImage.find(id);
                 if (ti == texOfImage.end()) {
                     DecorTex dt;
-                    int w = 0, h = 0;
-                    const std::string p = dir + "/" + t->image->uri;
-                    dt.texnum = decorTexnumOfFile(t->image->uri);
-                    if (readPng(p.c_str(), w, h, dt.rgba)) {
-                        dt.w = dt.origW = w; dt.h = dt.origH = h; dt.path = p;
-                        if (dt.texnum >= 0) replacementFor(texRoots, dt.texnum, dt, out.texWarnings);   // the mod's, then the pack's
-                        out.tex.push_back(std::move(dt)); ti = texOfImage.emplace(t->image, (int)out.tex.size() - 1).first;
+                    dt.key = key;
+                    dt.texnum = texpackKeyIsNumber(key.c_str()) ? atoi(key.c_str()) : -1;
+                    bool got = !key.empty() && texs && resolveTexture(*texs, key, dt, out.texWarnings);
+                    if (!got) {   // no source has it: the glTF's own picture
+                        int w = 0, h = 0;
+                        const std::string p = dir + "/" + t->image->uri;
+                        dt.rgba.clear();
+                        if (readPng(p.c_str(), w, h, dt.rgba)) {
+                            dt.w = dt.origW = w; dt.h = dt.origH = h; dt.path = p; dt.source = -1; dt.surface = -1;
+                            got = true;
+                            if (texs && texs->pack()) noSource.push_back(key.empty() ? std::string(t->image->uri) : key);
+                        }
                     }
-                    else ti = texOfImage.emplace(t->image, -1).first;   // missing picture: drawn untextured, not fatal
+                    if (got) { out.tex.push_back(std::move(dt)); ti = texOfImage.emplace(id, (int)out.tex.size() - 1).first; }
+                    else ti = texOfImage.emplace(id, -1).first;   // missing picture: drawn untextured, not fatal
                 }
                 dm.tex = ti->second;
                 if (t->sampler) { dm.cms = wrapToN64((int)t->sampler->wrap_s); dm.cmt = wrapToN64((int)t->sampler->wrap_t); }
@@ -226,6 +271,11 @@ DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out
             if (!inRange || dp.idx.empty()) continue;
             out.prims.push_back(std::move(dp));
         }
+    }
+    if (!noSource.empty()) {
+        std::string w = std::to_string(noSource.size()) + " texture(s) are in no mod or pack, the glTF's own picture is used:";
+        for (size_t i = 0; i < noSource.size() && i < 6; i++) w += " " + noSource[i];
+        out.texWarnings.push_back(w);
     }
     if (out.prims.empty()) { msg = model ? "the model has no triangles" : "the glTF export has no room geometry"; return DECOR_BAD; }
     if (model) { msg = "model: " + std::to_string(out.prims.size()) + " primitives"; return DECOR_OK; }

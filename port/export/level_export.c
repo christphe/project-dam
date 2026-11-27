@@ -294,8 +294,8 @@ static int export_level(LC *lc, const CvFileRow *row, const char *file, const ch
 
     for (int r = 0; r < lc->nrooms; r++) tot_tris += lc->rooms[r].tris;
 
-    /* ---- textures: PNGs for those used by textured materials ---- */
-    if (ex_write_textures(&lc->tc, lc->mc.mats, lc->mc.nm, dir, &ntexfiles)) FAIL("cannot write textures into %s", dir);
+    /* the pictures are the base pack's (ex_export_textures); the glTF points into it */
+    if (mkdir_p(dir)) FAIL("cannot create %s", dir);
 
     /* ---- glTF: meshes + nodes ---- */
     for (int r = 0; r < lc->nrooms; r++) {
@@ -340,6 +340,7 @@ static int export_level(LC *lc, const CvFileRow *row, const char *file, const ch
 
     /* ---- materials, textures, images, samplers ---- */
     if (ex_emit_materials(&mo, &lc->mc)) FAIL("out of memory");
+    ntexfiles = mo.nimg;
 
     jp(&json, "{\"asset\":{\"version\":\"2.0\",\"generator\":\"project-dam export\",\"extras\":{\"exporter_version\":%d,\"rom_region\":",
        EX_EXPORTER_VERSION);
@@ -382,7 +383,7 @@ static int export_level(LC *lc, const CvFileRow *row, const char *file, const ch
         int unknown = 0;
         rep(&rpt, "level %s  decor file %s  region %s  level_scale %.9g%s\n", name, file, lc->region, scale,
             scale_assumed ? " (assumed, no level entry)" : "");
-        rep(&rpt, "rooms %d  triangles %llu  issued-by-lists %llu  materials %zu  textures-written %zu\n\n", lc->nrooms,
+        rep(&rpt, "rooms %d  triangles %llu  issued-by-lists %llu  materials %zu  textures-used %zu\n\n", lc->nrooms,
             (unsigned long long)tot_tris, (unsigned long long)lc->issued, lc->mc.nm, ntexfiles);
         rep(&rpt, "per room (triangles, primitives, bytes after first end-of-list, dropped triangles, dropped vertex loads):\n");
         for (int r = 0; r < lc->nrooms; r++) {

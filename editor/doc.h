@@ -16,6 +16,7 @@ extern "C" {
 #include "decor.h"
 #include "levelrec.h"
 #include "models.h"
+#include "texset.h"
 #include "script_check.h"
 
 typedef std::array<float, 3> Vec3;
@@ -60,7 +61,7 @@ struct Level {
     bool hasDecor = false;
     Decor decor;
     std::string gltfRoot;              // the folder holding <level>/<level>.gltf; "" = look beside / inside the export folder
-    std::vector<std::string> texRoots; // replacement sources for the decor's textures, first wins: the open mod, the chosen texture pack
+    const TexSet *texSet = nullptr;    // the sources the decor's and the props' textures are resolved through: the open mod over the chosen texture pack (Doc owns it)
     std::string decorNote;             // what decor is drawn and why (for the log)
     bool decorNeedsExport = false;     // there is no current glTF export: the editor may run the game to write it
     // The static model export (<gltf root>/models/, issue #119): the props are drawn from it when `useModels`, else from level.rec's
@@ -215,10 +216,18 @@ struct Doc {
     void reloadDecor();
     // Reloads the decor when its texture sources changed (a mod opened or closed, another texture pack chosen).
     void syncModTextures();
-    // ---- texture packs: <game>/texturepacks/X.ptexpack (texpacks.h); the one chosen here is drawn under the mod's textures ----
-    std::string texPack;                            // the chosen pack's file name ("hd.ptexpack"), "" none
+    // ---- texture packs: <game>/texturepacks/X.ptexpack (texpacks.h); exactly one is chosen, ge007.ptexpack by default; the open mod's
+    // textures are merged over it (docs/specs/texture-packs.md) ----
+    std::string texPack;                            // the chosen pack's file name ("hd.ptexpack"), "" = ge007.ptexpack
+    TexSet texSet;                                  // the open mod and the chosen pack, what Level::texSet points at
     std::string texturePacksRoot() const;           // the game's texturepacks folder: next to its data folder
-    std::vector<std::string> textureRoots() const;  // what Level::texRoots should be now
+    std::string exportPackRoot() const;             // the export folder holding ge007.ptexpack (the open level's, else the game's cache), "" none
+    std::string basePackRoot() const;               // ge007.ptexpack: the game's copy, else the export's, "" none
+    std::string chosenPackRoot() const;             // the chosen pack's root ("" when there is no pack at all)
+    std::string texSetSignature() const;            // what texSet should have been opened from now
+    void openTexSet();                              // (re)opens texSet from the open mod and the chosen pack; the mod is read afresh
+    std::vector<PackChoice> packChoices;            // the list the pack combo shows (rescanPacks)
+    void rescanPacks();
     std::string gameDataDir() const;               // <game exe dir>/data, or GE_EDITOR_DATA
     // Opens a solo level by name from the export cache next to the game (exportcache.h), running the
     // game's export first when it is missing or when reexport is set. Blocks until the game is done.

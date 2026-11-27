@@ -169,7 +169,8 @@ void duplicateSelected(App &a, const Vec3 &org, const Vec3 &dir)
 
 void reloadDecorGpu(App &a)
 {
-    a.scene.setLevel(a.doc.hasLevel ? &a.doc.level : nullptr);   // the owners are unchanged: the thumbnails and the camera stay
+    clearOwnerThumbs(a);   // the props' textures may have changed (mod, texture pack): the thumbnails are rendered again
+    a.scene.setLevel(a.doc.hasLevel ? &a.doc.level : nullptr);   // the owners are unchanged: the camera stays
     a.seenDecorGen = a.doc.decorGen;
     if (a.doc.hasLevel) a.say("%s", a.doc.level.decorNote.c_str());
 }
@@ -409,7 +410,8 @@ void loadPrefs(App &a)
     if (!prefGet(text, "mcp").empty()) a.prefMcp = prefGet(text, "mcp") != "0";
     const int port = atoi(prefGet(text, "mcpport").c_str());
     if (port > 0 && port < 65536) a.prefMcpPort = port;
-    a.doc.texPack = prefGet(text, "texpack");
+    a.doc.texPack = prefGet(text, "texpack");   // "" (an older "none" too) = ge007.ptexpack
+    if (a.doc.texPack == "ge007.ptexpack") a.doc.texPack.clear();
 }
 
 void savePrefs(App &a)

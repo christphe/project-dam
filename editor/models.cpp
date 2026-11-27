@@ -20,9 +20,10 @@ static bool readFile(const std::string &path, std::string &out)
     return true;
 }
 
-bool ModelLib::open(const std::vector<std::string> &roots)
+bool ModelLib::open(const std::vector<std::string> &roots, const TexSet *texs)
 {
     m_open = false;
+    m_texs = texs;
     m_entries.clear(); m_index.clear(); m_cache.clear(); m_dir.clear();
     namespace fs = std::filesystem;
     for (const std::string &root : roots) {
@@ -75,7 +76,7 @@ const Decor *ModelLib::get(int model) const
     if (e && e->exported) {
         d.reset(new Decor());
         std::string msg;
-        if (decorLoad(m_dir + "/" + e->gltf, 0, *d, msg, {}, true) != DECOR_OK) {
+        if (decorLoad(m_dir + "/" + e->gltf, 0, *d, msg, m_texs, true) != DECOR_OK) {
             printf("[editor] models: model %d (%s) cannot be read: %s\n", model, e->file.c_str(), msg.c_str());
             fflush(stdout);
             d.reset();

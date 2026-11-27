@@ -279,3 +279,10 @@ Divisions truncate toward zero.
 Level 0 only, as 8-bit RGBA, row 0 at the top. Keep for the glTF extras:
 the texture number, the format number, width and height, the family (zlib /
 bit-packed) and method, and the word-1 detail fields of the size table.
+
+These pictures and fields go into the game's base texture pack,
+`ge007.ptexpack` ([texture-packs.md](texture-packs.md)): one
+`textures/<n>.png` per texture number, and one `textures.json` entry per
+number with the hit classes and detail fields of the size table and the
+format, width and height of the header. The glTF exports point into that
+pack instead of carrying their own copies.

@@ -14,6 +14,11 @@ For every <out_dir>/<level>/setup.json and setup_mp.json (docs/specs/setup.md): 
 schema (format, version, header, pads, props, ...), every record's `raw` has the size
 of its type, every link / pad / waypoint / tag reference resolves, and every AI list's
 byte range lies inside the file.
+
+<out_dir>/ge007.ptexpack (docs/specs/texture-packs.md): pack.json fields, textures.json (version 1, exactly the keys
+"0".."2697", valid names, alpha rule by format), every non-null image exists and is a PNG of width x height. Every glTF
+image URI resolves to a file of that pack, every textured material carries extras.texture, and no glTF folder has a
+textures/ folder of its own any more.
 """
 import json
 import os
@@ -60,6 +65,109 @@ def check_png(path):
     if bd == 8 and ct == 6 and len(raw) != h * (1 + 4 * w):
         return "idat size %d != %d" % (len(raw), h * (1 + 4 * w))
     return None
+
+
+PACK_VER = [None]   # exporter_version of ge007.ptexpack/pack.json, for the glTF check
+SURFACES = ["default", "stone", "wood", "metal", "glass", "water", "snow", "dirt", "mud", "tile", "metalobj", "chr", "glass_xlu"]
+FORMATS = ["rgba32", "rgba16", "rgb24", "rgb15", "ia16", "ia8", "ia4", "i8", "i4", "ci8_rgba16", "ci4_rgba16", "ci8_ia16", "ci4_ia16"]
+NTEXTURES = 2698
+
+
+def png_size(path):
+    with open(path, "rb") as f:
+        d = f.read(24)
+    return struct.unpack(">II", d[16:24])
+
+
+def _class_ok(v):
+    return v in SURFACES or (isinstance(v, str) and v.startswith("class") and v[5:].isdigit() and 13 <= int(v[5:]) <= 15)
+
+
+def check_pack(root):
+    """<root>/ge007.ptexpack: the game's base texture pack. Returns (errors, images, null images)."""
+    errs = []
+    pd = os.path.join(root, "ge007.ptexpack")
+    try:
+        with open(os.path.join(pd, "pack.json"), encoding="utf-8") as f:
+            pj = json.load(f)
+    except Exception as e:  # noqa: BLE001
+        return ["pack.json: %s" % e], 0, 0
+    for k in ("name", "author", "description"):
+        if not isinstance(pj.get(k), str) or not pj[k]:
+            errs.append("pack.json: %s missing" % k)
+    if pj.get("name") != "GoldenEye 007" or pj.get("author") != "Rare":
+        errs.append("pack.json: name / author")
+    if pj.get("base") is not True:
+        errs.append("pack.json: base must be true")
+    if pj.get("region") not in ("ntsc-final", "pal-final", "jpn-final"):
+        errs.append("pack.json: region %r" % pj.get("region"))
+    if not isinstance(pj.get("exporter_version"), int) or isinstance(pj.get("exporter_version"), bool):
+        errs.append("pack.json: exporter_version")
+    else:
+        PACK_VER[0] = pj["exporter_version"]
+    try:
+        with open(os.path.join(pd, "textures.json"), encoding="utf-8") as f:
+            tj = json.load(f)
+    except Exception as e:  # noqa: BLE001
+        return errs + ["textures.json: %s" % e], 0, 0
+    if tj.get("version") != 1:
+        errs.append("textures.json: version %r, expected 1" % tj.get("version"))
+    tex = tj.get("textures")
+    if not isinstance(tex, dict):
+        return errs + ["textures.json: textures is not an object"], 0, 0
+    want = [str(i) for i in range(NTEXTURES)]
+    if list(tex.keys()) != want:
+        errs.append("textures.json: keys are not exactly 0..%d in order (%d keys)" % (NTEXTURES - 1, len(tex)))
+    nimg = nnull = 0
+    for key, e in tex.items():
+        w = "texture %s: " % key
+        if not _class_ok(e.get("surface")):
+            errs.append(w + "surface %r" % e.get("surface"))
+        if not _class_ok(e.get("impact_sound")):
+            errs.append(w + "impact_sound %r" % e.get("impact_sound"))
+        det = e.get("detail")
+        if (not isinstance(det, dict) or sorted(det) != ["s_offset", "s_shift", "t_offset", "t_shift"]
+                or any(not isinstance(v, int) or not 0 <= v <= 15 for v in det.values())):
+            errs.append(w + "detail")
+        img = e.get("image", 0)
+        if img is None:
+            nnull += 1
+            if e.get("alpha") not in ("image", "luminance"):
+                errs.append(w + "alpha %r" % e.get("alpha"))
+            continue
+        if not isinstance(img, str):
+            errs.append(w + "image missing")
+            continue
+        nimg += 1
+        fmt = e.get("format")
+        if fmt not in FORMATS:
+            errs.append(w + "format %r" % fmt)
+        else:
+            exp = "luminance" if 4 <= FORMATS.index(fmt) <= 8 else "image"
+            if e.get("alpha") != exp:
+                errs.append(w + "alpha %r, expected %s for %s" % (e.get("alpha"), exp, fmt))
+            # the held size (texture-packs.md §tile_width): 8-byte lines, one line held on two; written only when it differs
+            bits = (16, 16, 16, 16, 16, 8, 4, 8, 4, 8, 4, 8, 4)[FORMATS.index(fmt)]   # 32-bit texels count as 16
+            ew, eh = e.get("width"), e.get("height")
+            if isinstance(ew, int) and isinstance(eh, int):
+                tw, th = (ew * bits + 63) // 64 * 64 // bits, 2 if eh == 1 else eh
+                want = (tw, th) if (tw, th) != (ew, eh) else (None, None)
+                if (e.get("tile_width"), e.get("tile_height")) != want:
+                    errs.append(w + "tile size %r x %r, expected %r x %r" % (e.get("tile_width"), e.get("tile_height"), *want))
+        ip = os.path.join(pd, img)
+        if not os.path.isfile(ip):
+            errs.append(w + "image missing: %s" % img)
+            continue
+        er = check_png(ip)
+        if er:
+            errs.append(w + "png %s: %s" % (img, er))
+        elif png_size(ip) != (e.get("width"), e.get("height")):
+            errs.append(w + "png is %dx%d, textures.json says %sx%s" % (png_size(ip) + (e.get("width"), e.get("height"))))
+    td = os.path.join(pd, "textures")
+    npng = len([n for n in os.listdir(td) if n.endswith(".png")]) if os.path.isdir(td) else 0
+    if npng != nimg:
+        errs.append("%d PNG files in textures/, %d non-null images in textures.json" % (npng, nimg))
+    return errs, nimg, nnull
 
 
 COLL = {}   # level -> (tiles, rooms, triangles) of the collision floor, for the summary
@@ -250,17 +358,34 @@ def check_level(root, name, report=True):
         bc = mt.get("pbrMetallicRoughness", {}).get("baseColorTexture")
         if bc and bc["index"] >= ntex:
             errs.append("material %d: bad texture" % i)
+        elif bc:
+            key = (mt.get("extras") or {}).get("texture")
+            if not isinstance(key, str):
+                errs.append("material %d: textured but extras.texture is %r" % (i, key))
+            else:
+                src = g["textures"][bc["index"]]["source"]
+                if src < nimg and not g["images"][src]["uri"].endswith("/ge007.ptexpack/textures/%s.png" % key):
+                    errs.append("material %d: extras.texture %s does not match image %s" % (i, key, g["images"][src]["uri"]))
+        elif "texture" in (mt.get("extras") or {}):
+            errs.append("material %d: extras.texture without a texture" % i)
     for node in g.get("nodes", []):
         if "mesh" in node and node["mesh"] >= len(g.get("meshes", [])):
             errs.append("node %s: bad mesh" % node.get("name"))
     for im in g.get("images", []):
-        ip = os.path.join(d, im["uri"])
+        ip = os.path.normpath(os.path.join(d, im["uri"]))
+        if "ge007.ptexpack/textures/" not in im["uri"]:
+            errs.append("image %s does not point into ge007.ptexpack" % im["uri"])
         if not os.path.isfile(ip):
             errs.append("image missing: %s" % im["uri"])
         else:
             e = check_png(ip)
             if e:
                 errs.append("png %s: %s" % (im["uri"], e))
+    if os.path.isdir(os.path.join(d, "textures")):
+        errs.append("textures/ folder next to the glTF (the pictures are in ge007.ptexpack)")
+    ev = (g.get("asset", {}).get("extras") or {}).get("exporter_version")
+    if PACK_VER[0] is not None and ev != PACK_VER[0]:
+        errs.append("asset.extras.exporter_version %r != pack.json %r" % (ev, PACK_VER[0]))
     if report and not os.path.isfile(os.path.join(d, "report.txt")):
         errs.append("report.txt missing")
     errs += check_collision(g, accs, views, binb, name)
@@ -809,8 +934,15 @@ def main():
         print(__doc__)
         return 2
     root = sys.argv[1]
-    levels = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n)) and n not in ("models", "text", "characters"))
+    levels = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n)) and n not in ("models", "text", "characters", "ge007.ptexpack"))
     bad = 0
+    perrs, pimg, pnull = check_pack(root)
+    for e in perrs[:50]:
+        print("    ERROR: ge007.ptexpack:", e)
+    if len(perrs) > 50:
+        print("    ... %d more pack errors" % (len(perrs) - 50))
+    print("ge007.ptexpack: %d pictures, %d textures without one, %d errors" % (pimg, pnull, len(perrs)))
+    bad += 1 if perrs else 0
     tot = [0, 0, 0, 0]
     for n in levels:
         errs, st = check_level(root, n)

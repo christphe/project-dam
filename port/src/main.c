@@ -276,8 +276,12 @@ int main(int argc, char **argv)
             }
             extern int ex_export_models(const char *rom_path, const char *out_dir,
                                         void (*log)(void *user, const char *line), void *user);
+            extern int ex_export_textures(const char *rom_path, const char *pack_dir,
+                                          void (*log)(void *user, const char *line), void *user);
             char mdir[1100];
-            int failed = ex_export_levels(rom, exdir, exportLevelsLog, NULL);
+            snprintf(mdir, sizeof(mdir), "%s/ge007.ptexpack", exdir);
+            int failed = ex_export_textures(rom, mdir, exportLevelsLog, NULL);
+            failed += ex_export_levels(rom, exdir, exportLevelsLog, NULL);
             snprintf(mdir, sizeof(mdir), "%s/models", exdir);
             failed += ex_export_models(rom, mdir, exportLevelsLog, NULL);
             extern int ex_export_text(const char *rom_path, const char *out_dir,

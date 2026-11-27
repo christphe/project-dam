@@ -74,24 +74,31 @@ int main(int argc, char **argv)
     CHECK(near(d.mn[0], -100, 1e-3f) && near(d.mx[0], 300, 1e-3f) && near(d.mx[2], 400, 1e-3f));
     if (d.tex.size() == 1) CHECK(d.tex[0].texnum == 1 && d.tex[0].source == -1 && d.tex[0].origW == 8);
 
-    // texture sources (texpacks.h): a mod folder and a .ptexpack tar, each with textures/1.png; the first listed wins, any size
+    // texture sources (texpacks.h, texset.h): the game's pack ge007.ptexpack (a folder), a mod folder and a complete hd.ptexpack tar,
+    // each with a picture of texture "1" (the glTF's image is textures/1.png): the mod over the chosen pack, any size
     {
         auto solid = [](int w, int h, uint8_t r, uint8_t g, uint8_t b) {
             std::vector<uint8_t> px((size_t)w * h * 4);
             for (size_t i = 0; i < px.size(); i += 4) { px[i] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = 255; }
             return px;
         };
-        const std::string mod = dir + "/mymod", packSrc = dir + "/packsrc", packs = dir + "/texturepacks", pack = packs + "/hd.ptexpack";
-        std::filesystem::create_directories(mod + "/textures", ec);
-        std::filesystem::create_directories(packSrc + "/textures", ec);
-        std::filesystem::create_directories(packs, ec);
+        auto put = [](const std::string &path, const char *text) {
+            FILE *f = fopen(path.c_str(), "wb");
+            CHECK(f != nullptr);
+            if (f) { fputs(text, f); fclose(f); }
+        };
+        const std::string base = dir + "/gebase/ge007.ptexpack", mod = dir + "/mymod", packSrc = dir + "/packsrc", packs = dir + "/texturepacks";
+        const std::string pack = packs + "/hd.ptexpack", lack = dir + "/lack.ptexpack";
+        for (const std::string &p : { base + "/textures", mod + "/textures", packSrc + "/textures", lack, packs }) std::filesystem::create_directories(p, ec);
+        const char *oneJson = "{\"version\":1,\"textures\":{\"1\":{\"image\":\"textures/1.png\",\"surface\":\"stone\",\"impact_sound\":\"stone\",\"alpha\":\"image\",\"width\":8,\"height\":8}}}";
+        put(base + "/textures.json", oneJson);
+        put(base + "/pack.json", "{\"name\":\"GoldenEye 007\",\"base\":true}");
+        CHECK(synth::writePngStored(base + "/textures/1.png", 8, 8, solid(8, 8, 1, 2, 3)));
         CHECK(synth::writePngStored(mod + "/textures/1.png", 16, 32, solid(16, 32, 200, 10, 10)));
         CHECK(synth::writePngStored(packSrc + "/textures/1.png", 64, 64, solid(64, 64, 10, 200, 10)));
-        {
-            FILE *f = fopen((packSrc + "/pack.json").c_str(), "wb");
-            CHECK(f != nullptr);
-            if (f) { fputs("{\"name\": \"HD test\", \"author\": \"tests\"}", f); fclose(f); }
-        }
+        put(packSrc + "/textures.json", "{\"version\":1,\"textures\":{\"1\":{\"surface\":\"wood\",\"width\":8,\"height\":8}}}");
+        put(packSrc + "/pack.json", "{\"name\": \"HD test\", \"author\": \"tests\"}");
+        put(lack + "/textures.json", "{\"version\":1,\"textures\":{}}");
         char err[256] = "";
         CHECK(pkgWriteDir(packSrc.c_str(), pack.c_str(), err, sizeof err));
 
@@ -99,24 +106,66 @@ int main(int argc, char **argv)
         CHECK(texpackScan(packs.c_str(), info, 4) == 1);
         CHECK(!strcmp(info[0].file, "hd.ptexpack") && !strcmp(info[0].name, "HD test") && !strcmp(info[0].author, "tests"));
 
-        CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg, { mod, pack }) == DECOR_OK);
-        CHECK(d.tex.size() == 1);
-        if (d.tex.size() == 1) {   // the mod's picture: its own size, the export's size kept beside it
-            CHECK(d.tex[0].source == 0 && d.tex[0].w == 16 && d.tex[0].h == 32 && d.tex[0].origW == 8 && d.tex[0].origH == 8);
-            CHECK(d.tex[0].rgba.size() == 16 * 32 * 4 && d.tex[0].rgba[0] == 200 && d.tex[0].rgba[1] == 10);
-        }
-        CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg, { pack }) == DECOR_OK);   // the pack alone, from inside the tar
-        if (d.tex.size() == 1) CHECK(d.tex[0].source == 0 && d.tex[0].w == 64 && d.tex[0].rgba[1] == 200);
+        const std::vector<PackChoice> list = listTexturePacks(packs, dir + "/gebase");   // ge007 from the export root, then hd
+        CHECK(list.size() == 2 && list[0].base && list[0].usable() && list[0].name == "GoldenEye 007" && list[1].file == "hd.ptexpack" && list[1].usable());
+        CHECK(listTexturePacks(packs, "").size() == 2 && !listTexturePacks(packs, "")[0].usable() && !listTexturePacks(packs, "")[1].usable());
+        CHECK(baseTexturePackRoot(packs, dir + "/gebase") == base && baseTexturePackRoot(packs, "").empty());
 
-        {   // an unreadable replacement: skipped with a warning, the next source is used
-            FILE *f = fopen((mod + "/textures/1.png").c_str(), "wb");
-            if (f) { fputs("not a png", f); fclose(f); }
+        TexSet ts;
+        ts.open(mod, pack, base);
+        CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg, &ts) == DECOR_OK);
+        CHECK(d.tex.size() == 1);
+        if (d.tex.size() == 1) {   // the mod's picture: its own size, the ROM size kept beside it
+            CHECK(d.tex[0].source == 0 && d.tex[0].w == 16 && d.tex[0].h == 32 && d.tex[0].origW == 8 && d.tex[0].origH == 8 && d.tex[0].key == "1");
+            CHECK(d.tex[0].rgba.size() == 16 * 32 * 4 && d.tex[0].rgba[0] == 200 && d.tex[0].rgba[1] == 10);
+            CHECK(d.tex[0].surface == 2);   // the pack's wood: the mod gave no surface
         }
-        CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg, { mod, pack }) == DECOR_OK);
+        ts.open("", pack, base);   // the pack alone, from inside the tar
+        CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg, &ts) == DECOR_OK);
+        if (d.tex.size() == 1) CHECK(d.tex[0].source == 1 && d.tex[0].w == 64 && d.tex[0].rgba[1] == 200);
+        ts.open("", base, base);   // ge007 chosen: the game's own picture
+        CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg, &ts) == DECOR_OK);
+        if (d.tex.size() == 1) CHECK(d.tex[0].source == -1 && d.tex[0].w == 8 && d.tex[0].rgba[0] == 1 && d.tex[0].surface == 1 && d.texWarnings.empty());
+        ts.open("", lack, base);   // an incomplete pack is refused: ge007 is used
+        CHECK(!ts.note().empty() && ts.pack() == ts.base());
+        ts.open("", pack, "");     // no ge007 to check a pack against: no pack
+        CHECK(!ts.note().empty() && ts.pack() == nullptr);
+
+        // a mod's textures.json alone: the surface changes, the picture stays the pack's
+        const std::string mod2 = dir + "/mymod2";
+        std::filesystem::create_directories(mod2, ec);
+        put(mod2 + "/textures.json", "{\"version\":1,\"textures\":{\"1\":{\"surface\":\"metal\"}}}");
+        ts.open(mod2, base, base);
+        CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg, &ts) == DECOR_OK);
+        if (d.tex.size() == 1) CHECK(d.tex[0].source == -1 && d.tex[0].w == 8 && d.tex[0].surface == 3);
+
+        // alpha "luminance": an opaque picture draws its luminance as alpha
+        const std::string mod3 = dir + "/mymod3";
+        std::filesystem::create_directories(mod3 + "/textures", ec);
+        put(mod3 + "/textures.json", "{\"version\":1,\"textures\":{\"1\":{\"alpha\":\"luminance\"}}}");
+        CHECK(synth::writePngStored(mod3 + "/textures/1.png", 4, 4, solid(4, 4, 100, 200, 50)));
+        ts.open(mod3, base, base);
+        CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg, &ts) == DECOR_OK);
+        if (d.tex.size() == 1) CHECK(d.tex[0].source == 0 && d.tex[0].rgba[3] == (299 * 100 + 587 * 200 + 114 * 50) / 1000);
+
+        {   // an unreadable mod picture: skipped with a warning, the pack's is used
+            put(mod + "/textures/1.png", "not a png");
+        }
+        ts.open(mod, pack, base);
+        CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg, &ts) == DECOR_OK);
         if (d.tex.size() == 1) CHECK(d.tex[0].source == 1 && d.tex[0].w == 64);
         CHECK(d.texWarnings.size() == 1);
-        CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg, { mod }) == DECOR_OK);   // nothing readable: the export's
+
+        // a key no source has: the glTF's own picture, one warning
+        put(base + "/textures.json", "{\"version\":1,\"textures\":{\"7\":{\"image\":null,\"surface\":\"stone\"}}}");
+        ts.open("", "", "");   // (the base was cached empty above: a fresh set)
+        TexSet fresh;
+        fresh.open("", base, base);
+        CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg, &fresh) == DECOR_OK);
         if (d.tex.size() == 1) CHECK(d.tex[0].source == -1 && d.tex[0].w == 8);
+        CHECK(d.texWarnings.size() == 1);
+        CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg) == DECOR_OK);   // no sources at all: the glTF's own, no warning
+        if (d.tex.size() == 1) CHECK(d.tex[0].source == -1 && d.tex[0].w == 8 && d.texWarnings.empty());
         CHECK(texpackTexnumOfName("textures/4095.png") == 4095 && texpackTexnumOfName("4096.png") == -1 && texpackTexnumOfName("a1.png") == -1);
     }
 

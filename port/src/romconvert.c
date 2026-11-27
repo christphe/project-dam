@@ -20,6 +20,11 @@
  * one (CV_CONVERTER_VERSION) the models are converted again, once, so a user
  * with older sidecars gets the current models without deleting anything.
  *
+ * After the sidecars, the game's base texture pack is made the same way:
+ * <game>/texturepacks/ge007.ptexpack (port/export/texpack_export.c, the pack of
+ * docs/specs/texture-packs.md) is written from the ROM when it is missing or its
+ * exporter_version differs from the compiled one.
+ *
  * Returns 1 when both sidecars are present (already or after converting),
  * -1 when they could not be produced (caller should abort boot with a
  * message rather than crash later in modelPromoteNodeOffsetsToPointers, D179).
@@ -130,6 +135,49 @@ static int rcConvert(const char *rom, const char *out, int steps)
     return code;
 }
 
+/* port/export/texpack_export.c. Declared here for the same reason as the converter. */
+typedef void (*ExLogFn)(void *user, const char *line);
+typedef void (*ExProgressFn)(void *user, int done, int total);
+extern void ex_set_progress(ExProgressFn fn, void *user);
+extern int ex_ensure_base_pack(const char *rom_path, const char *pack_dir, ExLogFn log, void *user);
+
+static void rcTexProgress(void *user, int done, int total)
+{
+    (void)user;
+    bootscreenProgress("Textures", total > 0 ? (float)done / (float)total : 0.f);
+}
+
+static void rcTexLog(void *user, const char *line)
+{
+    (void)user;
+    sysLogPrintf(LOG_INFO, "romconvert: %s", line);
+}
+
+/* The base texture pack in $S/../texturepacks (the folder texpack.c lists). Always 1: the game itself does not read the
+ * pack yet (the editor and modelview do), so a pack that cannot be written is logged and boot goes on. */
+static int rcEnsureBasePack(const char *romRelPath)
+{
+    char romPath[1024];
+    char packDir[1024];
+    int code;
+
+    snprintf(romPath, sizeof(romPath), "%s", sysResolvePath(romRelPath));
+    snprintf(packDir, sizeof(packDir), "%s/ge007.ptexpack", sysResolvePath("$S/../texturepacks"));
+    ex_set_progress(rcTexProgress, NULL);
+    code = ex_ensure_base_pack(romPath, packDir, rcTexLog, NULL);
+    ex_set_progress(NULL, NULL);
+    if (code < 0) {
+        sysLogPrintf(LOG_WARNING, "romconvert: the base texture pack could not be written to %s (boot goes on)", packDir);
+        bootscreenClose();
+        return 1;
+    }
+    if (code == 0) {
+        sysLogPrintf(LOG_INFO, "romconvert: base texture pack written to %s", packDir);
+        bootscreenClose();
+    }
+    return 1;
+}
+
 int romConvertEnsureSidecars(const unsigned char *romImg, const char *romRelPath)
 {
     const char *region = rcRegionForCountry(romImg[0x3E]);
@@ -139,7 +187,7 @@ int romConvertEnsureSidecars(const unsigned char *romImg, const char *romRelPath
     const int present = rcSidecarsPresent(region);
     const int stale = present && rcModelsVersion(region) != cv_converter_version();
     if (present && !stale)
-        return 1;
+        return rcEnsureBasePack(romRelPath);
 
     /* Resolve the ROM path we were given ("$S/...", "$E/..." or "./...") to
      * an absolute form for the child's argv. */
@@ -175,5 +223,5 @@ int romConvertEnsureSidecars(const unsigned char *romImg, const char *romRelPath
     }
     sysLogPrintf(LOG_INFO, "romconvert: sidecars %s — continuing boot",
                  stale ? "updated" : "generated");
-    return 1;
+    return rcEnsureBasePack(romRelPath);
 }

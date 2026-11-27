@@ -55,6 +55,20 @@ def fnv(rgba, w, h):
     return ((x ^ h) * FNV_PRIME) & MASK
 
 
+
+def texture_png(gltf_dir, n):
+    """The picture of texture n for a glTF in gltf_dir: the base pack ge007.ptexpack the export points into
+    (docs/specs/texture-packs.md, found in a parent folder), else an older export's own textures/<n>.png."""
+    d = os.path.abspath(gltf_dir)
+    while True:
+        cand = os.path.join(d, "ge007.ptexpack", "textures", "%d.png" % n)
+        if os.path.isfile(cand):
+            return cand
+        up = os.path.dirname(d)
+        if up == d:
+            return os.path.join(gltf_dir, "textures", "%d.png" % n)
+        d = up
+
 def read_png(path):
     data = open(path, "rb").read()
     assert data[:8] == b"\x89PNG\r\n\x1a\n", path
@@ -177,7 +191,7 @@ def compare_models(mdir, rdir):
         ctris, ctex = rec[n]
         ours = []   # (texnum, hash, w, h, rgba)
         for tn in e.get("textures", []):
-            w, h, rgba = read_png(os.path.join(mdir, os.path.dirname(e["gltf"]), "textures", "%d.png" % tn))
+            w, h, rgba = read_png(texture_png(os.path.join(mdir, os.path.dirname(e["gltf"])), tn))
             ours.append((tn, fnv(rgba, w, h), w, h, rgba))
         matched, unmatched = set(), []
         for tn, hs, w, h, rgba in ours:
@@ -531,7 +545,7 @@ def main():
                    if m.get("extras", {}).get("texnum", -1) >= 0})
     exact, padded, runtime, close, missing = 0, 0, [], [], []
     for n in used:
-        w, h, rgba = read_png(os.path.join(gdir, "textures", "%d.png" % n))
+        w, h, rgba = read_png(texture_png(gdir, n))
         if fnv(rgba, w, h) in rec_by_hash:
             exact += 1
             continue
