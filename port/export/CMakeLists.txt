@@ -30,10 +30,9 @@ if(NOT GE_SWITCH)
 
   # The texture/PNG test is built here, in this freestanding scope (the tests/ scope has the
   # decomp include path, whose zlib.h shadows the real one); tests/CMakeLists.txt registers it.
-  if(GE007_BUILD_TESTS)
-    add_executable(test_export_tex "${CMAKE_SOURCE_DIR}/tests/test_export_tex.c")
-    target_compile_options(test_export_tex PRIVATE -O2 -Wall -Wextra)
-    target_link_libraries(test_export_tex ge007_export ge007_convert ${ZLIB_LIBRARIES} m)
-    set_target_properties(test_export_tex PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
-  endif()
+  # Always built off Switch: this directory is configured before the GE007_BUILD_TESTS option exists.
+  add_executable(test_export_tex "${CMAKE_SOURCE_DIR}/tests/test_export_tex.c")
+  target_compile_options(test_export_tex PRIVATE -O2 -Wall -Wextra)
+  target_link_libraries(test_export_tex ge007_export ge007_convert ${ZLIB_LIBRARIES} m)
+  set_target_properties(test_export_tex PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
 endif()
