@@ -50,4 +50,23 @@ bool mv_export_pose(int anim, float frame, int njoints, std::vector<float>& pose
 // A texture image (RGBA8) by the path a material carries; cached; false = missing or not a PNG.
 bool mv_export_image(const std::string& path, int& w, int& h, std::vector<uint8_t>& rgba);
 
+// ---- texture sources (docs/specs/texture-packs.md): the active mod (partial, merged field by field) over the chosen texture
+// pack (complete). ge007.ptexpack, the game's own pack, is the default: <game>/texturepacks/ge007.ptexpack when the game wrote
+// it, else the export's own copy beside characters/. A pack that lacks textures of ge007 is refused (never mixed).
+struct MvPackChoice { std::string file, path, name, reason; bool base = false; bool usable() const { return reason.empty(); } };
+struct MvModChoice { std::string file, path, name; };
+void mv_tex_init(const std::string& gameDir);          // the game folder (texturepacks/, mods/); "" = none known
+const std::string& mv_tex_game();
+std::vector<MvPackChoice> mv_tex_packs();              // ge007 first, then the folder's packs; not selectable ones carry a reason (opens every pack: not cheap)
+std::vector<MvModChoice> mv_tex_mods();                // <game>/mods/*.pmod
+// mod: "" none, else a .pmod / folder path or the name of one in <game>/mods; pack: "" = ge007, else a path or the name of one
+// in <game>/texturepacks. false (and mv_tex_note() says why) when one was refused: ge007 is used, or no mod.
+bool mv_tex_use(const std::string& mod, const std::string& pack);
+const std::string& mv_tex_note();
+const std::string& mv_tex_mod();                       // what is in use ("" none / ge007)
+const std::string& mv_tex_pack();
+int mv_tex_gen();                                      // changes whenever mv_tex_use ran: cached GL textures are stale
+// The picture of a material: through the sources by its key, else the glTF's own image. false = missing.
+bool mv_tex_image(const MvMaterial& mt, int& w, int& h, std::vector<uint8_t>& rgba);
+
 int mv_export_selftest();   // PNG decoding and the pose maths, no export needed

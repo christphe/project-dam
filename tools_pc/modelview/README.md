@@ -27,6 +27,16 @@ git worktree the main checkout's `.env` is used if the worktree has none. No zli
 the PNG reader and the converter's inflate calls (`pc/shim/zlib.h`). Builds go to `build/`, settings to
 `data/modelview.ini`.
 
+**Textures.** A material is drawn from the texture its key names (material `extras.texture`;
+[docs/specs/texture-packs.md](../../docs/specs/texture-packs.md)): the active **mod** (partial: its `textures/<key>.png` and
+`textures.json` merge field by field) over the chosen **texture pack** (complete). One pack is always chosen:
+`ge007.ptexpack`, the game's own, by default (`<game>/texturepacks/ge007.ptexpack` when the game wrote it, else the export's own
+copy beside `characters/`). The glTF's own image is used only when no source has the key (an export without `ge007.ptexpack`).
+The game folder (holding `texturepacks/` and `mods/`) is `--game DIR`, else `MODELVIEW_GAME`, else a `build-win` / `build-linux` /
+`build-pc` folder of the checkout that has one of them; without one, only `--mod` / `--texpack` paths work and the Mod list has
+just None. A pack that lacks textures of ge007 is refused (greyed out in the list, "incomplete: N textures missing"; on the
+command line a note and ge007 is used): packs are never mixed.
+
 ## Commands
 
 ```sh
@@ -42,7 +52,10 @@ Options (they win over the `.ini`): `--export DIR`, `--body FILE` and `--head FI
 `--specs 0|1` (sunglasses), `--hair 0|1`, `--bodyscale 0|1`, `--tier 0|1`,
 `--method GAME|FLAT|PN|PHONG|BUTTERFLY|LOOP|HEAD`, `--passes 1|2`, `--crease DEG`, `--clamp F` (PN bulge clamp),
 `--splitjoint 0|1`, `--view side|split|sub|orig`, `--wire --edges --checker --normals --light --smooth 0|1`,
-`--w --h` (shot size). Relative `--shot` and `--export` paths are taken from where you run the command.
+`--w --h` (shot size), `--game DIR`, `--mod X.pmod|folder|name` (a path, or the name of a mod in `<game>/mods`) and
+`--texpack NAME|path` (a pack in `<game>/texturepacks`, with or without `.ptexpack`, or a path); the `.ini` keys are
+`game=`, `mod=` and `texpack=`. Relative `--shot`, `--export`, `--game` and `--mod` / `--texpack` paths that exist are taken from
+where you run the command. `shots` takes `--mod` and `--texpack` too.
 
 ## Viewer
 
@@ -62,7 +75,9 @@ Options (they win over the `.ini`): `--export DIR`, `--body FILE` and `--head FI
   **Sunglasses** (head part 0, hidden unless the guard wears them) and **Hair** (head part 1), each greyed out
   when the head has no such part; **Body scale from the table** (0.95 for one body, 1 for the others) and, for
   information, `pov` (the scale of the root motion) and the body's sex. Below: triangles of the body, the head,
-  the sunglasses and the hair, and how many textures loaded.
+  the sunglasses and the hair, and how many textures loaded. Above them the **Mod** list (None, the entries of
+  `<game>/mods`) and the **Pack** list (ge007, then `<game>/texturepacks`): changing either redraws the model with the new
+  textures; lists are read again each time they open.
 - **Animation** panel: all 170 animations, from the export's `animations/<name>.gltf` (one animation on the guard rig
   per file, listed in `characters.json`, loaded when chosen), retargeted onto the chosen body by node name: the animated rotations on the body's own joints, the root's height times the
   body's `pov` (an older export without that file: the body glTF's own animations). Frame slider, play at the
@@ -77,13 +92,15 @@ Options (they win over the `.ini`): `--export DIR`, `--body FILE` and `--head FI
 - View toggles: textures, vertex colours (off = texture only), wireframe, straight-edge colours, normals; **Clean view** turns all overlays off. Flags: `--vcol --wire --edges --normals --clean 1 --texture 0|1`.
 - `modelview.py selftest` checks the PNG reader, the pose maths and the HEAD method without an export. `shots` takes `--export DIR --anim NAME --frame N --clean`.
 - Model vertex colours are one colour per joint (limbs read apart; the head has its own); the checker shows the
-  model's UVs. Textures are the export's PNGs.
+  model's UVs. Textures: see above (the mod over the chosen pack; an `alpha: "luminance"` entry gives an opaque picture its
+  luminance as alpha).
 
 ## Files
 
 `pc/mv_mesh.h` (the data model: joint-local vertices, UV, RGBA, joint id, layer; joints with a rest offset; materials
 with the export's image), `pc/mv_export.h/.cpp` (the export: `characters.json` through cJSON, the glTF through
-cgltf, body + head assembly, posing from `animations/<name>.gltf` retargeted by node name, a PNG reader), `pc/mv_subdiv.h/.cpp` (the method
+cgltf, body + head assembly, posing from `animations/<name>.gltf` retargeted by node name, a PNG reader, and the texture
+sources `mv_tex_*`: the mod over the pack through `port/mission/texpacks.c` + `mission_pkg.c`, built with `-DTEXPACK_NO_PNG`), `pc/mv_subdiv.h/.cpp` (the method
 interface, edge classification, FLAT, PN through `conv_subdiv.c`, PHONG, BUTTERFLY, LOOP), `pc/mv_head.cpp` (HEAD),
 `pc/mv_mannequin.cpp` (the test model), `pc/modelview.cpp` (window, GL, the ImGui panel, `.ini`),
 `pc/mv_imgui.h/.cpp` (ImGui renderer and input; ImGui, cgltf and cJSON are `port/third_party`), `pc/mv_zlib.cpp` +

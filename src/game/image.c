@@ -2752,7 +2752,7 @@ void texLoad(s32 *updateword, struct texpool *pool)
 #ifdef PORT
             /* Texture packs (port/src/texpack.c): which texture number now sits at this address, so the renderer, which
              * only sees addresses, can swap in a pack's picture. Signed off (AGENTS rule 2): opt-in, inert without a pack. */
-            texpackRegister(tex->data, (s32)g_TexNumToLoad);
+            texpackRegister(tex->data, (s32)g_TexNumToLoad, (s32)bytesout);
 #endif
 
         }

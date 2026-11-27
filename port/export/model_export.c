@@ -658,7 +658,6 @@ static int export_model(const ModelEnt *me, const uint8_t *rom, size_t rom_size,
     MatOut mo;
     char dir[1100], path[1200];
     int fail = 0;
-    size_t ntexfiles = 0;
     memset(&fbuf, 0, sizeof fbuf); memset(&json, 0, sizeof json); memset(&tex_json, 0, sizeof tex_json);
     ex_matout_init(&mo);
     if (!x) { snprintf(res->msg, sizeof res->msg, "out of memory"); res->failed = 1; return 1; }
@@ -746,7 +745,7 @@ static int export_model(const ModelEnt *me, const uint8_t *rom, size_t rom_size,
     }
 
     /* ---- textures + materials ---- */
-    if (ex_write_textures(tc, x->mc.mats, x->mc.nm, dir, &ntexfiles)) FAIL("cannot write textures into %s", dir);
+    mo.pack_depth = 2;   /* <out>/models/<name>/<name>.gltf -> ../../ge007.ptexpack */
     if (ex_emit_materials(&mo, &x->mc)) FAIL("out of memory");
 
     /* ---- the glTF ---- */

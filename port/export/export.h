@@ -1,6 +1,6 @@
 /*
  * export.h -- static level export (issue #150): ROM -> level decor mesh +
- * textures -> glTF 2.0 (.gltf + .bin + PNG).
+ * textures -> glTF 2.0 (.gltf + .bin) + the base texture pack (PNG).
  *
  * CLEAN ROOM: everything in port/export/ is written from docs/specs/ only.
  * No decomp header, no src/game, no include/, no PR/gbi.h, no code derived
@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define EX_EXPORTER_VERSION 10  /* written to every glTF (asset.extras.exporter_version); bump on any output change */
+#define EX_EXPORTER_VERSION 11  /* written to every glTF (asset.extras.exporter_version); bump on any output change */
 
 /* ---- textures (tex_decode.c, docs/specs/textures.md) --------------------- */
 
@@ -32,6 +32,7 @@ typedef struct ExTexTable {
     uint32_t count;            /* textures in the size table (before the 0xFFFF terminator) */
     uint32_t *offset;          /* count + 1 entries: start of texture n, relative to images_start; offset[count] = total */
     uint32_t *word1;           /* count entries: word 1 of the size-table entry (detail fields), raw */
+    uint8_t *cls;              /* count entries: bits 31-24 of word 0 of the size-table entry (impact sound << 4 | surface) */
 } ExTexTable;
 
 typedef struct ExTexture {
@@ -60,12 +61,32 @@ int ex_png_write(const char *path, int width, int height, const uint8_t *rgba);
 /* Same, into memory (malloc'd *out, *out_len bytes). 0 on success. */
 int ex_png_encode(int width, int height, const uint8_t *rgba, uint8_t **out, size_t *out_len);
 
-/* ---- levels (level_export.c, docs/specs/level-decor.md, display-lists.md) */
-
 typedef void (*ExLogFn)(void *user, const char *line);
 
+/* ---- the base texture pack (texpack_export.c, docs/specs/texture-packs.md) --- */
+
+/* Progress of ex_export_textures: done of total textures. Set once, NULL to clear. */
+typedef void (*ExProgressFn)(void *user, int done, int total);
+void ex_set_progress(ExProgressFn fn, void *user);
+
+/* Writes the game's base texture pack into the folder `pack_dir` (normally <out>/ge007.ptexpack): pack.json,
+ * textures.json (all 2698 keys) and textures/<n>.png. The ROM must pass cv_romcheck. Returns 0 on success, else
+ * the number of problems (1 when the ROM or the texture table is refused). `log` may be NULL. */
+int ex_export_textures(const char *rom_path, const char *pack_dir, ExLogFn log, void *user);
+
+/* exporter_version written in <pack_dir>/pack.json, or -1 when there is no readable pack.json. */
+int ex_pack_version(const char *pack_dir);
+
+/* Makes sure <pack_dir> holds the base pack of this exporter: nothing to do when its pack.json says
+ * EX_EXPORTER_VERSION; else writes the pack beside it (<pack_dir>.tmp) and swaps it in, so an interrupted run
+ * leaves no half pack. 1 = already current, 0 = written, -1 = failed (log says why). */
+int ex_ensure_base_pack(const char *rom_path, const char *pack_dir, ExLogFn log, void *user);
+
+/* ---- levels (level_export.c, docs/specs/level-decor.md, display-lists.md) */
+
 /* Exports every decor file of the ROM (the levels of level-decor.md) into
- * <out_dir>/<level>/<level>.gltf + <level>.bin + textures/<texnum>.png and
+ * <out_dir>/<level>/<level>.gltf + <level>.bin (its images point into ../ge007.ptexpack/textures/, the base pack of
+ * ex_export_textures, which the caller writes first) and
  * <out_dir>/<level>/setup.json + setup_mp.json (setup_export.c, docs/specs/setup.md) and
  * <out_dir>/<level>/report.txt (opcode census, skipped commands, warnings).
  * The ROM must pass cv_romcheck. Returns the number of levels that failed
@@ -75,8 +96,8 @@ int ex_export_levels(const char *rom_path, const char *out_dir, ExLogFn log, voi
 /* ---- object models (model_export.c, docs/specs/models.md) ---------------- */
 
 /* Exports every object model of the model-number table into
- * <out_dir>/<file name without the trailing Z>/<same>.gltf + .bin + textures/<n>.png
- * and <out_dir>/models.json (one entry per model number: file, base scale,
+ * <out_dir>/<file name without the trailing Z>/<same>.gltf + .bin (images: ../../ge007.ptexpack/textures/<n>.png,
+ * relative to an export root where <out_dir> is <root>/models) and <out_dir>/models.json (one entry per model number: file, base scale,
  * bounding box, node and triangle counts, textures, notes). Returns the number
  * of models that failed, or 1000 + the count when the model table is refused
  * (its invariants do not hold for this ROM). `log` may be NULL. */
@@ -91,7 +112,8 @@ int ex_export_text(const char *rom_path, const char *out_dir, ExLogFn log, void 
 /* ---- characters (char_export.c, docs/specs/characters.md) ----------------- */
 
 /* Exports every guard body (skinned, with the selected animations) and head (rigid) of the character table into
- * <out_dir>/<file name without C and Z>/<same>.gltf + .bin + textures/<n>.png and <out_dir>/characters.json.
+ * <out_dir>/<file name without C and Z>/<same>.gltf + .bin (images: ../../ge007.ptexpack/textures/<n>.png,
+ * <out_dir> being <root>/characters) and <out_dir>/characters.json.
  * The first-person hand (id 41) is listed with kind "hand" and not exported. Returns the number of characters that
  * failed, or 1000 when the character table or the animation data is refused. `log` may be NULL. */
 int ex_export_characters(const char *rom_path, const char *out_dir, ExLogFn log, void *user);

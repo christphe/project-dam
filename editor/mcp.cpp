@@ -535,13 +535,14 @@ const Tool kTools[] = {
     { "mod_reorder", "Reorder the open mod's missions: order [folder, ...] (a permutation), or mission (folder or index) with to (new index). Save with mod_save.",
       "{\"type\":\"object\",\"properties\":{\"order\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"mission\":{\"type\":[\"integer\",\"string\"]},\"to\":{\"type\":\"integer\"}}}", toolModReorder },
     { "textures", "The open level's textures (glTF decor): texnum, size, where the drawn picture comes from (level, mod, pack) and the rooms using it; "
-      "the open mod's replacements (textures/<n>.png), the chosen texture pack and the packs in the game's texturepacks folder.",
+      "the open mod's pictures (textures/<n>.png), the chosen texture pack and the packs in the game's texturepacks folder (usable, or not and why).",
       "{\"type\":\"object\",\"properties\":{}}", toolTextures },
     { "mod_set_texture", "Replace texture texnum in the open mod with the PNG png (copied as <mod>/textures/<texnum>.png; 8-bit, not interlaced, any size: "
       "the texture coordinates are 0..1 of the picture). Pictures of your own only, never the game's. remove: true takes the replacement out. "
       "The decor is drawn again with it; returns what textures returns.",
       "{\"type\":\"object\",\"properties\":{\"texnum\":{\"type\":\"integer\"},\"png\":{\"type\":\"string\"},\"remove\":{\"type\":\"boolean\"}},\"required\":[\"texnum\"]}", toolModSetTexture },
-    { "set_texture_pack", "Draw the level with a texture pack of the game's texturepacks folder (file: \"hd.ptexpack\"; \"\" none), under the mod's own textures. "
+    { "set_texture_pack", "Draw the level with a texture pack of the game's texturepacks folder (file: \"hd.ptexpack\"; \"\" or \"ge007.ptexpack\" the game's own, the default), under the mod's own textures: "
+      "exactly one pack is always chosen, and an incomplete pack (missing textures of ge007) is refused. "
       "The editor's choice only (the game's is Video > Texture pack). Returns what textures returns.",
       "{\"type\":\"object\",\"properties\":{\"file\":{\"type\":\"string\"}}}", toolSetTexturePack },
     { "set_environment", "Set the mission's environment overrides (save only: the editor draws no sky or sea yet, preview in the game). mood day|dusk|night|keep; sun {azimuth, elevation (deg), color [r,g,b], glow}; sky, clouds [r,g,b]; cloud_speed; sea {enabled, height, color, swell, chop, speed}; clear: [mood|sun|sky|clouds|cloud_speed|sea] or \"all\" returns to the level's own.",

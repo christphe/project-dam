@@ -1,6 +1,7 @@
 // Mod (campaign) folder handling and the mission environment edit of Doc.
 // A mod is mods/<mod>/campaign.json plus one folder per mission (mission.json, thumb.png).
 #include "doc.h"
+#include "exportcache.h"
 #include "mission_pkg.h"
 #include "png.h"
 
@@ -152,12 +153,40 @@ std::string Doc::texturePacksRoot() const
     return m.substr(0, m.size() - 4) + "texturepacks";
 }
 
-std::vector<std::string> Doc::textureRoots() const
+std::string Doc::exportPackRoot() const
 {
-    std::vector<std::string> r;
-    if (hasMod) r.push_back(modDir);
-    if (!texPack.empty()) r.push_back(texturePacksRoot() + "/" + texPack);
-    return r;
+    namespace fs2 = std::filesystem;
+    std::error_code ec;
+    std::vector<std::string> roots;
+    if (hasLevel) roots = level.gltfRoots();
+    else if (!gameExe.empty()) roots.push_back(gltfDirFor(gameExe));
+    for (const std::string &r : roots) if (fs2::exists(fs2::path(r) / "ge007.ptexpack", ec)) return r;
+    return "";
+}
+
+std::string Doc::basePackRoot() const
+{
+    return baseTexturePackRoot(texturePacksRoot(), exportPackRoot());
+}
+
+std::string Doc::chosenPackRoot() const
+{
+    return texturePackPath(texPack, texturePacksRoot(), exportPackRoot());
+}
+
+std::string Doc::texSetSignature() const
+{
+    return TexSet::signatureOf(hasMod ? modDir : "", chosenPackRoot(), basePackRoot());
+}
+
+void Doc::openTexSet()
+{
+    texSet.open(hasMod ? modDir : "", chosenPackRoot(), basePackRoot());
+}
+
+void Doc::rescanPacks()
+{
+    packChoices = listTexturePacks(texturePacksRoot(), exportPackRoot());
 }
 
 std::vector<int> Doc::modTextures() const

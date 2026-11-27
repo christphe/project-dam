@@ -200,6 +200,8 @@ struct LoadedTexture {
      * with the two 32-bit halves of every 8-byte group swapped on odd rows.
      * Rare relies on this for the Rareware logo's text mip textures. */
     bool dxt0 = false;
+    /* texture packs: set by gfx_dp_load_tile (a load by tiles can be a strip of a wider image), cleared by gfx_dp_load_block */
+    bool from_tile = false;
 };
 
 static struct RDP {
@@ -1528,6 +1530,63 @@ static void gfx_porttex_bind(int i) {
     }
 }
 
+/* Texture packs: lay the pack's picture (pw x ph) out the way the importers lay out the game's own texture, so that a pack
+ * of the game's own pictures draws exactly as none does. The importers upload the tile as rdp.texture_tile[tile].line_size_bytes
+ * wide (TMEM lines are multiples of 8 bytes: a 33 texel I8 row is stored 40 wide; a 1 texel high texture 2 high) and
+ * size_bytes / line high, while the picture has the texture's real size, times a scale k (k = 1 for the game's own, 2 for a
+ * 2x pack). The texture is loaded either whole, or as a strip (gDPLoadTile of part of a wider image: its texel rows start
+ * `offset` bytes into the picture, full_image_line_size_bytes apart). Both come out as a canvas of the uploaded size times k
+ * with the strip's part of the picture in it and its last row and column repeated past the picture's edge. On return the
+ * canvas is filled and has the uploaded size (pw, ph set to it), or is left empty: upload the picture as is. */
+static void texpack_layout(const uint8_t* px, int& pw, int& ph, int tile, const LoadedTexture& lt, uint32_t offset,
+                           std::vector<uint8_t>& canvas) {
+    const uint32_t bpp = 4u << rdp.texture_tile[tile].siz;
+    const uint32_t row = rdp.texture_tile[tile].line_size_bytes;
+    if (!row || lt.raw_tex_metadata.h_byte_scale != 1 || lt.raw_tex_metadata.v_pixel_scale != 1) return;
+    /* (an RGBA32 tile counts its 32 bit texels as two 16 bit ones: rgba32's width is line / 2 and its height size / 2 / line) */
+    const bool t32 = rdp.texture_tile[tile].siz == G_IM_SIZ_32b;
+    const uint32_t gw = t32 ? row / 2 : row * 8 / bpp;
+    const uint32_t gh = t32 ? lt.size_bytes / 2 / row : lt.size_bytes / row;
+    if (!gw || !gh) return;
+    const bool strip = lt.from_tile && (offset || lt.full_image_line_size_bytes != lt.line_size_bytes);
+    /* the texel width of the image the rows belong to, and where the strip starts in it */
+    uint32_t imgw = gw, ox = 0, oy = 0;
+    if (strip) {
+        const uint32_t full = lt.full_image_line_size_bytes;
+        if (!full) return;
+        imgw = full * 8 / bpp;
+        oy = offset / full;
+        ox = (offset % full) * 8 / bpp;
+    }
+    /* the scale: the picture's real width is a multiple of k below the image's width by less than one 8 byte line */
+    const uint32_t align_px = t32 ? 4u : 64 / bpp;
+    double k = 0;
+    for (int kk = 1; kk <= 16 && k == 0; kk++) {
+        if (pw % kk || ph % kk) continue;
+        const uint32_t rw = (uint32_t)(pw / kk);
+        if (rw <= imgw && rw + align_px > imgw) k = kk;
+    }
+    if (k == 0) {
+        if (!strip) return;               /* whole: the picture as it is */
+        k = (double)pw / imgw;            /* strip of an unfamiliar picture: scale by the width */
+    }
+    const int cw = (int)(gw * k + 0.5), ch = (int)(gh * k + 0.5);
+    const int maxs = s_max_tex_size > 0 ? s_max_tex_size : 4096;
+    if (cw < 1 || ch < 1 || cw > maxs || ch > maxs) return;
+    if (!strip && cw == pw && ch == ph) return;   /* already the uploaded size */
+    const int sx0 = (int)(ox * k + 0.5), sy0 = (int)(oy * k + 0.5);
+    canvas.resize((size_t)cw * ch * 4);
+    for (int y = 0; y < ch; y++) {
+        const int sy = sy0 + y < ph ? sy0 + y : ph - 1;
+        for (int x = 0; x < cw; x++) {
+            const int sx = sx0 + x < pw ? sx0 + x : pw - 1;
+            memcpy(&canvas[((size_t)y * cw + x) * 4], px + ((size_t)sy * pw + sx) * 4, 4);
+        }
+    }
+    pw = cw;
+    ph = ch;
+}
+
 static void import_texture(int i, int tile, bool importReplacement) {
     s_tick_texloads++;   /* D583 SLOW line */
     TickTexTimer tick_tex_timer;
@@ -1704,7 +1763,12 @@ static void import_texture(int i, int tile, bool importReplacement) {
     /* Texture packs: the texture texLoad unpacked at this address has a picture in the selected pack. The salt keeps
      * it apart from the game's own in the cache (and changes with the pack). */
     int pack_texnum = -1;
-    const unsigned pack_salt = thumb_salt ? 0u : texpackSalt(orig_addr, &pack_texnum);
+    uint32_t pack_off = 0;
+    unsigned pack_salt = thumb_salt ? 0u : texpackSalt(orig_addr, loaded_texture.from_tile ? 1 : 0, &pack_texnum, &pack_off);
+    if (pack_salt) {   /* the same address can be loaded with another geometry (strips of different widths) */
+        pack_salt = (pack_salt ^ (loaded_texture.line_size_bytes * 40503u) ^ (loaded_texture.full_image_line_size_bytes * 2654435761u) ^
+                     (loaded_texture.size_bytes * 2246822519u) ^ (rdp.texture_tile[tile].line_size_bytes * 3266489917u)) | 1u;
+    }
     key.palette_hash ^= pack_salt;
 
     /* Intro blood (M-201): textures the game regenerates IN PLACE in the
@@ -1738,17 +1802,20 @@ static void import_texture(int i, int tile, bool importReplacement) {
     if (gfx_texture_cache_lookup(i, key) && !s_water_import && s_capture_id < 0) {
         return;   /* (a cache hit is decoded again when the water capture wants the image) */
     }
-    if (pack_salt && !s_water_import && s_capture_id < 0) {
-        /* The pack's picture, at its own size: the vertex pass normalises texture coordinates by the tile's texel count
-         * and the repeat period follows the uploaded size, so a larger picture maps the same way (D615). Uploaded with
-         * a mip chain and sampled with it: a large picture would alias when minified. A CI tile drawn with the TLUT off
-         * reads as an intensity texture (D161), so it gets the same alpha rule. */
+    if (pack_salt && !s_water_import && s_capture_id < 0 && !s_lr_on) {   /* (a level export records the game's own textures) */
+        /* The pack's picture of the whole texture, at its own size, laid out as the game's own is (texpack_layout): the vertex
+         * pass normalises texture coordinates by the tile's texel count and the repeat period follows the uploaded size, so a
+         * larger picture maps the same way (D615). Uploaded with a mip chain and sampled with it: a large picture would alias
+         * when minified. A CI tile drawn with the TLUT off reads as an intensity texture (D161), so it gets the same alpha rule. */
         const int fmt_tex = (fmt == G_IM_FMT_CI && rdp.palette_fmt == G_TT_NONE) ? G_IM_FMT_I : fmt;
         int pw = 0, ph = 0;
         const uint8_t* px = texpackPixels(pack_texnum, fmt_tex, s_max_tex_size > 0 ? s_max_tex_size : 4096, &pw, &ph);
         if (px) {
+            std::vector<uint8_t> canvas;
+            texpack_layout(px, pw, ph, tile, loaded_texture, pack_off, canvas);
             s_avg_addr = nullptr;
-            gfx_rapi->upload_texture(px, (uint32_t)pw, (uint32_t)ph, true);
+            if (!canvas.empty()) gfx_rapi->upload_texture(canvas.data(), (uint32_t)pw, (uint32_t)ph, true);
+            else gfx_rapi->upload_texture(px, (uint32_t)pw, (uint32_t)ph, true);
             gfx_rapi->set_sampler_parameters(i, false, 0, 0, true);
             if (rendering_state.textures[i]) rendering_state.textures[i]->second.pack_mips = true;
             return;
@@ -5940,6 +6007,7 @@ static void gfx_dp_load_block(uint8_t tile, uint32_t uls, uint32_t ult, uint32_t
     loaded_texture.addr = rdp.texture_to_load.addr;
     loaded_texture.src_fmt = rdp.texture_to_load.fmt; /* D229 */
     loaded_texture.dxt0 = (dxt == 0);                 /* D75 */
+    loaded_texture.from_tile = false;
 
     rdp.textures_changed[0] = rdp.textures_changed[1] = true;
 }
@@ -5982,6 +6050,7 @@ static void gfx_dp_load_tile(uint8_t tile, uint32_t uls, uint32_t ult, uint32_t 
     loaded_texture.addr = rdp.texture_to_load.addr + start_offset_bytes;
     loaded_texture.src_fmt = rdp.texture_to_load.fmt; /* D229 */
     loaded_texture.dxt0 = false;                      /* D75 */
+    loaded_texture.from_tile = true;
 
     rdp.texture_tile[tile].uls = uls;
     rdp.texture_tile[tile].ult = ult;

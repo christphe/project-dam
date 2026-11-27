@@ -26,7 +26,7 @@
 #include "texpack.h"
 #include "texpacks.h"
 
-#define REG_SIZE 16384            /* power of two; cleared when 3/4 full */
+#define REG_SIZE 16384            /* registered textures kept; cleared when full */
 #ifdef __SWITCH__
 #define CACHE_BUDGET (192u << 20)
 #else
@@ -44,9 +44,11 @@ static char s_modDir[600];
 static unsigned s_gen = 1;
 static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
 
-typedef struct { uintptr_t addr; int16_t texnum; } RegSlot;
+/* The registered textures, sorted by address, none overlapping: a load by sub-rectangles (gDPLoadTile strips) starts inside
+ * the texture, so the lookup is by range. */
+typedef struct { uintptr_t addr; uint32_t size; int16_t texnum; } RegSlot;
 static RegSlot s_reg[REG_SIZE];
-static int s_regUsed;
+static int s_regN;
 
 typedef struct {
     uint8_t *rgba, *lum;          /* the picture; the same with alpha = luminance (intensity tiles), made on demand */
@@ -162,42 +164,60 @@ int texpackListPacks(char (*files)[128], char (*names)[64], int max)
     return n;
 }
 
-void texpackRegister(const void *data, int texnum)
+/* The first entry whose end is past `a` (entries are sorted and disjoint). Under s_lock. */
+static int regFirstEnding(uintptr_t a)
 {
-    uintptr_t a = normAddr(data);
-    size_t h;
+    int lo = 0, hi = s_regN;
+    while (lo < hi) {
+        const int mid = (lo + hi) / 2;
+        if (s_reg[mid].addr + s_reg[mid].size <= a) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+}
+
+void texpackRegister(const void *data, int texnum, int bytes)
+{
+    const uintptr_t a = normAddr(data);
+    const uint32_t size = bytes > 8 ? (uint32_t)bytes : 8u;
+    int first, last;
     if (!data || texnum < 0 || texnum > TEXPACK_MAX_TEXNUM) return;
-    h = (size_t)((a >> 3) * 2654435761u) & (REG_SIZE - 1);
     pthread_mutex_lock(&s_lock);
-    if (s_regUsed >= REG_SIZE * 3 / 4) { memset(s_reg, 0, sizeof s_reg); s_regUsed = 0; }
-    while (s_reg[h].addr && s_reg[h].addr != a) h = (h + 1) & (REG_SIZE - 1);
-    if (!s_reg[h].addr) { s_reg[h].addr = a; s_regUsed++; }
-    s_reg[h].texnum = (int16_t)texnum;
+    if (s_regN >= REG_SIZE - 1) s_regN = 0;
+    first = regFirstEnding(a);                      /* the entries [first, last) overlap the new range: the ring reused it */
+    last = first;
+    while (last < s_regN && s_reg[last].addr < a + size) last++;
+    if (last - first != 1) memmove(&s_reg[first + 1], &s_reg[last], (size_t)(s_regN - last) * sizeof s_reg[0]);
+    s_regN += 1 - (last - first);
+    s_reg[first].addr = a; s_reg[first].size = size; s_reg[first].texnum = (int16_t)texnum;
     pthread_mutex_unlock(&s_lock);
 }
 
-static int lookupLocked(uintptr_t a)
+/* The texture holding address `a`: its number, and a's offset into it. A load by blocks starts at the texture's own address
+ * (a mip level further in is not the picture); a load by tiles may start anywhere inside. -1 when none. Under s_lock. */
+static int lookupLocked(uintptr_t a, int fromTile, uint32_t *offset)
 {
-    size_t h = (size_t)((a >> 3) * 2654435761u) & (REG_SIZE - 1);
-    while (s_reg[h].addr) {
-        if (s_reg[h].addr == a) return s_reg[h].texnum;
-        h = (h + 1) & (REG_SIZE - 1);
-    }
-    return -1;
+    const int i = regFirstEnding(a);
+    if (i >= s_regN || s_reg[i].addr > a) return -1;
+    if (!fromTile && s_reg[i].addr != a) return -1;
+    *offset = (uint32_t)(a - s_reg[i].addr);
+    return s_reg[i].texnum;
 }
 
-unsigned texpackSalt(const void *addr, int *texnum)
+unsigned texpackSalt(const void *addr, int fromTile, int *texnum, uint32_t *offset)
 {
     unsigned salt = 0;
     *texnum = -1;
+    *offset = 0;
     if (!s_ix && !s_modIx) return 0;   /* no pack, no mod textures: one unlocked test per import */
     pthread_mutex_lock(&s_lock);
     if (s_picGen != s_gen) { picsClear(); s_picGen = s_gen; }
     {
-        const int n = lookupLocked(normAddr(addr));
+        uint32_t off = 0;
+        const int n = lookupLocked(normAddr(addr), fromTile, &off);
         if (n >= 0 && sourceOf(n) && !s_pic[n].failed) {
             *texnum = n;
-            salt = ((0x5EA70000u ^ (s_gen * 2654435761u)) + (unsigned)n * 40503u) | 1u;
+            *offset = off;
+            salt = ((0x5EA70000u ^ (s_gen * 2654435761u)) + (unsigned)n * 40503u + off * 2246822519u) | 1u;
         }
     }
     pthread_mutex_unlock(&s_lock);

@@ -6,6 +6,7 @@
         --export DIR --body CgreyguardZ --head CheadkarlZ --specs 0|1 --hair 0|1 --bodyscale 0|1 --model FILE|BODY+HEAD
         --tier 0|1 --method GAME|FLAT|PN|PHONG|BUTTERFLY|LOOP|HEAD --passes 1|2 --crease DEG --clamp F --splitjoint 0|1
         --view side|split|sub|orig --wire 0|1 --edges 0|1 --checker 0|1 --normals 0|1 --light 0|1 --smooth 0|1
+        --game DIR (the game folder: texturepacks/ and mods/) --mod X.pmod|folder|name --texpack NAME|path
   python tools_pc/modelview/modelview.py export [--rom FILE] [--all-animations]
         write the character export into tools_pc/modelview/data/export (ge007-export, built in Docker)
   python tools_pc/modelview/modelview.py selftest              PNG decoding, pose maths and the HEAD method, no export needed
@@ -15,7 +16,9 @@
 The characters come from the static export (characters/characters.json + one glTF per body and head,
 docs/specs/characters.md), made from your own ROM: --export DIR, else MODELVIEW_EXPORT, else
 tools_pc/modelview/data/export (`modelview.py export` writes it). The Windows g++ comes from MODELVIEW_GXX
-(environment or <repo>/.env), else SEAVIEW_GXX. Settings are saved in tools_pc/modelview/data/modelview.ini
+(environment or <repo>/.env), else SEAVIEW_GXX. Textures are resolved by key through the active mod (--mod, partial)
+over the chosen texture pack (--texpack, complete; ge007.ptexpack, the export's own, by default), docs/specs/texture-packs.md; the game
+folder holding texturepacks/ and mods/ comes from --game, else MODELVIEW_GAME, else a build folder of this checkout. Settings are saved in tools_pc/modelview/data/modelview.ini
 (git ignores data/ and build/). Nothing from the ROM is written into the repo outside data/.
 """
 import argparse, html, json, os, re, subprocess, sys
@@ -78,6 +81,17 @@ def find_export(env, extra):
     return None
 
 
+def find_game(env, extra):
+    """--game (passed through untouched), MODELVIEW_GAME, else a build folder of this checkout that has texturepacks/ or mods/; None = unknown"""
+    if "--game" in extra:
+        return None
+    cands = ([env["MODELVIEW_GAME"]] if env.get("MODELVIEW_GAME") else []) + [os.path.join(r, b) for r in devenv.roots() for b in ("build-win", "build-linux", "build-pc")]
+    for d in cands:
+        if os.path.isdir(os.path.join(d, "texturepacks")) or os.path.isdir(os.path.join(d, "mods")):
+            return os.path.abspath(d)
+    return None
+
+
 def build(env):
     """compile the viewer; returns the exe path (build/modelview_new.exe when a running viewer locks modelview.exe)"""
     gxx = find_gxx(env)
@@ -90,6 +104,7 @@ def build(env):
     os.makedirs(odir, exist_ok=True); os.makedirs(DATA, exist_ok=True)
     e = dict(os.environ, PATH=os.path.dirname(gxx) + os.pathsep + os.environ.get("PATH", ""))
     objs = []
+    mission = os.path.join(REPO, "port", "mission")   # the texture-pack layer shared with the game: folders and tars, textures.json
 
     def obj(cc, src, flags):   # cached by modification time
         o = os.path.join(odir, os.path.basename(src) + ".o")
@@ -105,6 +120,8 @@ def build(env):
     for f in ("imgui.cpp", "imgui_draw.cpp", "imgui_tables.cpp", "imgui_widgets.cpp"):
         obj(gxx, os.path.join(imgui, f), ["-std=c++17", "-I", imgui, "-w"])
     obj(gcc, os.path.join(third, "cjson", "cJSON.c"), ["-w"])
+    for f in ("texpacks.c", "mission_pkg.c"):   # no zlib here: modelview decodes the PNGs itself
+        obj(gcc, os.path.join(mission, f), ["-I", mission, "-I", os.path.join(third, "cjson"), "-DTEXPACK_NO_PNG", "-w"])
 
     exe = os.path.join(bdir, "modelview.exe")
     if os.path.exists(exe):
@@ -114,7 +131,7 @@ def build(env):
             exe = os.path.join(bdir, "modelview_new.exe")
             print("modelview: modelview.exe is running, building", exe)
     srcs = [os.path.join(pc, f) for f in ("modelview.cpp", "mv_imgui.cpp", "mv_subdiv.cpp", "mv_mannequin.cpp", "mv_export.cpp", "mv_zlib.cpp", "mv_head.cpp")]
-    cmd = [gxx, "-O2", "-std=c++17", "-Wall", "-I", imgui, "-I", conv, "-I", os.path.join(third, "cgltf"), "-I", os.path.join(third, "cjson"),
+    cmd = [gxx, "-O2", "-std=c++17", "-Wall", "-I", imgui, "-I", conv, "-I", os.path.join(third, "cgltf"), "-I", os.path.join(third, "cjson"), "-I", mission,
            "-o", exe] + srcs + objs + ["-lopengl32", "-lgdi32", "-luser32", "-limm32", "-static"]
     if subprocess.run(cmd, env=e).returncode != 0:
         sys.exit("modelview: the viewer did not build")
@@ -123,7 +140,7 @@ def build(env):
 
 def absolutise(extra):
     for i, x in enumerate(extra[:-1]):   # the viewer runs in data/: a path given relative to here must be made absolute
-        if x in ("--shot", "--export"):
+        if x in ("--shot", "--export", "--game", "--mod", "--texpack") and (x in ("--shot", "--export", "--game") or os.path.exists(extra[i + 1])):
             extra[i + 1] = os.path.abspath(extra[i + 1])
     return extra
 
@@ -134,6 +151,9 @@ def cmd_pc(env, a):
     exp = find_export(env, extra)
     if exp:
         extra += ["--export", exp]
+    game = find_game(env, extra)
+    if game:
+        extra += ["--game", game]
     extra = absolutise(extra)
     if "--shot" in extra:   # unattended screenshot: wait for it
         sys.exit(subprocess.run([exe] + extra, cwd=DATA).returncode)
@@ -187,13 +207,14 @@ def cmd_shots(env, a):
     exp = os.path.abspath(a.export) if a.export else find_export(env, [])
     if not exp:
         sys.exit("modelview: no character export (run `modelview.py export`, or pass --export DIR)")
+    game = find_game(env, [])
     ok = {}
     for m in models:
         for me in methods:
             stem = m.replace("+", "_")
             png = os.path.join(out, f"{stem}_{me}.png")
             r = subprocess.run([exe, "--export", exp, "--model", m, "--method", me, "--view", "side", "--wire", "1", "--edges", "1",
-                                "--w", str(a.w), "--h", str(a.h)] + (["--anim", a.anim] if a.anim else []) + (["--frame", str(a.frame)] if a.frame is not None else []) + (["--clean", "1"] if a.clean else []) + ["--shot", png], cwd=DATA, capture_output=True, text=True)
+                                "--w", str(a.w), "--h", str(a.h)] + (["--anim", a.anim] if a.anim else []) + (["--frame", str(a.frame)] if a.frame is not None else []) + (["--clean", "1"] if a.clean else []) + (["--game", game] if game else []) + (["--mod", os.path.abspath(a.mod) if os.path.exists(a.mod) else a.mod] if a.mod else []) + (["--texpack", a.texpack] if a.texpack else []) + ["--shot", png], cwd=DATA, capture_output=True, text=True)
             ok[(m, me)] = r.returncode == 0 and os.path.exists(png)
             print(("ok   " if ok[(m, me)] else "FAIL ") + f"{m} {me}")
     rows = []
@@ -218,7 +239,7 @@ def main():
     p = sub.add_parser("selftest"); p.set_defaults(f=cmd_selftest)
     p = sub.add_parser("shots", allow_abbrev=False)
     p.add_argument("--out", required=True); p.add_argument("--models"); p.add_argument("--methods"); p.add_argument("--export")
-    p.add_argument("--anim"); p.add_argument("--frame", type=float); p.add_argument("--clean", action="store_true", help="no overlays: texture only")
+    p.add_argument("--anim"); p.add_argument("--frame", type=float); p.add_argument("--mod"); p.add_argument("--texpack"); p.add_argument("--clean", action="store_true", help="no overlays: texture only")
     p.add_argument("--w", type=int, default=1280); p.add_argument("--h", type=int, default=720); p.set_defaults(f=cmd_shots)
     a, extra = ap.parse_known_args()
     a.extra = extra

@@ -86,8 +86,6 @@ void ex_texcache_open(ExTexCache *tc, const uint8_t *rom, size_t rom_size, const
 void ex_texcache_close(ExTexCache *tc);
 void ex_texcache_clear(ExTexCache *tc);     /* drops the decoded textures, keeps the table */
 TexEnt *ex_texcache_get(ExTexCache *tc, int texnum);
-/* Writes <dir>/textures/<n>.png for every textured material's texture. *count = files written. 0 on success. */
-int ex_write_textures(ExTexCache *tc, const Material *mats, size_t nm, const char *dir, size_t *count);
 
 /* ---- display-list state shared by every list interpreter ---- */
 
@@ -155,6 +153,7 @@ typedef struct {
     GTex *gt; size_t ngt, capgt;
     int *imgtex; size_t nimg, capimg;
     int smap[9], nsmp;
+    int pack_depth;     /* folders between the glTF and the export root: 1 level (default), 2 model / character */
 } MatOut;
 
 void ex_matout_init(MatOut *mo);

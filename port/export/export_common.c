@@ -209,25 +209,6 @@ TexEnt *ex_texcache_get(ExTexCache *tc, int texnum)
     return e;
 }
 
-int ex_write_textures(ExTexCache *tc, const Material *mats, size_t nm, const char *dir, size_t *count)
-{
-    char path[1200];
-    *count = 0;
-    snprintf(path, sizeof path, "%s/textures", dir);
-    if (ex_mkdir_p(path)) return -1;
-    for (size_t i = 0; i < tc->nt; i++) {
-        TexEnt *te = &tc->tex[i];
-        int used = 0;
-        for (size_t m = 0; m < nm; m++)
-            if (mats[m].k.textured && mats[m].k.texnum == (uint32_t)te->texnum) used = 1;
-        if (!te->ok || !used) continue;
-        snprintf(path, sizeof path, "%s/textures/%d.png", dir, te->texnum);
-        if (ex_png_write(path, te->t.width, te->t.height, te->t.rgba)) return -1;
-        (*count)++;
-    }
-    return 0;
-}
-
 /* ---- display-list state ---- */
 
 int ex_dl_state(ExGfxState *s, unsigned op, uint32_t w0, uint32_t w1)
@@ -511,6 +492,7 @@ static void write_rgba(CvBuf *j, uint32_t c) { ex_jp(j, "[%u,%u,%u,%u]", c >> 24
 void ex_matout_init(MatOut *mo)
 {
     memset(mo, 0, sizeof *mo);
+    mo->pack_depth = 1;
     for (int i = 0; i < 9; i++) mo->smap[i] = -1;
 }
 
@@ -542,7 +524,8 @@ int ex_emit_materials(MatOut *mo, const MatCtx *mc)
                 if (ii == mo->nimg) {
                     if (ex_grow((void **)&mo->imgtex, &mo->capimg, mo->nimg + 1, sizeof *mo->imgtex)) return -1;
                     mo->imgtex[mo->nimg++] = (int)k->texnum;
-                    ex_jp(&mo->imgs, "%s{\"uri\":\"textures/%u.png\"}", ii ? "," : "", k->texnum);
+                    ex_jp(&mo->imgs, "%s{\"uri\":\"%s/ge007.ptexpack/textures/%u.png\"}", ii ? "," : "",
+                          mo->pack_depth >= 2 ? "../.." : "..", k->texnum);
                 }
                 int sk = (int)(wsm > 2 ? 0 : wsm) * 3 + (int)(wtm > 2 ? 0 : wtm);
                 if (mo->smap[sk] < 0) {
@@ -559,6 +542,7 @@ int ex_emit_materials(MatOut *mo, const MatCtx *mc)
         ex_jp(&mo->mats, ",\"doubleSided\":%s", (k->geom & 0x3000u) == 0 ? "true" : "false");
         ex_jp(&mo->mats, ",\"extensions\":{\"KHR_materials_unlit\":{}},\"extras\":{\"texnum\":%d",
               k->texnum == 0xFFFFFFFFu ? -1 : (int)k->texnum);
+        if (k->textured) ex_jp(&mo->mats, ",\"texture\":\"%u\"", k->texnum);   /* the texture key in the base pack (texture-packs.md) */
         if (k->geom & GEOM_TEXGEN) ex_jp(&mo->mats, ",\"texgen\":true%s", (k->geom & GEOM_TEXGEN_LINEAR) ? ",\"texgen_linear\":true" : "");
         if (m->emit_decal && (k->oml & 0x0C00u) == 0x0C00u) ex_jp(&mo->mats, ",\"decal\":true");
         if (k->texnum != 0xFFFFFFFFu && k->type == 1)

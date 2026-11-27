@@ -154,17 +154,19 @@ ToolResult toolModReorder(Doc &d, const cJSON *a)
 ToolResult toolTextures(Doc &d, const cJSON *)
 {
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddStringToObject(o, "texture_pack", d.texPack.c_str());
+    cJSON_AddStringToObject(o, "texture_pack", d.texPack.empty() ? "ge007.ptexpack" : d.texPack.c_str());
     cJSON_AddStringToObject(o, "texture_packs_dir", d.texturePacksRoot().c_str());
+    if (!d.texSet.note().empty()) cJSON_AddStringToObject(o, "texture_pack_note", d.texSet.note().c_str());
     {
-        std::vector<TexPackInfo> packs(64);
-        const int n = texpackScan(d.texturePacksRoot().c_str(), packs.data(), (int)packs.size());
+        d.rescanPacks();
         cJSON *pa = cJSON_AddArrayToObject(o, "packs");
-        for (int i = 0; i < n && i < (int)packs.size(); i++) {
+        for (const PackChoice &c : d.packChoices) {
             cJSON *p = cJSON_CreateObject();
-            cJSON_AddStringToObject(p, "file", packs[(size_t)i].file);
-            cJSON_AddStringToObject(p, "name", packs[(size_t)i].name);
-            if (packs[(size_t)i].author[0]) cJSON_AddStringToObject(p, "author", packs[(size_t)i].author);
+            cJSON_AddStringToObject(p, "file", c.file.c_str());
+            cJSON_AddStringToObject(p, "name", c.name.c_str());
+            if (!c.author.empty()) cJSON_AddStringToObject(p, "author", c.author.c_str());
+            cJSON_AddBoolToObject(p, "usable", c.usable());
+            if (!c.usable()) cJSON_AddStringToObject(p, "reason", c.reason.c_str());
             cJSON_AddItemToArray(pa, p);
         }
     }
@@ -183,8 +185,8 @@ ToolResult toolTextures(Doc &d, const cJSON *)
             cJSON_AddNumberToObject(e, "w", t.w);
             cJSON_AddNumberToObject(e, "h", t.h);
             if (t.source >= 0) { cJSON_AddNumberToObject(e, "orig_w", t.origW); cJSON_AddNumberToObject(e, "orig_h", t.origH); }
-            const bool fromMod = t.source == 0 && d.hasMod && !d.level.texRoots.empty() && d.level.texRoots[0] == d.modDir;
-            cJSON_AddStringToObject(e, "from", t.source < 0 ? "level" : fromMod ? "mod" : "pack");
+            if (!t.key.empty()) cJSON_AddStringToObject(e, "key", t.key.c_str());
+            cJSON_AddStringToObject(e, "from", t.source < 0 ? "level" : t.source == 0 ? "mod" : "pack");
             cJSON *ra = cJSON_AddArrayToObject(e, "rooms");
             for (int r : rooms) cJSON_AddItemToArray(ra, cJSON_CreateNumber(r));
             cJSON_AddItemToArray(arr, e);
@@ -215,14 +217,14 @@ ToolResult toolModSetTexture(Doc &d, const cJSON *a)
 ToolResult toolSetTexturePack(Doc &d, const cJSON *a)
 {
     const std::string f = argStr(a, "file");
-    if (!f.empty()) {
-        std::vector<TexPackInfo> packs(64);
-        const int n = texpackScan(d.texturePacksRoot().c_str(), packs.data(), (int)packs.size());
-        bool found = false;
-        for (int i = 0; i < n && i < (int)packs.size(); i++) if (f == packs[(size_t)i].file) found = true;
+    if (!f.empty() && f != "ge007.ptexpack") {
+        d.rescanPacks();
+        const PackChoice *found = nullptr;
+        for (const PackChoice &c : d.packChoices) if (f == c.file) found = &c;
         if (!found) return fail("no texture pack " + f + " in " + d.texturePacksRoot() + " (textures lists them)");
+        if (!found->usable()) return fail("texture pack " + f + " cannot be used: " + found->reason + " (a pack must have every texture of ge007.ptexpack)");
     }
-    d.texPack = f;
+    d.texPack = f == "ge007.ptexpack" ? "" : f;
     d.syncModTextures();
     return toolTextures(d, a);
 }

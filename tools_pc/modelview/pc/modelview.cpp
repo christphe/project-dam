@@ -4,6 +4,7 @@
 // args: --export DIR --body FILE --head FILE --specs 0|1 --hair 0|1 --shot f.png --w n --h n --method FLAT|PN|PHONG|BUTTERFLY|LOOP|HEAD
 //       --passes 1|2 --crease deg --view side|split|sub|orig
 //       --wire 0|1 --edges 0|1 --checker 0|1 --normals 0|1 --light 0|1 --smooth 0|1   (the command line wins over data/modelview.ini)
+//       --game DIR (texturepacks/ and mods/) --mod X.pmod|folder|name --texpack NAME|path   (textures: the mod over the chosen pack, ge007.ptexpack by default)
 #include <windows.h>
 #include <GL/gl.h>
 #include <GL/glext.h>
@@ -142,7 +143,10 @@ static std::string g_loadErr, g_animNote, g_texInfo, g_exportErr;
 static MvCharInfo g_charInfo;
 static bool g_tex = true;                                  // draw the model's textures
 static int g_animIdx = -1; static bool g_animOn = true, g_play = false; static float g_frame = 0, g_speed = 1; static std::string g_animName = "idle";
-static std::map<std::string, std::pair<GLuint, std::pair<int, int>>> g_texGL;   // image path -> GL texture, size (0 = not decodable)
+static std::map<std::string, std::pair<GLuint, std::pair<int, int>>> g_texGL;   // texture key (or image path) -> GL texture, size (0 = not decodable)
+static int g_texGLGen = 0;                                 // mv_tex_gen() the GL textures were made for
+static std::string g_gameDir, g_modName, g_packName;      // the game folder, the chosen mod and texture pack ("" = none / ge007)
+static void updateTexInfo();
 static bool isMannequin() { return g_bodyName.empty() && g_headName.empty(); }
 static void frameModel() {   // the camera target and distance from the model's bounding box
     const std::vector<MvVec3> jw = mv_joint_worlds(g_orig);
@@ -250,13 +254,14 @@ static bool loadCharacter(bool reframe = true) {
     g_animIdx = g_animName.empty() ? -1 : animFind(g_animName);
     if (g_animIdx >= 0 && g_frame >= mv_export_anims()[(size_t)g_animIdx].frames) g_frame = 0;
     applyPose(); if (reframe) frameModel();
-    {   // textures: how many load (the GL textures are made at draw time)
-        int ok = 0, bad = 0; std::string why;
-        for (const MvMaterial& mt : g_orig.materials) { int w, h; std::vector<uint8_t> px; if (mv_export_image(mt.image, w, h, px)) ok++; else { bad++; if (why.size() < 90) why += (why.empty() ? "" : "; ") + std::to_string(mt.texnum); } }
-        g_texInfo = std::to_string(ok) + " of " + std::to_string(ok + bad) + " textures loaded" + (why.empty() ? "" : " (missing: " + why + ")");
-    }
+    updateTexInfo();   // textures: how many load (the GL textures are made at draw time)
     fprintf(stderr, "model %s: %d vertices, %d triangles\n", m.name.c_str(), (int)m.verts.size(), (int)m.triCount());
     return true;
+}
+static void updateTexInfo() {
+    int ok = 0, bad = 0; std::string why;
+    for (const MvMaterial& mt : g_orig.materials) { int w, h; std::vector<uint8_t> px; if (mv_tex_image(mt, w, h, px)) ok++; else { bad++; if (why.size() < 90) why += (why.empty() ? "" : "; ") + (mt.key.empty() ? std::to_string(mt.texnum) : mt.key); } }
+    g_texInfo = std::to_string(ok) + " of " + std::to_string(ok + bad) + " textures loaded" + (why.empty() ? "" : " (missing: " + why + ")");
 }
 static void rebuild() {
     if (g_dirtyMesh) {
@@ -285,21 +290,26 @@ static void drawMesh(const Gpu& g, const float* vp) {
     glUniform1i(glGetUniformLocation(g_pMesh, "uLight"), g_light); glUniform1i(glGetUniformLocation(g_pMesh, "uHilite"), g_hilite);
     glUniform1i(glGetUniformLocation(g_pMesh, "uVCol"), g_vcol || mesh.materials.empty());
     glUniform1i(glGetUniformLocation(g_pMesh, "uSmooth"), g_smooth); glUniform1i(glGetUniformLocation(g_pMesh, "uTex"), 0);
+    if (g_texGLGen != mv_tex_gen()) {   // another mod or texture pack: the pictures are made again
+        for (auto& kv : g_texGL) if (kv.second.first) glDeleteTextures(1, &kv.second.first);
+        g_texGL.clear(); g_texGLGen = mv_tex_gen();
+    }
     glBindVertexArray(g.vaoT);
     glEnable(GL_POLYGON_OFFSET_FILL); glPolygonOffset(1.0f, 1.0f);
     for (const Draw& d : g.draws) {
         int mode = g_checker ? 1 : 0; float tw = 1, th = 1;
         if (d.mat >= 0 && d.mat < (int)mesh.materials.size() && !g_checker && g_tex) {
             const MvMaterial& mt = mesh.materials[(size_t)d.mat];
-            auto it = g_texGL.find(mt.image);
+            const std::string gk = mt.key.empty() ? mt.image : "k:" + mt.key;
+            auto it = g_texGL.find(gk);
             if (it == g_texGL.end()) {   // decode once, upload once; a texture that cannot be read stays untextured
                 int tw0 = 0, th0 = 0; std::vector<uint8_t> px; GLuint id = 0;
-                if (mv_export_image(mt.image, tw0, th0, px)) {
+                if (mv_tex_image(mt, tw0, th0, px)) {
                     glGenTextures(1, &id); glBindTexture(GL_TEXTURE_2D, id);
                     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, tw0, th0, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
                 }
-                it = g_texGL.emplace(mt.image, std::make_pair(id, std::make_pair(tw0, th0))).first;
+                it = g_texGL.emplace(gk, std::make_pair(id, std::make_pair(tw0, th0))).first;
             }
             if (it->second.first) {
                 static const GLint wrap[3] = { GL_REPEAT, GL_CLAMP_TO_EDGE, GL_MIRRORED_REPEAT };
@@ -368,9 +378,9 @@ static bool shotTo(const std::string& path, int W, int H) {   // through an offs
 static void saveIni(const char* path) {
     FILE* f = fopen(path, "w"); if (!f) return;
     fprintf(f, "method=%s\ncrease=%g\nsplit_joint_edges=%d\npasses=%d\nphong_alpha=%g\nview=%d\nsplit=%g\nwire=%d\nedge_colours=%d\nchecker=%d\nnormals=%d\nlight=%d\nsmooth=%d\n"
-               "vcol=%d\nhilite=%d\nyaw=%g\npitch=%g\ndist=%g\ntarget=%g,%g,%g\nbody=%s\nhead=%s\nspecs=%d\nhair=%d\nbodyscale=%d\nsamesex=%d\ntier=%d\npn_clamp=%g\nanim=%s\nframe=%g\ntextures=%d\ntexfeat=%d\nneckpin=%d\ntaubin=%d\n",
+               "vcol=%d\nhilite=%d\nyaw=%g\npitch=%g\ndist=%g\ntarget=%g,%g,%g\nbody=%s\nhead=%s\nspecs=%d\nhair=%d\nbodyscale=%d\nsamesex=%d\ntier=%d\npn_clamp=%g\nanim=%s\nframe=%g\ntextures=%d\ntexfeat=%d\nneckpin=%d\ntaubin=%d\ngame=%s\nmod=%s\ntexpack=%s\n",
             MV_METHOD_NAMES[g_method], g_par.crease_deg, g_par.split_joint_edges, g_par.passes, g_par.phong_alpha, g_view, g_split, g_wire, g_edgeCol, g_checker, g_normals, g_light, g_smooth,
-            g_vcol, g_hilite, g_yaw, g_pitch, g_dist, g_tgt[0], g_tgt[1], g_tgt[2], g_bodyName.c_str(), g_headName.c_str(), g_specs, g_hair, g_bodyScale, g_sameSex, g_tier, g_par.pn_clamp, g_animName.c_str(), g_frame, g_tex, (int)g_par.head_tex_features, (int)g_par.neck_pin, g_par.taubin_iters);
+            g_vcol, g_hilite, g_yaw, g_pitch, g_dist, g_tgt[0], g_tgt[1], g_tgt[2], g_bodyName.c_str(), g_headName.c_str(), g_specs, g_hair, g_bodyScale, g_sameSex, g_tier, g_par.pn_clamp, g_animName.c_str(), g_frame, g_tex, (int)g_par.head_tex_features, (int)g_par.neck_pin, g_par.taubin_iters, g_gameDir.c_str(), g_modName.c_str(), g_packName.c_str());
     fclose(f);
 }
 static int methodByName(const char* s) { if (!_strnicmp(s, "GAME", 4)) return MV_GAME; for (int i = 0; i < MV_METHOD_COUNT; i++) if (!_stricmp(s, MV_METHOD_NAMES[i])) return i; return atoi(s) % MV_METHOD_COUNT; }
@@ -410,6 +420,9 @@ static void setKey(const char* k, const char* v) {
     else if (!strcmp(k, "taubin")) g_par.taubin_iters = i < 0 ? 0 : i > 50 ? 50 : i;
     else if (!strcmp(k, "clean") && i) { g_vcol = g_wire = g_edgeCol = g_normals = false; }
     else if (!strcmp(k, "tier")) g_tier = i ? 1 : 0;
+    else if (!strcmp(k, "game")) g_gameDir = v;
+    else if (!strcmp(k, "mod")) g_modName = v;
+    else if (!strcmp(k, "texpack")) g_packName = v;
     else if (!strcmp(k, "pn_clamp")) g_par.pn_clamp = fminf(fmaxf(f, 0), 1);
     else if (!strcmp(k, "target")) sscanf(v, "%f,%f,%f", &g_tgt[0], &g_tgt[1], &g_tgt[2]);
     g_dirtyMesh = g_dirtyGpu = true;
@@ -495,6 +508,46 @@ static bool charCombo(const char* label, const char* kind, const char* none, std
     ImGui::EndDisabled();
     return changed;
 }
+// The mod and the texture pack the characters are drawn with: the mod's textures (partial) merged over one complete pack,
+// ge007.ptexpack (the game's own) by default. A pack that lacks textures of ge007 is greyed out and cannot be chosen.
+static bool textureCombos() {
+    static std::vector<MvPackChoice> packs; static std::vector<MvModChoice> mods; static bool wasOpen[2] = { false, false }, first = true;
+    bool changed = false;
+    auto nameOf = [](const std::string& s) { const size_t k = s.find_last_of("/\\"); std::string b = k == std::string::npos ? s : s.substr(k + 1); return b; };
+    if (first) { packs = mv_tex_packs(); mods = mv_tex_mods(); first = false; }
+    // mod
+    std::string modPrev = g_modName.empty() ? std::string("None") : nameOf(g_modName);
+    for (const MvModChoice& m : mods) if (g_modName == m.file || g_modName == m.name || g_modName == m.path) modPrev = m.name;
+    const bool mo = ImGui::BeginCombo("Mod", modPrev.c_str());
+    if (mo) {
+        if (!wasOpen[0]) mods = mv_tex_mods();
+        if (ImGui::Selectable("None", g_modName.empty())) { g_modName.clear(); changed = true; }
+        for (const MvModChoice& m : mods) if (ImGui::Selectable(m.name.c_str(), g_modName == m.file || g_modName == m.name || g_modName == m.path)) { g_modName = m.path; changed = true; }
+        ImGui::EndCombo();
+    }
+    wasOpen[0] = mo;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The mod's textures (textures/<n>.png, textures.json) are drawn over the texture pack's.\n%s", g_gameDir.empty() ? "No game folder known: pass --game DIR (or --mod X.pmod)" : (g_gameDir + "/mods").c_str());
+    // pack
+    std::string packPrev = "GoldenEye 007";
+    for (const MvPackChoice& p : packs) if ((g_packName.empty() && p.base) || (!g_packName.empty() && (g_packName == p.file || g_packName == p.path))) packPrev = p.name;
+    if (!g_packName.empty() && packPrev == "GoldenEye 007") packPrev = nameOf(g_packName);
+    const bool po = ImGui::BeginCombo("Pack", packPrev.c_str());
+    if (po) {
+        if (!wasOpen[1]) packs = mv_tex_packs();
+        for (const MvPackChoice& p : packs) {
+            ImGui::BeginDisabled(!p.usable());
+            const std::string l = p.name + (p.usable() ? "" : "  (" + p.reason + ")") + "##" + p.file;
+            if (ImGui::Selectable(l.c_str(), (g_packName.empty() && p.base) || g_packName == p.file || g_packName == p.path)) { g_packName = p.base ? "" : p.file; changed = true; }
+            ImGui::EndDisabled();
+        }
+        ImGui::EndCombo();
+    }
+    wasOpen[1] = po;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("One complete pack is always chosen: ge007 is the game's own textures.\nA pack that lacks textures of ge007 is not selectable.");
+    if (changed) { mv_tex_use(g_modName, g_packName); updateTexInfo(); }
+    if (!mv_tex_note().empty()) ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "%s", mv_tex_note().c_str());
+    return changed;
+}
 static void characterPanel() {
     if (!ImGui::CollapsingHeader("Character", ImGuiTreeNodeFlags_DefaultOpen)) return;
     if (!mv_export_ready()) {
@@ -516,6 +569,7 @@ static void characterPanel() {
     ImGui::Text("Tier"); ImGui::SameLine();
     if (ImGui::RadioButton("near", g_tier == 0)) { g_tier = 0; ch = true; } ImGui::SameLine();
     if (ImGui::RadioButton("far (simplified)", g_tier == 1)) { g_tier = 1; ch = true; }
+    textureCombos();
     // the game's parameters of this pair (makeonebody, the character table)
     const int hi = g_headName.empty() || ownHead ? -1 : mv_export_find(g_headName);
     if (hi >= 0) {
@@ -677,6 +731,7 @@ int main(int argc, char** argv) {
         else if (a == "--checker") setKey("checker", nx()); else if (a == "--normals") setKey("normals", nx()); else if (a == "--light") setKey("light", nx());
         else if (a == "--smooth") setKey("smooth", nx()); else if (a == "--vcol") setKey("vcol", nx()); else if (a == "--hilite") setKey("hilite", nx()); else if (a == "--texfeat") setKey("texfeat", nx()); else if (a == "--neckpin") setKey("neckpin", nx()); else if (a == "--taubin") setKey("taubin", nx()); else if (a == "--clean") setKey("clean", nx());
         else if (a == "--export") exportDir = nx(); else if (a == "--model") setKey("model", nx()); else if (a == "--tier") setKey("tier", nx());
+        else if (a == "--game") setKey("game", nx()); else if (a == "--mod") setKey("mod", nx()); else if (a == "--texpack") setKey("texpack", nx());
         else if (a == "--body") setKey("body", nx()); else if (a == "--head") setKey("head", nx());
         else if (a == "--specs") setKey("specs", nx()); else if (a == "--hair") setKey("hair", nx()); else if (a == "--bodyscale") setKey("bodyscale", nx());
         else if (a == "--selftest") selftest = true;
@@ -685,6 +740,7 @@ int main(int argc, char** argv) {
     }
 
     if (!exportDir.empty() && !mv_export_open(exportDir, g_exportErr)) fprintf(stderr, "export: %s\n", g_exportErr.c_str());
+    mv_tex_init(g_gameDir); mv_tex_use(g_modName, g_packName);   // after the export is open: ge007.ptexpack may sit beside it
     if (mv_export_ready()) fprintf(stderr, "export: %s (exporter version %d, %d characters)\n", mv_export_dir().c_str(), mv_export_version(), (int)mv_export_chars().size());
     {   // --model / model= named one file: a head goes to the head slot
         const int b = g_bodyName.empty() ? -1 : mv_export_find(g_bodyName);

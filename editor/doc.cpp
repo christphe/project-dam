@@ -261,7 +261,7 @@ std::vector<std::string> Level::gltfRoots() const
 void Level::loadModels()
 {
     useModels = false;
-    models.open(gltfRoots());
+    models.open(gltfRoots(), texSet);
     const char *force = getenv("GE_EDITOR_MODELS");
     const bool rec = force && std::string(force) == "rec";
     if (!models.isOpen()) { printf("[editor] models: no model export (models/models.json) beside the glTF decor: props from level.rec\n"); fflush(stdout); return; }
@@ -286,7 +286,7 @@ void Level::loadDecor()
     for (const std::string &root : roots) {
         const std::string path = (fs::path(root) / name / (name + ".gltf")).string();
         std::string msg;
-        const DecorResult r = decorLoad(path, exportGltfVersion(), decor, msg, texRoots);
+        const DecorResult r = decorLoad(path, exportGltfVersion(), decor, msg, texSet);
         if (r == DECOR_MISSING) continue;
         if (r == DECOR_OK) {
             hasDecor = true;
@@ -354,14 +354,15 @@ void Doc::reloadDecor()
 {
     if (!hasLevel) return;
     level.gltfRoot = gameExe.empty() ? "" : gltfDirFor(gameExe);
-    level.texRoots = textureRoots();
+    openTexSet();
+    level.texSet = &texSet;
     level.loadDecor();
     decorGen++;
 }
 
 void Doc::syncModTextures()
 {
-    if (hasLevel && level.texRoots != textureRoots()) reloadDecor();
+    if (hasLevel && texSet.signature() != texSetSignature()) reloadDecor();
 }
 
 bool Doc::openLevel(const std::string &dir, std::string &err)
@@ -372,7 +373,8 @@ bool Doc::openLevel(const std::string &dir, std::string &err)
     hasLevel = false;
     level.dataDir = gameDataDir();
     level.gltfRoot = gameExe.empty() ? "" : gltfDirFor(gameExe);
-    level.texRoots = textureRoots();
+    openTexSet();
+    level.texSet = &texSet;
     if (!level.load(dir, err)) return false;
     hasLevel = true;
     levelGen++;

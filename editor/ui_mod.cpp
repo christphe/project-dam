@@ -295,44 +295,48 @@ static uint32_t texPreview(App &a, int texnum, const DecorTex **info)
 }
 
 // Where the decor's picture of a texture came from, in a few words.
-static const char *texSourceName(const App &a, const DecorTex *t)
+static const char *texSourceName(const App &, const DecorTex *t)
 {
     if (!t) return "not in this level";
-    if (t->source < 0) return "the level's own";
-    const std::vector<std::string> &r = a.doc.level.texRoots;
-    if (a.doc.hasMod && t->source == 0 && !r.empty() && r[0] == a.doc.modDir) return "the mod's";
-    return "the texture pack's";
+    if (t->source < 0) return "the game's own";
+    return t->source == 0 ? "the mod's" : "the texture pack's";
 }
 
 void texturePackCombo(App &a)
 {
     Doc &d = a.doc;
-    static std::vector<TexPackInfo> packs;
-    static std::string lastRoot;
-    static double lastScan = -10;
     const std::string root = d.texturePacksRoot();
-    if (root != lastRoot || ImGui::GetTime() - lastScan > 2.0) {   // the folder is read again every two seconds at most
-        lastRoot = root; lastScan = ImGui::GetTime();
-        packs.assign(64, TexPackInfo());
-        const int n = texpackScan(root.c_str(), packs.data(), (int)packs.size());
-        packs.resize((size_t)std::min(n, 64));
-    }
-    std::string cur = "None";
-    for (const TexPackInfo &p : packs) if (d.texPack == p.file) cur = p.name;
-    if (!d.texPack.empty() && cur == "None") cur = d.texPack + " (missing)";
+    static bool wasOpen = false;
+    static std::string lastKey;
+    const std::string key = root + "|" + d.exportPackRoot();
+    if (d.packChoices.empty() || key != lastKey) { lastKey = key; d.rescanPacks(); }
+    const std::string chosen = d.texPack.empty() ? "ge007.ptexpack" : d.texPack;
+    std::string cur = chosen;
+    for (const PackChoice &p : d.packChoices) if (chosen == p.file) cur = p.name;
     ImGui::TextUnformatted("Texture pack");
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::BeginCombo("##texpack", cur.c_str())) {
-        if (ImGui::Selectable("None", d.texPack.empty())) { d.texPack.clear(); savePrefs(a); }
-        for (const TexPackInfo &p : packs) {
-            if (ImGui::Selectable(p.name, d.texPack == p.file)) { d.texPack = p.file; savePrefs(a); }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s%s%s%s%s", p.file, p.author[0] ? "\nby " : "", p.author, p.description[0] ? "\n" : "", p.description);
+    const bool open = ImGui::BeginCombo("##texpack", cur.c_str());
+    if (open) {
+        if (!wasOpen) d.rescanPacks();   // the packs are read again each time the list opens (a pack made meanwhile shows)
+        for (const PackChoice &p : d.packChoices) {
+            ImGui::BeginDisabled(!p.usable());
+            std::string label = p.name;
+            if (!p.usable()) label += "  (" + p.reason + ")";
+            if (ImGui::Selectable((label + "##" + p.file).c_str(), chosen == p.file)) { d.texPack = p.base ? "" : p.file; savePrefs(a); }
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s%s%s%s%s", p.file.c_str(), p.author.empty() ? "" : "\nby ", p.author.c_str(), p.description.empty() ? "" : "\n", p.description.c_str());
         }
         ImGui::EndCombo();
     }
+    wasOpen = open;
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Draws the level with a texture pack from %s, as the game does with Video > Texture pack.\nThe open mod's own textures win over the pack's.", root.c_str());
+        ImGui::SetTooltip("Draws the level and its props with a texture pack from %s (a complete set of the game's textures; ge007 is the game's own).\nThe open mod's own textures are merged over the pack's.", root.c_str());
+    if (!d.texSet.note().empty()) {
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "%s", d.texSet.note().c_str());
+        ImGui::PopTextWrapPos();
+    }
 }
 
 static void texturesSection(App &a)
@@ -417,7 +421,7 @@ static void texturesSection(App &a)
         ImGui::PopTextWrapPos();
     }
     ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("textures/<n>.png replaces texture n in every mission of the mod, over the player's texture pack. Use pictures you made yourself: a mod never holds the game's own data.");
+    ImGui::TextDisabled("textures/<n>.png replaces the picture of texture n in every mission of the mod, over the chosen texture pack (textures.json in the mod changes a texture's other fields). Use pictures you made yourself: a mod never holds the game's own data.");
     ImGui::PopTextWrapPos();
 }
 

@@ -6,7 +6,7 @@
  * which it builds on) only, plus the converter library's file table, rarezip inflate and ROM check. See export.h.
  *
  * Output layout (out_dir = <export dir>/characters):
- *   <out_dir>/<file name without the trailing Z>/<same>.gltf + .bin + textures/<n>.png     (one per body / head)
+ *   <out_dir>/<file name without the trailing Z>/<same>.gltf + .bin     (one per body / head; images point into ../../ge007.ptexpack/textures/)
  *   <out_dir>/animations/<name>.gltf + .bin     (one animation on the guard rig, shared by every body)
  *   <out_dir>/characters.json
  * Each body carries idle only (its rest pose); set GE007_EXPORT_ALL_ANIMATIONS=1 in the environment to put every
@@ -1075,7 +1075,6 @@ static int export_char(const CharEnt *ce, const AnimData *ad, const int *sel, co
     MatOut mo;
     char dir[1100], path[1200];
     int fail = 0, nanim = 0, npj[2] = { 0, 0 };
-    size_t ntexfiles = 0;
     float S[16][3];
     memset(&fbuf, 0, sizeof fbuf); memset(&json, 0, sizeof json); memset(mesh_pj, 0, sizeof mesh_pj);
     memset(&anims, 0, sizeof anims); memset(&tex_json, 0, sizeof tex_json);
@@ -1199,7 +1198,7 @@ static int export_char(const CharEnt *ce, const AnimData *ad, const int *sel, co
             if (ids[1] >= 0) add_to(x, -1, ids[1], 1);
         }
         /* the materials are complete now */
-        if (ex_write_textures(tc, x->mc.mats, x->mc.nm, dir, &ntexfiles)) { cv_buf_free(&meshes); FAIL("cannot write textures into %s", dir); }
+        mo.pack_depth = 2;   /* <out>/characters/<name>/<name>.gltf -> ../../ge007.ptexpack */
         if (ex_emit_materials(&mo, &x->mc)) { cv_buf_free(&meshes); FAIL("out of memory"); }
 
         /* skin + animations (bodies) */

@@ -1,5 +1,6 @@
 // modelview: see mv_export.h. glTF through cgltf, characters.json through cJSON (both vendored in port/third_party).
 #include "mv_export.h"
+#include <algorithm>
 #include <windows.h>
 #include <array>
 #include <map>
@@ -12,6 +13,7 @@
 #include "cgltf.h"
 extern "C" {
 #include "cJSON.h"
+#include "texpacks.h"
 }
 
 bool mv_inflate_raw(const uint8_t* src, size_t n, std::vector<uint8_t>& out);   // mv_zlib.cpp
@@ -138,13 +140,24 @@ int wrapOf(int gl) { return gl == 33071 ? 1 : gl == 33648 ? 2 : 0; }
 int materialOf(MvMesh& out, const cgltf_material* m, const std::string& gdir) {
     if (!m) return -1;
     MvMaterial mt;
-    if (cJSON* e = extrasOf(m->extras)) { mt.texnum = (int)jnum(e, "texnum", -1); cJSON_Delete(e); }
     const cgltf_texture* t = m->has_pbr_metallic_roughness ? m->pbr_metallic_roughness.base_color_texture.texture : nullptr;
     if (!t || !t->image || !t->image->uri) return -1;
+    if (cJSON* e = extrasOf(m->extras)) {   // extras.texture: the texture key ("412"); an older export: extras.texnum
+        const cJSON* k = cJSON_GetObjectItemCaseSensitive(e, "texture");
+        if (cJSON_IsString(k) && k->valuestring) mt.key = k->valuestring;
+        else if (cJSON_IsNumber(k)) mt.key = std::to_string((long long)k->valuedouble);
+        else if (cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(e, "texnum"))) mt.key = std::to_string((int)jnum(e, "texnum", -1));
+        cJSON_Delete(e);
+    }
     mt.image = gdir + "/" + t->image->uri;
+    if (mt.key.empty()) {   // no extras at all: the number in the picture's file name
+        const int n = texpackTexnumOfName(t->image->uri);
+        if (n >= 0) mt.key = std::to_string(n);
+    }
+    mt.texnum = texpackKeyIsNumber(mt.key.c_str()) ? atoi(mt.key.c_str()) : -1;
     if (t->sampler) { mt.wrapS = wrapOf(t->sampler->wrap_s); mt.wrapT = wrapOf(t->sampler->wrap_t); }
     for (size_t q = 0; q < out.materials.size(); q++)
-        if (out.materials[q].image == mt.image && out.materials[q].wrapS == mt.wrapS && out.materials[q].wrapT == mt.wrapT) return (int)q;
+        if (out.materials[q].key == mt.key && out.materials[q].image == mt.image && out.materials[q].wrapS == mt.wrapS && out.materials[q].wrapT == mt.wrapT) return (int)q;
     out.materials.push_back(mt); return (int)out.materials.size() - 1;
 }
 
@@ -440,6 +453,151 @@ bool mv_export_image(const std::string& path, int& w, int& h, std::vector<uint8_
     return it->second.ok;
 }
 
+
+// ---- texture sources (docs/specs/texture-packs.md): the active mod over the chosen pack ----------------------------------
+// A material is drawn from the texture its key names (material extras.texture): the mod's entry merged field by field over
+// the chosen pack's, the pack being ge007.ptexpack (the game's own) or a complete other pack. The glTF's own image URI is used
+// only when no source has the key (an export without ge007.ptexpack beside it).
+namespace {
+std::string g_game;                       // the game folder (holds texturepacks/ and mods/), "" unknown
+std::string g_modRoot, g_packRoot, g_baseRoot, g_texNote;
+TexPackSrc *g_srcMod = nullptr, *g_srcPack = nullptr, *g_srcBase = nullptr;
+int g_texGen = 0;
+std::map<std::string, Img> g_texImgs;     // key -> decoded picture of the current sources
+std::string slash(std::string p) { for (char& c : p) if (c == '\\') c = '/'; return p; }
+bool exists(const std::string& p) { WIN32_FILE_ATTRIBUTE_DATA a; return GetFileAttributesExA(p.c_str(), GetFileExInfoStandard, &a) != 0; }
+std::string exportRoot() {   // the export folder above characters/: where the export's own ge007.ptexpack is
+    std::string d = slash(g_dir);
+    while (!d.empty() && d.back() == '/') d.pop_back();
+    const size_t k = d.find_last_of('/');
+    return k == std::string::npos ? "" : d.substr(0, k);
+}
+std::string packsDir() { return g_game.empty() ? "" : g_game + "/texturepacks"; }
+std::string modsDir() { return g_game.empty() ? "" : g_game + "/mods"; }
+std::string findBase() {
+    const std::string a = packsDir().empty() ? "" : packsDir() + "/ge007.ptexpack", b = exportRoot().empty() ? "" : exportRoot() + "/ge007.ptexpack";
+    if (!a.empty() && exists(a)) return a;
+    if (!b.empty() && exists(b)) return b;
+    return "";
+}
+void closeSrc(TexPackSrc*& s) { texpackSrcClose(s); s = nullptr; }
+}  // namespace
+
+void mv_tex_init(const std::string& gameDir) { g_game = slash(gameDir); while (!g_game.empty() && g_game.back() == '/') g_game.pop_back(); }
+const std::string& mv_tex_game() { return g_game; }
+const std::string& mv_tex_note() { return g_texNote; }
+int mv_tex_gen() { return g_texGen; }
+const std::string& mv_tex_mod() { return g_modRoot; }
+const std::string& mv_tex_pack() { return g_packRoot; }
+
+std::vector<MvPackChoice> mv_tex_packs() {
+    std::vector<MvPackChoice> out;
+    const std::string base = findBase();
+    TexPackSrc* b = base.empty() ? nullptr : texpackSrcOpen(base.c_str());
+    MvPackChoice c0; c0.file = "ge007.ptexpack"; c0.path = base; c0.name = "GoldenEye 007"; c0.base = true;
+    if (b && texpackSrcMeta(b)->name[0]) c0.name = texpackSrcMeta(b)->name;
+    if (!b || !texpackSrcHasTexturesJson(b)) c0.reason = "not exported yet";
+    out.push_back(c0);
+    std::vector<TexPackInfo> infos(256);
+    const int n = packsDir().empty() ? 0 : std::min(texpackScan(packsDir().c_str(), infos.data(), (int)infos.size()), (int)infos.size());
+    for (int i = 0; i < n; i++) {
+        if (std::string(infos[(size_t)i].file) == "ge007.ptexpack") continue;
+        MvPackChoice c; c.file = infos[(size_t)i].file; c.path = packsDir() + "/" + c.file; c.name = infos[(size_t)i].name;
+        TexPackSrc* p = texpackSrcOpen(c.path.c_str());
+        if (!p) c.reason = "cannot be read";
+        else if (!b || !texpackSrcHasTexturesJson(b)) c.reason = "no ge007 pack to check it against";
+        else { const int miss = texpackMissing(p, b); if (miss > 0) c.reason = "incomplete: " + std::to_string(miss) + " textures missing"; }
+        texpackSrcClose(p);
+        out.push_back(c);
+    }
+    texpackSrcClose(b);
+    return out;
+}
+
+std::vector<MvModChoice> mv_tex_mods() {
+    std::vector<MvModChoice> out;
+    if (modsDir().empty()) return out;
+    WIN32_FIND_DATAA fd; HANDLE h = FindFirstFileA((modsDir() + "/*.pmod").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return out;
+    do {
+        MvModChoice m; m.file = fd.cFileName; m.path = modsDir() + "/" + m.file; m.name = m.file.substr(0, m.file.size() - 5);
+        out.push_back(m);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return out;
+}
+
+bool mv_tex_use(const std::string& modIn, const std::string& packIn) {
+    bool ok = true;
+    g_texNote.clear();
+    // a name is looked up in the game's folders, a path (it exists as is) is taken as it is
+    auto resolve = [&](const std::string& v, const std::string& dir, const char* suffix) -> std::string {
+        if (v.empty()) return "";
+        if (exists(v)) return slash(v);
+        if (!dir.empty()) {
+            const std::string a = dir + "/" + v, b = dir + "/" + v + suffix;
+            if (exists(a)) return a;
+            if (exists(b)) return b;
+        }
+        return slash(v);
+    };
+    const std::string mod = resolve(modIn, modsDir(), ".pmod");
+    std::string pack = packIn.empty() || packIn == "ge007" || packIn == "ge007.ptexpack" ? "" : resolve(packIn, packsDir(), ".ptexpack");
+    const std::string base = findBase();
+    closeSrc(g_srcMod); closeSrc(g_srcPack); closeSrc(g_srcBase);
+    g_texImgs.clear(); g_texGen++;
+    g_baseRoot = base;
+    g_srcBase = base.empty() ? nullptr : texpackSrcOpen(base.c_str());
+    if (!mod.empty()) {
+        g_srcMod = texpackSrcOpen(mod.c_str());
+        if (!g_srcMod) { g_texNote = "mod " + mod + " cannot be read: no mod"; ok = false; }
+    }
+    g_modRoot = g_srcMod ? mod : "";
+    g_srcPack = nullptr;
+    g_packRoot.clear();
+    if (!pack.empty() && pack != base) {
+        TexPackSrc* p = texpackSrcOpen(pack.c_str());
+        if (!p) { g_texNote = "texture pack " + pack + " cannot be read: ge007 is used"; ok = false; }
+        else if (!g_srcBase) { g_texNote = "texture pack " + pack + ": no ge007.ptexpack to check it against, so it is not used"; ok = false; texpackSrcClose(p); }
+        else {
+            const int miss = texpackMissing(p, g_srcBase);
+            if (miss > 0) { g_texNote = "texture pack " + pack + " is incomplete: " + std::to_string(miss) + " textures missing, ge007 is used"; ok = false; texpackSrcClose(p); }
+            else { g_srcPack = p; g_packRoot = pack; }
+        }
+    }
+    if (!g_srcPack && g_srcBase) { g_srcPack = g_srcBase; g_srcBase = nullptr; g_packRoot = ""; }   // ge007 is the chosen pack (owned by g_srcPack now)
+    if (!g_texNote.empty()) fprintf(stderr, "textures: %s\n", g_texNote.c_str());
+    return ok;
+}
+
+// One material's picture: through the sources by its key, else the glTF's own image. 0 = missing.
+bool mv_tex_image(const MvMaterial& mt, int& w, int& h, std::vector<uint8_t>& rgba) {
+    if (!mt.key.empty() && g_srcPack) {
+        auto it = g_texImgs.find(mt.key);
+        if (it == g_texImgs.end()) {
+            Img im;
+            TexPackResolved r; uint8_t* file = nullptr; size_t len = 0;
+            // the mod's picture first; one that does not decode gives way to the pack's
+            for (int pass = 0; pass < 2 && !im.ok; pass++) {
+                const TexPackSrc* m = pass == 0 ? g_srcMod : nullptr;
+                if (pass == 1 && !g_srcMod) break;
+                if (!texpackResolve(m, g_srcPack, mt.key.c_str(), &r) || !texpackResolvedRead(m, g_srcPack, &r, &file, &len)) continue;
+                std::vector<uint8_t> b(file, file + len); free(file);
+                if (!pngDecode(b, im.w, im.h, im.rgba)) { fprintf(stderr, "textures: %s: not a readable PNG\n", r.tex.image); continue; }
+                im.ok = true;
+                if (r.tex.alphaLuminance) {   // an opaque picture under alpha "luminance" draws its luminance as alpha
+                    bool opaque = true;
+                    for (size_t i = 3; i < im.rgba.size(); i += 4) if (im.rgba[i] != 255) { opaque = false; break; }
+                    if (opaque) for (size_t i = 0; i + 3 < im.rgba.size(); i += 4) im.rgba[i + 3] = (uint8_t)((299 * im.rgba[i] + 587 * im.rgba[i + 1] + 114 * im.rgba[i + 2]) / 1000);
+                }
+            }
+            it = g_texImgs.emplace(mt.key, std::move(im)).first;
+        }
+        if (it->second.ok) { w = it->second.w; h = it->second.h; rgba = it->second.rgba; return true; }
+    }
+    return mv_export_image(mt.image, w, h, rgba);
+}
+
 #include "mv_png.h"
 int mv_export_selftest() {
     int fail = 0;
@@ -468,6 +626,29 @@ int mv_export_selftest() {
         float p[12]; toPose(trs(t, q, s), p);
         const float x = 1 * p[0] + p[9], y = 1 * p[1] + p[10];
         if (fabsf(x - 1) > 1e-5f || fabsf(y - 3) > 1e-5f) { fail++; fprintf(stderr, "selftest FAIL trs (%g %g)\n", x, y); }
+    }
+    {   // the texture sources: ge007.ptexpack as the default, a mod over it, a pack that is incomplete
+        char tmp[MAX_PATH]; GetTempPathA(sizeof tmp, tmp);
+        const std::string T = slash(std::string(tmp)) + "mv_texsel", P = T + "/texturepacks", B = P + "/ge007.ptexpack", M = T + "/mods/m.pmod", L = P + "/lack.ptexpack";
+        std::vector<std::string> files, dirs;
+        auto mk = [&](const std::string& d) { if (CreateDirectoryA(d.c_str(), nullptr)) dirs.push_back(d); };
+        auto txt = [&](const std::string& p, const char* s) { FILE* f = fopen(p.c_str(), "wb"); if (f) { fputs(s, f); fclose(f); files.push_back(p); } };
+        auto png = [&](const std::string& p, uint8_t r, uint8_t g, uint8_t b) { uint8_t px[2 * 2 * 4]; for (int i = 0; i < 4; i++) { px[i * 4] = r; px[i * 4 + 1] = g; px[i * 4 + 2] = b; px[i * 4 + 3] = 255; } if (mvpng::write(p, 2, 2, px)) files.push_back(p); };
+        for (const std::string& d : { T, P, B, B + "/textures", T + "/mods", M, M + "/textures", L }) mk(d);
+        txt(B + "/textures.json", "{\"version\":1,\"textures\":{\"5\":{\"image\":\"textures/5.png\",\"surface\":\"stone\",\"alpha\":\"image\"},\"6\":{\"image\":\"textures/6.png\",\"surface\":\"wood\"}}}");
+        png(B + "/textures/5.png", 255, 0, 0); png(B + "/textures/6.png", 0, 0, 255);
+        txt(L + "/textures.json", "{\"version\":1,\"textures\":{\"5\":{\"surface\":\"stone\"}}}");
+        png(M + "/textures/5.png", 0, 255, 0);
+        mv_tex_init(T);
+        MvMaterial m5; m5.key = "5"; MvMaterial m6; m6.key = "6"; int w = 0, h = 0; std::vector<uint8_t> px;
+        const std::vector<MvPackChoice> packs = mv_tex_packs();
+        if (packs.size() != 2 || !packs[0].base || !packs[0].usable() || packs[1].usable()) { fail++; fprintf(stderr, "selftest FAIL pack list\n"); }
+        if (!mv_tex_use("", "") || !mv_tex_image(m5, w, h, px) || w != 2 || px[0] != 255 || px[1] != 0) { fail++; fprintf(stderr, "selftest FAIL ge007 picture\n"); }
+        if (!mv_tex_use("m", "") || !mv_tex_image(m5, w, h, px) || px[0] != 0 || px[1] != 255 || !mv_tex_image(m6, w, h, px) || px[2] != 255) { fail++; fprintf(stderr, "selftest FAIL mod over pack\n"); }
+        if (mv_tex_use("", "lack") || mv_tex_note().empty() || !mv_tex_pack().empty()) { fail++; fprintf(stderr, "selftest FAIL incomplete pack\n"); }
+        mv_tex_use("", "");
+        for (const std::string& f : files) remove(f.c_str());
+        for (size_t i = dirs.size(); i-- > 0;) RemoveDirectoryA(dirs[i].c_str());
     }
     fprintf(stderr, fail ? "selftest export: %d failures\n" : "selftest: PNG decoding and pose maths ok\n", fail);
     return fail ? 1 : 0;
