@@ -1005,7 +1005,8 @@ list(APPEND LIBS ge_imgui)   # a static library, so the CTest binaries (GE_CORE_
 # the window and the static-mesh API. It knows no game: the game (port/fast3d, port/src/video.c) and the tools
 # (tools_pc/ge_render_hello) link it and talk to it through port/ge_render/include/ge_render.h. Compiled with the game's
 # directory-wide options and include paths, like the game itself (the backends still read <PR/gbi.h> for the RDP constants).
-option(GE_TOOLS "Build the ge_render tools (tools_pc/ge_render_hello, tools_pc/fxview)" OFF)   # declared here: the shader packs below read it
+option(GE_TOOLS "Build the ge_render tools (tools_pc/ge_render_hello, tools_pc/fxview)" OFF)
+option(GE_FX_LOWCOST "Vulkan pack: the Switch's cheaper effect shaders (FX_LOWCOST), to judge them on PC (fxview win --lowcost)" OFF)   # declared here: the shader packs below read it
 set(GE_RENDER_DIR "${CMAKE_SOURCE_DIR}/port/ge_render")
 file(GLOB SRC_GE_RENDER CONFIGURE_DEPENDS "${GE_RENDER_DIR}/src/*.cpp")
 list(FILTER SRC_GE_RENDER EXCLUDE REGEX "/ge_imgui[.]cpp$")   # the ImGui backend is compiled clean, with the tools (below)

@@ -38,6 +38,7 @@
 #include "ge_render.h"
 #include "ge_imgui.h"
 #include "fxcluster.h"
+#include "ge_render_tool.h"   // GPU timers (--bench)
 #include "portfx.h"
 #include "fx_rom.h"
 #include "fx_tex.h"
@@ -90,6 +91,8 @@ struct Args {
     float yaw = 0, pitch = 0, texel = 2.0f, wallshade = 0.6f, sunaz = 135, sunel = 35, ptx = 10, pty = -6, pth = 70, ptr = 260;
     int probeFrame = 12, hold = 0, holes = 3, cmat = 0, seed = 1, w = 1280, h = 720, frames = 0, ui = -1, sun = -1, pt = 1, impact = 0, bgtex = 20, fc = 120, nearest = 0;
     int dtype = -1, walltex = -1, selftest = 0, page = 0;
+    float panx = 0, pany = 0;   // decal: middle drag pans the camera across the wall (world units, along the view's right / up)
+    int bench = 0, rep = 1;   // cluster: --bench 1 times fxClusterPom on the GPU (full shader vs coverage only), --rep N draws the cluster N times
     // the tabs (fx_tabs.inc): muzzle, tracer, burst, explosion; --t SECONDS freezes the time
     std::string tshow = "side", gun, tritem = "gun", burst = "stone";
     float t = -1, tspeed = 1, tyaw = 0, tpitch = 0, tzoom = 1, mrate = 6, mscale = 0.1f, trrange = 1500, trperiod = 0.25f, bperiod = 1.2f, etail = 0.5f;
@@ -117,6 +120,7 @@ static std::vector<Opt> optTable(Args &a) {
         { "impact", 'I', &a.impact, true }, { "bgtex", 'I', &a.bgtex, true }, { "fc", 'I', &a.fc, true }, { "nearest", 'I', &a.nearest, true }, { "dtype", 'I', &a.dtype, true },
         { "walltex", 'I', &a.walltex, true }, { "page", 'I', &a.page, true }, { "twall", 'I', &a.twall, true }, { "twalltex", 'I', &a.twalltex, true }, { "tseed", 'I', &a.tseed, true },
         { "mvis", 'I', &a.mvis, true }, { "explo", 'I', &a.explo, true }, { "play", 'I', &a.play, false },
+        { "bench", 'I', &a.bench, false }, { "rep", 'I', &a.rep, false }
     };
 }
 static bool setOpt(Args &a, const std::string &name, const std::string &val) {
@@ -467,6 +471,7 @@ static View makeView(const Args &a) {
     c.r[0] = -c.f[2]; c.r[1] = 0; c.r[2] = c.f[0];
     { const float l = 1.0f / sqrtf(c.r[0] * c.r[0] + c.r[2] * c.r[2]); c.r[0] *= l; c.r[2] *= l; }
     c.u[0] = c.r[1] * c.f[2] - c.r[2] * c.f[1]; c.u[1] = c.r[2] * c.f[0] - c.r[0] * c.f[2]; c.u[2] = c.r[0] * c.f[1] - c.r[1] * c.f[0];
+    for (int i = 0; i < 3; i++) c.eye[i] += c.r[i] * a.panx + c.u[i] * a.pany;   // the pan moves the eye and what it looks at together
     return c;
 }
 static void toEye(const View &c, const float w[3], float o[3], bool dir) {
@@ -683,7 +688,9 @@ static void clusterScene(const Args &a, Cluster &k, const Cam &cam) {
             // layout (gfx_pc): position, texture 0 (uv), texture 1 (uv + clamp S, T), input 1 (rgba)
             v.insert(v.end(), { c4[0], c4[1], c4[2], c4[3], q[i][2], q[i][3], q[i][2], q[i][3], cl, cl, vr, lightAmt, 1.0f, 1.0f });
         }
-        draw(v, 14);
+        if (a.bench) ge_render_gpu_timer_begin(1);
+        for (int r = 0; r < (a.rep > 0 ? a.rep : 1); r++) draw(v, 14);
+        if (a.bench) ge_render_gpu_timer_end(1);
     }
 }
 
@@ -1064,6 +1071,34 @@ int main(int argc, char **argv) {
         const int H = (int)h;
         const int x0 = showUi ? (int)kPanelW : 0;
         const Pane scene = { x0, 0, (int)w - x0, H };
+#ifndef __SWITCH__
+        if (!headless && (a.mode == "decal" || isTab(a))) {   // the scene's mouse (outside the panel): left drag orbits, the wheel zooms, middle drag pans and right drag moves the decal's point light
+            static int omx = 0, omy = 0, odrag = 0;
+            GeRenderInput mi;
+            ge_render_poll_input(&mi);
+            const bool overUi = showUi && ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureMouse;
+            const int btn = mi.mouse_buttons & 7;
+            if (!btn) odrag = 0;
+            else if (!odrag && mi.mouse_x >= x0 && !overUi) odrag = btn;   // a drag starts in the scene and keeps its button
+            const float dx = (float)(mi.mouse_x - omx), dy = (float)(mi.mouse_y - omy);
+            omx = mi.mouse_x; omy = mi.mouse_y;
+            const bool tab = isTab(a);
+            float &yaw = tab ? a.tyaw : a.yaw, &pitch = tab ? a.tpitch : a.pitch, &zoom = tab ? a.tzoom : a.dzoom;
+            const float ylim = tab ? 85.0f : 80.0f, plim = tab ? 85.0f : 60.0f;
+            if (odrag & 1) {
+                yaw = fminf(fmaxf(yaw - dx * 0.3f, -ylim), ylim);
+                pitch = fminf(fmaxf(pitch + dy * 0.3f, -plim), plim);
+            } else if ((odrag & 4) && !tab) {   // middle drag pans: the wall follows the mouse
+                const float k = 8.2f * holeSizeOf(a) / fmaxf(a.dzoom, 0.05f) * 0.0015f;
+                a.panx -= dx * k;
+                a.pany += dy * k;
+            } else if ((odrag & 2) && !tab) {
+                a.ptx += dx * 0.1f;
+                a.pty -= dy * 0.1f;
+            }
+            if (g_wheel != 0.0f && mi.mouse_x >= x0 && !overUi) zoom = fminf(fmaxf(zoom * powf(1.1f, g_wheel), 0.4f), 4.0f);
+        }
+#endif
         std::vector<std::pair<Pane, std::string>> labels;   // drawn by ImGui after the scene
         if (a.mode == "sea") {
             if (!seaStarted) {   // the first time the mode is shown: textures from the ROM, the VIEWER variants, the saved settings
@@ -1161,7 +1196,26 @@ int main(int argc, char **argv) {
                     logf("eye (% .2f % .2f % .2f) -> eye' (% .3f % .3f % .3f)", e[0], e[1], e[2], r[0] / r[3], r[1] / r[3], r[2] / r[3]);
                 }
             }
-            clusterScene(a, ccluster, cam);
+            if (a.bench) {   // the cluster fills the screen's height; phases of 120 frames alternate the full shader and coverage only
+                static double acc[2]; static int nacc[2];
+                const int phase = (f / 120) % 2;
+                a.diag = phase ? "coverage" : "";
+                buildCluster(ccluster, a);
+                const float tf = tanf(a.fov * 0.5f * 3.14159265f / 180.0f);
+                a.dist = ccluster.size * 0.5f / tf * 0.95f;
+                clusterScene(a, ccluster, cam);
+                const double ms = ge_render_gpu_timer_ms(1);
+                if (f % 120 >= 20 && ms >= 0) { acc[phase] += ms; nacc[phase]++; }
+                if (f % 120 == 119 && nacc[phase] == 0) logf("BENCH %s: no GPU time measured (last %.3f)", phase ? "coverage-only" : "fxClusterPom", ms);
+                if (f % 120 == 119 && nacc[phase] > 0) {
+                    const float cover = 0.95f * 0.95f * (float)h / (float)w;   // the cluster quad's share of the window
+                    logf("BENCH %s rep=%d window=%dx%d cluster=%.0f%% of it: gpu %.3f ms (avg of %d frames)", phase ? "coverage-only" : "fxClusterPom",
+                         a.rep, w, h, cover * 100.0f, acc[phase] / nacc[phase], nacc[phase]);
+                    acc[phase] = 0; nacc[phase] = 0;
+                }
+            } else {
+                clusterScene(a, ccluster, cam);
+            }
         } else {
             const int v = keyIndex(kViewKey, a.view);   // 0 side, 1 split, 2 original, 3 effect
             const bool sprite = a.mode == "sprite";
