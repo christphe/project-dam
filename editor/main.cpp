@@ -188,7 +188,7 @@ void usage()
          "    --mouse-then FRAME,X,Y            test aid: from that frame the cursor rests at X,Y instead\n"
          "    --log-cam                         test aid: print camera moves and the wheel-zoom pixel check to stderr\n"
          "    --open-menu NAME                  test aid: open a menu of the menu bar (File, Edit, View, Mission, Mod, Tools, Help)\n"
-         "    --open-window NAME                test aid: open a window: settings, help, log, props (Props browser), newmission (the New mission dialog)\n"
+         "    --open-window NAME                test aid: open a window: settings, help, log, props (Props browser), props-all (its All models category), newmission (the New mission dialog)\n"
          "    --place-model KIND:MODEL,TYPE,ITEM@X,Y  test aid: place a guard|object with that model where the view pixel X,Y points (as a drop does)\n"
          "    --mouse-from X,Y                  test aid: --mouse-drag DX,DY starts at this window pixel (e.g. a Props browser cell)\n"
          "    --capture                         test aid: Capture the view into the Thumbnail section on frame 10\n"
@@ -434,6 +434,7 @@ int main(int argc, char **argv)
     else if (opt.openWindow == "help") app.showHelp = true;
     else if (opt.openWindow == "log") app.showLog = true;
     else if (opt.openWindow == "props") app.showPropsWin = true;
+    else if (opt.openWindow == "props-all") { app.showPropsWin = true; app.propCat = 1; }   // the Props browser on its "All models" category
     else if (opt.openWindow == "newmission") doNewMission(app);
     if (opt.selectWhat.rfind("script:", 0) == 0) selectScript(app, atoi(opt.selectWhat.c_str() + 7));
     else if (opt.selectWhat.rfind("zone:", 0) == 0) { app.doc.sel = Selection(); app.doc.sel.kind = Selection::ZONE; app.doc.sel.id = opt.selectWhat.substr(5); }

@@ -165,7 +165,8 @@ struct App {
     // ---- Props browser (View > Props browser) ----
     bool showPropsWin = false;
     char propFilter[64] = "";
-    std::map<int, uint32_t> ownerTex;      // renderer owner -> rendered thumbnail texture (0: could not be rendered)
+    int propCat = 0;                       // Props browser: 0 the level's models, 1 all models of the model export
+    std::map<int, uint32_t> ownerTex;      // thumbnail key -> rendered thumbnail texture (0: could not be rendered); key >= 0 a renderer owner, key < 0 the glTF model -key-1
     std::vector<int> ownerQueue;           // owners waiting for their thumbnail (rendered between frames)
     int frameNo = 0;
 

@@ -77,7 +77,7 @@ static bool replacementFor(const std::vector<std::string> &roots, int texnum, De
     return false;
 }
 
-DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out, std::string &msg, const std::vector<std::string> &texRoots)
+DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out, std::string &msg, const std::vector<std::string> &texRoots, bool model)
 {
     out = Decor();
     FILE *probe = fopen(gltfPath.c_str(), "rb");
@@ -93,7 +93,7 @@ DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out
     int ver = 0;
     extrasInt(data->asset.extras, "exporter_version", ver);
     out.version = ver;
-    if (ver != expectVersion) {
+    if (!model && ver != expectVersion) {
         msg = "glTF export has exporter_version " + std::to_string(ver) + ", this build writes " + std::to_string(expectVersion);
         return DECOR_STALE;
     }
@@ -149,8 +149,20 @@ DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out
 
     const float big = 1e30f;
     for (int k = 0; k < 3; k++) { out.mn[k] = big; out.mx[k] = -big; }
-    for (cgltf_size ni = 0; ni < data->nodes_count; ni++) {
-        const cgltf_node *node = &data->nodes[ni];
+    // a level: every node; a model: the nodes of the default scene only (its level of detail 0, switches visible)
+    std::vector<const cgltf_node *> order;
+    if (model) {
+        const cgltf_scene *sc = data->scene ? data->scene : (data->scenes_count ? &data->scenes[0] : nullptr);
+        std::vector<const cgltf_node *> stack;
+        if (sc) for (cgltf_size i = sc->nodes_count; i-- > 0;) stack.push_back(sc->nodes[i]);
+        while (!stack.empty()) {
+            const cgltf_node *n = stack.back(); stack.pop_back();
+            order.push_back(n);
+            for (cgltf_size i = n->children_count; i-- > 0;) stack.push_back(n->children[i]);
+        }
+    } else
+        for (cgltf_size ni = 0; ni < data->nodes_count; ni++) order.push_back(&data->nodes[ni]);
+    for (const cgltf_node *node : order) {
         if (!node->mesh) continue;
         if (node->name && strncmp(node->name, "collision", 9) == 0) continue;   // the hidden collision floor: read below
         int room = -1;
@@ -215,7 +227,8 @@ DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out
             out.prims.push_back(std::move(dp));
         }
     }
-    if (out.prims.empty()) { msg = "the glTF export has no room geometry"; return DECOR_BAD; }
+    if (out.prims.empty()) { msg = model ? "the model has no triangles" : "the glTF export has no room geometry"; return DECOR_BAD; }
+    if (model) { msg = "model: " + std::to_string(out.prims.size()) + " primitives"; return DECOR_OK; }
     double levelScale = 0;
     if (data->asset.extras.data) {
         cJSON *j = cJSON_Parse(data->asset.extras.data);

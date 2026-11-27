@@ -25,7 +25,7 @@ read by `decor.cpp` with the vendored cgltf. It lives in `<game dir>/data/export
 is missing, or its `asset.extras.exporter_version` is not the one this build reads (`EX_EXPORTER_VERSION`), the editor runs
 `<game> --export-levels <that folder>` once in the background (about two seconds for all levels) and reloads the decor when it is done
 (the log says "glTF export done"); *Tools > Settings > Re-export all cached levels* redoes it too. Without a game executable the view
-keeps level.rec's rooms. `level.rec` still supplies the models (props, guards, doors) and everything else below. The glTF is drawn
+keeps level.rec's rooms. `level.rec` still supplies the guards, the props whose model is not in the model export (see "Props come from the model export") and everything else below. The glTF is drawn
 unlit as texture x vertex colour (colours converted back from linear to the game's own values), MASK as an alpha test at 0.5, BLEND
 after the opaque draws (depth-tested, written only where opaque), back faces culled unless the material is double sided, a decal's
 depth offset kept. Clicking the floor, the Zone tool and the surface snap use the glTF triangles. **`GE_EDITOR_DECOR=rec`** forces
@@ -128,10 +128,23 @@ Options: `--port N`, `--no-mcp`, `--game EXE`, `--mcp-stdio`, `--mcp-http`, `--s
   `GE_EDITOR_GAME`, `--game`, or the `ge007` exe next to `project-dam-editor`. The spawn pad is the selected
   pad or prop (or *Set as spawn*), as a number or a mission pad id.
 
-Props are drawn with the model the exporter recorded for their owner, placed so the bottom centre
-of the recorded geometry sits on the prop's pad (the recorded placement and rotation are not
-reused); a prop with no recorded model is a box. Everything is replayed through the game's own
+Props are drawn with a model placed so its bottom centre sits on the prop's pad (the recorded placement and rotation are not
+reused); a prop with no model at all is a box. Everything is replayed through the game's own
 fast3d OpenGL backend, so textures and colours match the game (fog is off).
+
+**Props come from the model export.** Object props (doors, crates, consoles, vehicles, items; not guards) are drawn from the static
+model export (`port/export/`, issue #119): `models/models.json` and `models/<name>/<name>.gltf`, one glTF per model number in model
+units, written beside the level folders by the same `ge007 --export-levels DIR` (so in `<game dir>/data/exports/gltf/models/`, or in
+`gltf/models/` next to the level exports; the editor looks where it looks for the decor). `decor.cpp` reads it with the same material
+mapping as the rooms, default scene only (the most detailed level of detail, switchable parts visible, joints in their rest pose, so a
+vehicle is a whole vehicle where level.rec's capture collapses every joint to the origin). Each model is read and uploaded on first
+use. Scale = the model's `base_scale` (0.1 for most props) x the record's extra scale (u8.8); placement = the pad, the pad's yaw and
+the bottom centre of the glTF model's own bounds; a door is fitted to its bound pad's box like the level.rec one (model x to the pad's
+y extent, y to z, z to x). The selection box is the glTF model's bounds. A model that is not in `models.json` (or has no triangles)
+falls back to level.rec's model; guards always use level.rec. The log says what was decided, once per level: `[editor] props: glTF
+models (N placed, M from glTF, K fallback: models ...)`. **`GE_EDITOR_MODELS=rec`** forces level.rec's props (to compare). The Props
+browser has an *All models* category listing every model of `models.json` (number and name, search by either), placeable like the
+level's own models (an object of type 3 with that model, item none).
 
 ### Scripts and zones
 
@@ -231,10 +244,11 @@ fast3d OpenGL backend, so textures and colours match the game (fog is off).
   `key_door` key item no object of the mission or the level gives (a `give_item` script counts), or whose `objective`
   is not listed. A finding about an item or a pad selects it and frames it when clicked in the log. MCP `validate`
   returns `errors` (texts) and `issues` (severity, text, the item / pad it is about).
-* **Props browser** (View > Props browser). The models the open level uses (the export's models table), each
+* **Props browser** (View > Props browser). Category *Level*: the models the open level uses (the export's models table), each
   rendered once with the same fast3d replay as the view and cached as a texture; search by model id, `guard`, `object` or
   type. Drag a cell onto the 3D view to place an object (or a guard) with that model at the point under the mouse
-  (as Ctrl+V does); a click makes it the default of the Guard / Object tool. Only the level's own models are listed.
+  (as Ctrl+V does); a click makes it the default of the Guard / Object tool. Category *All models*: every model of the model export
+  (see "Props come from the model export" above); guards are only in *Level* (they come from level.rec).
 * **Environment panel.** Per-field overrides (checkbox = the key is present; unchecked = the level's
   own): mood, sun, sky, clouds, sea. Save only: the editor draws no sky or sea, preview in the game.
   The sun marker in the view is draggable (azimuth 0 = +z).

@@ -179,7 +179,9 @@ void drawSelectionTab(App &a)
             for (size_t k = 0; k < it->weapons.size(); k++) ImGui::Text("weapon %zu: item %d  model %d", k + 1, it->weapons[k].item, it->weapons[k].model);
         }
         else ImGui::Text("item  %d", it->item);
-        if (it->owner >= 0) ImGui::Text("recorded model: owner %d", it->owner); else ImGui::TextDisabled("no recorded model (marker)");
+        const Decor *gd; float gs;
+        if (itemGltf(a.doc, *it, gd, gs)) ImGui::Text("glTF model %d (scale %.3g)", it->model, gs);
+        else if (it->owner >= 0) ImGui::Text("recorded model: owner %d", it->owner); else ImGui::TextDisabled("no recorded model (marker)");
         if (!it->assigned && a.doc.hasMission) {   // present on: the difficulties it is in (all ticked = no key)
             static const char *kNames[4] = { "Agent", "Secret Agent", "00 Agent", "007" };
             const int mask = it->diffMask ? it->diffMask : MISSION_DIFF_ALL;

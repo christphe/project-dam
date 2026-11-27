@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,8 @@ public:
     // One owner's recorded model alone, in a size x size picture (RGBA, top-down): the Props browser's thumbnails. Draws into the
     // window frame like render(), so call it between two frames, never inside one.
     bool renderOwner(int owner, int winW, int winH, int size, std::vector<uint8_t> &rgba);
+    // The same for one glTF model (the static model export) in model units, alone: the Props browser's thumbnails of the models.
+    bool renderModel(int model, int winW, int winH, int size, std::vector<uint8_t> &rgba);
     int runCount() const { return (int)m_runs.size(); }
     int drawn() const { return m_drawn; }
 
@@ -49,8 +52,18 @@ private:
         uint32_t nverts = 0;
         bool doubleSided = false, blend = false;
     };
-    void drawDecor(bool blendPass, const Mat4 &vp);
+    void buildDraws(const Decor &dc, std::vector<uint32_t> &texIds, std::vector<DecorDraw> &out);
+    void drawDraws(const std::vector<DecorDraw> &draws, const std::vector<uint32_t> &texIds, bool blendPass, const Mat4 &mtx);
+    void drawDecor(bool blendPass, const Mat4 &vp) { drawDraws(m_decor, m_decorTex, blendPass, vp); }
     bool m_useDecor = false;
+    // The props' glTF models (Level::models), uploaded on first use: the same draws as the decor, in model units.
+    struct ModelGpu { std::vector<uint32_t> tex; std::vector<DecorDraw> draws; };
+    const ModelGpu *modelGpu(int model);
+    void clearModels();
+    std::map<int, ModelGpu> m_models;
+    bool m_propsLogged = false;
+    struct PropInst { const ModelGpu *g; Mat4 m; };
+    std::vector<PropInst> m_propModels;   // this frame's glTF props: their translucent draws come after the decor's
     std::vector<uint32_t> m_decorTex;
     std::vector<DecorDraw> m_decor;
 

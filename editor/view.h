@@ -49,6 +49,11 @@ struct Hit {
     int texnum = -1;        // the texture number of the room surface the ray meets (glTF decor), -1 none / unknown
 };
 
+// The glTF model an object prop is drawn with (the static model export, Level::models), and the scale from model units to world units
+// (the model's base scale x the record's extra scale). False for guards, when the export has no such model, or with GE_EDITOR_MODELS=rec:
+// the prop then keeps level.rec's model.
+bool itemGltf(const Doc &d, const Item &it, const Decor *&dec, float &scale);
+
 // The item's box in its own frame: relative to its pad position, before the pad's rotation (owner model bounds, or a
 // default box). Drawn and picked rotated by Item::yawDeg, like the model.
 bool itemLocalBox(const Doc &d, const Item &it, Vec3 &mn, Vec3 &mx);
