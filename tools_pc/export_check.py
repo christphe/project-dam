@@ -317,12 +317,149 @@ def check_models(mroot):
     return 1 if bad or not ents else 0
 
 
+# ---- text export (docs/specs/text.md §Verification): strings/slots per bank, columns US E, US J, EU E, EU J, EU P, JP E, JP J ----
+TXT_COLS = {("ntsc-final", "E"): 0, ("ntsc-final", "J"): 1, ("pal-final", "E"): 2, ("pal-final", "J"): 3,
+            ("pal-final", "P"): 4, ("jpn-final", "E"): 5, ("jpn-final", "J"): 6}
+TXT_TOTAL = [1785, 1741, 1858, 1897, 1811, 1811, 1850]
+TXT_SHA1 = ["d96c68685336dcf802af4d8aaab465d6b681f2ee", "6dc32d754c0b48b9917993bf342dbfe71aea61f6",
+            "456f969513944726d02ea4686b15cb85d1406ac1", "78dd1128df28d425815b09e714f6a4f29f1bb19e",
+            "1824d661bfe5b0447f7d5160271f29b76f85dc0f", "0601e5fdb4effab8081a4fcf5aa6dd19afa1e293",
+            "593afa7a783da5bfd40cf4b5823fe08a45fcc31c"]
+
+
+def _same(x):
+    return " ".join([x] * 7)
+
+
+TXT_ROWS = {
+    2: "62/64 63/64 62/64 63/64 62/64 62/64 63/64", 3: "71/72 72/72 71/72 72/72 71/72 71/72 72/72",
+    5: "36/44 44/44 36/44 44/44 36/44 36/44 44/44", 7: _same("41/44"), 8: _same("45/48"),
+    9: _same("35/36"), 10: _same("15/16"), 11: _same("34/36"),
+    12: "30/36 35/36 30/36 35/36 30/36 30/36 35/36", 13: _same("31/32"), 18: _same("42/44"),
+    20: "130/140 55/56 140/148 148/148 140/148 140/148 148/148", 25: _same("29/32"),
+    28: "26/32 30/32 26/32 30/32 26/32 26/32 30/32", 29: "104/108 108/108 104/108 108/108 104/108 104/108 108/108",
+    30: _same("47/48"), 31: "38/44 42/44 38/44 42/44 38/44 38/44 42/44",
+    32: "31/36 35/36 31/36 35/36 31/36 31/36 35/36", 34: _same("71/72"), 35: _same("68/68"),
+    36: _same("45/48"), 37: "0/8 0/8 47/48 47/48 0/8 0/8 0/8", 38: _same("223/224"),
+    39: "287/288 287/288 302/304 302/304 302/304 302/304 302/304", 40: _same("36/36"),
+    41: _same("65/68"), 42: _same("14/16"), 43: _same("61/64"),
+    44: "68/68 68/68 69/72 69/72 69/72 69/72 69/72",
+}
+for _b in (1, 4, 6, 14, 15, 16, 17, 19, 21, 22, 23, 24, 26, 27, 33):
+    TXT_ROWS[_b] = _same("0/8")
+HEX4 = set("0123456789ABCDEF")
+# the spec's own examples (US E)
+TXT_EXAMPLES = {"9840": "Hunting Knife\n", "9856": "PP7 Special Issue\n", "986B": "Klobb\n", "9842": "KF7 Soviet\n",
+                "9866": "Sniper Rifle\n", "9C79": "Dam"}
+
+
+def check_text(troot):
+    """Text export (docs/specs/text.md): text_<lang>.json per language set and names.json."""
+    errs = []
+    files = sorted(n for n in os.listdir(troot) if n.startswith("text_") and n.endswith(".json"))
+    if not files:
+        errs.append("no text_<lang>.json")
+    region = None
+    ngame = 0
+    for fn in files:
+        try:
+            with open(os.path.join(troot, fn), encoding="utf-8") as f:
+                t = json.load(f)
+        except Exception as e:  # noqa: BLE001
+            errs.append("%s: %s" % (fn, e))
+            continue
+        region = t.get("region")
+        suf = t.get("suffix")
+        tag = "%s %s" % (region, suf)
+        if t.get("format") != "ge007-text/1":
+            errs.append("%s: format" % tag)
+        col = TXT_COLS.get((region, suf))
+        if col is None:
+            errs.append("%s: unexpected set" % tag)
+            continue
+        if t.get("game_language"):
+            ngame += 1
+        strs = t.get("strings", {})
+        banks = t.get("banks", [])
+        if [b["bank"] for b in banks] != list(range(1, 45)):
+            errs.append("%s: banks not 1..44" % tag)
+            continue
+        per = {}
+        for k, v in strs.items():
+            if len(k) != 4 or set(k) - HEX4:
+                errs.append("%s: bad id %r" % (tag, k))
+                continue
+            i = int(k, 16)
+            if (i >> 10) < 1 or (i >> 10) > 44 or v.get("index") != (i & 0x3FF) or v.get("bank") != banks[(i >> 10) - 1]["name"]:
+                errs.append("%s: id %s does not match its bank/index" % (tag, k))
+                continue
+            per[i >> 10] = per.get(i >> 10, 0) + 1
+            if suf != "J" and "{" in v["text"]:
+                errs.append("%s: escape in English text %s" % (tag, k))
+            if suf == "J" and not v.get("raw") and v["text"] != "":
+                errs.append("%s: %s has no raw" % (tag, k))
+        for b in banks:
+            exp = TXT_ROWS[b["bank"]].split()[col]
+            got = "%d/%d" % (b["strings"], b["slots"])
+            if got != exp:
+                errs.append("%s: bank %d %s: %s, spec says %s" % (tag, b["bank"], b["name"], got, exp))
+            if per.get(b["bank"], 0) != b["strings"]:
+                errs.append("%s: bank %d lists %d strings, header says %d" % (tag, b["bank"], per.get(b["bank"], 0), b["strings"]))
+        if len(strs) != TXT_TOTAL[col] or t.get("strings_total") != TXT_TOTAL[col]:
+            errs.append("%s: %d strings, spec says %d" % (tag, len(strs), TXT_TOTAL[col]))
+        if t.get("sha1") != TXT_SHA1[col]:
+            errs.append("%s: sha1 %s, spec says %s" % (tag, t.get("sha1"), TXT_SHA1[col]))
+        if col == 0:
+            for k, want in TXT_EXAMPLES.items():
+                if strs.get(k, {}).get("text") != want:
+                    errs.append("%s: example id %s differs from the spec" % (tag, k))
+        print("text %-14s %4d strings%s" % (tag, len(strs), " (game language)" if t.get("game_language") else ""))
+    if files and ngame != 1:
+        errs.append("%d sets marked as the game language" % ngame)
+    try:
+        with open(os.path.join(troot, "names.json"), encoding="utf-8") as f:
+            nm = json.load(f)
+        for key, n in (("items", 89), ("folders", 29), ("briefings", 20), ("mp_stages", 12), ("mp_characters", 64)):
+            if len(nm.get(key, [])) != n:
+                errs.append("names.json: %s has %d entries, spec says %d" % (key, len(nm.get(key, [])), n))
+        if [i["item"] for i in nm["items"]] != list(range(89)):
+            errs.append("names.json: item numbers")
+        nobj = sum(len(b["objectives"]) for b in nm["briefings"])
+        if nobj != 80:
+            errs.append("names.json: %d objectives, spec says 80" % nobj)
+        if sum(1 for f_ in nm["folders"] if f_["header"]) != 9:
+            errs.append("names.json: mission headers")
+
+        def ids(o):
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    if k in ("long", "short", "name", "select", "id"):
+                        yield v
+                    yield from ids(v)
+            elif isinstance(o, list):
+                for v in o:
+                    yield from ids(v)
+        for v in ids(nm):
+            if v is not None and (not isinstance(v, str) or len(v) != 4 or set(v) - HEX4):
+                errs.append("names.json: bad id %r" % (v,))
+                break
+        print("names: %d items, %d folders, %d briefings (%d objectives), %d stages, %d characters"
+              % (len(nm["items"]), len(nm["folders"]), len(nm["briefings"]), nobj, len(nm["mp_stages"]), len(nm["mp_characters"])))
+        if region and nm.get("region") != region:
+            errs.append("names.json region differs from text")
+    except Exception as e:  # noqa: BLE001
+        errs.append("names.json: %s" % e)
+    for er in errs:
+        print("text: ERROR: %s" % er)
+    return 1 if errs else 0
+
+
 def main():
     if len(sys.argv) != 2:
         print(__doc__)
         return 2
     root = sys.argv[1]
-    levels = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n)) and n != "models")
+    levels = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n)) and n not in ("models", "text"))
     bad = 0
     tot = [0, 0, 0, 0]
     for n in levels:
@@ -343,7 +480,8 @@ def main():
     print("%d levels checked, %d with errors; rooms %d primitives %d triangles %d textures %d"
           % (len(levels), bad, tot[0], tot[1], tot[2], tot[3]))
     mbad = check_models(os.path.join(root, "models")) if os.path.isdir(os.path.join(root, "models")) else 0
-    return 1 if bad or mbad or not levels else 0
+    tbad = check_text(os.path.join(root, "text")) if os.path.isdir(os.path.join(root, "text")) else 0
+    return 1 if bad or mbad or tbad or not levels else 0
 
 
 if __name__ == "__main__":

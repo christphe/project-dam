@@ -23,3 +23,4 @@ Rules for these pages:
 | [display-lists.md](display-lists.md) | The display-list commands the room blocks use, including GE's texture-reference command, and how texture coordinates map to UVs |
 | [models.md](models.md) | Object models (doors, crates, consoles, vehicles, floor weapons, glass): the model-number table, the model file's nodes and records, matrices and the rest pose, render types, placement scale, the glTF export and its check against `level.rec` |
 | [stan.md](stan.md) | A level's collision floor ("stan"): tiles, points, links to neighbours, room, kind and colour, world space |
+| [text.md](text.md) | Game text: the language banks per ROM (E / P / J), string ids (bank and index), the bank layout, ASCII and the Japanese two-byte glyph codes and fonts, the item, mission, briefing and multiplayer name tables in cdata, and the `text_<lang>.json` / `names.json` export |

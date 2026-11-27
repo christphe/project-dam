@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define EX_EXPORTER_VERSION 6   /* written to every glTF (asset.extras.exporter_version); bump on any output change */
+#define EX_EXPORTER_VERSION 7   /* written to every glTF (asset.extras.exporter_version); bump on any output change */
 
 /* ---- textures (tex_decode.c, docs/specs/textures.md) --------------------- */
 
@@ -80,6 +80,13 @@ int ex_export_levels(const char *rom_path, const char *out_dir, ExLogFn log, voi
  * of models that failed, or 1000 + the count when the model table is refused
  * (its invariants do not hold for this ROM). `log` may be NULL. */
 int ex_export_models(const char *rom_path, const char *out_dir, ExLogFn log, void *user);
+
+/* ---- game text (text_export.c, docs/specs/text.md) ---------------------- */
+
+/* Exports the text banks of every language file set the ROM carries to <out_dir>/text_<lang>.json
+ * and the item / mission folder / briefing / multiplayer name tables to <out_dir>/names.json.
+ * Returns the number of failures (0 = all written). `log` may be NULL. */
+int ex_export_text(const char *rom_path, const char *out_dir, ExLogFn log, void *user);
 
 #ifdef __cplusplus
 }
