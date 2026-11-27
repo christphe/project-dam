@@ -55,6 +55,8 @@ set_property(TARGET project-dam-editor PROPERTY INCLUDE_DIRECTORIES
   "${F3D_DIR}/include"
   "${CMAKE_SOURCE_DIR}/port/mission"
   "${CMAKE_SOURCE_DIR}/port/levelrec"
+  "${CMAKE_SOURCE_DIR}/port/export"
+  "${CMAKE_SOURCE_DIR}/port/third_party/cgltf"
   "${CMAKE_SOURCE_DIR}/port/third_party/cjson")
 if(SDL2_INCLUDE_DIR)
   target_include_directories(project-dam-editor SYSTEM PRIVATE "${SDL2_INCLUDE_DIR}")
@@ -79,7 +81,7 @@ set_target_properties(project-dam-editor PROPERTIES OUTPUT_NAME "project-dam-edi
 add_executable(make_test_rec "${ED_DIR}/tools/make_test_rec.cpp")
 set_property(TARGET make_test_rec PROPERTY CXX_STANDARD 17)
 set_property(TARGET make_test_rec PROPERTY RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
-set_property(TARGET make_test_rec PROPERTY INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/port/levelrec")
+set_property(TARGET make_test_rec PROPERTY INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/port/levelrec" "${CMAKE_SOURCE_DIR}/port/export" "${ED_DIR}/tools")
 set_property(TARGET make_test_rec PROPERTY COMPILE_OPTIONS "")
 set_property(TARGET make_test_rec PROPERTY COMPILE_DEFINITIONS "")
 if(NOT WIN32)
@@ -87,4 +89,20 @@ if(NOT WIN32)
 elseif(MINGW)
   # The Windows bundle ships no libstdc++-6.dll: a PATH one from another toolchain fails to load (0xC0000139).
   target_link_options(make_test_rec PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+
+# ---- glTF decor loader test (editor/decor.cpp on a synthetic glTF written by the test; no ROM) ----------
+add_executable(test_decor "${ED_DIR}/tools/test_decor.cpp" "${ED_DIR}/decor.cpp" "${ED_DIR}/png.cpp")
+set_property(TARGET test_decor PROPERTY CXX_STANDARD 17)
+set_property(TARGET test_decor PROPERTY RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+set_property(TARGET test_decor PROPERTY INCLUDE_DIRECTORIES "${ED_DIR}" "${ED_DIR}/tools" "${CMAKE_SOURCE_DIR}/port/export"
+  "${CMAKE_SOURCE_DIR}/port/third_party/cgltf" "${CMAKE_SOURCE_DIR}/port/third_party/cjson")
+set_property(TARGET test_decor PROPERTY COMPILE_OPTIONS "")
+set_property(TARGET test_decor PROPERTY COMPILE_DEFINITIONS "")
+target_link_libraries(test_decor PRIVATE ge_mission ${LIBS})
+if(MINGW)
+  target_link_options(test_decor PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+if(NOT GE_SWITCH)
+  add_test(NAME test_decor COMMAND test_decor "${CMAKE_BINARY_DIR}/test_decor_tmp")
 endif()

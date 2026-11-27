@@ -524,6 +524,7 @@ int main(int argc, char **argv)
         drainJobs();
         pollLevel(app);
         if (app.doc.levelGen != app.seenLevelGen) reloadLevelGpu(app);
+        else if (app.doc.decorGen != app.seenDecorGen) reloadDecorGpu(app);
 
         drawable();
         int ww, wh;

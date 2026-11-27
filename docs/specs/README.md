@@ -1,0 +1,23 @@
+# Format specs (clean room)
+
+These pages describe GoldenEye's ROM data formats in prose, as facts: byte
+layouts, bit fields, algorithms and constants. They are written from the
+decompilation by the lead, in the lead's own words. Code that must stay free
+of game code (`port/export/`, issue #150) is written **from these pages
+only**: its authors do not open `src/game/`, `include/`, `PR/gbi.h` or any
+tool derived from them.
+
+Rules for these pages:
+
+- Describe behaviour and layout; never paste or paraphrase decompiled code
+  line by line. Numbers (offsets, bit positions, constants, tables of facts)
+  are fine.
+- When a value was measured on a ROM rather than read from the
+  decompilation, say so and say which ROM (region).
+- All multi-byte ROM values are big-endian unless stated.
+
+| Page | Covers |
+|---|---|
+| [level-decor.md](level-decor.md) | A level's decor file: header, room table, compressed room blocks, vertices, room positions, level scale, which file belongs to which level |
+| [textures.md](textures.md) | The texture bank: where the size table and the data are, the per-texture header, the two decompression families, the 13 pixel formats |
+| [display-lists.md](display-lists.md) | The display-list commands the room blocks use, including GE's texture-reference command, and how texture coordinates map to UVs |

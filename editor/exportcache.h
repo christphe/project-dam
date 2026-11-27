@@ -7,12 +7,20 @@
 
 // <game dir>/data/exports/<level>, absolute. "" when there is no game exe.
 std::string exportDirFor(const std::string &gameExe, const std::string &level);
+// The static glTF export of every level (`ge007 --export-levels DIR`, issue #150): <game dir>/data/exports/gltf/, beside the
+// per-level folders; <level>/<level>.gltf + .bin + textures/ inside. ROM-derived like the rest of the cache. "" when there is no game exe.
+std::string gltfDirFor(const std::string &gameExe);
+// EX_EXPORTER_VERSION of port/export/export.h: the glTF export version this build reads.
+int exportGltfVersion();
+// <dir>/<level>/<level>.gltf exists and was written with exportGltfVersion().
+bool gltfCurrent(const std::string &dir, const std::string &level);
 // Both files of a finished export are there.
 bool exportPresent(const std::string &dir);
 
 // One export run of the game, started in the background.
 struct ExportJob {
     bool running = false;
+    bool gltf = false;               // the all-levels glTF export (level = "gltf"), not one level's level.rec
     std::string level, dir;
 #ifdef _WIN32
     void *proc = nullptr;
@@ -24,6 +32,8 @@ struct ExportJob {
 // Starts the game on `level` (a solo level name) exporting into exportDirFor(). Any older export of
 // that level is removed first, so exportPresent() means this run finished.
 bool exportStart(ExportJob &j, const std::string &gameExe, const std::string &level, std::string &err);
+// Starts `ge007 --export-levels <gltfDirFor>` (all levels, about two seconds). Done (poll returns 1) when gltfCurrent() holds.
+bool exportStartGltf(ExportJob &j, const std::string &gameExe, std::string &err);
 // 0 still running, 1 done (the export is present), -1 failed (err says why).
 int exportPoll(ExportJob &j, std::string &err);
 // Starts and waits up to timeoutSec. dir gets the export folder.

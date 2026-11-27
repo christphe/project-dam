@@ -13,6 +13,7 @@
 extern "C" {
 #include "mission.h"
 }
+#include "decor.h"
 #include "levelrec.h"
 #include "script_check.h"
 
@@ -51,7 +52,15 @@ struct Level {
     std::vector<int> ailists;
     std::map<int, int> padIndex;       // pad num -> index in pads
     std::vector<OwnerInfo> owners;     // parallel to rec.owners
-    std::vector<LTri> roomTris;        // room geometry for picking
+    std::vector<LTri> roomTris;        // room geometry for picking (the glTF decor's when it is in use, else level.rec's)
+    std::vector<LTri> roomTrisRec;     // the same from level.rec's room runs
+    // The decor (rooms) from the static glTF export (<gltf root>/<level>/<level>.gltf, issue #150); level.rec then only supplies
+    // the models (props, guards). GE_EDITOR_DECOR=rec forces level.rec's rooms.
+    bool hasDecor = false;
+    Decor decor;
+    std::string gltfRoot;              // the folder holding <level>/<level>.gltf; "" = look beside / inside the export folder
+    std::string decorNote;             // what decor is drawn and why (for the log)
+    bool decorNeedsExport = false;     // there is no current glTF export: the editor may run the game to write it
     Vec3 mn{}, mx{};                   // bounds of everything
 
     Level() = default;
@@ -60,6 +69,8 @@ struct Level {
     ~Level() { if (hasRec) levelrecFree(&rec); }
 
     bool load(const std::string &exportDir, std::string &err);
+    // (Re)reads the glTF decor and sets roomTris. Never fails: without a usable glTF export level.rec's rooms stay.
+    void loadDecor();
     const LPad *pad(int num) const;
     const LProp *prop(int index) const;
     // The recorded owner of a guard body or an object model (level.json "models"), -1 none. Body and
@@ -178,6 +189,7 @@ struct Doc {
     bool dirty = false;
     bool emptyPending = false;   // a new "emptied" mission waits for its level to load (openLevel)
     int levelGen = 0;          // counts openLevel calls: the GUI reloads its GPU copy when it changes
+    int decorGen = 0;          // counts reloadDecor calls (the glTF export arrived): the GUI re-uploads the level, keeps the camera
     Selection sel;
     std::string gameExe;       // GE_EDITOR_GAME or the sibling build dir's ge007
     std::string lastPlay;      // command line of the last test_run
@@ -190,6 +202,8 @@ struct Doc {
 
     // ---- files ----
     bool openLevel(const std::string &dir, std::string &err);
+    // Re-reads the open level's glTF decor (after the editor had the game write it).
+    void reloadDecor();
     std::string gameDataDir() const;               // <game exe dir>/data, or GE_EDITOR_DATA
     // Opens a solo level by name from the export cache next to the game (exportcache.h), running the
     // game's export first when it is missing or when reexport is set. Blocks until the game is done.

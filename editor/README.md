@@ -7,8 +7,8 @@ It is separate from the game and never built for the Switch.
 
 ## Never share an export
 
-The level view comes from a **level export** (`level.rec` + `level.json`), written by the game from
-the user's own ROM. It contains ROM-derived geometry and textures. Exports live in your local data
+The level view comes from a **level export** (`level.rec` + `level.json`) and from the **glTF decor export** (below), both written by
+the game from the user's own ROM. They contain ROM-derived geometry and textures. Exports live in your local data
 directory, are gitignored, and must never be committed, attached to issues or sent to anyone. What
 you share is the mission: `mission.json` (and its Luau scripts). A mission holds only numbers (prop
 indices, pad numbers, model ids) and the uuids of the props it adds, no ROM data.
@@ -19,8 +19,21 @@ added prop by that uuid (a `Guard` / `Door` / `Prop` property is the uuid string
 an original level prop by its number; the game resolves each uuid to the setup prop number the record gets, so adding or deleting
 other props no longer shifts a script's references. Format: `port/mission/mission.h`.
 
-**Where the data comes from.** The renderer-only part (room geometry, models, stan tiles, portals, the
-model-to-owner link) is the export. The level *setup* (pads, guards, objects with every record field,
+**The decor comes from glTF.** The rooms (the level's walls, floors, scenery) are drawn from the static glTF export of the game
+(`port/export/`, issue #150: `ge007 --export-levels DIR` writes `DIR/<level>/<level>.gltf` + `.bin` + `textures/N.png` for every level),
+read by `decor.cpp` with the vendored cgltf. It lives in `<game dir>/data/exports/gltf/`, beside the per-level `level.rec` folders. When it
+is missing, or its `asset.extras.exporter_version` is not the one this build reads (`EX_EXPORTER_VERSION`), the editor runs
+`<game> --export-levels <that folder>` once in the background (about two seconds for all levels) and reloads the decor when it is done
+(the log says "glTF export done"); *Tools > Settings > Re-export all cached levels* redoes it too. Without a game executable the view
+keeps level.rec's rooms. `level.rec` still supplies the models (props, guards, doors) and everything else below. The glTF is drawn
+unlit as texture x vertex colour (colours converted back from linear to the game's own values), MASK as an alpha test at 0.5, BLEND
+after the opaque draws (depth-tested, written only where opaque), back faces culled unless the material is double sided, a decal's
+depth offset kept. Clicking the floor, the Zone tool and the surface snap use the glTF triangles. **`GE_EDITOR_DECOR=rec`** forces
+level.rec's rooms (to compare the two). `make_test_rec` also writes a synthetic glTF (`<dir>/gltf/bunker1/`, the editor looks in
+`<export>/gltf/` too).
+
+**Where the data comes from.** The renderer-only part (models, stan tiles, portals, the
+model-to-owner link) is the level export; the rooms are the glTF above. The level *setup* (pads, guards, objects with every record field,
 AI list ids) is read by the editor itself from the converted data the game keeps next to its
 executable, `<game dir>/data/pccg-<region>/` (written from your ROM the first time the game starts;
 `GE_EDITOR_DATA` overrides the data folder). The export's `level.json` names the setup row. If the
@@ -45,7 +58,7 @@ docker compose run --rm windows sh -c 'export SDL2DIR=/usr/x86_64-w64-mingw32/sy
 ```
 
 Targets (`editor/CMakeLists.txt`): `project-dam-editor`; `ge_luau_analysis` (Luau Analysis, a static library of its own with a clean include path);
-`make_test_rec`. The editor links the `ge_render` library (`port/ge_render`, issue #142): it opens its window and its backend with
+`make_test_rec`; `test_decor` (the glTF loader on a synthetic glTF, a ctest, runs without a ROM). The editor links the `ge_render` library (`port/ge_render`, issue #142): it opens its window and its backend with
 `ge_render_open`, draws the level through the backend's draw API (`scene.cpp`) and the GUI through the same API
 (`imgui_render_ge.cpp`, replacing the OpenGL3 ImGui backend). **Renderer:** OpenGL (default; needs 3.0 or newer) or Vulkan 1.3,
 `--renderer gl|vk` or Tools > Settings > Rendering (applies at the next start; `dev.py editor --renderer vk`). Vulkan falls back
@@ -270,6 +283,7 @@ python editor/tools/mcp_smoke.py <project-dam-editor exe> <export dir> <scratch 
 |---|---|
 | `doc.h/.cpp`, `doc_actions.cpp` | the document: level export, mission, selection, every action, undo |
 | `scene.cpp`, `view.cpp` | replay through `gfx_opengl_api`; camera, projection, picking |
+| `decor.h/.cpp`, `exportcache.*` | the glTF decor loader (cgltf + `png.cpp`); the export cache folders and the game runs that fill them |
 | `mcp.cpp`, `mcp_http.cpp` | JSON-RPC tools; the HTTP transport (cpp-httplib) |
 | `main.cpp` | `main()`, the loop, the command line and the test aids |
 | `ui_app.h` | the GUI state (`App`) and the helpers shared by the panel files |
@@ -285,6 +299,6 @@ python editor/tools/mcp_smoke.py <project-dam-editor exe> <export dir> <scratch 
 | `ui_overlay.cpp`, `ui_frame.cpp`, `ui_actions.cpp` | 3D overlay + gizmo + sun marker; one frame (layout, camera, shortcuts); actions shared by menus, buttons and keys |
 | `launch.cpp` | starting the game |
 | `third_party/` | cpp-httplib, the ImGui SDL2 and OpenGL3 backends, ImGuiColorTextEdit (the code editor), `luau_shim/` (see `NOTICE`) |
-| `tools/` | `make_test_rec.cpp`, `mcp_smoke.py` |
+| `tools/` | `make_test_rec.cpp`, `synth_gltf.h` (synthetic glTF), `test_decor.cpp`, `mcp_smoke.py` |
 
-Dear ImGui itself and `port/fast3d/` are the game's vendored copies, used unmodified. The Luau type checker is `port/third_party/luau/Analysis` + `Config` (the same 0.746 as the game's VM and compiler), built as `ge_luau_analysis` for the editor only.
+cgltf (`port/third_party/cgltf`, MIT, see `NOTICE`) is vendored for the decor loader. Dear ImGui itself and `port/fast3d/` are the game's vendored copies, used unmodified. The Luau type checker is `port/third_party/luau/Analysis` + `Config` (the same 0.746 as the game's VM and compiler), built as `ge_luau_analysis` for the editor only.

@@ -7,6 +7,10 @@
 #include "editor_gl.h"
 #include "ge_render.h"
 
+// gfx_cc.h needs C++20 (the editor is C++17): the few combiner constants the decor uses, as there (SHADER_* / SHADER_OPT_*)
+enum { CC_INPUT_1 = 1, CC_TEXEL0 = 8 };
+enum { CC_OPT_ALPHA = 1 << 0, CC_OPT_TEXTURE_EDGE = 1 << 2, CC_OPT_ZCUT = 1 << 14 };
+
 static GfxRenderingAPI *api() { return ge_render_api(); }
 
 bool Scene::init(int w, int h, std::string &err)
@@ -31,7 +35,10 @@ void Scene::setLevel(const Level *lv)
     GfxRenderingAPI *a = api();
     for (auto &r : m_runs) if (r.mesh) a->mesh_delete(r.mesh);
     for (uint32_t t : m_tex) a->delete_texture(t);
+    for (auto &d : m_decor) if (d.mesh) a->mesh_delete(d.mesh);
+    for (uint32_t t : m_decorTex) a->delete_texture(t);
     m_runs.clear(); m_tex.clear(); m_runsOfOwner.clear();
+    m_decor.clear(); m_decorTex.clear(); m_useDecor = false;
     m_cur = nullptr;
     m_level = lv;
     if (!lv || !lv->hasRec) return;
@@ -62,6 +69,82 @@ void Scene::setLevel(const Level *lv)
         if (!g.prg) continue;
         g.mesh = a->mesh_create(rec.runs[i].verts, r->nfloats);
         g.usable = true;
+    }
+
+    // The decor from the glTF export. Its combiner is TEXEL0 * SHADE (colour and alpha), SHADE alone when untextured: the same
+    // cycle-1 word is written for colour and alpha (gfx_cc.h: a, b, c, d nibbles per formula, colour in bits 0..15, alpha in 16..31).
+    // OPAQUE draws no alpha at all (3-float inputs), MASK discards below 0.5 (SHADER_OPT_TEXTURE_EDGE), BLEND blends.
+    if (!lv->hasDecor) return;
+    m_useDecor = true;
+    const Decor &dc = lv->decor;
+    for (const DecorTex &t : dc.tex) {
+        uint32_t id = a->new_texture();
+        a->select_texture(0, id, true);
+        a->upload_texture(t.rgba.data(), (uint32_t)t.w, (uint32_t)t.h, true);
+        m_decorTex.push_back(id);
+    }
+    for (const DecorPrim &p : dc.prims) {
+        const DecorMaterial &m = dc.materials[(size_t)p.material];
+        const bool textured = m.tex >= 0 && !p.uv.empty();
+        const bool alpha = m.alphaMode != 0;
+        const uint64_t w = textured ? ((uint64_t)CC_TEXEL0 | ((uint64_t)CC_INPUT_1 << 8)) : ((uint64_t)CC_INPUT_1 << 12);
+        const uint64_t id0 = w | (w << 16);
+        // A blended surface that writes no depth also writes it where it is opaque (SHADER_OPT_ZCUT, the backend's second depth-only
+        // pass), as the game's own draws do (gfx_pc.cpp, D987), except a decal; so its solid part hides what is drawn behind it later.
+        const uint32_t id1 = alpha ? (CC_OPT_ALPHA | (m.alphaMode == 1 ? CC_OPT_TEXTURE_EDGE : 0) |
+                                      (m.alphaMode == 2 && m.zmode != 0xC00 ? CC_OPT_ZCUT : 0)) : 0;
+        ShaderProgram *prg = a->lookup_shader(id0, id1);
+        if (!prg) prg = a->create_and_load_new_shader(id0, id1);
+        uint8_t nin; bool used[2];
+        a->shader_get_info(prg, &nin, used);
+        if (nin != 1 || used[0] != textured || used[1]) continue;
+        const size_t ncomp = alpha ? 4 : 3, stride = 4 + (textured ? 2 : 0) + ncomp;
+        std::vector<float> vb(p.idx.size() * stride);
+        for (size_t i = 0; i < p.idx.size(); i++) {
+            const size_t v = p.idx[i];
+            float *o = &vb[i * stride];
+            o[0] = p.pos[v * 3]; o[1] = p.pos[v * 3 + 1]; o[2] = p.pos[v * 3 + 2]; o[3] = 0;   // matrix 0: the view-projection
+            size_t k = 4;
+            if (textured) { o[k++] = p.uv[v * 2]; o[k++] = p.uv[v * 2 + 1]; }
+            for (size_t c = 0; c < ncomp; c++) o[k++] = p.col[v * 4 + c];
+        }
+        DecorDraw d;
+        d.mesh = a->mesh_create(vb.data(), vb.size());
+        d.prg = prg;
+        d.tex = textured ? m.tex : -1;
+        d.cms = m.cms; d.cmt = m.cmt; d.zmode = m.zmode;
+        d.nverts = (uint32_t)p.idx.size();
+        d.doubleSided = m.doubleSided;
+        d.blend = m.alphaMode == 2;
+        m_decor.push_back(d);
+    }
+}
+
+void Scene::drawDecor(bool blendPass, const Mat4 &vp)
+{
+    GfxRenderingAPI *a = api();
+    static GfxMeshDraw d;   // large: keep it off the stack
+    for (const DecorDraw &g : m_decor) {
+        if (g.blend != blendPass) continue;
+        if (g.prg != m_cur) {
+            if (m_cur) a->unload_shader(m_cur);
+            a->load_shader(g.prg);
+            m_cur = g.prg;
+        }
+        if (g.tex >= 0) {
+            a->select_texture(0, m_decorTex[(size_t)g.tex], true);
+            a->set_sampler_parameters(0, true, (uint32_t)g.cms, (uint32_t)g.cmt, true);
+        }
+        a->set_depth_mode(true, !g.blend, true, false, (uint16_t)g.zmode);   // blended: tested, never written; a decal gets the depth offset
+        a->set_use_alpha(g.blend, 0);
+        memset(&d, 0, sizeof d);
+        d.nverts = g.nverts;
+        d.nmtx = 1;
+        d.cull = g.doubleSided ? 0 : 1;   // glTF: counter-clockwise is the front, as the game's
+        d.noise_scale = 1.0f;
+        memcpy(d.mtx[0], vp.m, sizeof vp.m);
+        a->mesh_draw(g.mesh, &d);
+        m_drawn++;
     }
 }
 
@@ -129,10 +212,13 @@ void Scene::render(const Doc &doc, const Camera &cam, int winW, int winH, int vx
     const Mat4 ident = mat4Identity();
     const LevelRec &rec = m_level->rec;
 
-    if (showRooms)
-        for (uint32_t o = 0; o < rec.hdr->nowners; o++)
-            if (rec.owners[o].kind == LEVELREC_OWNER_ROOM)
-                for (int run : m_runsOfOwner[o]) drawRun(run, vp, ident);
+    if (showRooms) {
+        if (m_useDecor) drawDecor(false, vp);   // the glTF decor replaces level.rec's room runs
+        else
+            for (uint32_t o = 0; o < rec.hdr->nowners; o++)
+                if (rec.owners[o].kind == LEVELREC_OWNER_ROOM)
+                    for (int run : m_runsOfOwner[o]) drawRun(run, vp, ident);
+    }
 
     if (showProps)
         for (const Item &it : doc.items()) {
@@ -140,6 +226,7 @@ void Scene::render(const Doc &doc, const Camera &cam, int winW, int winH, int vx
             const Mat4 place = itemPlacement(doc, it);
             for (int run : m_runsOfOwner[(size_t)it.owner]) drawRun(run, vp, place);
         }
+    if (showRooms && m_useDecor) drawDecor(true, vp);   // translucent decor last: tested against props, not written
     if (m_cur) { a->unload_shader(m_cur); m_cur = nullptr; }
     editorGlScissorOff();
 }

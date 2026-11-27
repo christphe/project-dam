@@ -28,6 +28,9 @@ Third-party code vendored into the port layer keeps its own license:
   * port/third_party/cjson/ - JSON parser (cJSON 1.7.18), MIT,
     Copyright (c) 2009-2017 Dave Gamble and cJSON contributors; see
     port/third_party/cjson/LICENSE.
+  * port/third_party/cgltf/ - glTF 2.0 parser (cgltf 1.15, single header), MIT,
+    Copyright (c) 2018-2021 Johannes Kuhlmann; see port/third_party/cgltf/LICENSE.
+    Used by the mission editor only (editor/decor.cpp).
 
 Runtime libraries bundled in the downloads (not in this repository) keep
 their own licenses; each license text ships in the download's licenses/ folder:

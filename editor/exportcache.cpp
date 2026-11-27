@@ -2,6 +2,7 @@
 
 extern "C" {
 #include "mission.h"
+#include "export.h"
 }
 
 #include <chrono>
@@ -28,6 +29,31 @@ std::string exportDirFor(const std::string &gameExe, const std::string &level)
     std::error_code ec;
     fs::path exe = fs::absolute(fs::path(gameExe), ec);
     return (exe.parent_path() / "data" / "exports" / level).string();
+}
+
+std::string gltfDirFor(const std::string &gameExe)
+{
+    if (gameExe.empty()) return "";
+    std::error_code ec;
+    fs::path exe = fs::absolute(fs::path(gameExe), ec);
+    return (exe.parent_path() / "data" / "exports" / "gltf").string();
+}
+
+int exportGltfVersion() { return EX_EXPORTER_VERSION; }
+
+bool gltfCurrent(const std::string &dir, const std::string &level)
+{
+    if (dir.empty() || level.empty()) return false;
+    FILE *f = fopen((fs::path(dir) / level / (level + ".gltf")).string().c_str(), "rb");
+    if (!f) return false;
+    char head[2048];
+    const size_t n = fread(head, 1, sizeof head - 1, f);   // asset.extras comes first in the file
+    fclose(f);
+    head[n] = 0;
+    const char *k = strstr(head, "\"exporter_version\"");
+    if (!k) return false;
+    k = strchr(k, ':');
+    return k && atoi(k + 1) == EX_EXPORTER_VERSION;
 }
 
 bool exportPresent(const std::string &dir)
@@ -85,7 +111,48 @@ bool exportStart(ExportJob &j, const std::string &gameExe, const std::string &le
     j.pid = (int)pid;
 #endif
     j.running = true;
+    j.gltf = false;
     j.level = level;
+    j.dir = dir;
+    return true;
+}
+
+bool exportStartGltf(ExportJob &j, const std::string &gameExe, std::string &err)
+{
+    if (j.running) { err = "an export is already running (" + j.level + ")"; return false; }
+    if (gameExe.empty()) { err = "no game executable: set it in Tools > Settings, or GE_EDITOR_GAME"; return false; }
+    std::error_code ec;
+    fs::path exe = fs::absolute(fs::path(gameExe), ec);
+    if (!fs::is_regular_file(exe, ec)) { err = "game executable not found: " + exe.string(); return false; }
+    const std::string dir = gltfDirFor(exe.string());
+    fs::create_directories(dir, ec);
+    if (ec) { err = "cannot create " + dir + ": " + ec.message(); return false; }
+    const std::string cwd = exe.parent_path().string();
+#ifdef _WIN32
+    std::string cl = "\"" + exe.string() + "\" --export-levels \"" + dir + "\"";
+    STARTUPINFOA si; PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof si); si.cb = sizeof si;
+    memset(&pi, 0, sizeof pi);
+    if (!CreateProcessA(nullptr, &cl[0], nullptr, nullptr, FALSE, 0, nullptr, cwd.c_str(), &si, &pi)) {
+        err = "cannot start the game (error " + std::to_string((int)GetLastError()) + ")";
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    j.proc = pi.hProcess;
+#else
+    const std::string exeS = exe.string();
+    pid_t pid = fork();
+    if (pid < 0) { err = "fork failed"; return false; }
+    if (pid == 0) {
+        if (chdir(cwd.c_str()) != 0) _exit(127);
+        execl(exeS.c_str(), exeS.c_str(), "--export-levels", dir.c_str(), (char *)nullptr);
+        _exit(127);
+    }
+    j.pid = (int)pid;
+#endif
+    j.running = true;
+    j.gltf = true;
+    j.level = "gltf";
     j.dir = dir;
     return true;
 }
@@ -114,7 +181,11 @@ int exportPoll(ExportJob &j, std::string &err)
     j.pid = -1;
 #endif
     j.running = false;
-    if (exportPresent(j.dir)) return 1;
+    if (j.gltf ? gltfCurrent(j.dir, "bunker1") : exportPresent(j.dir)) return 1;
+    if (j.gltf) {
+        err = "the game exited (code " + std::to_string(code) + ") without writing the glTF export; see data/ge007.log next to the game";
+        return -1;
+    }
     err = "the game exited (code " + std::to_string(code) + ") without writing the export of " + j.level +
           "; see data/ge007.log next to the game";
     return -1;
