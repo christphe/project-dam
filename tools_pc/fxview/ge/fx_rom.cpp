@@ -81,6 +81,17 @@ bool fxRomOpen(const std::string& path, const std::string& workDir) {
         }
         g_tables[kTableNames[i]] = t;
     }
+    {   // skywaterimages: the sky mode's water textures (src/game/sky.c), its entries up to the next table
+        std::vector<ImgEntry> t;
+        for (unsigned o = kSkyWaterU[0]; o + 12 <= kSkyWaterU[1]; o += 12) {
+            const uint8_t* e = &g_rom[base + o];
+            ImgEntry x;
+            x.index = ((uint32_t)e[0] << 24) | ((uint32_t)e[1] << 16) | ((uint32_t)e[2] << 8) | e[3];
+            x.w = e[4]; x.h = e[5]; x.level = e[6]; x.format = e[7]; x.depth = e[8]; x.flagsS = e[9]; x.flagsT = e[10];
+            t.push_back(x);
+        }
+        g_tables["skywaterimages"] = t;
+    }
     const std::string list = workDir + "imagelist.u.csv";   // offsets only
     FILE* f = fopen(list.c_str(), "wb");
     if (!f) { g_note = "cannot write " + list; return false; }

@@ -16,7 +16,7 @@
 
 #include <ctype.h>
 #include "skyplus_core.h"
-#include "cloudtex.h"
+#include "fx_rom.h"   // the user's ROM: fxview's own loader (textures by image number, the global image table)
 #include "clouds.h"
 #include "img.h"
 #include "waterbake.h"
@@ -120,9 +120,8 @@ V3 rotAxis(V3 v, V3 k, float a) { const float c = cosf(a), s = sinf(a); return a
 /* ---- state ------------------------------------------------------------------------------------------------ */
 struct State {
     bool ok = false;
-    std::string dataDir = "data", romArg, imgArg, iniPath, wtexArg, view, status;
+    std::string dataDir, wtexArg, view, status;   /* dataDir: the game's data dir (water/<level>.ini); "" = next to the ROM */
     int stageIdx = 0;
-    std::string romData, imgListUsed;   /* the user's ROM (when it was read) and the image list that matched it */
     int waterImageId = 0;
     bool romOk = false;
     SkyPlusWaterSettings ws;
@@ -149,11 +148,12 @@ struct State {
     float prevVal[NPAR] = {};
     int prevVar[3] = { -1, -1, -1 };
     float bakeEye[3] = {};
-    std::vector<std::string> sets;   /* --set Name=value */
+    std::vector<std::string> sets;   /* Name=value: fxview.ini's sea.<Name>, then --set; applied over the level's defaults */
+    bool presetSet = false;          /* sea.preset: the water surface mode's preset */
     PortSkyPlus p;
     double gpuMs = -1;
     char shot[512] = "";
-    char iniBuf[260] = "seatab.ini", wtexBuf[260] = "";
+    char wtexBuf[260] = "";
     std::vector<float> grid;   /* the water plane's grid, (GN + 1)^2 vertices, x y in -1..1 */
     std::vector<float> vb;
     uint64_t waterId0 = 0, sceneId0 = 0;
@@ -181,63 +181,20 @@ void applyLevel(int lv) {
 
 void resetAll() { for (int i = 0; i < NPAR; i++) g.val[i] = g.def[i]; g.seaVar = g.skyVar = 0; }
 
-std::string readText(const std::string& p) {
-    std::string t;
-    FILE* f = fopen(p.c_str(), "rb");
-    if (!f) return t;
-    char b[4096];
-    size_t n;
-    while ((n = fread(b, 1, sizeof b, f))) t.append(b, n);
-    fclose(f);
-    return t;
-}
-
-/* the user's ROM: --rom, N64_ROM / FXVIEW_ROM in the environment, N64_ROM in a .env up the directory tree, then the game's data dir (--data) */
-std::string findRom() {
-    if (!g.romArg.empty()) return g.romArg;
-    for (const char* k : { "FXVIEW_ROM", "N64_ROM" }) if (const char* v = getenv(k)) if (*v) return v;
-    std::string dir = ".";
-    for (int up = 0; up < 8; up++, dir += "/..") {
-        const std::string e = readText(dir + "/.env");
-        size_t at = e.find("N64_ROM=");
-        if (at != std::string::npos && (at == 0 || e[at - 1] == '\n')) {
-            size_t end = e.find_first_of("\r\n", at);
-            return e.substr(at + 8, end == std::string::npos ? std::string::npos : end - at - 8);
-        }
-    }
-    /* the game's own data dir (--data): the file names romdata.c looks for */
-    if (!g.dataDir.empty())
-        for (const char* n : { "ge007.ntsc-final.z64", "ge007.pal-final.z64", "ge007.jpn-final.z64", "baserom.u.z64", "baserom.e.z64", "baserom.j.z64" })
-            if (FILE* f = fopen((g.dataDir + "/" + n).c_str(), "rb")) { fclose(f); return g.dataDir + "/" + n; }
-    return "";
-}
-
-/* GE's cloud texture (bg/clouds, IA8 64x64) from the ROM, as skyPlusTexture makes it; else a generated one */
+/* GE's cloud texture (bg/clouds, IA8 64x64) from the ROM fxview opened, as skyPlusTexture makes it (the I of I4A4); else a generated one */
 void loadClouds() {
     g.romOk = false;
-    const std::string romPath = findRom();
-    std::string rom = romPath.empty() ? std::string() : readText(romPath);
-    if (rom.size() >= 0x400000) {
-        const char reg = rom[0x3E] == 'E' ? 'u' : rom[0x3E] == 'P' ? 'e' : rom[0x3E] == 'J' ? 'j' : 0;
-        std::vector<std::string> lists;
-        if (!g.imgArg.empty()) lists.push_back(g.imgArg);
-        for (const char* d : { ".", "..", "../..", "../../..", "../../../.." }) lists.push_back(std::string(d) + "/imagelist." + (reg ? reg : 'u') + ".csv");
-        lists.push_back(g.dataDir + "/imagelist." + (reg ? reg : 'u') + ".csv");
-        std::string why = "no imagelist.<region>.csv";
-        unsigned char ci[4096];
-        for (const std::string& l : lists) {
-            if (!readText(l).empty() && cloudTexFromRom((const uint8_t*)rom.data(), rom.size(), l.c_str(), IMAGE_CLOUDS_GRAYSCALE_NUM, ci, why)) {
-                memcpy(g.cloud, ci, 4096);
-                g.romOk = true;
-                g.imgListUsed = l;
-                fprintf(stderr, "seatab: cloud texture from %s\n", romPath.c_str());
-                break;
-            }
+    if (fxRomLoaded()) {
+        MvTexImage im;
+        if (fxRomTexture(IMAGE_CLOUDS_GRAYSCALE_NUM, im) && im.w == 64 && im.h == 64) {
+            for (int i = 0; i < 4096; i++) g.cloud[i] = im.rgba[(size_t)i * 4];
+            g.romOk = true;
+            fprintf(stderr, "seatab: cloud texture from the ROM (image %d)\n", IMAGE_CLOUDS_GRAYSCALE_NUM);
+        } else {
+            fprintf(stderr, "seatab: the cloud texture could not be read from the ROM (%s)\n", im.note.c_str());
         }
-        if (g.romOk) g.romData.swap(rom);   /* kept: the level's water texture comes from it too */
-        if (!g.romOk) fprintf(stderr, "seatab: the cloud texture could not be read from %s (%s)\n", romPath.c_str(), why.c_str());
     } else {
-        fprintf(stderr, "seatab: no ROM (--rom FILE, N64_ROM in .env): a generated cloud texture\n");
+        fprintf(stderr, "seatab: no ROM: a generated cloud texture\n");
     }
     if (!g.romOk) { g.texSel = g.texSel ? g.texSel : 1; unsigned char none[4096] = {}; makeCloudTex(g.texSel, none, g.cloud); }
 }
@@ -310,16 +267,16 @@ void loadWater() {
     if (!g.wtexPath.empty()) {   /* an explicit file (--wtex) wins */
         if (img::loadImage(g.wtexPath, im)) used = g.wtexPath; else fprintf(stderr, "seatab: water texture %s: not readable\n", g.wtexPath.c_str());
     }
-    if (used.empty() && g.romOk) {   /* the game's way: skywaterimages[WaterImageId] of the level's environment record (src/game/sky.c) */
+    if (used.empty() && fxRomLoaded()) {   /* the game's way: skywaterimages[WaterImageId] of the level's environment record (src/game/sky.c) */
         /* a record whose WaterImageId is 0 (Dam, Complex...) has its water draws textured by the level's own room data, which a tool without the
          * level loader cannot reach: the first water image of the table stands in */
         const int id = g.waterImageId > 0 ? g.waterImageId : 1;
-        int w = 0, h = 0;
-        std::string why;
-        if (waterTexFromRom((const uint8_t*)g.romData.data(), g.romData.size(), g.imgListUsed.c_str(), id, &w, &h, im.px, why)) {
-            im.w = w; im.h = h;
-            used = "ROM skywaterimages[" + std::to_string(id) + "] (" + why + ")" + (g.waterImageId > 0 ? "" : ", the level's own water texture is in its room data: stand-in");
-        } else fprintf(stderr, "seatab: the water texture could not be read from the ROM (%s)\n", why.c_str());
+        const ImgEntry* e = fxTableEntry("skywaterimages", id);
+        MvTexImage t;
+        if (e && fxRomTexture((int)e->index, t)) {
+            im.w = t.w; im.h = t.h; im.px.swap(t.rgba);
+            used = "ROM skywaterimages[" + std::to_string(id) + "] (image " + std::to_string(e->index) + ")" + (g.waterImageId > 0 ? "" : ", the level's own water texture is in its room data: stand-in");
+        } else fprintf(stderr, "seatab: the water texture could not be read from the ROM (%s)\n", e ? t.note.c_str() : "no skywaterimages entry");
     }
     if (used.empty()) {
         im.w = im.h = 64; waterbake::placeholder(g.level + 1, im.px); used = "(generated placeholder: no ROM)";
@@ -492,39 +449,56 @@ void viewerBlock(GeRenderViewer* vb) {
 
 /* ---- the public API ---------------------------------------------------------------------------------------- */
 
-bool seaTabParseArg(int argc, char** argv, int* i) {
-    auto nx = [&]() -> const char* { return *i + 1 < argc ? argv[++*i] : "0"; };
-    const std::string a = argv[*i];
-    if (a == "--rom") g.romArg = nx();
-    else if (a == "--data") g.dataDir = nx();
-    else if (a == "--imagelist") g.imgArg = nx();
-    else if (a == "--ini") g.iniPath = nx();
-    else if (a == "--mode") { const std::string v = nx(); g.modeArg = v == "water" || v == "1" ? 1 : v == "sky" || v == "2" ? 2 : 0; }
-    else if (a == "--level") {
-        const std::string v = nx();
-        g.stageIdx = 0;
-        for (int i = 0; i < nLevels(); i++) if (v == levels()[i].name) g.stageIdx = i;
-        if (isdigit((unsigned char)v[0])) { const int n = atoi(v.c_str()); g.stageIdx = n % nLevels(); for (int i = 0; i < nLevels(); i++) if (levels()[i].stage == n) g.stageIdx = i; }
-        g.levelArg = true;
+static int levelByName(const std::string& v) {
+    for (int i = 0; i < nLevels(); i++) if (v == levels()[i].name) return i;
+    if (!v.empty() && isdigit((unsigned char)v[0])) { const int n = atoi(v.c_str()); for (int i = 0; i < nLevels(); i++) if (levels()[i].stage == n) return i; }
+    return -1;
+}
+
+bool seaTabSetting(const char* key, const char* value) {
+    const std::string k = key, v = value ? value : "";
+    if (k == "mode") { if (v != "sea" && v != "water" && v != "sky") return false; g.modeArg = v == "water" ? 1 : v == "sky" ? 2 : 0; }
+    else if (k == "level") { const int l = levelByName(v); if (l < 0) { fprintf(stderr, "seatab: no level %s\n", v.c_str()); return true; } g.stageIdx = l; g.levelArg = true; }
+    else if (k == "data") g.dataDir = v;
+    else if (k == "sea") g.seaVar = atoi(v.c_str());
+    else if (k == "sky") g.skyVar = atoi(v.c_str());
+    else if (k == "tex") g.texSel = atoi(v.c_str());
+    else if (k == "wtex") g.wtexArg = v;
+    else if (k == "scene") { if (v != "0" && v != "1") return false; g.scene = v == "1"; }
+    else if (k == "view") {
+        static const char* const views[] = { "overview", "pier", "boxes", "shore", "pool", "far" };
+        bool known = false;
+        for (const char* n : views) known |= v == n;
+        if (!known) return false;
+        g.view = v;
     }
-    else if (a == "--sea") g.seaVar = atoi(nx());
-    else if (a == "--sky") g.skyVar = atoi(nx());
-    else if (a == "--tex") g.texSel = atoi(nx());
-    else if (a == "--wtex") g.wtexArg = nx();
-    else if (a == "--scene") g.scene = atoi(nx()) != 0;
-    else if (a == "--view") g.view = nx();
-    else if (a == "--time") { g.fixedTime = (float)atof(nx()); g.haveTime = true; }
-    else if (a == "--sway") g.sway = atoi(nx()) != 0;
-    else if (a == "--rep") g.rep = atoi(nx());
-    else if (a == "--scale") g.scale = atoi(nx());
-    else if (a == "--cam") { g.haveCam = sscanf(nx(), "%f,%f,%f,%f,%f", &g.cam[0], &g.cam[1], &g.cam[2], &g.cam[3], &g.cam[4]) == 5; if (!g.haveCam) fprintf(stderr, "--cam wants x,y,z,yaw,pitch\n"); }
-    else if (a == "--set") g.sets.push_back(nx());
+    else if (k == "time") { g.fixedTime = (float)atof(v.c_str()); g.haveTime = true; }
+    else if (k == "sway") g.sway = atoi(v.c_str()) != 0;
+    else if (k == "rep") g.rep = atoi(v.c_str());
+    else if (k == "scale") g.scale = atoi(v.c_str());
+    else if (k == "preset") { g.level = atoi(v.c_str()); g.presetSet = true; }
+    else if (k == "cam") { g.haveCam = sscanf(v.c_str(), "%f,%f,%f,%f,%f", &g.cam[0], &g.cam[1], &g.cam[2], &g.cam[3], &g.cam[4]) == 5; if (!g.haveCam) fprintf(stderr, "seatab: cam wants x,y,z,yaw,pitch\n"); }
+    else if (k == "set") g.sets.push_back(v);
+    else if (parIdx(key) >= 0) g.sets.push_back(k + "=" + v);   /* a value of the table by its name (fxview.ini: sea.<Name>=v) */
     else return false;
-    ++*i;
     return true;
 }
 
-bool seaTabInit(const void* viewerPack, size_t viewerPackSize) {
+void seaTabWriteSettings(FILE* f) {
+    static const char* const modes[] = { "sea", "water", "sky" };
+    fprintf(f, "sea.mode=%s\nsea.level=%s\nsea.sea=%d\nsea.sky=%d\nsea.tex=%d\nsea.preset=%d\nsea.scene=%d\nsea.rep=%d\nsea.scale=%d\nsea.sway=%d\n",
+            modes[g.mode % 3], levels()[g.stageIdx < nLevels() ? g.stageIdx : 0].name.c_str(), g.seaVar, g.skyVar, g.texSel, g.level, g.scene ? 1 : 0,
+            g.rep, g.scale, g.sway ? 1 : 0);
+    if (!g.wtexPath.empty()) fprintf(f, "sea.wtex=%s\n", g.wtexPath.c_str());
+    if (g.ok) for (int i = 0; i < NPAR; i++) if (g.val[i] != g.def[i]) fprintf(f, "sea.%s=%g\n", kPar[i].name, g.val[i]);   /* what differs from the level */
+}
+
+bool seaTabInit(const void* viewerPack, size_t viewerPackSize, const char* romPath) {
+    if (g.dataDir.empty() && romPath && *romPath) {   /* the game's data dir: where the ROM is (water/<level>.ini) */
+        const std::string r = romPath;
+        const size_t sl = r.find_last_of("/\\");
+        g.dataDir = sl == std::string::npos ? "." : r.substr(0, sl);
+    }
     baseCamera();
     skyPlusCoreWaveTexture(g.wave);
     loadClouds();
@@ -532,10 +506,9 @@ bool seaTabInit(const void* viewerPack, size_t viewerPackSize) {
     const int mode = g.modeArg, level = g.level, seaVar = g.seaVar, skyVar = g.skyVar, texSel = g.texSel, rep = g.rep, scale = g.scale;
     const bool scene = g.scene, sway = g.sway;
     selectLevel(g.stageIdx);
-    if (!g.iniPath.empty()) seaTabLoadIni(g.iniPath.c_str());
-    /* the command line wins over the .ini: the arguments again */
+    /* the level's defaults are set: the settings again over them (fxview.ini first, then the command line) */
     if (mode >= 0) g.mode = mode;
-    (void)level;
+    if (g.presetSet) applyLevel(level);
     if (seaVar) g.seaVar = seaVar;
     if (skyVar) g.skyVar = skyVar;
     if (texSel) { g.texSel = texSel; g.texDirty = true; }
@@ -731,41 +704,9 @@ void seaTabCycleScale(void) { g.scale = (g.scale + 1) % 3; }
 void seaTabToggleSway(void) { g.sway = !g.sway; }
 void seaTabToggleFreeze(void) { g.freeze = !g.freeze; }
 
-void seaTabSaveIni(const char* path) {
-    FILE* f = fopen(path, "w");
-    if (!f) return;
-    for (int i = 0; i < NPAR; i++) fprintf(f, "%s=%g\n", kPar[i].name, g.val[i]);
-    fprintf(f, "__sea=%d\n__sky=%d\n__tex=%d\n__mode=%d\n__level=%d\n__wtex=%s\n__scene=%d\n__rep=%d\n__scale=%d\n", g.seaVar, g.skyVar, g.texSel, g.mode, g.level,
-            g.wtexPath.c_str(), g.scene, g.rep, g.scale);
-    fclose(f);
-}
-
-void seaTabLoadIni(const char* path) {
-    FILE* f = fopen(path, "r");
-    if (!f) { fprintf(stderr, "seatab: no settings file %s\n", path); return; }
-    char line[600];
-    while (fgets(line, sizeof line, f)) {
-        char* eq = strrchr(line, '=');   /* the last one: a name may hold '=' (Bake from (0 = no bake)) */
-        if (!eq) continue;
-        *eq = 0;
-        const float v = (float)atof(eq + 1);
-        if (!strcmp(line, "__wtex")) { std::string t = eq + 1; while (!t.empty() && (t.back() == '\n' || t.back() == '\r')) t.pop_back(); g.wtexPath = t; g.wtexDirty = true; continue; }
-        if (!strcmp(line, "__mode")) g.mode = (int)v;
-        else if (!strcmp(line, "__level")) { g.level = (int)v; g.wtexDirty = true; }
-        else if (!strcmp(line, "__sea")) g.seaVar = (int)v;
-        else if (!strcmp(line, "__sky")) g.skyVar = (int)v;
-        else if (!strcmp(line, "__tex")) { g.texSel = (int)v; g.texDirty = true; }
-        else if (!strcmp(line, "__scene")) g.scene = (int)v != 0;
-        else if (!strcmp(line, "__rep")) g.rep = (int)v < 1 ? 1 : (int)v > 64 ? 64 : (int)v;
-        else if (!strcmp(line, "__scale")) g.scale = (int)v < 0 ? 0 : (int)v > 2 ? 2 : (int)v;
-        else { const int k = parIdx(line); if (k >= 0) g.val[k] = v; }
-    }
-    fclose(f);
-}
-
 void seaTabUi(void) {
     if (!g.ok) { ImGui::TextUnformatted("The sea tab did not start."); return; }
-    ImGui::TextUnformatted(seaTabStatus());
+    ImGui::TextWrapped("%s", seaTabStatus());
     {
         std::string names;
         for (int i = 0; i < nLevels(); i++) { names += levels()[i].name.c_str(); names += '\0'; }
@@ -788,12 +729,7 @@ void seaTabUi(void) {
     ImGui::SliderInt("Load (passes per frame)", &g.rep, 1, 64);
     ImGui::Combo("Scale", &g.scale, kScaleNames, 3);
     ImGui::Checkbox("Sway", &g.sway); ImGui::SameLine(); ImGui::Checkbox("Freeze time", &g.freeze);
-    ImGui::InputText("Settings file", g.iniBuf, sizeof g.iniBuf);
-    if (ImGui::Button("Save")) seaTabSaveIni(g.iniBuf);
-    ImGui::SameLine();
-    if (ImGui::Button("Load##ini")) seaTabLoadIni(g.iniBuf);
-    ImGui::SameLine();
-    if (ImGui::Button("Reset all")) resetAll();
+    if (ImGui::Button("Reset all (the level's values)")) resetAll();
     if (ImGui::BeginTabBar("seatabs")) {
         for (int t = 0; t < 6; t++) {
             if (!ImGui::BeginTabItem(kTabs[t])) continue;
