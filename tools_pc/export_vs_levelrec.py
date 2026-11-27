@@ -195,6 +195,51 @@ def compare_models(mdir, rdir):
     return 1 if bad else 0
 
 
+def compare_stan(g, rdir):
+    """The collision floor of the glTF (asset.extras.collision, primitives' extras.tiles) against level.json "stan":
+    same tile count per room, same points tile by tile (level.json has 4 decimals), every link resolves."""
+    ce = g.get("asset", {}).get("extras", {}).get("collision")
+    jp = os.path.join(rdir, "level.json")
+    if ce is None or not os.path.isfile(jp):
+        print("stan: %s" % ("no collision in the glTF" if ce is None else "no level.json"))
+        return 0 if ce is None else 1
+    ref = json.load(open(jp)).get("stan", [])
+    scale = g["asset"]["extras"]["level_scale"]
+    tiles = {}
+    for n in g["nodes"]:
+        if not (n.get("extras") or {}).get("collision") or "mesh" not in n:
+            continue
+        for p in g["meshes"][n["mesh"]]["primitives"]:
+            for t in p.get("extras", {}).get("tiles", []):
+                tiles[t["index"]] = t
+    mine = [tiles[i] for i in sorted(tiles)]
+    per_room_a, per_room_b = {}, {}
+    for t in mine:
+        per_room_a[t["room"]] = per_room_a.get(t["room"], 0) + 1
+    for t in ref:
+        per_room_b[t["room"]] = per_room_b.get(t["room"], 0) + 1
+    room_bad = [r for r in sorted(set(per_room_a) | set(per_room_b)) if per_room_a.get(r, 0) != per_room_b.get(r, 0)]
+    pt_bad = 0
+    worst = 0.0
+    for a, b in zip(mine, ref):
+        if a["room"] != b["room"] or len(a["points"]) != len(b["v"]):
+            pt_bad += 1
+            continue
+        # level.json has 4 decimals and float32 values: the allowed difference is 2e-4 plus 2.4e-7 of the value
+        d = max(abs(p[c] / scale - q[c]) - 2.4e-7 * abs(q[c]) for p, q in zip(a["points"], b["v"]) for c in range(3))
+        worst = max(worst, d)
+        if d > 2e-4:
+            pt_bad += 1
+    unresolved = ce.get("unresolved_links", 0)
+    bad_nb = sum(1 for t in mine for L, nb in zip(t["links"], t["neighbour"]) if (L >> 4 != 0) and nb < 0)
+    print("stan: glTF %d tiles in %d rooms, level.json %d tiles in %d rooms; %d rooms differ in tile count, "
+          "%d tiles differ in room/points (max point difference %.5f), %d unresolved links"
+          % (len(mine), len(per_room_a), len(ref), len(per_room_b), len(room_bad), pt_bad, worst, unresolved + bad_nb))
+    for r in room_bad[:20]:
+        print("  room %d: glTF %d tiles, level.json %d" % (r, per_room_a.get(r, 0), per_room_b.get(r, 0)))
+    return 1 if (room_bad or pt_bad or len(mine) != len(ref) or unresolved or bad_nb) else 0
+
+
 def main():
     if sys.argv[1] == "--models":
         return compare_models(sys.argv[2], sys.argv[3])
@@ -241,7 +286,7 @@ def main():
     mesh_tris = {}
     for node in g["nodes"]:
         room = node.get("extras", {}).get("room")
-        if room is None or "mesh" not in node:
+        if room is None or "mesh" not in node or node.get("extras", {}).get("collision"):
             continue
         t = 0
         for p in g["meshes"][node["mesh"]]["primitives"]:
@@ -253,7 +298,8 @@ def main():
           % (level, len(rooms), sum(mesh_tris.values()), sum(rec_tris.values()), len(bad)))
     for r, a, b in bad[:20]:
         print("  room %d: glTF %d, level.rec %d" % (r, a, b))
-    return 1 if (missing or bad or close) else 0
+    stan_bad = compare_stan(g, rdir)
+    return 1 if (missing or bad or close or stan_bad) else 0
 
 
 if __name__ == "__main__":

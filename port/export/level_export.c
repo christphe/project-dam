@@ -7,6 +7,7 @@
  */
 #include "export_common.h"
 #include "conv_romcheck.h"
+#include "stan_export.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -81,6 +82,7 @@ typedef struct {
 typedef struct {
     const uint8_t *rom; size_t rom_size;
     const char *region;
+    const CvRegionData *rd;
     ExTexCache tc;
     MatCtx mc;
 
@@ -222,7 +224,7 @@ static void rep(CvBuf *r, const char *fmt, ...)
 /* one level                                                                */
 /* ------------------------------------------------------------------------ */
 
-typedef struct { int rooms; uint64_t tris, issued; size_t mats, textures; int failed; char msg[1300]; } LevelResult;
+typedef struct { int rooms; uint64_t tris, issued; size_t mats, textures; int failed; char msg[1300]; size_t stan_tiles, stan_rooms; } LevelResult;
 
 static int export_level(LC *lc, const CvFileRow *row, const char *file, const char *name, double scale, int scale_assumed,
                         const char *out_dir, LevelResult *res)
@@ -230,10 +232,13 @@ static int export_level(LC *lc, const CvFileRow *row, const char *file, const ch
     CvBuf rpt, json, comp[3], nodes, meshes;
     GW g;
     MatOut mo;
+    ExStan stan;
+    int stan_rc = 1;
     memset(&rpt, 0, sizeof rpt); memset(&json, 0, sizeof json); memset(&g, 0, sizeof g);
     memset(comp, 0, sizeof comp);
     memset(&nodes, 0, sizeof nodes); memset(&meshes, 0, sizeof meshes);
     ex_matout_init(&mo);
+    memset(&stan, 0, sizeof stan);
     lc_reset_level(lc);
     int fail = 0, n = 0, nmesh = 0;
     size_t ntexfiles = 0;
@@ -315,6 +320,23 @@ static int export_level(LC *lc, const CvFileRow *row, const char *file, const ch
            rm->rp[0], rm->rp[1], rm->rp[2]);
     }
 
+    /* ---- collision floor (stan.md): an extra "collision" node tree, in its own scene ---- */
+    while (g.bin.len & 3) { uint8_t z = 0; cv_buf_put(&g.bin, &z, 1); }
+    stan_rc = ex_stan_build(lc->rom, lc->rom_size, lc->rd, file, scale, g.bin.len, g.nviews, g.naccs, nmesh, lc->nrooms,
+                            (int)lc->mc.nm, &stan);
+    if (stan_rc < 0) FAIL("out of memory");
+    if (stan_rc == 0) {
+        if (g.nviews) cv_buf_put(&g.views, ",", 1);
+        cv_buf_put(&g.views, stan.views.p, stan.views.len); g.nviews += stan.nviews;
+        if (g.naccs) cv_buf_put(&g.accs, ",", 1);
+        cv_buf_put(&g.accs, stan.accs.p, stan.accs.len); g.naccs += stan.naccs;
+        cv_buf_put(&g.bin, stan.bin.p, stan.bin.len);
+        if (nmesh) cv_buf_put(&meshes, ",", 1);
+        cv_buf_put(&meshes, stan.meshes.p, stan.meshes.len); nmesh += stan.nmeshes;
+        cv_buf_put(&nodes, stan.nodes.p, stan.nodes.len);
+        res->stan_tiles = stan.tiles; res->stan_rooms = stan.rooms;
+    }
+
     /* ---- materials, textures, images, samplers ---- */
     if (ex_emit_materials(&mo, &lc->mc)) FAIL("out of memory");
 
@@ -326,11 +348,19 @@ static int export_level(LC *lc, const CvFileRow *row, const char *file, const ch
     jp(&json, ",\"level_scale\":%.9g", scale);
     jp(&json, ",\"vertex_color_encoding\":\"linear (converted from the game's sRGB bytes)\"");
     if (scale_assumed) jp(&json, ",\"level_scale_note\":\"no level entry for this file; scale 1.0 assumed\"");
-    jp(&json, "}},\"extensionsUsed\":[\"KHR_materials_unlit\"],\"scene\":0,\"scenes\":[{\"nodes\":[");
+    if (stan_rc == 0) cv_buf_put(&json, stan.asset_extras.p, stan.asset_extras.len);
+    jp(&json, "}},\"extensionsUsed\":[\"KHR_materials_unlit\"%s],\"scene\":0,\"scenes\":[{\"nodes\":[",
+       stan_rc == 0 ? ",\"KHR_node_visibility\"" : "");
     for (int r = 0; r < lc->nrooms; r++) jp(&json, "%s%d", r ? "," : "", r);
-    jp(&json, "]}],\"nodes\":["); cv_buf_put(&json, nodes.p, nodes.len); jp(&json, "]");
+    jp(&json, "]}");
+    if (stan_rc == 0) jp(&json, ",{\"name\":\"collision\",\"nodes\":[%d]}", stan.root_node);
+    jp(&json, "],\"nodes\":["); cv_buf_put(&json, nodes.p, nodes.len); jp(&json, "]");
     if (nmesh) { jp(&json, ",\"meshes\":["); cv_buf_put(&json, meshes.p, meshes.len); jp(&json, "]"); }
-    if (lc->mc.nm) { jp(&json, ",\"materials\":["); cv_buf_put(&json, mo.mats.p, mo.mats.len); jp(&json, "]"); }
+    if (stan_rc == 0) {   /* the "collision" material is the last one: index lc->mc.nm */
+        if (lc->mc.nm) cv_buf_put(&mo.mats, ",", 1);
+        cv_buf_put(&mo.mats, ex_stan_material_json(), strlen(ex_stan_material_json()));
+    }
+    if (lc->mc.nm || stan_rc == 0) { jp(&json, ",\"materials\":["); cv_buf_put(&json, mo.mats.p, mo.mats.len); jp(&json, "]"); }
     ex_emit_texture_arrays(&json, &mo);
     if (g.naccs) {
         jp(&json, ",\"accessors\":["); cv_buf_put(&json, g.accs.p, g.accs.len);
@@ -387,6 +417,13 @@ static int export_level(LC *lc, const CvFileRow *row, const char *file, const ch
             rep(&rpt, "materials with shade alpha replaced by environment alpha: %zu\n", nenv);
             rep(&rpt, "texture-generated materials (geometry mode 0x40000): %zu\n", ntg);
         }
+        if (stan_rc == 0)
+            rep(&rpt, "\ncollision floor %s: %zu tiles in %zu rooms, %zu triangles, edges: %zu walls, %zu linked, %zu unresolved links, "
+                      "%zu trailing bytes%s%s%s\n", stan.file, stan.tiles, stan.rooms, stan.tris, stan.walls, stan.linked, stan.unresolved,
+                stan.trailing, stan.table_mismatch ? ", first table entry != end of table (tiles walked from the end of the table)" : "",
+                stan.note[0] ? ", note: " : "", stan.note);
+        else
+            rep(&rpt, "\ncollision floor: none (%s)\n", stan.note);
         rep(&rpt, "\ntexture decode failures:\n");
         for (size_t i = 0; i < lc->tc.nt; i++)
             if (!lc->tc.tex[i].ok) { rep(&rpt, "  texture %d: %s\n", lc->tc.tex[i].texnum, lc->tc.tex[i].err); nfail++; }
@@ -413,6 +450,7 @@ done:
     cv_buf_free(&rpt); cv_buf_free(&json); gw_free(&g);
     cv_buf_free(&nodes); cv_buf_free(&meshes);
     ex_matout_free(&mo);
+    ex_stan_free(&stan);
     res->failed = fail;
     return fail;
 #undef FAIL
@@ -435,7 +473,7 @@ int ex_export_levels(const char *rom_path, const char *out_dir, ExLogFn log, voi
 
     LC *lc = (LC *)calloc(1, sizeof *lc);
     if (!lc) { free(rom); return 1; }
-    lc->rom = rom; lc->rom_size = rom_size; lc->region = region;
+    lc->rom = rom; lc->rom_size = rom_size; lc->region = region; lc->rd = rd;
     ex_texcache_open(&lc->tc, rom, rom_size, region, log, user);
     lc->mc.tc = &lc->tc; lc->mc.env_rule = 1; lc->mc.normal_mask = GEOM_TEXGEN; lc->mc.emit_decal = 0;
 
@@ -475,8 +513,9 @@ int ex_export_levels(const char *rom_path, const char *out_dir, ExLogFn log, voi
                 logf_(log, user, "%-10s FAILED: %s", names[k], res.msg);
             } else {
                 gtris += res.tris; gtex += res.textures;
-                logf_(log, user, "%-10s rooms %3d  triangles %7llu (issued %llu)  materials %3zu  textures %3zu", names[k],
-                      res.rooms, (unsigned long long)res.tris, (unsigned long long)res.issued, res.mats, res.textures);
+                logf_(log, user, "%-10s rooms %3d  triangles %7llu (issued %llu)  materials %3zu  textures %3zu  stan tiles %5zu rooms %3zu", names[k],
+                      res.rooms, (unsigned long long)res.tris, (unsigned long long)res.issued, res.mats, res.textures,
+                      res.stan_tiles, res.stan_rooms);
             }
         }
     }

@@ -22,3 +22,4 @@ Rules for these pages:
 | [textures.md](textures.md) | The texture bank: where the size table and the data are, the per-texture header, the two decompression families, the 13 pixel formats |
 | [display-lists.md](display-lists.md) | The display-list commands the room blocks use, including GE's texture-reference command, and how texture coordinates map to UVs |
 | [models.md](models.md) | Object models (doors, crates, consoles, vehicles, floor weapons, glass): the model-number table, the model file's nodes and records, matrices and the rest pose, render types, placement scale, the glTF export and its check against `level.rec` |
+| [stan.md](stan.md) | A level's collision floor ("stan"): tiles, points, links to neighbours, room, kind and colour, world space |

@@ -27,7 +27,17 @@ struct DecorPrim {
     std::vector<uint32_t> idx;   // triangle list
 };
 
+// One collision floor tile ("stan", docs/specs/stan.md) from the glTF's hidden `collision` node.
+struct DecorStanTile {
+    int index = 0;               // level-wide tile index (the neighbour values refer to it)
+    int room = -1;
+    int kind = 0;                // 0 normal floor, others special (crouch, ladder, ...)
+    std::vector<float> pt;       // xyz per point, world units (raw s16 point / level_scale)
+    std::vector<int> nb;         // per edge i (point i -> i+1): the neighbour tile index, -1 = no neighbour (a wall)
+};
+
 struct Decor {
+    std::vector<DecorStanTile> stan;   // empty when the glTF has no collision node
     std::vector<DecorMaterial> materials;
     std::vector<DecorTex> tex;
     std::vector<DecorPrim> prims;

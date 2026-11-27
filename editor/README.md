@@ -29,7 +29,10 @@ keeps level.rec's rooms. `level.rec` still supplies the models (props, guards, d
 unlit as texture x vertex colour (colours converted back from linear to the game's own values), MASK as an alpha test at 0.5, BLEND
 after the opaque draws (depth-tested, written only where opaque), back faces culled unless the material is double sided, a decal's
 depth offset kept. Clicking the floor, the Zone tool and the surface snap use the glTF triangles. **`GE_EDITOR_DECOR=rec`** forces
-level.rec's rooms (to compare the two). `make_test_rec` also writes a synthetic glTF (`<dir>/gltf/bunker1/`, the editor looks in
+level.rec's rooms (to compare the two). The glTF also carries the level's collision floor ("stan", `docs/specs/stan.md`) as a hidden
+`collision` node (scene 1, not drawn as decor): *View > Stan tiles* (or `--floor`) draws it from there as filled translucent tiles with
+the edges that have no neighbour (walls) highlighted, and falls back to `level.json`'s `stan` when the glTF has none (or with
+`GE_EDITOR_DECOR=rec`); the log says which ("floor: glTF collision (N tiles)" / "floor: level.json"). `make_test_rec` also writes a synthetic glTF (`<dir>/gltf/bunker1/`, the editor looks in
 `<export>/gltf/` too).
 
 **Where the data comes from.** The renderer-only part (models, stan tiles, portals, the
