@@ -284,6 +284,10 @@ int main(int argc, char **argv)
                                       void (*log)(void *user, const char *line), void *user);
             snprintf(mdir, sizeof(mdir), "%s/text", exdir);
             failed += ex_export_text(rom, mdir, exportLevelsLog, NULL);
+            extern int ex_export_characters(const char *rom_path, const char *out_dir,
+                                            void (*log)(void *user, const char *line), void *user);
+            snprintf(mdir, sizeof(mdir), "%s/characters", exdir);
+            failed += ex_export_characters(rom, mdir, exportLevelsLog, NULL);
             return failed > 254 ? 254 : failed;
         }
     }
