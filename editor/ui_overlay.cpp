@@ -12,7 +12,27 @@ void drawOverlay(App &a, const Overlay &o)
                 orange = IM_COL32(240, 160, 50, 255), green = IM_COL32(80, 220, 110, 255), grey = IM_COL32(130, 130, 140, 150),
                 cyan = IM_COL32(70, 200, 230, 160), faint = IM_COL32(90, 200, 120, 90), blue = IM_COL32(120, 170, 255, 255);
     if (d.hasLevel) {
-        if (a.showStan)
+        if (a.showStan && d.level.hasDecor && !d.level.decor.stan.empty()) {
+            // the glTF's collision floor: filled translucent tiles, shared edges faint, edges without a neighbour (walls) highlighted
+            const ImU32 fillN = IM_COL32(60, 200, 110, 40), fillS = IM_COL32(220, 80, 220, 70), wall = IM_COL32(240, 160, 50, 230);
+            for (const DecorStanTile &t : d.level.decor.stan) {
+                const size_t n = t.pt.size() / 3;
+                ImVec2 s[16];
+                bool ok = n <= 16;
+                for (size_t i = 0; ok && i < n; i++) ok = o.pt({ t.pt[i * 3], t.pt[i * 3 + 1], t.pt[i * 3 + 2] }, s[i]);
+                if (!ok) continue;
+                float area = 0;
+                for (size_t i = 0; i < n; i++) area += s[i].x * s[(i + 1) % n].y - s[(i + 1) % n].x * s[i].y;
+                if (area < 0) for (size_t i = 0; i < n / 2; i++) std::swap(s[i], s[n - 1 - i]);   // ImGui wants one winding
+                o.dl->AddConvexPolyFilled(s, (int)n, t.kind ? fillS : fillN);
+                for (size_t i = 0; i < n; i++) {
+                    const size_t j = (i + 1) % n;
+                    const bool isWall = i >= t.nb.size() || t.nb[i] < 0;
+                    const Vec3 pa = { t.pt[i * 3], t.pt[i * 3 + 1], t.pt[i * 3 + 2] }, pb = { t.pt[j * 3], t.pt[j * 3 + 1], t.pt[j * 3 + 2] };
+                    o.line(pa, pb, isWall ? wall : faint, isWall ? 1.6f : 1.0f);
+                }
+            }
+        } else if (a.showStan)
             for (auto &p : d.level.stan)
                 for (size_t i = 0; i < p.v.size(); i++) o.line(p.v[i], p.v[(i + 1) % p.v.size()], faint);
         if (a.showPortals)

@@ -59,6 +59,7 @@ struct Options {
     bool hasCam = false, hasClick = false, hasDrag = false;
     float drag[4] = { 0, 0, 0, 0 };
     int dragAxis = -1;
+    bool floorOn = false;       // --floor: View > Stan tiles on from the start (test aid)
     bool noOffscreen = false;   // --no-offscreen: draw straight into the window (see editor_gl.h)
     std::string renderer;       // --renderer gl|vk: the ge_render backend (else the Settings choice, OpenGL by default)
     bool hasMouseDrag = false, mouseClickMode = false, mouseMiddle = false;   // --mouse-middle: the drag uses the middle button (pan)   // --mouse-click: click the handle, move, click to confirm
@@ -170,6 +171,7 @@ void usage()
          "    --mission FILE    mission.json to open (a new one is started if the file does not exist)\n"
          "    --port N          MCP HTTP port on 127.0.0.1 (default 8765; the next free one is used)\n"
          "    --no-mcp          do not start the MCP HTTP server\n"
+         "    --floor           show the collision floor (View > Stan tiles) from the start\n"
          "    --no-offscreen    draw straight into the window, not into a whole offscreen frame copied at the end\n"
          "                      (the default avoids half-drawn frames on NVIDIA's DXGI present path)\n"
          "    --renderer gl|vk  the ge_render backend: OpenGL or Vulkan (default: the Settings choice, OpenGL; Vulkan falls back to OpenGL\n"
@@ -211,6 +213,7 @@ bool parseArgs(int argc, char **argv, Options &o)
         else if (s == "--mcp-http") o.mcpHttp = true;
         else if (s == "--no-mcp") o.noMcp = true;
         else if (s == "--no-offscreen") o.noOffscreen = true;
+        else if (s == "--floor") o.floorOn = true;
         else if (s == "--renderer") next(o.renderer);
         else if (s == "--debug-gl") {}                       // read by the backend through the arg_check callback
         else if (s == "--gl-version" && i + 1 < argc) i++;   // ... and this one through arg_get_string
@@ -439,6 +442,7 @@ int main(int argc, char **argv)
         const size_t colon = opt.openScript.find(':');
         openScriptEditor(app, opt.openScript.substr(0, colon), colon == std::string::npos ? 0 : atoi(opt.openScript.c_str() + colon + 1));
     }
+    if (opt.floorOn) app.showStan = true;
     app.forceTab = opt.openTab == "selection" ? 0 : opt.openTab == "mission" ? 1 : opt.openTab == "mod" ? 2 : -1;
     Vec3 lastCam = app.cam.pos;
     while (!quit) {

@@ -56,6 +56,106 @@ def check_png(path):
     return None
 
 
+COLL = {}   # level -> (tiles, rooms, triangles) of the collision floor, for the summary
+
+
+def check_collision(g, accs, views, binb, name):
+    """The collision floor (docs/specs/stan.md): a hidden `collision` node (scene 1 only) with one child per room."""
+    errs = []
+    ce = g.get("asset", {}).get("extras", {}).get("collision")
+    if ce is None:
+        return errs   # a level without a stan file is allowed (the report says why)
+    scale = g["asset"]["extras"].get("level_scale", 1.0)
+    scenes = g.get("scenes", [])
+    nodes = g.get("nodes", [])
+    if g["asset"]["extras"].get("collision_scene") != 1 or len(scenes) < 2:
+        errs.append("collision: asset.extras.collision_scene must be 1 and scenes[1] must exist")
+        return errs
+    roots = [i for i, n in enumerate(nodes) if n.get("name") == "collision"]
+    if len(roots) != 1:
+        errs.append("collision: expected one node named collision, found %d" % len(roots))
+        return errs
+    if scenes[1].get("nodes") != roots:
+        errs.append("collision: scenes[1] must contain exactly the collision node")
+    if roots[0] in scenes[0].get("nodes", []):
+        errs.append("collision: the collision node is in the default scene")
+    tiles = {}
+    tri_total = 0
+    mats = g.get("materials", [])
+    for ci in nodes[roots[0]].get("children", []):
+        node = nodes[ci]
+        room = (node.get("extras") or {}).get("room")
+        if room is None or "mesh" not in node or node.get("name") != "collision_room_%d" % room:
+            errs.append("collision: bad child node %d" % ci)
+            continue
+        prims = g["meshes"][node["mesh"]]["primitives"]
+        if len(prims) != 1:
+            errs.append("collision room %d: expected one primitive" % room)
+            continue
+        p = prims[0]
+        if list(p["attributes"].keys()) != ["POSITION"]:
+            errs.append("collision room %d: only POSITION expected" % room)
+        if p.get("material", -1) >= len(mats) or mats[p.get("material", 0)].get("name") != "collision":
+            errs.append("collision room %d: material is not the collision material" % room)
+        pa = accs[p["attributes"]["POSITION"]]
+        ia = accs[p["indices"]]
+        fmt, sz = CT[ia["componentType"]]
+        v = views[ia["bufferView"]]
+        off = v["byteOffset"] + ia.get("byteOffset", 0)
+        idx = struct.unpack("<%d%s" % (ia["count"], fmt), binb[off:off + ia["count"] * sz])
+        if ia["count"] % 3 or (idx and max(idx) >= pa["count"]):
+            errs.append("collision room %d: bad indices" % room)
+        vv = views[pa["bufferView"]]
+        po = vv["byteOffset"] + pa.get("byteOffset", 0)
+        pos = struct.unpack("<%df" % (pa["count"] * 3), binb[po:po + pa["count"] * 12])
+        tri_total += ia["count"] // 3
+        tl = p.get("extras", {}).get("tiles", [])
+        vi = 0
+        tri = 0
+        for t in tl:
+            n = t["point_count"]
+            if not (len(t["points"]) == len(t["links"]) == len(t["neighbour"]) == n):
+                errs.append("collision tile %s: array lengths" % t.get("index"))
+                continue
+            if t["room"] != room:
+                errs.append("collision tile %s: room %d in room %d's mesh" % (t["index"], t["room"], room))
+            if t["index"] in tiles:
+                errs.append("collision tile %s: duplicate index" % t["index"])
+            tiles[t["index"]] = t
+            if t["first_triangle"] != tri:
+                errs.append("collision tile %d: first_triangle %d != %d" % (t["index"], t["first_triangle"], tri))
+            if n >= 3:
+                for j, pt in enumerate(t["points"]):
+                    for c in range(3):
+                        if abs(pos[(vi + j) * 3 + c] - pt[c] / scale) > 1e-4 * max(1.0, abs(pt[c] / scale)):
+                            errs.append("collision tile %d: point %d does not match POSITION" % (t["index"], j))
+                            break
+                    else:
+                        continue
+                    break
+                if idx[tri * 3:tri * 3 + 3 * (n - 2)] != tuple(x for j in range(1, n - 1) for x in (vi, vi + j, vi + j + 1)):
+                    errs.append("collision tile %d: not a fan from point 0" % t["index"])
+                vi += n
+                tri += n - 2
+        if vi != pa["count"] or tri * 3 != ia["count"]:
+            errs.append("collision room %d: tiles do not account for all vertices / triangles" % room)
+    if sorted(tiles) != list(range(len(tiles))) or len(tiles) != ce["tiles"]:
+        errs.append("collision: tile indices are not 0..%d (asset says %d)" % (len(tiles) - 1, ce["tiles"]))
+    nb_bad = 0
+    for t in tiles.values():
+        for L, nb in zip(t["links"], t["neighbour"]):
+            if (L >> 4 == 0) != (nb == -1) or nb >= len(tiles):
+                nb_bad += 1
+    if nb_bad:
+        errs.append("collision: %d edges whose link and neighbour disagree (or point outside the tile list)" % nb_bad)
+    if ce.get("unresolved_links"):
+        errs.append("collision: %d links do not land on a tile" % ce["unresolved_links"])
+    if ce.get("rooms") != len(nodes[roots[0]].get("children", [])):
+        errs.append("collision: asset room count != children")
+    COLL[name] = (len(tiles), len(nodes[roots[0]].get("children", [])), tri_total)
+    return errs
+
+
 def check_level(root, name, report=True):
     errs = []
     d = os.path.join(root, name)
@@ -104,6 +204,8 @@ def check_level(root, name, report=True):
     ntri = 0
     nprim = 0
     for m in g.get("meshes", []):
+        if m.get("name", "").startswith("collision_room_"):
+            continue   # the collision floor: check_collision below
         for p in m["primitives"]:
             nprim += 1
             pa = p["attributes"]
@@ -155,7 +257,8 @@ def check_level(root, name, report=True):
                 errs.append("png %s: %s" % (im["uri"], e))
     if report and not os.path.isfile(os.path.join(d, "report.txt")):
         errs.append("report.txt missing")
-    stats = (len(g.get("nodes", [])), nprim, ntri, nimg, nmat)
+    errs += check_collision(g, accs, views, binb, name)
+    stats = (len([n for n in g.get("nodes", []) if not (n.get("extras") or {}).get("collision")]), nprim, ntri, nimg, nmat)
     return errs, stats
 
 
@@ -231,6 +334,8 @@ def main():
                 tot[i] += st[i]
         else:
             print("%-10s ERRORS" % n)
+        if n in COLL:
+            print("%-10s collision: %d tiles in %d rooms, %d triangles (hidden scene 1)" % ((n,) + COLL[n]))
         for e in errs:
             print("    ERROR:", e)
         if errs:

@@ -116,6 +116,7 @@ DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out
     for (cgltf_size ni = 0; ni < data->nodes_count; ni++) {
         const cgltf_node *node = &data->nodes[ni];
         if (!node->mesh) continue;
+        if (node->name && strncmp(node->name, "collision", 9) == 0) continue;   // the hidden collision floor: read below
         int room = -1;
         if (!extrasInt(node->extras, "room", room) && node->name && sscanf(node->name, "room_%d", &room) != 1) room = -1;
         float w[16];
@@ -179,14 +180,51 @@ DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out
         }
     }
     if (out.prims.empty()) { msg = "the glTF export has no room geometry"; return DECOR_BAD; }
+    double levelScale = 0;
     if (data->asset.extras.data) {
         cJSON *j = cJSON_Parse(data->asset.extras.data);
         if (j) {
             const cJSON *l = cJSON_GetObjectItemCaseSensitive(j, "level");
             if (cJSON_IsString(l)) out.level = l->valuestring;
+            const cJSON *sc = cJSON_GetObjectItemCaseSensitive(j, "level_scale");
+            if (cJSON_IsNumber(sc)) levelScale = sc->valuedouble;
             cJSON_Delete(j);
         }
     }
+    // the collision floor: nodes collision_room_<n>, their mesh's one primitive carries extras.tiles (raw s16 points)
+    if (levelScale > 0)
+        for (cgltf_size ni = 0; ni < data->nodes_count; ni++) {
+            const cgltf_node *node = &data->nodes[ni];
+            if (!node->mesh || !node->name || strncmp(node->name, "collision_room_", 15) != 0) continue;
+            for (cgltf_size pi = 0; pi < node->mesh->primitives_count; pi++) {
+                const cgltf_extras &ex = node->mesh->primitives[pi].extras;
+                if (!ex.data) continue;
+                cJSON *j = cJSON_Parse(ex.data);
+                if (!j) continue;
+                const cJSON *t;
+                cJSON_ArrayForEach(t, cJSON_GetObjectItemCaseSensitive(j, "tiles")) {
+                    const cJSON *pts = cJSON_GetObjectItemCaseSensitive(t, "points"), *nbs = cJSON_GetObjectItemCaseSensitive(t, "neighbour");
+                    const cJSON *ix = cJSON_GetObjectItemCaseSensitive(t, "index"), *rm = cJSON_GetObjectItemCaseSensitive(t, "room");
+                    const cJSON *kd = cJSON_GetObjectItemCaseSensitive(t, "kind");
+                    if (!cJSON_IsArray(pts) || !cJSON_IsNumber(ix)) continue;
+                    DecorStanTile st;
+                    st.index = (int)ix->valuedouble;
+                    st.room = cJSON_IsNumber(rm) ? (int)rm->valuedouble : -1;
+                    st.kind = cJSON_IsNumber(kd) ? (int)kd->valuedouble : 0;
+                    const cJSON *p;
+                    cJSON_ArrayForEach(p, pts) {
+                        if (!cJSON_IsArray(p) || cJSON_GetArraySize(p) < 3) continue;
+                        for (int k = 0; k < 3; k++) st.pt.push_back((float)(cJSON_GetArrayItem(p, k)->valuedouble / levelScale));
+                    }
+                    const cJSON *n;
+                    cJSON_ArrayForEach(n, nbs) st.nb.push_back(cJSON_IsNumber(n) ? (int)n->valuedouble : -1);
+                    st.nb.resize(st.pt.size() / 3, -1);
+                    if (st.pt.size() >= 9) out.stan.push_back(std::move(st));
+                }
+                cJSON_Delete(j);
+            }
+        }
     msg = "glTF decor: " + std::to_string(out.prims.size()) + " primitives, " + std::to_string(out.tex.size()) + " textures";
+    if (!out.stan.empty()) msg += ", " + std::to_string(out.stan.size()) + " collision tiles";
     return DECOR_OK;
 }
