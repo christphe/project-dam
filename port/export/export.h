@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define EX_EXPORTER_VERSION 8   /* written to every glTF (asset.extras.exporter_version); bump on any output change */
+#define EX_EXPORTER_VERSION 9   /* written to every glTF (asset.extras.exporter_version); bump on any output change */
 
 /* ---- textures (tex_decode.c, docs/specs/textures.md) --------------------- */
 
@@ -88,6 +88,13 @@ int ex_export_models(const char *rom_path, const char *out_dir, ExLogFn log, voi
  * and the item / mission folder / briefing / multiplayer name tables to <out_dir>/names.json.
  * Returns the number of failures (0 = all written). `log` may be NULL. */
 int ex_export_text(const char *rom_path, const char *out_dir, ExLogFn log, void *user);
+/* ---- characters (char_export.c, docs/specs/characters.md) ----------------- */
+
+/* Exports every guard body (skinned, with the selected animations) and head (rigid) of the character table into
+ * <out_dir>/<file name without C and Z>/<same>.gltf + .bin + textures/<n>.png and <out_dir>/characters.json.
+ * The first-person hand (id 41) is listed with kind "hand" and not exported. Returns the number of characters that
+ * failed, or 1000 when the character table or the animation data is refused. `log` may be NULL. */
+int ex_export_characters(const char *rom_path, const char *out_dir, ExLogFn log, void *user);
 
 #ifdef __cplusplus
 }

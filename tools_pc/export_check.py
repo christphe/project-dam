@@ -3,6 +3,7 @@
 
 usage: export_check.py <out_dir>
 
+<out_dir>/models and <out_dir>/characters are checked as their own indexes (models.json, characters.json).
 For every <out_dir>/<level>/<level>.gltf: the JSON parses; every bufferView and
 accessor fits the .bin; index values are below the vertex count; POSITION
 min/max match the data; every image file exists and is a valid PNG; every
@@ -21,7 +22,7 @@ import sys
 import zlib
 
 CT = {5120: ("b", 1), 5121: ("B", 1), 5122: ("h", 2), 5123: ("H", 2), 5125: ("I", 4), 5126: ("f", 4)}
-NC = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
+NC = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
 
 
 def check_png(path):
@@ -613,6 +614,147 @@ def check_text(troot):
     for er in errs:
         print("text: ERROR: %s" % er)
     return 1 if errs else 0
+def check_characters(croot):
+    """Characters export (docs/specs/characters.md): <croot>/<name>/<name>.gltf for every entry of characters.json."""
+    try:
+        with open(os.path.join(croot, "characters.json"), encoding="utf-8") as f:
+            idx = json.load(f)
+    except Exception as e:  # noqa: BLE001
+        print("characters: characters.json: %s" % e)
+        return 1
+    ents = idx.get("characters", [])
+    bad, nb, nh, nhand, tri_def, tri_all = 0, 0, 0, 0, 0, 0
+    if [e.get("id") for e in ents] != list(range(len(ents))) or len(ents) != 80:
+        print("characters: ERROR: ids are not 0..79 in order")
+        bad += 1
+    for e in ents:
+        if e.get("kind") == "hand":
+            nhand += 1
+            if e.get("gltf") is not None:
+                print("character %d: ERROR: hand must not have a gltf" % e["id"])
+                bad += 1
+            continue
+        if e.get("kind") not in ("body", "head"):
+            print("character %d %s: FAILED %s" % (e["id"], e.get("file"), e.get("notes")))
+            bad += 1
+            continue
+        name = os.path.dirname(e["gltf"])
+        errs, st = check_level(croot, name, report=False)
+        if st is not None:
+            try:
+                with open(os.path.join(croot, e["gltf"]), encoding="utf-8") as f:
+                    g = json.load(f)
+                with open(os.path.join(croot, name, name + ".bin"), "rb") as f:
+                    binb = f.read()
+                accs, nodes = g["accessors"], g["nodes"]
+                body = e["kind"] == "body"
+                nb += body
+                nh += not body
+                if st[2] != e["triangles_all"]:
+                    errs.append("triangles_all %d != gltf %d" % (e["triangles_all"], st[2]))
+                tdef = 0
+                for m in g.get("meshes", []):
+                    for p in m["primitives"]:
+                        x = p.get("extras", {})
+                        if x.get("lod_far") or x.get("sunglasses"):
+                            continue
+                        tdef += accs[p["indices"]]["count"] // 3
+                if body:
+                    tri_def += tdef
+                    if tdef != e["triangles"]:
+                        errs.append("triangles %d != gltf %d" % (e["triangles"], tdef))
+                tri_all += st[2]
+                for si in g["scenes"]:
+                    for ni in si["nodes"]:
+                        if ni >= len(nodes):
+                            errs.append("scene node %d out of range" % ni)
+                for nd in nodes:
+                    for c in nd.get("children", []):
+                        if c >= len(nodes):
+                            errs.append("child %d out of range" % c)
+                if g["asset"]["extras"].get("character") != e["id"]:
+                    errs.append("asset.extras.character != characters.json")
+                if body:
+                    errs += check_body_rig(g, binb, e)
+                else:
+                    for m in g.get("meshes", []):
+                        for p in m["primitives"]:
+                            if "JOINTS_0" in p["attributes"]:
+                                errs.append("head with a skin attribute")
+                    if [n["name"] for n in nodes if n.get("name") == "neck"] != ["neck"]:
+                        errs.append("head: no neck root node")
+            except Exception as ex:  # noqa: BLE001
+                errs.append("gltf: %s" % ex)
+        for er in errs:
+            print("character %d %s: ERROR: %s" % (e["id"], e.get("file"), er))
+        if errs:
+            bad += 1
+    print("%d characters checked (%d bodies, %d heads, %d hand skipped), %d with errors; body triangles (scene 0) %d, all %d"
+          % (len(ents), nb, nh, nhand, bad, tri_def, tri_all))
+    return 1 if bad or not ents else 0
+
+
+def acc_vals(g, binb, ai):
+    a = g["accessors"][ai]
+    fmt, sz = CT[a["componentType"]]
+    n = 16 if a["type"] == "MAT4" else NC[a["type"]]
+    v = g["bufferViews"][a["bufferView"]]
+    off = v["byteOffset"] + a.get("byteOffset", 0)
+    return struct.unpack("<%d%s" % (a["count"] * n, fmt), binb[off:off + a["count"] * n * sz]), n
+
+
+def check_body_rig(g, binb, e):
+    """The skin (joints, inverse bind matrices, one joint of weight 1 per vertex) and the animations of a body."""
+    errs = []
+    nodes = g["nodes"]
+    sk = g.get("skins", [])
+    if len(sk) != 1:
+        return ["expected one skin, found %d" % len(sk)]
+    sk = sk[0]
+    nj = len(sk["joints"])
+    if nj != e["joints"]:
+        errs.append("skin has %d joints, characters.json %d" % (nj, e["joints"]))
+    if any(j >= len(nodes) for j in sk["joints"]) or nodes[sk["skeleton"]].get("name") != "j0_root":
+        errs.append("skin joints / skeleton node")
+    for j in range(16):
+        if not any(n.get("name", "").startswith("j%d_" % j) and "_half" not in n["name"] for n in nodes):
+            errs.append("joint %d node missing" % j)
+    ibm, _ = acc_vals(g, binb, sk["inverseBindMatrices"])
+    if len(ibm) != nj * 16:
+        errs.append("inverseBindMatrices count")
+    for m in g["meshes"]:
+        for p in m["primitives"]:
+            a = p["attributes"]
+            if "JOINTS_0" not in a or "WEIGHTS_0" not in a:
+                errs.append("%s: body primitive without JOINTS_0/WEIGHTS_0" % m.get("name"))
+                continue
+            jv, _ = acc_vals(g, binb, a["JOINTS_0"])
+            wv, _ = acc_vals(g, binb, a["WEIGHTS_0"])
+            if jv and max(jv) >= nj:
+                errs.append("%s: joint index %d >= %d" % (m.get("name"), max(jv), nj))
+            if any(jv[i] for i in range(len(jv)) if i % 4) or any(
+                    wv[i * 4] != 1.0 or wv[i * 4 + 1] or wv[i * 4 + 2] or wv[i * 4 + 3] for i in range(len(wv) // 4)):
+                errs.append("%s: weights are not (1, 0, 0, 0) on joint slot 0" % m.get("name"))
+    want = set(e.get("animations", []))
+    have = set(a.get("name") for a in g.get("animations", []))
+    if want != have:
+        errs.append("animations %s != characters.json %s" % (sorted(have), sorted(want)))
+    for a in g.get("animations", []):
+        for c in a["channels"]:
+            if c["target"]["node"] >= len(nodes):
+                errs.append("animation %s: node out of range" % a["name"])
+            s = a["samplers"][c["sampler"]]
+            ti, _ = acc_vals(g, binb, s["input"])
+            vo, _ = acc_vals(g, binb, s["output"])
+            if len(vo) != len(ti) * (3 if c["target"]["path"] == "translation" else 4) or any(b <= a2 for a2, b in zip(ti, ti[1:])):
+                errs.append("animation %s: sampler sizes / times" % a["name"])
+            if c["target"]["path"] == "rotation":
+                for k in range(len(ti)):
+                    q = vo[k * 4:k * 4 + 4]
+                    if abs(sum(v * v for v in q) - 1.0) > 1e-4:
+                        errs.append("animation %s: non-unit quaternion" % a["name"])
+                        break
+    return errs
 
 
 def main():
@@ -620,7 +762,7 @@ def main():
         print(__doc__)
         return 2
     root = sys.argv[1]
-    levels = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n)) and n not in ("models", "text"))
+    levels = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n)) and n not in ("models", "text", "characters"))
     bad = 0
     tot = [0, 0, 0, 0]
     for n in levels:
@@ -652,7 +794,8 @@ def main():
           % (len(levels), bad, tot[0], tot[1], tot[2], tot[3]))
     mbad = check_models(os.path.join(root, "models")) if os.path.isdir(os.path.join(root, "models")) else 0
     tbad = check_text(os.path.join(root, "text")) if os.path.isdir(os.path.join(root, "text")) else 0
-    return 1 if bad or mbad or tbad or not levels else 0
+    cbad = check_characters(os.path.join(root, "characters")) if os.path.isdir(os.path.join(root, "characters")) else 0
+    return 1 if bad or mbad or tbad or cbad or not levels else 0
 
 
 if __name__ == "__main__":

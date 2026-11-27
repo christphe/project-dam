@@ -26,6 +26,12 @@ the set of object model numbers (plus ammo box slot models with a quantity) agai
 the `models[]` entries with guard false, the guard `body` values against the
 guard true entries; and, when that level.json has `pads`, every pad within float32
 precision.
+  python tools_pc/export_vs_levelrec.py --characters <characters_dir> <levelrec_dir>
+
+compares every `guard <body id>` owner of the level.rec with <characters_dir>/characters.json
+(docs/specs/characters.md): (1) every near-LOD triangle of the ROM body (raw positions) occurs in the capture;
+(2) the capture's joint matrices equal S(model scale) x G of some (animation, frame) of the export (accepted at
+1e-3; a blended live pose is reported, not failed); (3) the heads whose every vertex occurs in the capture.
 
 Both inputs are ROM-derived and stay in the user's data folders. Stdlib only.
 """
@@ -292,9 +298,227 @@ def compare_setup(sp, rdir):
     return 1 if bad else 0
 
 
+def read_levelrec_runs(path):
+    """-> {owner name: [(mtx rows (list of 16-float tuples), nverts, vertex floats)]} for the kind-1 owners."""
+    d = open(path, "rb").read()
+    ntex, nown, nruns = struct.unpack_from("<III", d, 8 + 64 + 32)
+    off = 8 + 64 + 32 + 12
+    for _ in range(ntex):
+        hsh, w, h = struct.unpack_from("<QHH", d, off)
+        off += 12 + w * h * 4
+    owners = []
+    for _ in range(nown):
+        kind, oid = struct.unpack_from("<Ii", d, off)
+        name = d[off + 8:off + 40].split(b"\0")[0].decode("latin1")
+        owners.append((kind, oid, name))
+        off += 8 + 32
+    run_fmt = "<IQI2i8B4BH4B6f96f2B3I"
+    run_size = struct.calcsize(run_fmt)
+    out = {}
+    for _ in range(nruns):
+        r = struct.unpack_from(run_fmt, d, off)
+        nverts, nmtx, nfloats = r[-3:]
+        off += run_size
+        mt = struct.unpack_from("<%df" % (nmtx * 16), d, off)
+        off += nmtx * 64
+        vf = struct.unpack_from("<%df" % nfloats, d, off)
+        off += nfloats * 4
+        kind, oid, name = owners[r[0]]
+        if kind == 1:
+            out.setdefault(name, []).append(([mt[i * 16:i * 16 + 16] for i in range(nmtx)], nverts, vf))
+    return out
+
+
+def m4mul(a, b):
+    return [[sum(a[i][k] * b[k][j] for k in range(4)) for j in range(4)] for i in range(4)]
+
+
+def m4trs(t, q):
+    x, y, z, w = q
+    return [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w), t[0]],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w), t[1]],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y), t[2]],
+            [0.0, 0.0, 0.0, 1.0]]
+
+
+def load_body(cdir, e):
+    """The ROM body of a characters.json entry: stored-position triangles per list, the skin, per-frame joint matrices."""
+    gp = os.path.join(cdir, e["gltf"])
+    g = json.load(open(gp))
+    binb = open(gp[:-5] + ".bin", "rb").read()
+
+    def acc(ai):
+        a = g["accessors"][ai]
+        fmt, sz = {5121: ("B", 1), 5123: ("H", 2), 5125: ("I", 4), 5126: ("f", 4)}[a["componentType"]]
+        n = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}[a["type"]]
+        v = g["bufferViews"][a["bufferView"]]
+        o = v["byteOffset"] + a.get("byteOffset", 0)
+        return struct.unpack("<%d%s" % (a["count"] * n, fmt), binb[o:o + a["count"] * n * sz]), n
+
+    nodes = g["nodes"]
+    parent = {}
+    for i, n in enumerate(nodes):
+        for c in n.get("children", []):
+            parent[c] = i
+    skin = g["skins"][0]["joints"]
+
+    def joint_of(ni):
+        return int(nodes[ni]["name"].split("_")[0][1:])
+
+    def bind_sum(ni):   # sum of the origins from joint 1 down to the node's joint (the half node adds its own origin)
+        s = [0.0, 0.0, 0.0]
+        while ni in parent and joint_of(ni) >= 1:
+            t = nodes[ni]["translation"]
+            s = [s[k] + t[k] for k in range(3)]
+            ni = parent[ni]
+        return s
+
+    sums = {ni: bind_sum(ni) for ni in skin}
+    tris = []   # (scene0, [(stored pos int tuple, matrix) x 3])
+    for mesh in g["meshes"]:
+        for p in mesh["primitives"]:
+            ex = p.get("extras", {})
+            near = not ex.get("lod_far")
+            pos, _ = acc(p["attributes"]["POSITION"])
+            jt, _ = acc(p["attributes"]["JOINTS_0"])
+            idx, _ = acc(p["indices"])
+            for k in range(0, len(idx), 3):
+                vs = []
+                for ii in idx[k:k + 3]:
+                    m = jt[ii * 4]
+                    s = sums[skin[m]] if m < len(skin) else [0, 0, 0]
+                    vs.append((tuple(int(round(pos[ii * 3 + c] - s[c])) for c in range(3)), m))
+                tris.append((near, vs))
+    # joint matrices per (animation, frame)
+    anims = {}
+    for a in g.get("animations", []):
+        ch = {}
+        for c in a["channels"]:
+            s = a["samplers"][c["sampler"]]
+            vals, n = acc(s["output"])
+            ch[(c["target"]["node"], c["target"]["path"])] = [vals[i:i + n] for i in range(0, len(vals), n)]
+        nf = a["extras"]["frames"]
+        frames = []
+        for f in range(nf):
+            glob = {}
+
+            def G(ni):
+                if ni in glob:
+                    return glob[ni]
+                nd = nodes[ni]
+                t = nd.get("translation", [0, 0, 0])
+                q = nd.get("rotation", [0, 0, 0, 1])
+                if (ni, "rotation") in ch:
+                    q = ch[(ni, "rotation")][f]
+                if joint_of(ni) == 0:
+                    t = [0.0, 0.0, 0.0]   # the capture zeroes the root's position and heading
+                    q = [0.0, 0.0, 0.0, 1.0]
+                elif (ni, "translation") in ch:
+                    t = ch[(ni, "translation")][f]
+                loc = m4trs(t, q)
+                glob[ni] = m4mul(G(parent[ni]), loc) if ni in parent else loc
+                return glob[ni]
+
+            frames.append([G(ni) for ni in skin])
+        anims[a["name"]] = frames
+    return tris, anims, skin
+
+
+def compare_characters(cdir, rdir):
+    cj = json.load(open(os.path.join(cdir, "characters.json")))
+    ents = {e["id"]: e for e in cj["characters"]}
+    runs = read_levelrec_runs(os.path.join(rdir, "level.rec"))
+    bad = 0
+    heads = [e for e in cj["characters"] if e.get("kind") == "head"]
+    for name in sorted(runs):
+        if not name.startswith("guard "):
+            continue
+        bid = int(name.split()[-1])
+        e = ents.get(bid)
+        if not e or e.get("kind") != "body":
+            print("%s: not a body of characters.json" % name)
+            bad += 1
+            continue
+        scale = e["model_scale"]
+        cap = {}   # sorted triangle of int positions -> (run, [(pos, idx)])
+        capverts = set()
+        for ri, (mt, nv, vf) in enumerate(runs[name]):
+            stride = len(vf) // nv
+            for t in range(nv // 3):
+                vs = []
+                for k in range(3):
+                    o = (t * 3 + k) * stride
+                    vs.append((tuple(int(round(vf[o + c])) for c in range(3)), int(round(vf[o + 3]))))
+                    capverts.add(vs[-1][0])
+                cap.setdefault(tuple(sorted(v[0] for v in vs)), (ri, vs))
+        tris, anims, skin = load_body(cdir, e)
+        near = [t for t in tris if t[0]]
+        found = 0
+        pairs = {}   # rom matrix -> (run, capture matrix idx)
+        for _, vs in near:
+            key = tuple(sorted(v[0] for v in vs))
+            hit = cap.get(key)
+            if not hit:
+                continue
+            found += 1
+            for pos, m in vs:
+                for cpos, ci in hit[1]:
+                    if cpos == pos:
+                        pairs.setdefault(m, (hit[0], ci))
+        body_ok = found == len(near)
+        # the pose: S(model scale) x G(joint) of some (animation, frame) for every matrix, capture matrices transposed
+        best = None
+        for an, frames in anims.items():
+            for f, Gs in enumerate(frames):
+                err = 0.0
+                for m, (ri, ci) in pairs.items():
+                    cm = runs[name][ri][0][ci]
+                    for i in range(4):
+                        for j in range(4):
+                            want = Gs[m][i][j] * (scale if i < 3 else 1.0)
+                            err = max(err, abs(cm[j * 4 + i] - want))
+                if best is None or err < best[0]:
+                    best = (err, an, f)
+        ok_pose = best is not None and best[0] <= 1e-3
+        capt = sum(nv // 3 for _, nv, _ in runs[name])
+        print("%-9s body %-14s (%s): ROM near-LOD triangles %d, in capture %d (capture total %d); pose: %s"
+              % (name, e["file"], e.get("label"), len(near), found, capt,
+                 ("%s frame %d, max matrix error %.2g" % (best[1], best[2], best[0])) if best and ok_pose else
+                 ("no exported frame within 1e-3 (closest %s frame %d, %.3g): a blended or non-exported pose" % (best[1], best[2], best[0]))
+                 if best else "no animation"))
+        if not body_ok and not e.get("has_head"):
+            bad += 1
+        # heads: every vertex of the ROM head (sunglasses left out) occurs in the capture
+        hits = []
+        for h in heads:
+            try:
+                hg = json.load(open(os.path.join(cdir, h["gltf"])))
+                hb = open(os.path.join(cdir, h["gltf"])[:-5] + ".bin", "rb").read()
+            except OSError:
+                continue
+            tot = ok = 0
+            for mesh in hg["meshes"]:
+                for p in mesh["primitives"]:
+                    if p.get("extras", {}).get("sunglasses") or p.get("extras", {}).get("lod_far"):
+                        continue
+                    a = hg["accessors"][p["attributes"]["POSITION"]]
+                    v = hg["bufferViews"][a["bufferView"]]
+                    vals = struct.unpack_from("<%df" % (a["count"] * 3), hb, v["byteOffset"] + a.get("byteOffset", 0))
+                    for i in range(a["count"]):
+                        tot += 1
+                        ok += tuple(int(round(c)) for c in vals[i * 3:i * 3 + 3]) in capverts
+            if tot and ok == tot:
+                hits.append("%d %s (%d tris)" % (h["id"], h["name"], h["triangles"]))
+        print("          heads whose every vertex occurs in the capture: %s" % (", ".join(hits) if hits else "none"))
+    print("%d guard owners; %d failures" % (sum(1 for n in runs if n.startswith("guard ")), bad))
+    return 1 if bad else 0
+
+
 def main():
     if sys.argv[1] == "--setup":
         return compare_setup(sys.argv[2], sys.argv[3])
+    if sys.argv[1] == "--characters":
+        return compare_characters(sys.argv[2], sys.argv[3])
     if sys.argv[1] == "--models":
         return compare_models(sys.argv[2], sys.argv[3])
     gdir, rdir = sys.argv[1], sys.argv[2]

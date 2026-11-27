@@ -24,5 +24,7 @@ int main(int argc, char **argv)
     failed += ex_export_models(argv[1], mdir, say, NULL);
     snprintf(mdir, sizeof mdir, "%s/text", argv[2]);
     failed += ex_export_text(argv[1], mdir, say, NULL);
+    snprintf(mdir, sizeof mdir, "%s/characters", argv[2]);
+    failed += ex_export_characters(argv[1], mdir, say, NULL);
     return failed > 254 ? 254 : failed;
 }

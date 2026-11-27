@@ -21,6 +21,7 @@ Rules for these pages:
 | [level-decor.md](level-decor.md) | A level's decor file: header, room table, compressed room blocks, vertices, room positions, level scale, which file belongs to which level |
 | [textures.md](textures.md) | The texture bank: where the size table and the data are, the per-texture header, the two decompression families, the 13 pixel formats |
 | [display-lists.md](display-lists.md) | The display-list commands the room blocks use, including GE's texture-reference command, and how texture coordinates map to UVs |
+| [characters.md](characters.md) | Guard bodies and heads: the body/head table, how a head attaches, the shared skeleton and its half-rotation matrices, matrix skinning, the rest and bind poses, placement scale and `pov`, the animation table and frame / root-motion bit format, the skinned glTF export and its check against `level.rec` |
 | [models.md](models.md) | Object models (doors, crates, consoles, vehicles, floor weapons, glass): the model-number table, the model file's nodes and records, matrices and the rest pose, render types, placement scale, the glTF export and its check against `level.rec` |
 | [stan.md](stan.md) | A level's collision floor ("stan"): tiles, points, links to neighbours, room, kind and colour, world space |
 | [text.md](text.md) | Game text: the language banks per ROM (E / P / J), string ids (bank and index), the bank layout, ASCII and the Japanese two-byte glyph codes and fonts, the item, mission, briefing and multiplayer name tables in cdata, and the `text_<lang>.json` / `names.json` export |
