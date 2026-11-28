@@ -43,6 +43,11 @@
  *   mission.difficulty() -> 0..3                    the difficulty being played: 0 Agent, 1 Secret Agent, 2 00 Agent, 3 007
  *                                                   (-1 when the host has no difficulty)
  *   door(prop) / guard(prop) -> target              a target for a setup prop number
+ *   chr(n) -> target                                the guard whose chr number is n (the number the setup and the game's
+ *                                                   own scripts use); a target with no prop when there is none
+ *   tag(n) -> target                                the object an object tag names (doors, terminals, screens ...)
+ *   text(id) -> string | nil                        the game's text `id` in the language played: id a number or 4 hex digits
+ *                                                   ("2C04"); the campaign references text by id and never ships it (#165)
  *   player(n) -> target                             player n (0-based) as a target (kind "player"): :say(), :distance(),
  *                                                   :near(), :distance_to() (the prop methods do nothing on it)
  *   target (global of the script)                   the script's own target (kind "prop", "pad", "zone", "mission")
@@ -174,6 +179,17 @@ typedef struct MissionHost {
      * or a zone); pos is the speaker's position now in every case. range > 0: players farther away do not get it. */
     void (*say_at)(void *ud, const char *who, const char *text, int kind, int index, const float pos[3], float range);
     void (*fail)(void *ud);                            /* end the level as a failure */
+    /* #165 (the Luau campaign): game text by id, and the setup's own ids. */
+    int  (*text)(void *ud, int id, char *out, size_t outlen);   /* the game text `id` (bank * 1024 + index) in the language
+                                                                   played, without its final line break; 0: no such text */
+    int  (*chr_prop)(void *ud, int chrnum);            /* the setup prop of the guard with chr number `chrnum`; -1: none */
+    int  (*tag_prop)(void *ud, int tag);               /* the setup prop an object tag `tag` names; -1: none */
+    int  (*prop_chr)(void *ud, int prop);              /* the chr number of setup guard `prop`; -1: not a guard */
+    int  (*pad_by_id)(void *ud, const char *id);       /* the pad number of a mission pad (its string id); -1: none */
+    /* The campaign API's domains (mission_lua_ext.h); NULL: not available. */
+    const struct MissionHostGuard  *guard_ext;
+    const struct MissionHostWorld  *world_ext;
+    const struct MissionHostCinema *cinema_ext;
 } MissionHost;
 
 #define MH_HEALTH_CUR  0

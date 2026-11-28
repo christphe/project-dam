@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "name": "text:9C99",
+  "level": "egypt",
+  "description": "",
+  "level_ai": false,
+  "level_intro": false,
+  "scripts": [
+    {
+      "use": "egypt",
+      "target": {
+        "kind": "mission"
+      }
+    }
+  ]
+}

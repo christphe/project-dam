@@ -1,6 +1,7 @@
 // The Luau runtime of a custom mission: see mission_lua.h.
 #include "mission_lua.h"
 #include "ge_pkg.h"
+#include "mission_lua_ext.h"
 
 #include <algorithm>
 #include <chrono>
@@ -129,6 +130,7 @@ struct MissionRuntime {
     std::vector<signed char> doorPrev, deadPrev;
     std::vector<unsigned char> inZone;   // [zone * kMaxPlayers + player]
     int started = 0;
+    int traced = 0;                      // GE_MISSIONTRACE lines written
 
     void log(const char *fmt, ...) const;
 };
@@ -247,7 +249,24 @@ void pushEvent(lua_State *T, const Event &e)
 Field num(const char *k, double v) { Field f; f.key = k; f.num = v; return f; }
 Field str(const char *k, const char *v) { Field f; f.key = k; f.isStr = true; f.str = v; return f; }
 
-void raise(MissionRuntime *rt, Event e) { rt->queue.push_back(std::move(e)); }
+// GE_MISSIONTRACE=1: every raised event goes to the log with its fields, at most 500 lines per runtime (#165, to see
+// what a level's scripts were told without a debugger).
+void traceEvent(MissionRuntime *rt, const Event &e)
+{
+    static int enabled = -1;
+    if (enabled < 0) { const char *v = getenv("GE_MISSIONTRACE"); enabled = (v && *v && *v != '0') ? 1 : 0; }
+    if (!enabled || rt->traced >= 500) return;
+    std::string s = "event " + e.name;
+    for (const Field &f : e.f) {
+        char buf[64];
+        if (f.isStr) s += " " + f.key + "=" + f.str;
+        else { snprintf(buf, sizeof buf, " %s=%g", f.key.c_str(), f.num); s += buf; }
+    }
+    if (++rt->traced == 500) s += " (trace capped)";
+    rt->log("%s", s.c_str());
+}
+
+void raise(MissionRuntime *rt, Event e) { traceEvent(rt, e); rt->queue.push_back(std::move(e)); }
 
 // ----------------------------------------------------------- Lua functions
 int l_print(lua_State *L)
@@ -1138,6 +1157,55 @@ void pushTarget(lua_State *L, const char *kind, int prop)
 
 int l_door(lua_State *L) { pushTarget(L, "prop", (int)luaL_checkinteger(L, 1)); return 1; }
 
+// chr(n) / tag(n): a target by the setup's own ids (#165). -1 (no such guard / object) gives a target with no prop,
+// which every method treats as missing, as for a removed prop.
+int l_chr(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int n = (int)luaL_checkinteger(L, 1);
+    int p = rt->host.chr_prop ? rt->host.chr_prop(rt->host.ud, n) : -1;
+    // A chr with no setup record (a clone, a guard spawn_guard brings in) is still a target: the guard domain
+    // addresses guards by chr number. The setup methods (by prop) treat it as missing.
+    pushTarget(L, "prop", p);
+    lua_pushnumber(L, n);
+    lua_setfield(L, -2, "chr");
+    return 1;
+}
+
+int l_tag(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int n = (int)luaL_checkinteger(L, 1);
+    int p = rt->host.tag_prop ? rt->host.tag_prop(rt->host.ud, n) : -1;
+    if (p < 0) rt->log("tag(%d): no object has that tag", n);
+    pushTarget(L, "prop", p);
+    return 1;
+}
+
+// text(id): the game's text by id, 0x0400..0xB3FF, given as a number or as 4 hex digits ("2C04").
+int l_text(lua_State *L)
+{
+    MissionRuntime *rt = rtOf(L);
+    int id = -1;
+    if (lua_type(L, 1) == LUA_TNUMBER) {
+        id = (int)lua_tointeger(L, 1);
+    } else {
+        const char *s = luaL_checkstring(L, 1);
+        char *end = NULL;
+        long v = strtol(s, &end, 16);
+        if (end && *end == '\0' && end - s == 4) id = (int)v;
+    }
+    if (id < 0x400 || id > 0xB3FF) luaL_error(L, "text(): not a text id (0400..B3FF)");
+    char buf[1024];
+    if (!rt->host.text || !rt->host.text(rt->host.ud, id, buf, sizeof buf)) {
+        rt->log("text(%04X): no such text", id);
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushstring(L, buf);
+    return 1;
+}
+
 // player(n): player n (0-based) as a target.
 int l_player(lua_State *L)
 {
@@ -1455,6 +1523,122 @@ void scan(MissionRuntime *rt)
 
 }  // namespace
 
+// ============================================================ #165: helpers for the domain bindings (mission_lua_ext.h)
+const MissionHost *missionLuaHost(lua_State *L) { return &rtOf(L)->host; }
+
+void missionLuaLog(lua_State *L, const char *fmt, ...)
+{
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    rtOf(L)->log("%s", buf);
+}
+
+static int tgtNumField(lua_State *L, int idx, const char *field)
+{
+    if (!lua_istable(L, idx)) return -1;
+    lua_getfield(L, idx, field);
+    int v = lua_isnumber(L, -1) ? (int)lua_tonumber(L, -1) : -1;
+    lua_pop(L, 1);
+    return v;
+}
+
+static bool tgtKindIs(lua_State *L, int idx, const char *kind)
+{
+    if (!lua_istable(L, idx)) return false;
+    lua_getfield(L, idx, "kind");
+    bool is = lua_isstring(L, -1) && strcmp(lua_tostring(L, -1), kind) == 0;
+    lua_pop(L, 1);
+    return is;
+}
+
+int missionLuaTgtProp(lua_State *L, int idx) { return tgtNumField(L, idx, "prop"); }
+
+int missionLuaTgtChr(lua_State *L, int idx)
+{
+    int c = tgtNumField(L, idx, "chr");
+    if (c >= 0) return c;
+    int p = tgtNumField(L, idx, "prop");
+    const MissionHost &h = rtOf(L)->host;
+    return (p >= 0 && h.prop_chr) ? h.prop_chr(h.ud, p) : -1;
+}
+
+int missionLuaTgtPlayer(lua_State *L, int idx) { return tgtKindIs(L, idx, "player") ? tgtNumField(L, idx, "player") : -1; }
+
+static int padById(lua_State *L, const char *id)
+{
+    const MissionHost &h = rtOf(L)->host;
+    return (id && h.pad_by_id) ? h.pad_by_id(h.ud, id) : -1;
+}
+
+int missionLuaTgtPad(lua_State *L, int idx)
+{
+    if (!tgtKindIs(L, idx, "pad")) return -1;
+    lua_getfield(L, idx, "pad");
+    int v = lua_isnumber(L, -1) ? (int)lua_tonumber(L, -1) : lua_isstring(L, -1) ? padById(L, lua_tostring(L, -1)) : -1;
+    lua_pop(L, 1);
+    return v;
+}
+
+int missionLuaPadArg(lua_State *L, int idx)
+{
+    if (lua_type(L, idx) == LUA_TNUMBER) return (int)lua_tonumber(L, idx);
+    if (lua_type(L, idx) == LUA_TSTRING) return padById(L, lua_tostring(L, idx));
+    if (lua_istable(L, idx)) return missionLuaTgtPad(L, idx);
+    return -1;
+}
+
+// emit(name [, fields]): an event of the scripts' own, delivered like the engine's (next tick, every subscriber).
+// The engine's own names are refused so a script cannot fake a death or an objective.
+int l_emit(lua_State *L)
+{
+    static const char *const kEngine[] = { "start", "end", "pickup", "death", "door", "zone", "objective",
+        "objective_failed", "player_death", "player_hurt", "player_revived", "gunfire", "alarm", "guard_hurt",
+        "guard_down", "guard_revived", "intro_done", "intro_swirl", "destroyed", "activated", "gadget_used",
+        "picked_up", "door_refused", "anim_end", "guard_damaged", "guard_died", "guard_spotted", "guard_heard",
+        "guard_near_miss", "guard_witnessed", "key_copied", "photographed", "camera_done" };
+    MissionRuntime *rt = rtOf(L);
+    const char *name = luaL_checkstring(L, 1);
+    for (const char *k : kEngine)
+        if (!strcmp(name, k)) luaL_error(L, "emit(): \"%s\" is an engine event", name);
+    Event e;
+    e.name = name;
+    if (lua_istable(L, 2)) {
+        lua_pushnil(L);
+        while (lua_next(L, 2)) {
+            if (lua_type(L, -2) == LUA_TSTRING) {
+                Field f;
+                f.key = lua_tostring(L, -2);
+                if (lua_type(L, -1) == LUA_TNUMBER) f.num = lua_tonumber(L, -1);
+                else if (lua_type(L, -1) == LUA_TBOOLEAN) f.num = lua_toboolean(L, -1);
+                else if (lua_type(L, -1) == LUA_TSTRING) { f.isStr = true; f.str = lua_tostring(L, -1); }
+                else { lua_pop(L, 1); continue; }
+                e.f.push_back(std::move(f));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    raise(rt, std::move(e));
+    return 0;
+}
+
+void missionLuaPushTarget(lua_State *L, const char *kind, int prop, int chr, int index)
+{
+    pushTarget(L, kind, prop);
+    if (chr >= 0) { lua_pushnumber(L, chr); lua_setfield(L, -2, "chr"); }
+    if (index >= 0) {
+        const char *f = !strcmp(kind, "pad") ? "pad" : (!strcmp(kind, "player") || !strcmp(kind, "body")) ? "player" : nullptr;
+        if (f) { lua_pushnumber(L, index); lua_setfield(L, -2, f); }
+    }
+}
+
+void missionLuaRaise(lua_State *L, const char *name, const MissionEvField *fields, int nfields)
+{
+    missionRtRaise(rtOf(L), name, fields, nfields);
+}
+
 // =================================================================== API
 MissionRuntime *missionRtCreate(const Mission *m, const MissionHost *host, const char *mission_dir, const char *mod_dir, char *err, size_t errlen)
 {
@@ -1494,7 +1678,9 @@ MissionRuntime *missionRtCreate(const Mission *m, const MissionHost *host, const
     for (const Fn &f : { Fn{ "print", l_print }, Fn{ "message", l_message }, Fn{ "say", l_say }, Fn{ "give", l_give }, Fn{ "take", l_take },
                          Fn{ "has", l_has }, Fn{ "wait", l_wait }, Fn{ "event", l_event }, Fn{ "door", l_door }, Fn{ "guard", l_door },
                          Fn{ "player", l_player }, Fn{ "clock", l_clock }, Fn{ "spawn", l_spawn }, Fn{ "on", l_on },
-                         Fn{ "require", l_require } }) {
+                         Fn{ "require", l_require }, Fn{ "chr", l_chr }, Fn{ "tag", l_tag }, Fn{ "text", l_text },
+                         Fn{ "prop", l_door },       // #165: prop(n), any setup prop (door() / guard() are the same target)
+                         Fn{ "emit", l_emit } }) {
         lua_pushcfunction(L, f.f, f.name);
         lua_setglobal(L, f.name);
     }
@@ -1527,6 +1713,13 @@ MissionRuntime *missionRtCreate(const Mission *m, const MissionHost *host, const
                          Fn{ "set_revivable", t_set_revivable }, Fn{ "is_down", t_is_down } }) {
         lua_pushcfunction(L, f.f, f.name);
         lua_setfield(L, -2, f.name);
+    }
+    {   // #165: the campaign API's domains (mission_lua_ext.h) add their Target methods and globals
+        int mt = lua_gettop(L);
+        missionLuaRegGuard(L, mt);
+        missionLuaRegWorld(L, mt);
+        missionLuaRegCinema(L, mt);
+        lua_settop(L, mt);
     }
     lua_pop(L, 1);
     for (const auto &mt : { std::make_pair(kTaskMT, Fn{ "cancel", task_cancel }), std::make_pair(kConnMT, Fn{ "off", conn_off }) }) {

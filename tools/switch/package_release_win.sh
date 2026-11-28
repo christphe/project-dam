@@ -20,7 +20,9 @@ EXE="$BUILD/ge007.x86_64.exe"
 NAME="project-dam-$VERSION-windows-x64"
 STAGE="$OUT/$NAME"
 rm -rf "$STAGE"
-mkdir -p "$STAGE/licenses" "$STAGE/data"
+mkdir -p "$STAGE/licenses" "$STAGE/data" "$STAGE/mods"
+# The Luau campaign (#165): campaign/ packed as a .pmod next to the exe (mods/).
+sh tools/pack_mod.sh campaign "$STAGE/mods/campaign.pmod"
 
 cp "$EXE" "$STAGE/"
 for dll in "$BUILD"/*.dll; do

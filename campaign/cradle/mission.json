@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "name": "text:9C93",
+  "level": "cradle",
+  "description": "",
+  "briefing": "",
+  "level_ai": false,
+  "level_intro": false,
+  "scripts": [
+    {
+      "use": "cradle",
+      "target": {
+        "kind": "mission"
+      }
+    }
+  ]
+}

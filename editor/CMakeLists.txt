@@ -92,6 +92,20 @@ elseif(MINGW)
   target_link_options(make_test_rec PRIVATE -static-libstdc++ -static-libgcc)
 endif()
 
+# ---- script_check_cli: the editor's script type check from the command line (the Luau campaign, #165) ----------
+add_executable(script_check_cli "${ED_DIR}/tools/script_check_cli.cpp" "${ED_DIR}/script_check.cpp" "${ED_DIR}/script_props.cpp")
+set_property(TARGET script_check_cli PROPERTY CXX_STANDARD 17)
+set_property(TARGET script_check_cli PROPERTY RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+set_property(TARGET script_check_cli PROPERTY INCLUDE_DIRECTORIES "${ED_DIR}"
+  "${ED_LUAU}/Analysis/include" "${ED_LUAU}/Config/include" "${ED_LUAU}/Ast/include" "${ED_LUAU}/Common/include"
+  "${CMAKE_SOURCE_DIR}/port/mission")
+set_property(TARGET script_check_cli PROPERTY COMPILE_OPTIONS "")
+set_property(TARGET script_check_cli PROPERTY COMPILE_DEFINITIONS "")
+target_link_libraries(script_check_cli PRIVATE ge_luau_analysis ge_mission ${LIBS})
+if(MINGW)
+  target_link_options(script_check_cli PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+
 # ---- glTF decor loader test (editor/decor.cpp on a synthetic glTF written by the test; no ROM) ----------
 add_executable(test_decor "${ED_DIR}/tools/test_decor.cpp" "${ED_DIR}/decor.cpp" "${ED_DIR}/texset.cpp")
 set_property(TARGET test_decor PROPERTY CXX_STANDARD 17)

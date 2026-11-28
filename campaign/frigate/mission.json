@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "name": "text:9C83",
+  "level": "frigate",
+  "description": "",
+  "briefing": "",
+  "level_ai": false,
+  "level_intro": false,
+  "scripts": [
+    {
+      "use": "frigate",
+      "target": {
+        "kind": "mission"
+      }
+    }
+  ]
+}

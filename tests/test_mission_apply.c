@@ -404,6 +404,81 @@ static void test_weapons(void)
     missionApplyFree(&r);
 }
 
+/* "level_ai": false empties every list of the AI list table (16-byte PC entries, a 0 offset ends it); the default
+ * leaves them alone. */
+static void test_level_ai(void)
+{
+    enum { AITBL = 0xC00, L0 = 0xD00, L1 = 0xD10 };
+    MissionApplyResult r;
+    char err[128] = "";
+    const Mission *m;
+    build();
+    wr32(g_file + 8 * 5, AITBL);
+    wr32(g_file + AITBL, L0);      wr32(g_file + AITBL + 8, 0x401);
+    wr32(g_file + AITBL + 16, L1); wr32(g_file + AITBL + 24, 0x1000);
+    wr32(g_file + AITBL + 32, 0);
+    g_file[L0] = 0x20; g_file[L0 + 1] = 0x05; g_file[L1] = 0x03; g_file[L1 + 1] = 0x04;
+    g_size = L1 + 16;
+
+    m = load("{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\" }\n");
+    GE_CHECK(m != NULL);
+    GE_CHECK_EQ_INT(m->level_ai_off, 0);
+    GE_CHECK_EQ_INT(missionApplySetup(m, g_file, g_size, -1, 1.0f, &r, err, sizeof err), 1);
+    GE_CHECK_EQ_INT(r.data[L0], 0x20);
+    GE_CHECK_EQ_INT(r.data[L1], 0x03);
+    missionApplyFree(&r);
+
+    m = load("{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\", \"level_ai\": false }\n");
+    GE_CHECK(m != NULL);
+    GE_CHECK_EQ_INT(m->level_ai_off, 1);
+    GE_CHECK_EQ_INT(missionApplySetup(m, g_file, g_size, -1, 1.0f, &r, err, sizeof err), 1);
+    GE_CHECK_EQ_INT(r.data[L0], 0x04);
+    GE_CHECK_EQ_INT(r.data[L0 + 1], 0x05);   /* only the first byte: the list ends at once */
+    GE_CHECK_EQ_INT(r.data[L1], 0x04);
+    GE_CHECK_EQ_INT((int)rd32(r.data + AITBL + 8), 0x401);   /* ids untouched */
+    missionApplyFree(&r);
+
+    GE_CHECK(load("{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\", \"level_ai\": 0 }\n") == NULL);
+}
+
+/* "level_intro": false drops the swirl (3), intro animation (4) and camera (6) records from the intro stream and
+ * keeps the others in order, END last. */
+static void test_level_intro(void)
+{
+    enum { IN = 0xA00 };
+    MissionApplyResult r;
+    char err[128] = "";
+    const Mission *m;
+    uint32_t o = IN;
+    build();
+    wr32(g_file + 8 * 2, IN);
+    wr32(g_file + o, 0); wr32(g_file + o + 4, 1); wr32(g_file + o + 8, 0); o += 12;         /* spawn pad 1 */
+    wr32(g_file + o, 6); wr32(g_file + o + 4, 0x1234); o += 40;                             /* camera */
+    wr32(g_file + o, 1); wr32(g_file + o + 4, 8); wr32(g_file + o + 8, 0xFFFFFFFF); o += 16; /* item 8 */
+    wr32(g_file + o, 3); o += 32;                                                           /* swirl */
+    wr32(g_file + o, 4); wr32(g_file + o + 4, 2); o += 8;                                   /* animation */
+    wr32(g_file + o, 9); o += 4;                                                            /* END */
+    g_size = o + 16;
+
+    m = load("{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\", \"level_intro\": false }\n");
+    GE_CHECK(m != NULL);
+    GE_CHECK_EQ_INT(m->level_intro_off, 1);
+    GE_CHECK_EQ_INT(missionApplySetup(m, g_file, g_size, -1, 1.0f, &r, err, sizeof err), 1);
+    GE_CHECK_EQ_INT((int)rd32(r.data + IN), 0);          /* spawn kept */
+    GE_CHECK_EQ_INT((int)rd32(r.data + IN + 4), 1);
+    GE_CHECK_EQ_INT((int)rd32(r.data + IN + 12), 1);     /* item next: the camera is gone */
+    GE_CHECK_EQ_INT((int)rd32(r.data + IN + 16), 8);
+    GE_CHECK_EQ_INT((int)rd32(r.data + IN + 28), 9);     /* END right after: swirl and animation gone */
+    missionApplyFree(&r);
+
+    m = load("{ \"format\": 1, \"name\": \"t\", \"level\": \"bunker1\" }\n");
+    GE_CHECK(m != NULL);
+    GE_CHECK_EQ_INT(m->level_intro_off, 0);
+    GE_CHECK_EQ_INT(missionApplySetup(m, g_file, g_size, -1, 1.0f, &r, err, sizeof err), 1);
+    GE_CHECK_EQ_INT((int)rd32(r.data + IN + 12), 6);     /* default: the camera stays */
+    missionApplyFree(&r);
+}
+
 int main(void)
 {
     MissionApplyResult r;
@@ -518,6 +593,8 @@ int main(void)
     test_setup_prop();
     test_weapons();
     test_setup_decode();
+    test_level_ai();
+    test_level_intro();
 
     /* a file that is not a setup */
     ok = missionApplySetup(m, g_file, 16, -1, 1.0f, &r, err, sizeof err);

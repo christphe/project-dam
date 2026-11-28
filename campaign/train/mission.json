@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "name": "text:9C8B",
+  "level": "train",
+  "description": "",
+  "level_ai": false,
+  "level_intro": false,
+  "scripts": [
+    {
+      "use": "train",
+      "target": {
+        "kind": "mission"
+      }
+    }
+  ]
+}

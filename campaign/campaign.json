@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "id": "75c2509f-2def-4521-8689-d785148ca5a1",
+  "name": "Campaign",
+  "author": "project-dam",
+  "description": "The solo campaign on the mission API (#165).",
+  "affects": ["story"],
+  "unlock": "ordered",
+  "missions": ["dam", "facility", "runway", "surface1", "bunker1", "silo", "frigate", "surface2", "bunker2",
+               "statue", "archives", "streets", "depot", "train", "jungle", "control", "caverns", "cradle",
+               "aztec", "egypt", "cuba"]
+}

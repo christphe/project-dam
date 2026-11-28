@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "name": "text:9C8D",
+  "level": "jungle",
+  "description": "",
+  "level_ai": false,
+  "level_intro": false,
+  "scripts": [
+    {
+      "use": "jungle",
+      "target": {
+        "kind": "mission"
+      }
+    }
+  ]
+}
