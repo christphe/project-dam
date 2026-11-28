@@ -8,6 +8,9 @@
 /* D50: font segments are re-laid out from the N64 ROM layout to the PC C
  * layout (see romdataFixupFont). */
 #include "romdata.h"
+#include "fonts.h"   /* the fonts from the asset packs (docs/specs/fonts.md); GE_ROM_FONTS=1 keeps the ROM */
+#include "system.h"
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #endif
@@ -94,6 +97,72 @@ void setTextOverlapCorrection(s32 flag) {
     overlap_correction = flag;
 }
 
+#ifdef PORT
+extern u8 _jfontchardataSegmentRomStart;
+extern u8 _efontchardataSegmentRomStart;
+void romCopy(void *target, void *source, u32 size);
+
+/* One Latin font in the PC layout. The N64-layout block comes from the asset stack (fontsLatinBlock), else from the ROM
+ * segment; romdataFixupFont re-lays it out either way. GE_FONTS_CHECK=1 (dev) compares the pack with the ROM, once. */
+static struct font *loadLatinFont(int which, void *romStart, u32 n64len)
+{
+    static int checked[2];
+    u8 *blk = (u8 *)malloc(n64len);
+    unsigned n = blk ? fontsLatinBlock(which, blk, n64len) : 0;
+    struct font *f;
+
+    if (n && n != n64len) {
+        sysLogPrintf(LOG_WARNING, "fonts: the pack's %s font is %u bytes, the ROM's %u: reading the ROM", which ? "large" : "small", n, (unsigned)n64len);
+        n = 0;
+    }
+    if (fontsCheckEnabled() && !checked[which]) {
+        u8 *rom = (u8 *)malloc(n64len);
+        checked[which] = 1;
+        if (rom && n) {
+            unsigned c = 0, d = 0;
+            romCopy(rom, romStart, n64len);
+            fontsCompareLatin(rom, blk, n64len, &c, &d);
+            sysLogPrintf(LOG_NOTE, "fonts check: %s: %u compared, %u differ", which ? "large" : "small", c, d);
+        } else {
+            sysLogPrintf(LOG_NOTE, "fonts check: %s: no pack font to compare", which ? "large" : "small");
+        }
+        free(rom);
+    }
+    if (n) {
+        u32 pixStart = 0xB80;   /* where fontsBuildLatin puts the first glyph's pixels */
+        u32 pcsize = (u32)((uintptr_t)&((struct font *)0)->chars + 94 * sizeof(struct fontchar)) + n64len - pixStart;
+        f = (struct font *)mempAllocBytesInBank(pcsize, MEMPOOL_STAGE);
+        memcpy(f, blk, n64len);
+    } else {
+        f = (struct font *)mempAllocBytesInBank(romdataFontPcSize((const u8 *)romStart, n64len), MEMPOOL_STAGE);
+        romCopy(f, romStart, n64len);
+    }
+    free(blk);
+    romdataFixupFont((u8 *)f, n64len);
+    return f;
+}
+
+/* GE_FONTS_CHECK=1: every pair of both Japanese fonts, pack against ROM. */
+static void checkJpnFonts(void)
+{
+    static int done;
+    int wide;
+    if (done || !fontsCheckEnabled()) return;
+    done = 1;
+    for (wide = 0; wide < 2; wide++) {
+        unsigned pairs = wide ? 53 : 488, bs = wide ? 0x80 : 0x60, k, diffs = 0, missing = 0;
+        u8 rom[0x80], pk[0x80];
+        for (k = 0; k < pairs; k++) {
+            unsigned got = 0;
+            romCopy(rom, (u8 *)(wide ? &_efontchardataSegmentRomStart : &_jfontchardataSegmentRomStart) + k * bs, bs);
+            if (!fontsJpnPair(wide, k, pk, &got) || got != bs) { missing++; continue; }
+            if (memcmp(rom, pk, bs)) diffs++;
+        }
+        sysLogPrintf(LOG_NOTE, "fonts check: %s: %u pairs (%u glyphs) compared, %u differ, %u missing", wide ? "jp_wide" : "jp_narrow", pairs, pairs * 2, diffs, missing);
+    }
+}
+#endif
+
 extern u8 _fontbankgothicSegmentEnd;
 extern u8 _fontbankgothicSegmentRomStart;
 extern u8 _fontzurichboldSegmentEnd;
@@ -120,11 +189,8 @@ void load_font_tables(void)
 #ifdef PORT
 	{
         u32 n64len = len;
-		ptrFontBankGothic = (struct font *)mempAllocBytesInBank(romdataFontPcSize((const u8 *)&_fontbankgothicSegmentRomStart, n64len), MEMPOOL_STAGE);
+		ptrFontBankGothic = loadLatinFont(0, (void *) &_fontbankgothicSegmentRomStart, n64len);
 		ptrFontBankGothicChars = ptrFontBankGothic->chars;
-
-		romCopy(ptrFontBankGothic, (void *) &_fontbankgothicSegmentRomStart, n64len);
-		romdataFixupFont((u8 *)ptrFontBankGothic, n64len);
 	}
 #else
     len = (romptr_t)&_fontbankgothicSegmentEnd - (romptr_t)&_fontbankgothicSegmentStart;
@@ -143,11 +209,8 @@ void load_font_tables(void)
 #ifdef PORT
 	{
         u32 n64len = len;
-		ptrFontZurichBold = (struct font *)mempAllocBytesInBank(romdataFontPcSize((const u8 *)&_fontzurichboldSegmentRomStart, n64len), MEMPOOL_STAGE);
+		ptrFontZurichBold = loadLatinFont(1, (void *) &_fontzurichboldSegmentRomStart, n64len);
 		ptrFontZurichBoldChars = ptrFontZurichBold->chars;
-
-		romCopy(ptrFontZurichBold, (void *) &_fontzurichboldSegmentRomStart, n64len);
-		romdataFixupFont((u8 *)ptrFontZurichBold, n64len);
 	}
 #else
     len = (romptr_t)&_fontzurichboldSegmentEnd - (romptr_t)&_fontzurichboldSegmentStart;
@@ -161,6 +224,9 @@ void load_font_tables(void)
 	for (i = 0; i < 94; i++) {
 		ptrFontZurichBoldChars[i].pixeldata += (uintptr_t)ptrFontZurichBold;
 	}
+#ifdef PORT
+    checkJpnFonts();
+#endif
 }
 
 Gfx *microcode_constructor(Gfx *gdl) //fontGfxSetup

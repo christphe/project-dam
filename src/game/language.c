@@ -10,6 +10,7 @@
 #include "romdata.h"
 #ifdef PORT
 #include "envflag.h"   /* cached getenv for hot-path probes */
+#include "fonts.h"     /* fontsJpnPair: the Japanese glyph pairs from the asset packs */
 #include "system.h"   /* sysLogPrintf: D582 / D602 one-shot diagnostics */
 #endif
 #include "portaddr.h" /* MACOS-ADDR-WINDOW/M2: DRAM window base */
@@ -373,7 +374,15 @@ struct jpncharpixels *langGetJpnCharPixels(s32 codepoint)
 		g_JpnCacheCacheItems[freeindexsingle].ttl = 2;
 		g_JpnCacheCacheItems[freeindexsingle].codepoint = codepoint >> 1;
 
+#ifdef PORT
+		{
+			unsigned fbytes = 0;   /* the pair from the asset stack (fonts.json), else the ROM (GE_ROM_FONTS=1) */
+			if (!fontsJpnPair(0, (unsigned)(codepoint >> SHIFTAMOUNT), (u8 *)&g_JpnCharCachePixels[freeindexsingle * 8], &fbytes) || fbytes != 0x60)
+				romCopy(&g_JpnCharCachePixels[freeindexsingle * 8], (romptr_t) &_jfontchardataSegmentRomStart + (codepoint >> SHIFTAMOUNT) * 0x60, 0x60);
+		}
+#else
 		romCopy(&g_JpnCharCachePixels[freeindexsingle * 8], (romptr_t) &_jfontchardataSegmentRomStart + (codepoint >> SHIFTAMOUNT) * 0x60, 0x60);
+#endif
 
 		return &g_JpnCharCachePixels[freeindexsingle * 8];
 	}
@@ -384,7 +393,15 @@ struct jpncharpixels *langGetJpnCharPixels(s32 codepoint)
 		g_JpnCacheCacheItems[freeindexmulti + 0].codepoint = codepoint >> 1;
 		g_JpnCacheCacheItems[freeindexmulti + 1].codepoint = codepoint >> 1;
 
+#ifdef PORT
+		{
+			unsigned fbytes = 0;
+			if (!fontsJpnPair(1, (unsigned)((codepoint & 0x1fff) >> SHIFTAMOUNT), (u8 *)&g_JpnCharCachePixels[freeindexmulti * 8], &fbytes) || fbytes != 0x80)
+				romCopy(&g_JpnCharCachePixels[freeindexmulti * 8], (romptr_t) &_efontchardataSegmentRomStart + ((codepoint & 0x1fff) >> SHIFTAMOUNT) * 0x80, 0x80);
+		}
+#else
 		romCopy(&g_JpnCharCachePixels[freeindexmulti * 8], (romptr_t) &_efontchardataSegmentRomStart + ((codepoint & 0x1fff) >> SHIFTAMOUNT) * 0x80, 0x80);
+#endif
 
 		return &g_JpnCharCachePixels[freeindexmulti * 8];
 	}
