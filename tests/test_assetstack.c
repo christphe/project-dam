@@ -140,6 +140,35 @@ int main(void)
         GE_CHECK(!assetPackIsFileName(".passets") && !assetPackIsFileName("x.pmod") && !assetPackIsFileName("a;b.passets"));
     }
 
+    /* the whole list: disabled packs keep their place, written with a "-" */
+    {
+        char text[ASSETPACK_LIST_LEN], en[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
+        int on[ASSETPACK_MAX];
+        int n = assetPackEntriesParse(" hd.passets ; -faces.passets;;-hd.passets;-bad name.txt;old.ptexpack;-a/b.passets;-x.passets", files, on, ASSETPACK_MAX);
+        GE_CHECK_EQ_INT(n, 4);
+        GE_CHECK_STR(files[1], "faces.passets");
+        GE_CHECK(on[0] && !on[1] && on[2] && !on[3]);
+        assetPackEntriesFormat(files, on, n, text, sizeof text);
+        GE_CHECK_STR(text, "hd.passets;-faces.passets;old.ptexpack;-x.passets");
+        GE_CHECK(assetPackEntriesMove(files, on, n, 3, 1));   /* a disabled pack moves with its flag */
+        assetPackEntriesFormat(files, on, n, text, sizeof text);
+        GE_CHECK_STR(text, "hd.passets;-x.passets;-faces.passets;old.ptexpack");
+        GE_CHECK(assetPackEntriesMove(files, on, n, 0, 3));
+        assetPackEntriesFormat(files, on, n, text, sizeof text);
+        GE_CHECK_STR(text, "-x.passets;-faces.passets;old.ptexpack;hd.passets");
+        GE_CHECK(!assetPackEntriesMove(files, on, n, 2, 2) && !assetPackEntriesMove(files, on, n, 0, 4));
+        GE_CHECK_EQ_INT(assetPackEntriesEnabled(files, on, n, en, ASSETPACK_MAX), 2);
+        GE_CHECK_STR(en[0], "old.ptexpack");
+        GE_CHECK_STR(en[1], "hd.passets");
+        /* the older form (no "-") is all enabled; the enabled-only reader skips the disabled ones */
+        n = assetPackEntriesParse("a.passets;b.passets", files, on, ASSETPACK_MAX);
+        GE_CHECK(n == 2 && on[0] && on[1]);
+        n = assetPackListParse("a.passets;-b.passets;c.passets", files, ASSETPACK_MAX);
+        GE_CHECK_EQ_INT(n, 2);
+        GE_CHECK_STR(files[1], "c.passets");
+        GE_CHECK(!assetPackIsFileName("-a.passets"));
+    }
+
     /* the resolution: the mod first, then the packs in order, every pack partial */
     m = texpackIndexOpen(mod);
     GE_CHECK(m != NULL);

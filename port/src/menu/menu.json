@@ -42,20 +42,8 @@
         { "id": "reset_display", "key": "__ResetEntry", "label": "Reset to defaults", "type": "action" }
       ] },
       { "name": "Asset packs", "controls": [
-        { "id": "packsel", "key": "__AssetPackSel", "label": "Pack", "type": "select", "default": "0",
-          "options": [ { "id": "0", "label": "No asset pack" } ],
-          "help": "Replacement textures and other assets: the .passets files in the assetpacks folder next to the game. The enabled packs are numbered: where two have the same texture, the lower number wins. The mod's own assets always win." },
-        { "id": "packon", "key": "__AssetPackOn", "label": "Enabled", "type": "toggle",
-          "help": "Use this pack. A pack enabled now goes last in the order. Nothing changes until you choose Apply." },
-        { "id": "packdirty", "key": "__AssetPackDirty", "label": "Changed", "type": "toggle", "show": "false" },
-        { "id": "packup", "key": "__AssetPackUp", "label": "Move up", "type": "action", "disabled": "!packon",
-          "help": "Give this pack priority over the one above it." },
-        { "id": "packdown", "key": "__AssetPackDown", "label": "Move down", "type": "action", "disabled": "!packon",
-          "help": "Let the pack below it win over this one." },
-        { "id": "packapply", "key": "__AssetPackApply", "label": "Apply", "type": "action", "disabled": "!packdirty",
-          "help": "Use the packs as listed now and save them. Leaving the menu without applying drops the changes." },
-        { "id": "packdiscard", "key": "__AssetPackDiscard", "label": "Discard changes", "type": "action", "disabled": "!packdirty",
-          "help": "Go back to the packs in use." }
+        { "id": "packs", "type": "packlist",
+          "help": "Replacement textures and other assets: the .passets files in the assetpacks folder next to the game. Tick a pack to use it. The ticked packs are numbered: where two have the same texture, the lower number wins. The arrows change the order. The mod's own assets always win. Nothing changes until you choose Apply." }
       ] },
       { "name": "Performance", "show": "platform == 'pc' || dev", "controls": [
         { "id": "msaaHandheld", "key": "Video.MSAAHandheld", "label": "Anti-aliasing (handheld)", "type": "slider", "dev": "switch",

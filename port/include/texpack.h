@@ -18,17 +18,18 @@ extern "C" {
 
 void texpackInit(void);                    /* after configLoad: opens the packs Video.AssetPacks lists (an older
                                               Video.TexturePack migrates to it) */
-/* The enabled packs, file names in order separated by ';' ("" none); also stored in Video.AssetPacks. */
+/* Every known pack in the player's order, file names separated by ';', a disabled one prefixed "-" ("" none); also stored in
+ * Video.AssetPacks. Only the enabled ones are opened, in that order. */
 void texpackSetPacks(const char *list);
-const char *texpackPacks(void);            /* the list in use */
+const char *texpackPacks(void);            /* the list in use (the whole list, as above) */
 /* Adds `file` at the end of the list (the lowest priority) when `add` and it is not in it yet (then saves the ini), and opens the
  * packs again: the base pack is written after texpackInit, so it is only readable from then on. */
 void texpackPackWritten(const char *file, int add);
 /* The active mission's mod (its folder or X.pmod; "" none): its textures/<n>.png come before the pack's. Stopgap until the
  * game draws its levels from glTF (port/src/missions.c calls it on activation and deactivation). */
 void texpackSetMod(const char *dir);
-/* The packs in assetpacks/ and texturepacks/ (sorted file names, display names), for the menu. Returns how many (up to max). */
-int texpackListPacks(char (*files)[128], char (*names)[64], int max);
+/* The packs in assetpacks/ and texturepacks/ (sorted file names, display names, authors), for the menu. Returns how many (up to max). */
+int texpackListPacks(char (*files)[128], char (*names)[64], char (*authors)[64], int max);
 
 /* Any file of the asset packs by its path inside a pack ("labels/text_en.json", "sounds/sfx/sfx.json"): the active mod's
  * first, then the enabled packs in order (docs/specs/asset-packs.md). *out and *len: the bytes; `from` (may be

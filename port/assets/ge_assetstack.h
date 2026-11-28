@@ -11,7 +11,7 @@
  * order, else the key is missing and the caller draws its fallback (the game's own texture while the game still draws from
  * the ROM; a checker, a box, silence, a default font once it draws from the export).
  *
- * The enabled packs are kept as one string, the file names in order separated by ';' (Video.AssetPacks).
+ * All known packs are kept as one string, the file names in order separated by ';', a disabled one prefixed "-" (Video.AssetPacks).
  *
  * Plain C, no game headers. Reading a texture (assetStackReadTexture) is safe on any thread: each pack's index is read once
  * when the stack is opened and never changes afterwards (texpackIndexOpen).
@@ -58,6 +58,14 @@ void assetPackListFormat(char (*files)[ASSETPACK_FILE_LEN], int n, char *out, si
 int assetPackListMove(char (*files)[ASSETPACK_FILE_LEN], int n, int from, int to);
 /* The position of `file` in the list, -1 when absent. */
 int assetPackListFind(char (*files)[ASSETPACK_FILE_LEN], int n, const char *file);
+
+/* ---- the whole list: every known pack in the player's order, a disabled one written "-name" ----
+ * assetPackListParse above reads such a list too and returns only the enabled names (a "-name" is not a file name). A list
+ * with no "-" means that all of its packs are enabled (the older form). */
+int assetPackEntriesParse(const char *list, char (*files)[ASSETPACK_FILE_LEN], int *on, int max);   /* files without the "-", on[i] 0/1; returns how many */
+void assetPackEntriesFormat(char (*files)[ASSETPACK_FILE_LEN], const int *on, int n, char *out, size_t outlen);
+int assetPackEntriesMove(char (*files)[ASSETPACK_FILE_LEN], int *on, int n, int from, int to);   /* like assetPackListMove, the flag goes with the name */
+int assetPackEntriesEnabled(char (*files)[ASSETPACK_FILE_LEN], const int *on, int n, char (*out)[ASSETPACK_FILE_LEN], int max);   /* the enabled names in order; returns how many */
 
 /* ---- a stack: the enabled packs, opened in order ---- */
 typedef struct AssetStack AssetStack;
