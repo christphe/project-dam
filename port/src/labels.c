@@ -152,9 +152,9 @@ void labelsFree(Labels *L)
 
 /* ---- the stack-backed reader ---- */
 
-static Labels g_labels;
+static Labels g_labels, g_prev;   /* g_prev: the generation before the last reload, kept so strings already handed out stay valid */
 static int g_loaded, g_ok;                 /* g_loaded: tried for g_packs; g_ok: the file is in g_labels */
-static char g_packs[512];
+static unsigned g_gen;                     /* assetStackGen() the loaded file belongs to */
 static const char *g_file, *g_fallback;
 static int g_romFlag = -1, g_checkFlag = -1;
 
@@ -174,7 +174,11 @@ void labelsSetLanguage(const char *file, const char *fallback) { g_file = file; 
 
 void labelsInvalidate(void)
 {
-    labelsFree(&g_labels);   /* a string handed out earlier is valid only until the next load: callers ask again per draw */
+    /* Strings handed out earlier stay valid through ONE reload: the old generation is parked in g_prev and freed at the
+     * reload after that (a draw in flight or a line cached for a frame never sees freed memory). */
+    labelsFree(&g_prev);
+    g_prev = g_labels;
+    memset(&g_labels, 0, sizeof g_labels);
     g_loaded = g_ok = 0;
 }
 
@@ -215,12 +219,11 @@ static void load(void)
 
 int labelsActive(void)
 {
-    const char *packs;
+    unsigned gen;
     if (romFlag()) return 0;
-    packs = texpackPacks();
-    if (!packs) packs = "";
-    if (g_loaded && strcmp(packs, g_packs)) labelsInvalidate();
-    if (!g_loaded) { snprintf(g_packs, sizeof g_packs, "%s", packs); load(); }
+    gen = assetStackGen();
+    if (g_loaded && gen != g_gen) labelsInvalidate();   /* a pack toggled / reordered / rewritten, or another mod */
+    if (!g_loaded) { g_gen = gen; load(); }
     return g_ok;
 }
 

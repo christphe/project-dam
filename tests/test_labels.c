@@ -10,7 +10,7 @@
 /* ---- stubs for what labels.c links against ---- */
 static const char *g_fixture;
 static int g_reads;
-static const char *g_packs = "";
+static unsigned g_gen = 1;
 int assetRead(const char *rel, unsigned char **out, unsigned long *len, int *from)
 {
     (void)from;
@@ -21,7 +21,7 @@ int assetRead(const char *rel, unsigned char **out, unsigned long *len, int *fro
     memcpy(*out, g_fixture, *len + 1);
     return 1;
 }
-const char *texpackPacks(void) { return g_packs; }
+unsigned assetStackGen(void) { return g_gen; }
 void pkgFree(void *p) { free(p); }
 void sysLogPrintf(int level, const char *fmt, ...) { (void)level; (void)fmt; }
 
@@ -63,7 +63,7 @@ int main(void)
     GE_CHECK(!labelsActive());                          /* no pack has the file: the ROM path */
     GE_CHECK(labelsGet(0x9840) == NULL);
     g_fixture = kEn;
-    g_packs = "ge007.passets";                          /* the pack list changed: read again */
+    g_gen++;                                            /* the stack changed: read again */
     GE_CHECK(labelsActive());
     s = labelsGet(0x9840);
     GE_CHECK(s && !strcmp((const char *)s, "Hunting Knife\n"));
@@ -71,6 +71,29 @@ int main(void)
     s = labelsMissing(0x9841);
     GE_CHECK(s && !strcmp((const char *)s, "[0x9841]"));
     { int r = g_reads; labelsGet(0x9840); labelsGet(0x986B); GE_CHECK_EQ_INT(g_reads, r); }   /* read once */
+
+    /* a reload: new text, and a string handed out before it stays valid through that one reload */
+    {
+        static const char kEn2[] = "{\"banks\":[],\"strings\":{\"9840\":{\"bank\":\"LGUN\",\"index\":64,\"text\":\"Other\"}}}";
+        const unsigned char *old = labelsGet(0x9840);
+        int r = g_reads;
+        g_fixture = kEn2;
+        GE_CHECK(labelsGet(0x9840) != NULL);            /* same generation: still the first file */
+        GE_CHECK_EQ_INT(g_reads, r);
+        g_gen++;
+        s = labelsGet(0x9840);
+        GE_CHECK(s && !strcmp((const char *)s, "Other"));
+        GE_CHECK(g_reads > r);
+        GE_CHECK(old && !strcmp((const char *)old, "Hunting Knife\n"));   /* old buffer still alive (ASan/valgrind would catch a free) */
+        g_fixture = NULL;
+        g_gen++;                                        /* a mod without the file and no pack: back to the ROM path */
+        GE_CHECK(!labelsActive());
+        GE_CHECK(labelsGet(0x9840) == NULL);
+        g_fixture = kEn;
+        g_gen++;
+        GE_CHECK(labelsActive());
+        GE_CHECK(labelsGet(0x986B) != NULL);
+    }
 
     return GE_TEST_END();
 }

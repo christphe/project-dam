@@ -36,7 +36,7 @@ unsigned labelsBankSlots(const Labels *L, int bank);
 unsigned labelsGetBankSlots(int bank);   /* the reader's file; 1024 when inactive */
 
 /* The stack-backed reader. The file is the game's language (US: text_en, EU: text_en-GB then text_en, JP: text_ja); it is read
- * on first use and again when Video.AssetPacks changes or labelsInvalidate() is called (a mod switch). */
+ * on first use and again when assetStackGen() changes (pack toggled, reordered or rewritten, another mod); strings handed out before a reload stay valid through that one reload. */
 void labelsSetLanguage(const char *file, const char *fallback);   /* tests: "labels/text_en.json", NULL */
 void labelsInvalidate(void);
 /* 1 when strings come from the packs: GE_ROM_LABELS unset and the language file loaded. 0 = use the ROM banks. */
