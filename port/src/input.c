@@ -114,8 +114,6 @@ extern void gunRequestHandWeaponChange(enum GUNHAND hand, s32 nextWeapon, s32 cy
 #include "input/input_types.h"
 #include "input/n64bridge.h"
 #include "input/style_modern.h"
-#include "input/style_enhanced.h"
-#include "input/style_original.h"
 #include "input/input_internal.h"
 
 static void overlayFrontEndCrosshair(void);
@@ -295,24 +293,16 @@ int inputSlotPadSeat(int slot)
 }
 
 /* ------------------------------------------------------------------------
- * D469: data-driven gamepad action table + presets + per-seat rebinding.
+ * Gamepad sources and the Modern layout.
  *
  * Sources are SDL controller buttons plus the two analog triggers treated as
- * digital (padTriggerPct). Each action is bound to up to two sources, written
- * in the ini as SDL names joined by a comma ("a,x", "righttrigger", "none").
- * Input.PadPreset: 0 = 1.1 Jinx (the pre-D469 hard-wired mapping; default),
- * 1 = 1.2 Christmas, 2 = 1.3 Frost (D498: D394 stick roles, same buttons),
- * 3 = Custom (the per-seat Input.Pad.* strings), 4 = 1.4 Elektra (D498).
- * Seat 0 keys are
- * Input.Pad.<Action>; seats 1..3 are Input.Pad2/3/4.<Action>. Seat = pads[]
- * index (D448), not the controller slot.
- *
+ * digital (padTriggerPct). A layout binds each action to a mask of sources.
+ * Seat = pads[] index (D448), not the controller slot. Threading: the poll
+ * thread reads an immutable published table (atomic pointer) rebuilt into a
+ * spare buffer only when the signature changes (the pad family); no strtok.
  * Not rebindable (menu lockout guard): menu accept/cancel (A,X -> native A;
  * B,Y -> native B outside a playable stage), D-pad -> N64 D-pad, sticks,
- * Back (opens the overlay). Start is forced back to `start` if a Custom table
- * leaves it unbound. Threading: the poll thread reads an immutable published
- * table (atomic pointer) rebuilt into a spare buffer only when the config
- * signature changes; no strtok.
+ * Back (opens the overlay).
  * ------------------------------------------------------------------------ */
 enum { PS_A, PS_B, PS_X, PS_Y, PS_LB, PS_RB, PS_LS, PS_RS, PS_START,
        PS_DUP, PS_DDOWN, PS_DLEFT, PS_DRIGHT, PS_LT, PS_RT, PS_COUNT };
@@ -336,85 +326,28 @@ static const struct { const char *name; int btn; } kPadSrc[PS_COUNT] = {
     [PS_RT] = { "righttrigger", -1 },
 };
 
-enum { PA_FIRE, PA_AIM, PA_USE, PA_RELOAD, PA_CROUCH, PA_NEXTWPN, PA_PREVWPN,
-       PA_GADGET, PA_START, PA_COUNT };
-/* Jinx 1.1 (D394) = def. Fire/Aim analog triggers act in any state; every
- * digital source only acts while a stage is playable (facePlayable). */
-static const struct { const char *key; const char *label; const char *def; } kPadAct[PA_COUNT] = {
-    [PA_FIRE]    = { "Fire",       "Fire",             "righttrigger" },
-    [PA_AIM]     = { "Aim",        "Aim",              "lefttrigger,leftshoulder" },
-    [PA_USE]     = { "Use",        "Use / action",     "a" },
-    [PA_RELOAD]  = { "Reload",     "Reload",           "x" },
-    [PA_CROUCH]  = { "Crouch",     "Crouch",           "leftstick,rightstick" },
-    [PA_NEXTWPN] = { "NextWeapon", "Next weapon",      "y" },
-    [PA_PREVWPN] = { "PrevWeapon", "Previous weapon",  "none" },
-    [PA_GADGET]  = { "Gadget",     "Cycle gadget",     "b" },
-    [PA_START]   = { "Start",      "Start / pause",    "start" },
-};
+enum { PA_FIRE, PA_AIM, PA_USE, PA_RELOAD, PA_CROUCH, PA_NEXTWPN, PA_START, PA_COUNT };
 
-/* Modern (Input.ControlScheme 2): RT fire, LT aim, A use, X reload, Y next weapon, R3 crouch; LB opens the weapon wheel and RB
+/* Modern: RT fire, LT aim, A use, X reload, Y next weapon, R3 crouch; LB opens the weapon wheel and RB
  * the gadget wheel (port/src/wheel.c reads them itself); B is free. */
 static const char *const kPadModern[PA_COUNT] = {
     [PA_FIRE] = "righttrigger", [PA_AIM] = "lefttrigger", [PA_USE] = "a", [PA_RELOAD] = "x", [PA_CROUCH] = "rightstick",
-    [PA_NEXTWPN] = "y", [PA_PREVWPN] = "none", [PA_GADGET] = "none", [PA_START] = "start",
+    [PA_NEXTWPN] = "y", [PA_START] = "start",
 };
 /* Modern goes by position, not by letter: a Nintendo pad prints Y where Xbox has X (left), X where Xbox has Y (top),
  * B at the bottom and A on the right. Same hands on every pad. */
 static const char *const kPadModernNin[PA_COUNT] = {
     [PA_FIRE] = "righttrigger", [PA_AIM] = "lefttrigger", [PA_USE] = "b", [PA_RELOAD] = "y", [PA_CROUCH] = "rightstick",
-    [PA_NEXTWPN] = "x", [PA_PREVWPN] = "none", [PA_GADGET] = "none", [PA_START] = "start",
+    [PA_NEXTWPN] = "x", [PA_START] = "start",
 };
 static u8 padFamily[MAX_PADS];   /* defined with its notes below (D471); 2 = Nintendo */
 
-/* D643 (#145 b/c, #149): Original control scheme = a STRICT virtual N64
- * controller. Each native N64 button is bound to up to two pad sources
- * (Input.N64Pad[N].<Button>), and a press emits exactly that bit in every
- * context (stage, menu, watch, tank) -- no port action (dedicated use/reload,
- * crouch, gadget cycle, prev-weapon) is injected; the game's own code decides
- * what A/B/Z/... mean (B = "use if usable else reload" lives in lv.c).
- * Defaults follow the Nintendo Switch Online N64 convention. The right stick
- * stays digital C-buttons (fixed, in addition to any C source bound here). */
-enum { NB_A, NB_B, NB_Z, NB_R, NB_L, NB_CU, NB_CD, NB_CL, NB_CR, NB_START,
-       NB_DU, NB_DD, NB_DL, NB_DR, NB_COUNT };
-static const struct { const char *key; const char *def; } kN64Btn[NB_COUNT] = {
-    [NB_A]     = { "A",      "a" },
-    [NB_B]     = { "B",      "x" },
-    [NB_Z]     = { "Z",      "righttrigger" },
-    [NB_R]     = { "R",      "lefttrigger,rightshoulder" },
-    [NB_L]     = { "L",      "leftshoulder" },
-    [NB_CU]    = { "CUp",    "none" },
-    [NB_CD]    = { "CDown",  "none" },
-    [NB_CL]    = { "CLeft",  "none" },
-    [NB_CR]    = { "CRight", "none" },
-    [NB_START] = { "Start",  "start" },
-    [NB_DU]    = { "DUp",    "dpup" },
-    [NB_DD]    = { "DDown",  "dpdown" },
-    [NB_DL]    = { "DLeft",  "dpleft" },
-    [NB_DR]    = { "DRight", "dpright" },
-};
-typedef struct { u32 mask[PA_COUNT]; u32 n64[NB_COUNT]; } PadBinds;
+typedef struct { u32 mask[PA_COUNT]; } PadBinds;
 typedef struct { PadBinds seat[MAX_PADS]; } PadTable;
 
-static int  padPreset[MAX_PADS] = {0};           /* D518: per-seat (Input.PadPreset[2/3/4]) */
-/* D194/D238: 1 = force GE's own 1.2/SOLITARE
- * control style for continuous analog pitch;
- * 0 = legacy 1.1/HONEY + D166 digital pulse.
- * (D498: declared here so the stick-style helpers below can read it.) */
+/* D194/D238: 1 = continuous analog pitch (the natural-look stick roles);
+ * 0 = the legacy 1.1/HONEY roles + D166 digital pulse. */
 static int naturalPitchMode = 1;                 /* Input.NaturalPitch */
-/* D513 Input.ControlScheme[2/3/4], per player like the presets: 0 Enhanced (the XBLA layouts, Input.PadPreset),
- * 1 Original (the game's own selection is honoured), 2 Modern. */
-enum { SCHEME_ENHANCED = 0, SCHEME_ORIGINAL = 1, SCHEME_MODERN = 2 };
-static int controlScheme[MAX_PADS] = { SCHEME_MODERN, SCHEME_MODERN, SCHEME_MODERN, SCHEME_MODERN };
-static int schemeOriginal(int seat) { return seat >= 0 && seat < MAX_PADS && controlScheme[seat] == SCHEME_ORIGINAL; }
-/* D513 accessor (#145): watchsettings.c gates D564's pin of the game's own
- * "Look up/down" value on this: in the Modern scheme the port's Invert
- * look rows own the inversion; in Original the game's watch setting is
- * the live control (the game honours it in bondview2's stick-pitch path),
- * so it must stay user-settable there. */
-int inputControlScheme(int seat) { return (seat >= 0 && seat < MAX_PADS) ? controlScheme[seat] : SCHEME_MODERN; }
-int *inputControlSchemePtr(int seat) { return &controlScheme[(seat >= 0 && seat < MAX_PADS) ? seat : 0]; }
-/* D645: Original scheme -- F10 "Invert look" mirrors the game's own
- * "Look up/down" (watchsettings.c keeps the two in sync both ways). */
 #if defined(PLATFORM_SWITCH)
 /* project-dam: the console's controller defaults, the maintainer's tuned values:
  * look sensitivity 0.85x, look inverted vertically, look smoothing 2,
@@ -433,11 +366,6 @@ int *inputControlSchemePtr(int seat) { return &controlScheme[(seat >= 0 && seat 
 static int padLookInvertY = NX_LOOK_INVERT_Y;                   /* Input.PadLookInvertY: 1 = invert the look stick's Y (right stick in SOLITARE roles, left stick in HONEY roles -- #145) */
 int inputPadLookInvert(void) { return padLookInvertY; }
 void inputSetPadLookInvert(int v) { padLookInvertY = v ? 1 : 0; }
-static char padStr[MAX_PADS][PA_COUNT][32];      /* Input.Pad[N].<Action> */
-static char padStrKey[MAX_PADS][PA_COUNT][40];
-static char n64Str[MAX_PADS][NB_COUNT][32];      /* D643 Input.N64Pad[N].<Button> */
-static char n64StrKey[MAX_PADS][NB_COUNT][40];
-static int n64StickFeel = 1;                     /* D643 Input.N64StickFeel (Original only): 1 accurate, 0 the Modern deadzone/rescale */
 static PadTable padTabBuf[2];
 static void *padTabPub;                         /* published PadTable*; pointer-sized/aligned for SDL_Atomic{Get,Set}Ptr (D599) */
 static unsigned padTabSig = 0;
@@ -467,95 +395,21 @@ static u32 padParseMask(const char *s, int *bad)
     return m;
 }
 
-static void padBuildBinds(PadBinds *b, int seat, int custom, int *bad)
+static void padBuildBinds(PadBinds *b, int seat, int *bad)
 {
     for (int a = 0; a < PA_COUNT; a++)
-        b->mask[a] = padParseMask(custom ? padStr[seat][a] : (controlScheme[seat] == SCHEME_MODERN ? (padFamily[seat] == 2 ? kPadModernNin[a] : kPadModern[a]) : kPadAct[a].def), bad);
-    if (!b->mask[PA_START]) b->mask[PA_START] = PSM(PS_START);   /* lockout guard: keep a pause path */
-    for (int n = 0; n < NB_COUNT; n++) b->n64[n] = 0;
+        b->mask[a] = padParseMask(padFamily[seat] == 2 ? kPadModernNin[a] : kPadModern[a], bad);
 }
 
-/* D643: the Original table. Port actions are zeroed (nothing may inject
- * use/reload/crouch/gadget/weapon-cycle); n64[] carries the buttons. Guards:
- * Start unbound -> default; A and B both unbound -> both default (menu lockout). */
-static void padBuildN64(PadBinds *b, int seat, int *bad)
-{
-    for (int a = 0; a < PA_COUNT; a++) b->mask[a] = 0;
-    for (int n = 0; n < NB_COUNT; n++) b->n64[n] = padParseMask(n64Str[seat][n], bad);
-    if (!b->n64[NB_START]) b->n64[NB_START] = padParseMask(kN64Btn[NB_START].def, NULL);
-    if (!b->n64[NB_A] && !b->n64[NB_B]) {
-        b->n64[NB_A] = padParseMask(kN64Btn[NB_A].def, NULL);
-        b->n64[NB_B] = padParseMask(kN64Btn[NB_B].def, NULL);
-    }
-}
+/* Which stick mapping the port emits: the natural-look roles (SOLITARE) unless Input.NaturalPitch is off. */
+static int stickSolitare(int seat) { (void)seat; return naturalPitchMode != 0; }
+static int styleIsSolitare(int seat) { return stickSolitare(seat); }
 
-/* D498: preset 3 is Custom; 4 = 1.4 Elektra is a fixed mapping, not custom.
- * D518: per seat -- editing another player's preset must not touch this one. */
-static int padPresetCustom(int seat) { return padPreset[seat] == 3; }
-/* D516: in Original the D498 port presets are not offered (the game's own
- * styles are); the stored preset is ignored (plain N64 layout) unless it is
- * Custom, whose binds still apply (edited in Ext only). Ext: exactly padPreset. */
-static int padPresetEff(int seat)
-{
-    if (controlScheme[seat] == SCHEME_MODERN) return INPRESET_JINX;   /* Modern: the natural-pitch roles of Jinx (the old preset 5 gave the same) */
-    return (schemeOriginal(seat) && padPreset[seat] != 3) ? 0 : padPreset[seat];
-}
-
-int inputPadIsModern(int seat)
-{
-    return seat >= 0 && seat < MAX_PADS && controlScheme[seat] == SCHEME_MODERN;
-}
-
-/* D498: stick style for the active preset. 1.2 Christmas / 1.3 Frost force
- * HONEY and 1.4 Elektra forces SOLITARE (for mouse and keyboard too, since
- * the game runs one control style per player). 1.1 Jinx (the default) and
- * Custom keep Input.NaturalPitch, so the NaturalPitch=0 escape hatch still
- * works exactly as before D498. D518: per seat. */
-static int stickSolitare(int seat) {
-    return inputEnhancedSolitare(padPresetEff(seat), naturalPitchMode);   /* input/style_enhanced.c */
-}
-/* D513: which stick mapping the port emits for the active player. Modern:
- * exactly stickSolitare() (the port forces the style, D498 pins included).
- * OG: follow the game's own live style -- 1.2 SOLITARE and 1.4 GOODNIGHT use
- * the natural-look (stick = look, C-buttons = move) roles; 1.1 / 1.3 and the
- * 2.x dual-controller styles use the HONEY roles for the first pad. In OG the
- * game really runs a 2.x style and reads its second stick from controller
- * playernum + playerCount (bondview2.c ~4997-5003, faithful to the N64): the
- * port only maps this pad, so with one pad that second stick is idle, as on an
- * N64. Buttons pass through as N64 buttons (no 1.3/1.4 role permutation:
- * faithful). With no
- * player yet (front end) it falls back to the Modern value, which menus
- * ignore anyway. */
-static int styleIsSolitare(int seat)
-{
-    if (!schemeOriginal(seat)) return stickSolitare(seat);
-    struct player *p = inputSlotPlayer();
-    if (!p) return stickSolitare(seat);
-    int t = p->cur_player_control_type_0;
-    return t == CONTROLLER_CONFIG_SOLITARE_ || t == CONTROLLER_CONFIG_GOODNIGHT_;
-}
-/* D498: 1.3 Frost / 1.4 Elektra swap the two sticks (never in menus). */
-static int stickSwap(int seat) { return inputEnhancedSwap(padPresetEff(seat)); }
-
-/* Signature of everything the table depends on (presets only unless a seat is Custom). */
+/* Signature of everything the table depends on: the pad family of each seat. */
 static unsigned padComputeSig(void)
 {
-    int anyCustom = 0;
     unsigned h = 2166136261u;
-    for (int s = 0; s < MAX_PADS; s++) h = (h ^ (unsigned)controlScheme[s]) * 16777619u;   /* D643 */
-    for (int s = 0; s < MAX_PADS; s++)
-        if (schemeOriginal(s))
-            for (int n = 0; n < NB_COUNT; n++)
-                for (const char *p = n64Str[s][n]; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
-    for (int s = 0; s < MAX_PADS; s++) {
-        h ^= (unsigned)padPreset[s] * 16777619u;
-        h = (h ^ (unsigned)padFamily[s]) * 16777619u;   /* Modern follows the pad's family (by position) */
-        if (padPresetCustom(s)) anyCustom = 1;
-    }
-    if (anyCustom)
-        for (int s = 0; s < MAX_PADS; s++)
-            for (int a = 0; a < PA_COUNT; a++)
-                for (const char *p = padStr[s][a]; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
+    for (int s = 0; s < MAX_PADS; s++) h = (h ^ (unsigned)padFamily[s]) * 16777619u;   /* Modern follows the pad's family (by position) */
     return h;
 }
 
@@ -573,16 +427,11 @@ static const PadTable *padTabGet(void)
         PadTable *cur = (PadTable *)SDL_AtomicGetPtr((void **)&padTabPub);
         PadTable *spare = (cur == &padTabBuf[0]) ? &padTabBuf[1] : &padTabBuf[0];
         int bad = 0;
-        for (int s = 0; s < MAX_PADS; s++) {
-            padBuildBinds(&spare->seat[s], s, padPresetCustom(s), &bad);
-            if (schemeOriginal(s)) padBuildN64(&spare->seat[s], s, &bad);   /* D643 */
-        }
+        for (int s = 0; s < MAX_PADS; s++) padBuildBinds(&spare->seat[s], s, &bad);
         SDL_AtomicSetPtr((void **)&padTabPub, spare);
         padTabSig = sig;
         padTabValid = 1;
-        sysLogPrintf(LOG_INFO, "input: pad table rebuilt (presets %d/%d/%d/%d%s, %d unknown name(s))",
-                     padPreset[0], padPreset[1], padPreset[2], padPreset[3],
-                     padPresetCustom(0) || padPresetCustom(1) || padPresetCustom(2) || padPresetCustom(3) ? " custom" : "", bad);   /* D498, D518 */
+        sysLogPrintf(LOG_INFO, "input: pad table rebuilt (%d unknown name(s))", bad);
         SDL_AtomicUnlock(&rebuildLock);
         return spare;
     }
@@ -748,10 +597,6 @@ static void padDetectFamily(int seat)
 static float gRumbleScale = 0.5f;
 
 static int mouseAimSpeed  = 16;     /* aim-mode sensitivity, percent (B3: 50 -> 25 M-29 -> 16; still overshot at 25) */
-int g_inputGepdSens       = 38;     /* D194 Input.GepdSens: GEPD SENSITIVITY setting, range 1..500
-                                        (D304: widened from 1..80 to match Input.MouseTurnSpeed)
-                                        (20 -> 25 "a bit slow" -> 30 user-calibrated match point
-                                        -> 38: user asked defaults ~20-35% faster than that) */
 static int aimBand        = 20;     /* aim mode: usable stick range above the 60 gate */
 /* D407: mouse->stick gain multiplier (%, 100 = unchanged) applied ONLY while
  * aiming in tank. In-tank aim must use the legacy velocity-stick path (the
@@ -766,8 +611,6 @@ static int tankAimScale   = 100;
  * leave that mode". At 40% (2.4 stick/px) the mid-speed view rate matches
  * the GEPD reticle's angular pace at GepdSens=30; flicks still reach full
  * turn speed, only later. */
-static int sensLink       = 1;     /* F10 overlay: keep aim/turn sens at the
-                                      stock 38:50 ratio (default on) */
 int g_inputMouseTurnSpeed = 50;     /* hipfire yaw sensitivity, percent
                                         (40 = M-123 match point at GepdSens=30; 50 = the user's
                                         "~20-35% faster" default request, same +25% as g_inputGepdSens) */
@@ -787,65 +630,13 @@ int g_inputMouseSensitivity = 100;  /* D238: single master sensitivity, percent 
 static int aimCurveGamma  = 160;    /* D194(a): aim-mode response curve exponent x100
                                       * (100 = linear, >100 = more low-speed control /
                                       * less bang-bang, <100 = more twitchy). */
-int g_inputAimAbsolute      = 1;    /* D194: 1 = GEPD-style aim while RMB is held --
-                                      * crosshair locked at centre, mouse MOVEMENT
-                                      * rotates the view 1:1 in screen angle; 0 =
-                                      * legacy velocity stick from mouse delta. */
 int g_inputMouseDirectLook  = 1;    /* WI-1 (GEPD-INPUT-PLAN.md #89): 1 = hipfire
                                       * writes vv_theta/vv_verta directly (see
                                       * inputHipDirectCompute), same linear-in-px model
                                       * as aim mode; 0 = legacy stick-curve path
                                       * (MOUSE_TURN_GAIN), kept as an escape hatch. */
 
-/* Input.PdMouseAim -- use the Perfect Dark port's mouse-aim model instead of
- * GEPD's. Mirrors fgsfdsfgs/perfect_dark exactly (bondmove.c/bondgun.c): PD
- * accumulates the mouse delta into a position (`swivelpos`, clamped [-1,1])
- * and then pushes that POSITION into the game's crosshair integrator as its
- * INPUT, with a near-zero crosshair damp (`bgunSwivelWithDamp(x, y, 0.01f)`).
- *
- * The near-zero damp is the whole point. GE's aim path uses the weapon's
- * CrosshairSpeed (~0.8) -- a value chosen for the analog stick, where the
- * integrator does the smoothing. With a mouse that slow integrator is what
- * makes the drawn crosshair step: the port writes once per input poll while
- * the game damps once per sim tick, so the displayed value is write*damp^k
- * with k varying (findings D332). At damp 0.01 the input dominates and k stops
- * mattering -- PD never had this bug because it never gave the mouse a slow
- * damp.
- *
- * In this mode the port only ACCUMULATES; the game's own integrator does the
- * rest, driven by the port-supplied turn through a #ifdef PORT hook in
- * sub_GAME_7F067FBC (gunfire.c). Default off: it changes aim feel, so it is
- * opt-in. */
-int g_inputPdMouseAim = 0;
-
-/* D337 -- aim mode, folded (user decision 2026-09-24):
- *   Input.AimMode 0 = N64 (default): the N64 aim model -- crosshair travels,
- *       camera edge-scrolls -- with the mouse fed through the game's own
- *       crosshair integrator at PD's mouse damp (D332 / PR #96). Same range,
- *       edge-scroll and bullet mapping as the old GEPD overwrite, without its
- *       poll-vs-tick step jitter.
- *   Input.AimMode 1 = Centred (PC, opt-in, #104): the mouse turns the camera
- *       and the crosshair stays centred. Not an N64 behaviour; kept for players
- *       who asked for FPS-style aiming.
- * Input.AimLegacyGepd=1 (hidden, one release) restores the old GEPD overwrite
- * for the N64 mode. GE_PDMOUSEAIM=0/1 still forces the integration at launch.
- * Legacy keys: Input.AimStyle 2 (Centred) migrates to AimMode 1; AimStyle 0/1
- * and Input.PdMouseAim map to the default N64 mode. */
-#if defined(PLATFORM_SWITCH)
-/* project-dam: Centred (with the weapon sway) by default on the console. In the N64 model the
- * crosshair springs back when the stick is released, so a shot needs the
- * stick held still at an angle -- workable on the N64's long stick, not on a
- * Joy-Con. Centred is the stick-turns-the-camera model of modern shooters;
- * the sway (inputPadAimSway) gives the weapon back the motion Centred removes. */
-int g_inputAimMode = AIMMODE_CENTRED;
-static int nxDefaultsRev = 0;   /* Input.NxDefaultsRev: Switch default migrations done */
-#else
-int g_inputAimMode = AIMMODE_N64;
-#endif
-int g_inputAimDevMouse;               /* declared below with its notes */
-int g_inputAimLegacyGepd = 0;
-int g_inputAimStyleLegacy = 0;   /* Input.AimStyle (D333, superseded) */
-
+int g_inputAimDevMouse;               /* the device that aimed last: 1 = the mouse (D337) */
 double g_inputHipThetaDegOut;   /* D428: yaw degrees the last inputHipDirectCompute applied */
 void inputSwayFeedTheta(double deg);
 int inputPadDirectCompute(int dx, int dy);   /* D404: pad twin of the above */
@@ -1345,7 +1136,6 @@ static void inputOpenPads(void)
 
 static int crouchMode = 1;   /* 0 = hold, 1 = toggle (latched crouch input); D556: toggle by default (existing ini values kept) */
 
-static void padMapSelfTest(void);
 int inputInit(void)
 {
     if (!SDL_WasInit(SDL_INIT_GAMECONTROLLER)) {
@@ -1420,12 +1210,6 @@ int inputInit(void)
         inputDefaultsRev = 2;
     }
 #if defined(PLATFORM_SWITCH)
-    /* project-dam: inis written by 0.1.0 carry the N64 aim style as a plain
-     * default; move them to Centred once. A later choice is kept. */
-    if (nxDefaultsRev < 1) {
-        g_inputAimMode = AIMMODE_CENTRED;
-        nxDefaultsRev = 1;
-    }
     /* Right-stick deadzone 10 % instead of the desktop 25 %: modern shooters
      * use 5-12 %, and 25 % swallowed the small aim movements. Only the
      * untouched default moves; a value the player set is kept. */
@@ -1457,7 +1241,6 @@ int inputInit(void)
     inputApplyCursorVisibility();   /* hide the OS cursor if we start focused */
     inputApplyMouseRequests(); /* inputInit runs on the host thread */
 
-    if (GE_ENVFLAG("GE_PADMAPTEST")) padMapSelfTest();   /* D469 */
 
     sysLogPrintf(LOG_INFO, "input: ready (mask=0x%x, %d controller(s), aimSpeed=%d)",
                  connectedMask, numControllers, mouseAimSpeed);
@@ -1614,14 +1397,11 @@ static void inputCycleGadget(void)
 }
 
 /* ------------------------------------------------------------------------
- * The pad control styles: the adapter around port/src/input/style_*.c.
+ * The pad control style: the adapter around port/src/input/style_modern.c.
  * Snapshot = the pad + the game's context; the strategy of the seat's style
  * returns commands; the N64 bridge (input/n64bridge.c) turns them into the pad
  * bits the game reads. What touches the game (aim models, crouch, the gadget
  * cycle) stays here.
- *   Original  (controlScheme 1)               g_inputStyleOriginal
- *   Modern    (controlScheme 2)               g_inputStyleModern
- *   Enhanced  (controlScheme 0, preset 0..4)  g_inputStyleEnhanced
  * ------------------------------------------------------------------------ */
 _Static_assert(PSM(PS_A) == INB_A && PSM(PS_B) == INB_B && PSM(PS_X) == INB_X && PSM(PS_Y) == INB_Y &&
                PSM(PS_LB) == INB_LB && PSM(PS_RB) == INB_RB && PSM(PS_LS) == INB_LS && PSM(PS_RS) == INB_RS &&
@@ -1629,14 +1409,9 @@ _Static_assert(PSM(PS_A) == INB_A && PSM(PS_B) == INB_B && PSM(PS_X) == INB_X &&
                PSM(PS_DLEFT) == INB_DLEFT && PSM(PS_DRIGHT) == INB_DRIGHT &&
                PSM(PS_LT) == INB_LT && PSM(PS_RT) == INB_RT, "pad source bits must match INB_*");
 _Static_assert((int)PA_FIRE == (int)INACT_FIRE && (int)PA_AIM == (int)INACT_AIM && (int)PA_USE == (int)INACT_USE && (int)PA_RELOAD == (int)INACT_RELOAD &&
-               (int)PA_CROUCH == (int)INACT_CROUCH && (int)PA_NEXTWPN == (int)INACT_NEXTWPN && (int)PA_PREVWPN == (int)INACT_PREVWPN &&
-               (int)PA_GADGET == (int)INACT_GADGET && (int)PA_START == (int)INACT_START && (int)PA_COUNT == (int)INACT_COUNT,
+               (int)PA_CROUCH == (int)INACT_CROUCH && (int)PA_NEXTWPN == (int)INACT_NEXTWPN &&
+               (int)PA_START == (int)INACT_START && (int)PA_COUNT == (int)INACT_COUNT,
                "pad actions must match INACT_*");
-_Static_assert((int)NB_A == (int)INNB_A && (int)NB_B == (int)INNB_B && (int)NB_Z == (int)INNB_Z && (int)NB_R == (int)INNB_R &&
-               (int)NB_L == (int)INNB_L && (int)NB_CU == (int)INNB_CU && (int)NB_CD == (int)INNB_CD && (int)NB_CL == (int)INNB_CL &&
-               (int)NB_CR == (int)INNB_CR && (int)NB_START == (int)INNB_START && (int)NB_DU == (int)INNB_DU &&
-               (int)NB_DD == (int)INNB_DD && (int)NB_DL == (int)INNB_DL && (int)NB_DR == (int)INNB_DR &&
-               (int)NB_COUNT == (int)INNB_COUNT, "N64 buttons must match INNB_*");
 _Static_assert(STICK_MAX == INPUT_STICK_MAX && RSTICK_THRESHOLD == INPUT_RSTICK_THRESHOLD, "stick constants");
 
 static InputStrategyState s_padState[MAX_PADS];   /* per slot: the look low-pass */
@@ -1647,14 +1422,6 @@ static int padAimScale(void *user, int v, int sens)
     return nxAimStickP(v, sens, (int)(intptr_t)user);
 }
 
-/* The strategy of a seat's control style. */
-static const InputStrategy *padStrategyFor(int seat)
-{
-    if (schemeOriginal(seat)) return &g_inputStyleOriginal;
-    if (inputPadIsModern(seat)) return &g_inputStyleModern;
-    return &g_inputStyleEnhanced;
-}
-
 /* Builds the snapshot of slot idx and runs its seat's strategy. `pad` is
  * slotPad(idx): NULL when the keyboard plays the seat, in which case only the
  * Modern aim assists still read the pad (pads[idx]); the other styles have
@@ -1662,9 +1429,9 @@ static const InputStrategy *padStrategyFor(int seat)
  * (commands untouched). */
 static const InputStrategy *padPoll(int idx, SDL_GameController *pad, int wheelOpen, InputCommands *cmd)
 {
-    const InputStrategy *strat = padStrategyFor(idx);   /* the player's settings (#83) */
+    const InputStrategy *strat = &g_inputStyleModern;
     SDL_GameController *dev = pad ? pad : (inputSeatShift() ? NULL : pads[idx]);   /* behind the keyboard player 1, pads[idx] is another player's */
-    if (!dev || (!pad && strat != &g_inputStyleModern)) return NULL;
+    if (!dev) return NULL;
 
     InputSnapshot in;
     memset(&in, 0, sizeof in);
@@ -1693,7 +1460,7 @@ static const InputStrategy *padPoll(int idx, SDL_GameController *pad, int wheelO
     in.ctx.inStage = (current_menu == GE_MENU_RUN_STAGE);
     in.ctx.aiming = mp && mp->insightaimmode;
     in.ctx.dead = mp && mp->bonddead;
-    if (strat == &g_inputStyleModern && in.ctx.inStage && in.ctx.aiming && !in.ctx.dead)   /* weapon lookup only when it can matter */
+    if (in.ctx.inStage && in.ctx.aiming && !in.ctx.dead)   /* weapon lookup only when it can matter */
         in.ctx.scopedWeapon = bondwalkItemCheckBitflags(mp->hands[GUNRIGHT].weaponnum, WEAPONSTATBITFLAG_DISABLE_CROUCH) != 0;
 
     in.cfg.deadzoneL = padDeadzoneL;
@@ -1705,13 +1472,7 @@ static const InputStrategy *padPoll(int idx, SDL_GameController *pad, int wheelO
     in.cfg.lookInvertY = padLookInvertY;
     in.cfg.triggerPct = padTriggerPct;
     in.cfg.naturalPitch = styleIsSolitare(idx);
-    in.cfg.stickSwap = stickSwap(idx);   /* D498/D518: roles by slot, like stickSolitare (binds below go by player too) */
-    in.cfg.n64StickFeel = n64StickFeel;
-    {
-        const PadBinds *pb = &padTabGet()->seat[idx];
-        memcpy(in.cfg.bind, pb->mask, sizeof in.cfg.bind);
-        memcpy(in.cfg.n64Bind, pb->n64, sizeof in.cfg.n64Bind);
-    }
+
     in.aimScale = padAimScale;
     in.aimScaleUser = (void *)(intptr_t)idx;
 
@@ -1756,7 +1517,7 @@ int portDirectMove(int playernum, int *walk, int *strafe)
 /* #85 Look ahead under GameDirect, read by the hook in src/game/bondview2.c after the 1.x styles set
  * disableLookAhead. The game's own look-ahead is off in SOLITARE / GOODNIGHT (the N64 stick is the view
  * there); with GameDirect the left stick walks and the right stick looks, so the reason is gone.
- *   0 not GameDirect: the game's own rules stand (Original controls, HONEY roles, scripted slot 0)
+ *   0 not GameDirect: the game's own rules stand (HONEY roles, scripted slot 0)
  *   1 Original level, look stick at rest: the game's look-ahead runs (slope target, thresholds, centring)
  *   2 Original level, look stick deflected: the game's look-ahead runs, the hook treats the stick as a
  *     manual pitch (C-up / C-down on the N64: cancel, disarm, block until the walk stick is released)
@@ -1802,19 +1563,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
         (idx == 0 || idx < getPlayerCount())) {   /* D416: each slot rewrites only its own player's style */
         int wantSolitare = stickSolitare(idx) ? CONTROLLER_CONFIG_SOLITARE_ : CONTROLLER_CONFIG_HONEY_;   /* D498, D518 */
         struct player *sp = inputSlotPlayer();
-        if (schemeOriginal(idx)) {
-            /* D513 OG controls: the port never writes the style; the game's own
-             * selection (watch / save / MP setup) stands. Log each change once. */
-            static int lastStyle[4] = { -1, -1, -1, -1 };
-            if (idx < 4 && sp->cur_player_control_type_0 != lastStyle[idx]) {
-                lastStyle[idx] = sp->cur_player_control_type_0;
-                char dual[80] = "";
-                if (lastStyle[idx] >= 4)
-                    snprintf(dual, sizeof(dual), "; dual-controller style: second stick read from controller %d", idx + (int)getPlayerCount());
-                sysLogPrintf(LOG_INFO, "input: original control style, slot %d style %d (%s)%s", idx, lastStyle[idx],
-                             styleIsSolitare(idx) ? "natural-look roles" : "1.1 roles", dual);
-            }
-        } else if (!inputMpSplit()) {
+        if (!inputMpSplit()) {
             if (cur_player_get_control_type() != wantSolitare)
                 cur_player_set_control_type(wantSolitare);
         } else if (sp->cur_player_control_type_0 != wantSolitare) {
@@ -2000,11 +1749,11 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
          * front-end screen (file select, cheat) can be
          * driven vertically from the keyboard. Watch/pause keeps the C-button
          * mapping: it is current_menu==RUN_STAGE (menuMode 0), N64-style. */
-        /* GameDirect (Enhanced / Modern, the same rules as the pad's inputDirectMoveDecide): W/S/A/D walk and
+        /* GameDirect (the same rules as the pad's inputDirectMoveDecide): W/S/A/D walk and
          * strafe at full analog scale, through the hook in bondview2.c, not as C steps. The pad's GameDirect
          * zeroes the game's digital steps, so the C bits alone stopped as soon as a pad was plugged in. Aiming
-         * (the C-bit slow strafe), the tank, the watch, Original and the QA harness keep the C bits. */
-        kbDirect = !schemeOriginal(idx) && styleIsSolitare(idx) && inputCanUseGameplayActions(menuMode) &&
+         * (the C-bit slow strafe), the tank, the watch and the QA harness keep the C bits. */
+        kbDirect = styleIsSolitare(idx) && inputCanUseGameplayActions(menuMode) &&
                    !(inputSlotPlayer() && inputSlotPlayer()->insightaimmode) &&
                    !(g_inputReplayActive || inputScriptIsActive(0) || g_inputRec != NULL);
         kbFwd = inputActHeld(ks, IA_FORWARD);
@@ -2045,24 +1794,6 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
             AIMS.centreClearTicks = 2;   /* see D194 centre-spring note above */
         if (!aimHeld) {
             AIMS.centreClearTicks = 0;
-            /* GEPD adopts the game's current crosshair pos every non-aim
-             * frame so re-entry starts where the game left it. */
-            AIMS.gepdHeldPrev = 0;
-            if (inputSlotPlayer()) {
-                if (inputPdMouseAimEnabled()) {
-                    /* D338: the accumulator is in GEPD units (±LIMIT = edge);
-                     * adopt through the game's screen mapping (offset =
-                     * pos*(1-damp), gunfire.c) and the aim-range scale, so aim
-                     * entry starts exactly where the crosshair is drawn. */
-                    double k = (1.0 - (double) inputSlotPlayer()->guncrossdamp) / 0.99
-                             * GEPD_CROSSHAIR_LIMIT / inputAimRangeScale();
-                    AIMS.crossX = (double) inputSlotPlayer()->crosshair_x_pos * k;
-                    AIMS.crossY = (double) inputSlotPlayer()->crosshair_y_pos * k;
-                } else {
-                    AIMS.crossX = (double) inputSlotPlayer()->crosshair_x_pos / inputAimRangeScale();
-                    AIMS.crossY = (double) inputSlotPlayer()->crosshair_y_pos / inputAimRangeScale();
-                }
-            }
         }
         AIMS.aimHeldPrev = aimHeld;
         if (aimRisingEdgeAim && inputSlotPlayer() && inputSlotPlayer()->docentreupdown
@@ -2103,7 +1834,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
          * combined edges prevent a held input from repeatedly using a door.
          * In menus/watch/tank the pad keeps native accept/cancel buttons. */
         SDL_GameController *slot0Pad = slotPad(0);
-        u32 slot0Held = (slot0Pad && !schemeOriginal(0)) ? padActHeld(&padTabGet()->seat[0], padReadRaw(slot0Pad)) : 0;
+        u32 slot0Held = slot0Pad ? padActHeld(&padTabGet()->seat[0], padReadRaw(slot0Pad)) : 0;
         int padUse = (slot0Held & (1u << PA_USE)) != 0;       /* D469: bound actions (Jinx 1.1: A / X) */
         int padReload = (slot0Held & (1u << PA_RELOAD)) != 0;
         int useNow = inputScriptIsActive(0) ? g_inputScriptSlots[0].use : (inputActHeld(ks, IA_CANCEL) || padUse);
@@ -2348,7 +2079,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                  * exactly as before. */
             } else if (aimHeld) {
                 /* D194 GEPD-mirror aim: direct crosshair/camera writes, no
-                 * look stick (see inputAimGepdCompute). Keyboard turn (sx/sy set
+                 * look stick (see inputHipDirectCompute). Keyboard turn (sx/sy set
                  * above) still works. Otherwise fall through to the legacy
                  * velocity stick below.
                  * D407 follow-up: in-tank the game aims the turret from raw
@@ -2357,22 +2088,12 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                  * direct-write models must be bypassed there and the legacy
                  * velocity stick emitted instead. */
                 int tankAimStick = (g_PlayerIsInTank == 1);
-                if (!tankAimStick && inputAimModeGet() == AIMMODE_CENTRED) {
-                    /* D333: FPS-style centred aim -- the camera takes the
-                     * mouse (same path as hipfire, which also declines on
-                     * the watch/pause/cutscene gates) and no stick is
+                if (!tankAimStick) {
+                    /* Centred aim: the camera takes the mouse (same path as hipfire, which
+                     * also declines on the watch/pause/cutscene gates) and no stick is
                      * emitted, so the crosshair settles at centre. */
                     inputHipDirectCompute(edx * lookDtScale, dyLook * lookDtScale);
-                } else if (!tankAimStick && inputPdMouseAimEnabled()) {
-                    /* PD model: accumulate only. The game's own integrator is
-                     * driven by the port-supplied turn through the
-                     * sub_GAME_7F067FBC hook (see Input.PdMouseAim above). */
-                    inputAimGepdAccumulate(edx, dyLook);
-                    /* Edge-scroll belongs to the aim position, not to the
-                     * crosshair model -- without this the camera stops
-                     * following the crosshair at the screen edge. */
-                    inputAimGepdEdgeScroll();
-                } else if (tankAimStick || !inputAimGepdCompute(edx * lookDtScale, dyLook * lookDtScale)) {
+                } else {
                 double aimEdx = edx * lookDtScale, aimDyLook = dyLook * lookDtScale;
                 double aimSens = (mouseAimSpeed / 100.0) * (g_inputMouseSensitivity / 100.0);
                 if (tankAimStick) aimSens *= tankAimScale / 100.0;   /* D407 */
@@ -2393,7 +2114,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                     if (m > ceilStick) m = ceilStick;
                     sy += (aimDyLook > 0) ? m : -m;   /* +stick_y = look down */
                 }
-                } /* D194: end legacy velocity-aim fallback */
+                } /* in a tank the game aims the turret from the raw stick */
 
                 /* D194 centre-spring clear: a minimal pitch stick for a couple
                  * of ticks -- enough for bondview2's manual-input rule to clear
@@ -2490,10 +2211,10 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
     }
     if (pad) {
         /* D282: front-end menus (main menu, file select, mission-select map)
-         * navigate with the left stick whatever the stick roles (the strategies
-         * do that: INMODE_MENU) -- a menu-context remap only, no effect on in-level
+         * navigate with the left stick whatever the stick roles (the strategy
+         * does that: INMODE_MENU) -- a menu-context remap only, no effect on in-level
          * control feel. */
-        /* Sticks from the strategy (input/style_*.c); the C bits go out through
+        /* Sticks from the strategy (input/style_modern.c); the C bits go out through
          * the bridge below. The aim models and their side effects stay here. */
         if (mc.mode == INMODE_MENU) {
             if (mc.moveX) sx = mc.moveX;
@@ -2511,7 +2232,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                 extern void nxLookAheadStep(struct player *p, int walkingForward, int lookIdle);   /* Look ahead Low / Medium / High (#85) */
                 nxLookAheadStep(inputSlotPlayer(), mc.moveFwd, rxs == 0 && rys == 0);
             }
-            if (inputAimModeGet() == AIMMODE_CENTRED && !(idx == 0 && g_inputReplayActive) &&
+            if (!(idx == 0 && g_inputReplayActive) &&
                 inputPadDirectCompute(rxs, rys)) {
                 if (idx == 0) g_inputRecPadDirect = 1;   /* D404: the stick drives the camera directly, no stick emitted */
                 /* D404 (resolved by implementation, 2026-09-28): pad CENTRED
@@ -2521,15 +2242,12 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                  * on a pad. No look stick is emitted this poll; when
                  * inputPadDirectCompute declines (dead/watch/pause/cutscene) the
                  * legacy stick emission below runs, as the mouse branch
-                 * falls back to its legacy path. AIMMODE_N64 keeps today's
-                 * behaviour: the deflection feeds the game's crosshair
-                 * integrator (travel + edge scroll + spring-back -- the
-                 * original controller feel). */
+                 * falls back to its legacy path. */
             } else {
                 if (rxs) sx = rxs;
                 if (rys) sy = rys;
             }
-        } else {   /* INMODE_HONEY: the left stick is the analog stick (#145: the look stick in 1.1 / 1.3 roles; D645: not inverted in Original) */
+        } else {   /* INMODE_HONEY: the left stick is the analog stick (#145: the look stick in the 1.1 roles) */
             if (mc.moveX) sx = mc.moveX;
             if (mc.moveY) sy = mc.moveY;
             if (idx == 0 && mc.moveActive) g_inputAimDevMouse = 0;   /* D337: pad aim active */
@@ -2546,7 +2264,6 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
             bo.southpaw = padSouthpaw;
             button = n64BridgeButtons(button, &mc, &bo);
             if (mc.crouch) crouchNow = 1;
-            if (mc.gadgetEdge) inputCycleGadget();
             padActPrev[idx] = mc.actionsHeld;
         }
 
@@ -2699,7 +2416,7 @@ static unsigned inputComputePadSlot(int idx, signed char *stick_x, signed char *
                      g_inputScriptSlots[0].frame, (int)inputSlotPlayer()->insightaimmode, g_inputAimDevMouse,
                      (double)inputSlotPlayer()->crosshair_angle.f[0],
                      (double)inputSlotPlayer()->crosshair_x_pos, (double)inputSlotPlayer()->crosshair_y_pos,
-                     (double)inputSlotPlayer()->vv_theta, (double)inputSlotPlayer()->vv_verta, AIMS.crossX);
+                     (double)inputSlotPlayer()->vv_theta, (double)inputSlotPlayer()->vv_verta);
     }
     if (configGetInputLog() && (button || sx || sy)) {
         sysLogPrintf(LOG_NOTE, "GE_INPUTLOG cont%d: btn=%04x stick=(%d,%d)",
@@ -2986,187 +2703,7 @@ int inputGetNumControllers(void)
     return numControllers;
 }
 
-/* ------------------------------------------------------------------------
- * D469: UI-facing pad binding API (F10 overlay + front-end PC Options) and
- * the GE_PADMAPTEST self-test.
- * ------------------------------------------------------------------------ */
-int inputPadActionCount(void) { return PA_COUNT; }
-const char *inputPadActionLabel(int act) { return (act >= 0 && act < PA_COUNT) ? kPadAct[act].label : ""; }
-int inputPadSourceCount(void) { return PS_COUNT; }
-const char *inputPadSourceName(int src) { return (src >= 0 && src < PS_COUNT) ? kPadSrc[src].name : "none"; }
-int inputPadActionForKey(const char *key)
-{
-    char want[48];
-    for (int a = 0; a < PA_COUNT; a++) {
-        snprintf(want, sizeof(want), "Input.Pad.%s", kPadAct[a].key);
-        if (key && !strcmp(key, want)) return a;
-    }
-    return -1;
-}
 int inputPadSeatPresent(int seat) { return seat >= 0 && seat < MAX_PADS && pads[seat] != NULL; }
-unsigned inputPadHeldSources(int seat)
-{
-    return (seat >= 0 && seat < MAX_PADS) ? padReadRaw(pads[seat]) : 0;
-}
-/* D518: the overlay re-points its "Layout preset" row (and the Custom-only
- * bind rows' visibility) at the selected seat's value. */
-int *inputPadPresetPtr(int seat)
-{
-    return &padPreset[(seat >= 0 && seat < MAX_PADS) ? seat : 0];
-}
-
-int inputPadPresetStep(int cur, int dir)
-{
-    /* D498: display order Jinx, Christmas, Frost, Elektra, Custom (stored 0,1,2,4,3). */
-    static const int order[5] = { 0, 1, 2, 4, 3 };
-    for (int i = 0; i < 5; i++)
-        if (order[i] == cur) return order[(i + (dir > 0 ? 1 : 4)) % 5];
-    return 0;   /* unknown stored value -> Jinx */
-}
-
-/* "a,x" -> src[0]=A, src[1]=X; empty/none/unknown -> -1 (positional). */
-static void padSlotSources(const char *s, int src[INPUT_BIND_SLOTS])
-{
-    src[0] = src[1] = -1;
-    for (int slot = 0; slot < INPUT_BIND_SLOTS && s; slot++) {
-        const char *e = strchr(s, ',');
-        size_t n = e ? (size_t)(e - s) : strlen(s);
-        for (int i = 0; i < PS_COUNT; i++)
-            if (strlen(kPadSrc[i].name) == n && !SDL_strncasecmp(s, kPadSrc[i].name, n)) { src[slot] = i; break; }
-        s = e ? e + 1 : NULL;
-    }
-}
-
-void inputPadBindingText(int seat, int act, int slot, char *out, int n)
-{
-    int src[INPUT_BIND_SLOTS];
-    if (seat < 0 || seat >= MAX_PADS || act < 0 || act >= PA_COUNT || slot < 0 || slot >= INPUT_BIND_SLOTS) {
-        snprintf(out, n, "none");
-        return;
-    }
-    padSlotSources(padStr[seat][act], src);
-    snprintf(out, n, "%s", src[slot] >= 0 ? kPadSrc[src[slot]].name : "none");
-}
-
-/* src < 0 clears the slot. Returns 1 on success. Writes the seat's Input.Pad*
- * string (the poll thread notices the signature change and republishes). */
-int inputPadBindingSet(int seat, int act, int slot, int src)
-{
-    int t[INPUT_BIND_SLOTS];
-    if (seat < 0 || seat >= MAX_PADS || act < 0 || act >= PA_COUNT ||
-        slot < 0 || slot >= INPUT_BIND_SLOTS || src >= PS_COUNT) return 0;
-    padSlotSources(padStr[seat][act], t);
-    t[slot] = src < 0 ? -1 : src;
-    char buf[sizeof(padStr[0][0])];
-    snprintf(buf, sizeof(buf), "%s", t[0] >= 0 ? kPadSrc[t[0]].name : "none");
-    if (t[1] >= 0) {
-        size_t l = strlen(buf);
-        snprintf(buf + l, sizeof(buf) - l, ",%s", kPadSrc[t[1]].name);
-    }
-    snprintf(padStr[seat][act], sizeof(padStr[seat][act]), "%s", buf);
-    return 1;
-}
-
-/* Reset one action to the Jinx 1.1 default on every seat. Returns seats changed. */
-int inputPadBindingReset(int act)
-{
-    int n = 0;
-    if (act < 0 || act >= PA_COUNT) return 0;
-    for (int s = 0; s < MAX_PADS; s++) {
-        if (strcmp(padStr[s][act], kPadAct[act].def)) n++;
-        snprintf(padStr[s][act], sizeof(padStr[s][act]), "%s", kPadAct[act].def);
-    }
-    return n;
-}
-
-/* GE_PADMAPTEST=1: boot-time proof of the BIND TABLES (logs, then the game
- * continues). The mapping itself (sources -> commands -> N64 bits) is pure and
- * unit-tested in tests/test_input_{modern,enhanced,original}.c; what only exists
- * here is the string -> mask resolution:
- *  1. Custom remap moves the action; seats are independent; Start guard;
- *  2. a non-Custom preset ignores Input.Pad.*;
- *  3. the binding API round trip;
- *  4. Original: the default N64 table, per-seat remap, the unbound guards.
- * Config values are restored afterwards so nothing is persisted. */
-static void padMapSelfTest(void)
-{
-    int fail = 0;
-    int savedPreset[MAX_PADS];
-    char saved[MAX_PADS][PA_COUNT][32];
-    memcpy(savedPreset, padPreset, sizeof(savedPreset));
-    memcpy(saved, padStr, sizeof(saved));
-    /* Custom: seat 0 Fire := a, seat 1 untouched, seat 2 Use := y. */
-    for (int s = 0; s < MAX_PADS; s++) padPreset[s] = 3;
-    snprintf(padStr[0][PA_FIRE], sizeof(padStr[0][0]), "a");
-    snprintf(padStr[2][PA_USE], sizeof(padStr[0][0]), "y,none");
-    snprintf(padStr[2][PA_NEXTWPN], sizeof(padStr[0][0]), "none");
-    snprintf(padStr[3][PA_START], sizeof(padStr[0][0]), "none");
-    const PadTable *t = padTabGet();
-    int c1 = t->seat[0].mask[PA_FIRE] == PSM(PS_A);
-    int c3 = t->seat[1].mask[PA_FIRE] == PSM(PS_RT);       /* seat 1 still default */
-    int c5 = t->seat[2].mask[PA_USE] == PSM(PS_Y) && t->seat[2].mask[PA_NEXTWPN] == 0;
-    int c6 = t->seat[1].mask[PA_NEXTWPN] == PSM(PS_Y);
-    int c7 = t->seat[3].mask[PA_START] == PSM(PS_START);   /* Start guard re-forces start */
-    sysLogPrintf(LOG_INFO, "GE_PADMAPTEST: custom: seat0 Fire=a (%d); seat1 independent (%d); seat2 Use=y, Next none (%d); seat1 Y=next (%d); start guard (%d)",
-                 c1, c3, c5, c6, c7);
-    fail += !(c1 && c3 && c5 && c6 && c7);
-    /* Preset != Custom ignores the strings. */
-    for (int s = 0; s < MAX_PADS; s++) padPreset[s] = 0;
-    t = padTabGet();
-    int c8 = t->seat[0].mask[PA_FIRE] == PSM(PS_RT);
-    sysLogPrintf(LOG_INFO, "GE_PADMAPTEST: preset0 ignores Input.Pad.* (%d)", c8);
-    fail += !c8;
-    /* binding API round trip */
-    inputPadBindingSet(1, PA_FIRE, 1, PS_RB);
-    char tx[32], ty[32];
-    inputPadBindingText(1, PA_FIRE, 0, tx, sizeof(tx));
-    inputPadBindingText(1, PA_FIRE, 1, ty, sizeof(ty));
-    int c10 = !strcmp(tx, "righttrigger") && !strcmp(ty, "rightshoulder") && !strcmp(padStr[1][PA_FIRE], "righttrigger,rightshoulder");
-    inputPadBindingSet(1, PA_FIRE, 0, -1);
-    inputPadBindingText(1, PA_FIRE, 0, tx, sizeof(tx));
-    int c11 = !strcmp(tx, "none") && !strcmp(padStr[1][PA_FIRE], "none,rightshoulder");
-    sysLogPrintf(LOG_INFO, "GE_PADMAPTEST: binding API round trip (%d) clear keeps slot (%d) [%s]", c10, c11, padStr[1][PA_FIRE]);
-    fail += !(c10 && c11);
-
-    /* D643: Original = strict virtual N64 pad: the default table, then remap,
-     * per-seat independence, guards. */
-    {
-        char savedN[MAX_PADS][NB_COUNT][32];
-        int savedCs[MAX_PADS], o1 = 1, o2 = 1, o3 = 1;
-        memcpy(savedCs, controlScheme, sizeof(savedCs));
-        memcpy(savedN, n64Str, sizeof(savedN));
-        for (int s2 = 0; s2 < MAX_PADS; s2++) controlScheme[s2] = SCHEME_ORIGINAL;
-        for (int s2 = 0; s2 < MAX_PADS; s2++) {
-            padPreset[s2] = 0;
-            for (int n = 0; n < NB_COUNT; n++) snprintf(n64Str[s2][n], sizeof(n64Str[0][0]), "%s", kN64Btn[n].def);
-        }
-        padTabValid = 0;
-        const PadTable *ot = padTabGet();
-        o1 = ot->seat[0].n64[NB_A] == PSM(PS_A) && ot->seat[0].n64[NB_B] == PSM(PS_X) &&
-             ot->seat[0].n64[NB_Z] == PSM(PS_RT) && ot->seat[0].n64[NB_R] == (PSM(PS_LT) | PSM(PS_RB)) &&
-             ot->seat[0].n64[NB_L] == PSM(PS_LB) && ot->seat[0].n64[NB_START] == PSM(PS_START) &&
-             ot->seat[0].n64[NB_CU] == 0 && padActHeld(&ot->seat[0], ~0u) == 0;
-        snprintf(n64Str[1][NB_B], sizeof(n64Str[0][0]), "y,b");
-        snprintf(n64Str[1][NB_CU], sizeof(n64Str[0][0]), "rightstick");
-        snprintf(n64Str[2][NB_START], sizeof(n64Str[0][0]), "none");
-        snprintf(n64Str[3][NB_A], sizeof(n64Str[0][0]), "none");
-        snprintf(n64Str[3][NB_B], sizeof(n64Str[0][0]), "none");
-        ot = padTabGet();
-        o2 = ot->seat[1].n64[NB_B] == (PSM(PS_Y) | PSM(PS_B)) && ot->seat[1].n64[NB_CU] == PSM(PS_RS) &&
-             ot->seat[0].n64[NB_B] == PSM(PS_X);
-        o3 = ot->seat[2].n64[NB_START] == PSM(PS_START) &&
-             ot->seat[3].n64[NB_A] == PSM(PS_A) && ot->seat[3].n64[NB_B] == PSM(PS_X);
-        sysLogPrintf(LOG_INFO, "GE_PADMAPTEST: original table (%d) remap/seat-independence (%d) unbound-fallback (%d)", o1, o2, o3);
-        fail += !(o1 && o2 && o3);
-        memcpy(controlScheme, savedCs, sizeof(savedCs));
-        memcpy(n64Str, savedN, sizeof(savedN));
-    }
-
-    memcpy(padStr, saved, sizeof(saved));
-    memcpy(padPreset, savedPreset, sizeof(savedPreset));
-    padTabValid = 0;
-    sysLogPrintf(fail ? LOG_ERROR : LOG_INFO, "GE_PADMAPTEST: %s", fail ? "FAIL" : "PASS");
-}
 
 /* CONSOLE mode (port/include/console.h): no keyboard/mouse. Resolved once on
  * first use, which is after configLoad (main.c) so the ini key is readable. */
@@ -3218,28 +2755,6 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
 {
     configRegisterInt("System.Console", &cfgConsole, 0, 1);   /* hidden: not in the options menu */
     configRegisterInt("System.Handheld", &cfgHandheld, 0, 1); /* hidden: not in the options menu (#131) */
-    /* D518: per seat. The pre-D518 global key is kept as seat 1's, so an
-     * existing ini keeps its value for P1 and P2-P4 start at Jinx. */
-    configRegisterInt("Input.PadPreset",  &padPreset[0], 0, 5);   /* D498: 0 Jinx 1.1, 1 Christmas 1.2, 2 Frost 1.3, 3 Custom, 4 Elektra 1.4 */
-    configRegisterInt("Input.PadPreset2", &padPreset[1], 0, 5);
-    configRegisterInt("Input.PadPreset3", &padPreset[2], 0, 5);
-    configRegisterInt("Input.PadPreset4", &padPreset[3], 0, 5);
-    for (int seat = 0; seat < MAX_PADS; seat++)
-        for (int a = 0; a < PA_COUNT; a++) {
-            if (seat == 0) snprintf(padStrKey[seat][a], sizeof(padStrKey[seat][a]), "Input.Pad.%s", kPadAct[a].key);
-            else           snprintf(padStrKey[seat][a], sizeof(padStrKey[seat][a]), "Input.Pad%d.%s", seat + 1, kPadAct[a].key);
-            snprintf(padStr[seat][a], sizeof(padStr[seat][a]), "%s", kPadAct[a].def);
-            configRegisterString(padStrKey[seat][a], padStr[seat][a], sizeof(padStr[seat][a]));
-        }
-    /* D643 (#145/#149): Original-scheme N64 button map, per seat (seat 1 = Input.N64Pad.<B>, seats 2-4 = Input.N64Pad2/3/4.<B>). */
-    for (int seat = 0; seat < MAX_PADS; seat++)
-        for (int n = 0; n < NB_COUNT; n++) {
-            if (seat == 0) snprintf(n64StrKey[seat][n], sizeof(n64StrKey[seat][n]), "Input.N64Pad.%s", kN64Btn[n].key);
-            else           snprintf(n64StrKey[seat][n], sizeof(n64StrKey[seat][n]), "Input.N64Pad%d.%s", seat + 1, kN64Btn[n].key);
-            snprintf(n64Str[seat][n], sizeof(n64Str[seat][n]), "%s", kN64Btn[n].def);
-            configRegisterString(n64StrKey[seat][n], n64Str[seat][n], sizeof(n64Str[seat][n]));
-        }
-    configRegisterInt("Input.N64StickFeel", &n64StickFeel, 0, 1);
     configRegisterInt("Input.P1Type", &p1Type, 0, 2);   /* player 1: 0 keyboard + mouse, 1 gamepad, 2 auto */
     configRegisterString("Input.Player1Pad", padPref[0], sizeof(padPref[0]));
     configRegisterString("Input.Player2Pad", padPref[1], sizeof(padPref[1]));
@@ -3248,36 +2763,14 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
     configRegisterInt("Input.MouseEnabled", &g_inputMouseEnabled, 0, 1);
     configRegisterInt("Input.CrosshairCursor", &g_inputCfgCrosshairCursor, 0, 1);   /* D555 */
     configRegisterInt("Input.MouseAimSpeed", &mouseAimSpeed, 1, 500);
-    configRegisterInt("Input.PdMouseAim",     &g_inputPdMouseAim,     0, 1);   /* legacy -> AimStyle 1 */
-    configRegisterInt("Input.AimStyle",       &g_inputAimStyleLegacy, 0, 2);   /* D333 legacy -> AimMode */
-    configRegisterInt("Input.AimMode",        &g_inputAimMode,        0, 1);   /* D337 */
 #if defined(PLATFORM_SWITCH)
     configRegisterInt("Input.NxDefaultsRev",  &nxDefaultsRev,  0, 2);   /* project-dam */
 #endif
-    configRegisterInt("Input.AimLegacyGepd",  &g_inputAimLegacyGepd,  0, 1);   /* D337 hidden fallback */
-    configRegisterInt("Input.AimRange",       &g_inputAimRange,       0, 1);   /* D338 PC / N64 */
-    configRegisterInt("Input.AimAbsolute", &g_inputAimAbsolute, 0, 1);  /* D194 */
     configRegisterInt("Input.MouseDirectLook", &g_inputMouseDirectLook, 0, 1);  /* WI-1 */
-    /* D194: renamed Input.GepdSens -> Input.AimModeSens (community name for
-     * the RMB aim mode; "GEPD" is internal provenance jargon). The old key
-     * stays registered against the same variable as a deprecated alias --
-     * if both appear in an ini, the later line wins. */
-    /* D304: widened from the old (1,80) clamp to match Input.MouseTurnSpeed's
-     * (1,500) range exactly -- both are the same underlying "reference SENS
-     * passthrough" unit (see inputAimGepdCompute/inputHipDirectCompute), consumed by
-     * two different, intentional per-mode divisor constants (2920 vs the
-     * turn-speed path's /100*0.1), so a shared range lets the two sliders be
-     * directly comparable ("1:1" in the menu) instead of arbitrarily capped
-     * at different, mismatched ceilings. Old 80 cap was well below even this
-     * value's own reference-model native ceiling (100 raw = 500% in the
-     * source GEPD injector's own display convention). */
-    configRegisterInt("Input.AimModeSens", &g_inputGepdSens, 1, 500);
-    configRegisterInt("Input.GepdSens",    &g_inputGepdSens, 1, 500);   /* deprecated alias */
     configRegisterInt("Input.AimBand", &aimBand, 5, 40);
     configRegisterInt("Input.TankAimScale", &tankAimScale, 10, 300);   /* D407 */
     configRegisterInt("Input.MouseTurnSpeed", &g_inputMouseTurnSpeed, 1, 500);
-    configRegisterInt("Input.SensLink", &sensLink, 0, 1);
-    configRegisterInt("Input.HipfirePitchSpeed", &hipfirePitchSpeed, 10, 500);
+        configRegisterInt("Input.HipfirePitchSpeed", &hipfirePitchSpeed, 10, 500);
     configRegisterInt("Input.MouseInvertY", &mouseInvertY, 0, 1);
     configRegisterInt("Input.MouseYScale", &mouseYScale, 1, 500);
     configRegisterInt("Input.MouseSmoothing", &mouseSmoothing, 0, 90);
@@ -3286,10 +2779,6 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
     configRegisterInt("Input.MouseSensitivity", &g_inputMouseSensitivity, 1, 500);  /* D238 */
     configRegisterInt("Input.MouseAimCurve", &aimCurveGamma, 50, 400);  /* D194(a), x100 */
     configRegisterInt("Input.NaturalPitch", &naturalPitchMode, 0, 1);  /* D194/D238 */
-    configRegisterInt("Input.ControlScheme",  &controlScheme[0], 0, 2);   /* D513: 0 Enhanced, 1 Original, 2 Modern; per player */
-    configRegisterInt("Input.ControlScheme2", &controlScheme[1], 0, 2);
-    configRegisterInt("Input.ControlScheme3", &controlScheme[2], 0, 2);
-    configRegisterInt("Input.ControlScheme4", &controlScheme[3], 0, 2);
     configRegisterInt("Input.PadDeadzone", &padDeadzone, 0, 30000);  /* legacy; Wave A migrates to L/R */
     configRegisterInt("Input.PadDeadzoneL", &padDeadzoneL, 0, 30000);  /* Wave A: left (movement) stick */
     configRegisterInt("Input.PadDeadzoneR", &padDeadzoneR, 0, 30000);  /* Wave A: right (look) stick */

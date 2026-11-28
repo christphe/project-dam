@@ -302,10 +302,7 @@ static void aimAssistUpdate(int active)
 
 static int aimAssistActive(void)
 {
-    double aimMode = 0.0;   /* Input.AimMode: 0 = Original, 1 / 2 = centred */
-
-    configGetValue("Input.AimMode", &aimMode);
-    return s_aimAssist > 0 && aimMode != 0.0 && coopIsMission() && currentPlayerGetIsAiming();
+    return s_aimAssist > 0 && coopIsMission() && currentPlayerGetIsAiming();
 }
 
 /* Called from lvlRender (src/game/lv.c, one PORT line) right before
@@ -327,11 +324,8 @@ float nxAimZoomFactor(void)
     struct timespec ts;
     double now, dt, k;
 
-    double aimMode = 0.0;   /* Input.AimMode: 0 = Original, 1 / 2 = centred */
-
-    configGetValue("Input.AimMode", &aimMode);
     if (s_aimZoom > 0 && aimZoomAllowed() && coopIsMission() &&
-        aimMode != 0.0 && currentPlayerGetIsAiming()) {
+        currentPlayerGetIsAiming()) {
         target = (s_aimZoom == 1) ? 1.5f : 2.0f;
     }
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -401,14 +395,12 @@ void nxAimEntryStep(struct player *p)
         double t0, sPrev;
     } st[4];
     typeof(st[0]) *S = &st[nxPidx(p)];
-    double aimMode = 0.0;
     struct timespec ts;
     double now, t, s, f, rsx, rsy;
     float offX, offY;
     int aiming;
 
-    configGetValue("Input.AimMode", &aimMode);
-    if (p == NULL || s_aimEntry == 0 || aimMode == 0.0) {
+    if (p == NULL || s_aimEntry == 0) {
         S->wasAiming = 0;
         S->settling = 0;
         return;
@@ -502,15 +494,8 @@ static int s_aimStop = 1;   /* 0 off, 1 on */
 
 void nxAimStopStep(struct player *p, int moving)
 {
-    double aimMode = 0.0;
-
-
     if (!s_aimStop || p == NULL || moving || !p->insightaimmode || p->bonddead || !p->outside_watch_menu ||
         p->pause_state != 0) {
-        return;
-    }
-    configGetValue("Input.AimMode", &aimMode);
-    if (aimMode == 0.0) {
         return;
     }
     p->speedgo = 0.0f;

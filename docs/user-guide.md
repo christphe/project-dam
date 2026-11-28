@@ -34,55 +34,17 @@ controls, every setting and file, and fixes for common problems.
 | Start               | `Enter` / `Tab`          | Start         |
 | Options overlay     | `F10`                    | Select        |
 
-The keyboard defaults are a GEPD-style layout. The table shows the **Modern**
-control style, the default: right trigger fires, left trigger aims, and the
+The keyboard defaults are a GEPD-style layout. The gamepad layout is
+**Modern**: right trigger fires, left trigger aims, and the
 face buttons reload, switch weapon and use by position (so a Nintendo pad keeps
 the same hands as an Xbox one); LB and RB open the weapon and gadget wheels, and
 while aiming the D-pad zooms a scope and the left stick strafes slowly.
 PlayStation and Nintendo controllers show their own button names in the menus.
 
-**Control style:** *Controller → Control style* picks one of three. **Modern**
-is the default. **Enhanced** uses Rare's Xbox layouts (1.1 Jinx, 1.2 Christmas,
-1.3 Frost, 1.4 Elektra, which swap the stick roles), selectable under
-*Controller* (pick a player first, then *Layout presets*); it fixes the game's own controller style
-(the watch's 1.1–1.4 selector), so the watch's selector has no effect. Enhanced
-and Modern walk at the speed of the left stick's tilt. **Original** stops the port from touching the style:
-pick 1.1, 1.2, 1.3 or 1.4 on the watch (or in the multiplayer setup) and it
-behaves as on the N64, and the Controller page then offers the game's own
-styles ("Controller style", 1.1 Honey to 2.4 Goodhead, saved in the Bond file
-like the watch's) instead of the layout presets, which apply in Extended only. Buttons are passed
-through as the N64's buttons, so 1.3 and 1.4 move fire and aim exactly as the
-console does. The 2.x dual-controller styles run faithfully too: the game
-reads their second stick from the next controller slot, which the port does not
-map yet (a second pad assigned to that slot should provide it, untested), so with
-one pad pick a 1.x style. Saves made with earlier builds may hold 1.2 (the port wrote its
-forced style back into the save), so when you switch to the Original control style, pick
-your style on the watch once.
-
-In the Original control style the pad is a strict virtual N64 controller in
-every context (stage, menus, watch, tank): each press sends the native N64
-button and the game decides what it means (so *B* uses a door or reloads, as
-on the console). Default layout, remappable per player in the ini
-(`Input.N64Pad.<Button>`, `Input.N64Pad2..4` for players 2-4; up to two pad
-buttons each) and with `Input.N64StickFeel` (1 = linear +/-80 stick with a
-small dead centre, 0 = the Extended deadzone):
-
-| Pad | N64 | Pad | N64 |
-|---|---|---|---|
-| South (A) | A | Right stick | C buttons |
-| West (X) | B | Left stick | Analog stick |
-| Right trigger | Z | D-pad | D-pad |
-| Left trigger / RB | R | Start | Start |
-| LB | L | Back | PC options overlay |
-
 **Rebinding:** *Key Bindings* in the options overlay rebinds the
-keyboard and mouse (one list: movement, then actions). Controller buttons are
-rebindable per controller under *Controller* (pick a player first): set *Layout presets* to
-*Custom*, select an action and press a pad button (tap B or Esc to cancel,
-hold B to bind B itself, hold Back to clear; Y clears the selected slot).
-Each action takes up to two buttons. Menus always keep A/X accept and B/Y
-cancel, so you can't lock yourself out. There is no warning yet when two
-actions share a button, and the Xbox release's "left stick aims the
+keyboard and mouse (one list: movement, then actions). The gamepad layout is
+fixed (Modern); the options menu shows it drawn on a pad. Menus always keep
+A/X accept and B/Y cancel. The Xbox release's "left stick aims the
 crosshair" and "D-pad copies the left stick" behaviors are not reproduced
 (here the right stick aims and the D-pad strafes, as on the N64).
 
@@ -94,7 +56,7 @@ level (with no gamepad connected, player 1 stays on the keyboard + mouse).
 Every device can use the menus, and a pad's Select opens the options overlay
 even when the pad is not the one playing, so the type can be changed from the
 pad alone. A gamepad player can also pick *Controller*: *Auto* (the
-first free one) or a specific connected pad. *Mode* (Enhanced or Original) and the rows that follow depend on the
+first free one) or a specific connected pad. The rows that follow depend on the
 chosen type; the key bindings are a sub-menu of player 1's page.
 
 **Split-screen:** pick Multiplayer from the main menu. With *Auto*: one

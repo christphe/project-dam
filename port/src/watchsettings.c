@@ -27,7 +27,6 @@ extern u16 musicTrack1GetVolume(void);
 extern u16 get_mTrack2Vol(void);
 extern void fileBuildWriteNewSave(u32 folder);
 extern void set_cur_player_look_vertical_inverted(u32 value);
-extern int inputControlScheme(int seat);   /* D513, per player: 0 Enhanced, 1 Original, 2 Modern */
 extern int inputPadLookInvert(void);   /* D645 */
 extern void inputSetPadLookInvert(int v);
 extern void cur_player_set_aim_control(u32 value);
@@ -641,30 +640,9 @@ void watchSettingsGameTick(void)
      * those paths). Pin it to its factory value (0, as a blank profile has
      * it) so a value saved by an older build or set via the in-game watch
      * menu cannot silently flip the pad stick on the game's pitch path.
-     * #145 (v0.6.0): in the Original scheme the pin is LIFTED -- the game
-     * honours the setting in bondview2's stick-pitch path
-     * (moveData.invertPitch), so the in-game watch "Look up/down" row is
-     * the player's live control again, exactly as on the N64. RAM only;
-     * one int compare per tick. */
-    if (stageActive() && g_CurrentPlayer && inputControlScheme(get_cur_playernum()) != 1 &&
-        get_cur_player_look_vertical_inverted() != 0)
+     * RAM only; one int compare per tick. */
+    if (stageActive() && g_CurrentPlayer && get_cur_player_look_vertical_inverted() != 0)
         set_cur_player_look_vertical_inverted(0);
-    /* D645 (#145): in Original the F10 "Invert look" row and the watch
-     * "Look up/down" row are one setting. Whichever changed since the last
-     * tick wins; the game then applies it natively (C-buttons and the
-     * aim-mode stick), as on the N64. */
-    static int lastRow = -1, lastGame = -1;
-    if (!stageActive()) lastRow = -1;   /* re-sync on each stage entry */
-    if (stageActive() && g_CurrentPlayer && inputControlScheme(get_cur_playernum()) == 1) {
-        int row = inputPadLookInvert(), game = get_cur_player_look_vertical_inverted() ? 1 : 0;
-        if (lastRow < 0) {   /* stage entry: the F10 row (edited in the front end) wins */
-            if (row != game) set_cur_player_look_vertical_inverted(row);
-        } else if (row != lastRow && row != game) set_cur_player_look_vertical_inverted(row);
-        else if (game != lastGame && game != row) inputSetPadLookInvert(game);
-        lastRow = inputPadLookInvert();
-        lastGame = get_cur_player_look_vertical_inverted() ? 1 : 0;
-    }
-
     if (!stageActive() || !g_CurrentPlayer) {
         wsStageWasActive = 0;
         if (!stageActive()) wsLookAheadChecked = 0;

@@ -385,14 +385,8 @@ void drawCrosshairPreview(ImDrawList* dl, float x, float y, float w, float h, fl
 /* the gamepad drawn with what each button does in the chosen layout: the left half's labels on the left, the right half's on the right */
 void drawDiagram(ImDrawList* dl, const Control& c, float x, float y, float w, float u) {
     if (c.widget == "crosshair") { drawCrosshairPreview(dl, x, y, w, 16.0f * u, u); return; }
-    auto fit = g_model.byId.find(c.follows);
-    if (fit == g_model.byId.end()) return;
-    const Control& f = *fit->second;
-    const int k = (int)g_state.get(f.id);
-    if (k < 0 || k >= (int)f.options.size()) return;
-    auto lit = c.layouts.find(f.options[k].id);
-    if (lit == c.layouts.end()) return;
-    const auto& L = lit->second;
+    if (c.layouts.empty()) return;
+    const auto& L = c.layouts.begin()->second;   /* the one layout of the diagram */
     const float pw = 30.0f * u, ph = g_padAspect > 0 ? pw / g_padAspect : 19.0f * u, px = x + (w - pw) * 0.5f + 3.0f * u, py = y + 3.5f * u;
     const float fs = 1.35f * u;
     const ImU32 ink = kInk, line = kRule;
