@@ -46,6 +46,10 @@ ge_add_test(test_defaults    test_defaults.c ${GE_TEST_PLATFORM})
 
 # The first-launch GPU benchmark's decision (port/src/gpuprobe.c): pure, no core.
 ge_add_pure_test(test_gpuprobe test_gpuprobe.c ${CMAKE_SOURCE_DIR}/port/src/gpuprobe.c)
+# The labels reader (port/src/labels.c): the asset stack is stubbed in the test.
+ge_add_pure_test(test_labels test_labels.c ${CMAKE_SOURCE_DIR}/port/src/labels.c)
+target_compile_definitions(test_labels PRIVATE LABELS_PURE_TEST)
+target_include_directories(test_labels PRIVATE "${CMAKE_SOURCE_DIR}/port/include" "${CMAKE_SOURCE_DIR}/port/assets")
 # CONSOLE mode precedence (port/include/console.h, header-only): pure, no core.
 ge_add_pure_test(test_console test_console.c)
 

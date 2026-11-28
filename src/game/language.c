@@ -8,6 +8,9 @@
 /* D50: language banks carry a big-endian offset table; decode it in place
  * after each load (see romdataFixupLangBank). */
 #include "romdata.h"
+#include "labels.h"
+#include <string.h>
+static void langLabelsCheck(int bank);
 #ifdef PORT
 #include "envflag.h"   /* cached getenv for hot-path probes */
 #include "system.h"   /* sysLogPrintf: D582 / D602 one-shot diagnostics */
@@ -290,6 +293,8 @@ void langInit(void) {
     langFixupLoadedBank(LnameX_lookuptable[LMPWEAPONS][j_text_trigger], PORT_N64PTR(void, g_LangBanks[LMPWEAPONS]));
     langFixupLoadedBank(LnameX_lookuptable[LOPTIONS][j_text_trigger], PORT_N64PTR(void, g_LangBanks[LOPTIONS]));
     langFixupLoadedBank(LnameX_lookuptable[LMISC][j_text_trigger], PORT_N64PTR(void, g_LangBanks[LMISC]));
+    { static const int permBanks[] = { LGUN, LTITLE, LMPMENU, LPROPOBJ, LMPWEAPONS, LOPTIONS, LMISC }; int k;
+      for (k = 0; k < 7; k++) langLabelsCheck(permBanks[k]); }
 #endif
 }
 
@@ -398,6 +403,7 @@ void langLoadToAddr(u32 id)
     g_LangBanks[id] = _fileNameLoadToBank(LnameX_lookuptable[id][j_text_trigger],1,0x100,MEMPOOL_STAGE);
 #ifdef PORT
     langFixupLoadedBank(LnameX_lookuptable[id][j_text_trigger], PORT_N64PTR(void, g_LangBanks[id]));
+    langLabelsCheck((int)id);
 #endif
 }
 
@@ -407,6 +413,7 @@ void langLoadToBank(int id,u8 *target,int size)
     g_LangBanks[id] = _fileNameLoadToAddr(LnameX_lookuptable[id][j_text_trigger],1,target,size);
 #ifdef PORT
     langFixupLoadedBank(LnameX_lookuptable[id][j_text_trigger], PORT_N64PTR(void, g_LangBanks[id]));
+    langLabelsCheck((int)id);
 #endif
 }
 
@@ -420,7 +427,27 @@ void langClearBank(s32 textBank) {
  * @param slotID: UniqueID of string (a combination of Bank ID and string index)
  * @return char* string.
  */
+#ifdef PORT
+static u8 * langGetRom(s32 slotID);
+
+/* The text comes from the asset-pack stack (labels/text_<lang>.json, port/src/labels.c); GE_ROM_LABELS=1 keeps the ROM's banks.
+ * An id the pack lacks while the loaded bank has it is a gap in the pack: a visible placeholder and one log line. */
 u8 * langGet(s32 slotID)
+{
+    if (labelsActive() && (u32)slotID < (45u << 10)) {
+        const u8 *s = labelsGet((unsigned)slotID);
+        if (s) {
+            return (u8 *)s;
+        }
+        return langGetRom(slotID) ? (u8 *)labelsMissing((unsigned)slotID) : NULL;
+    }
+    return langGetRom(slotID);
+}
+
+static u8 * langGetRom(s32 slotID)
+#else
+u8 * langGet(s32 slotID)
+#endif
 {
 #ifdef PORT
     /* D129: guard an out-of-range language slot id. `slotID >> 10` indexes
@@ -476,3 +503,26 @@ u8 * langGet(s32 slotID)
     #endif
     return (textslot_offset != 0) ? (u8*)output_slot : NULL;
 }
+
+#ifdef PORT
+/* GE_LABELS_CHECK: compare the bank just loaded with the pack's strings and log the counts (dev probe). */
+static void langLabelsCheck(int bank)
+{
+    int same = 0, diff = 0, romOnly = 0, packOnly = 0, i;
+    static int total[4];
+    if (!labelsCheckEnabled() || !labelsActive() || bank < 0 || bank >= 45) return;
+    for (i = 0; i < 1024; i++) {
+        s32 id = (bank << 10) | i;
+        const u8 *rom = langGetRom(id);
+        const u8 *pk = labelsGet((unsigned)id);
+        if (rom && pk) {
+            if (strcmp((const char *)rom, (const char *)pk) == 0) same++;
+            else { diff++; sysLogPrintf(LOG_WARNING, "labels check: id 0x%04X differs", (unsigned)id); }
+        } else if (rom) { romOnly++; sysLogPrintf(LOG_WARNING, "labels check: id 0x%04X only in the ROM", (unsigned)id); }
+        else if (pk) { packOnly++; }
+    }
+    total[0] += same; total[1] += diff; total[2] += romOnly; total[3] += packOnly;
+    sysLogPrintf(LOG_NOTE, "labels check: bank %d: %d same, %d differ, %d only ROM, %d only pack (running: %d same, %d differ, %d only ROM, %d only pack)",
+                 bank, same, diff, romOnly, packOnly, total[0], total[1], total[2], total[3]);
+}
+#endif

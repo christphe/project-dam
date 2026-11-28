@@ -45,6 +45,8 @@ state you want to look at. Commands go through [dev.py](dev-py.md).
 | `GE_STARTWEAPON=N` | Start with that item (8 = KF7). |
 | `GE_INPUTSCRIPT="frame:BUTTONS;..."` | Scripted input for player 1 (`GE_INPUTSCRIPT_P1..P3` for the others), counted in controller reads: `120:START;180:A`, or `300:ZHOLD` to hold fire from 300. Token list: the header of `port/src/input_script.c`. |
 | `GE_MENUGOTO=tab,entry[,focus]` | Open the options menu on that page ([options-menu.md](options-menu.md)). |
+| `GE_ROM_LABELS=1` | Read the game's text from the ROM's language banks instead of the asset packs' `labels/text_<lang>.json` (A/B runs; `port/src/labels.c`). |
+| `GE_LABELS_CHECK=1` | Compare every language bank the game loads with the pack's strings and log `labels check:` lines with the counts (same / differ / only ROM / only pack). |
 
 Every `GE_*` probe, with its file and status: `docs/dev/GE-ENV-PROBES.md`. `python
 tools_pc/gen_env_probes.py` reports the probes it misses and today's file:line of each one.
