@@ -105,7 +105,7 @@ is none), a checkbox that enables the pack (it goes last) or disables it, and
 up / down arrows that move it (disabled for a disabled pack and at the ends of
 the enabled ones). With no pack the menu says so. On a pad Up / Down move between
 rows, Left / Right pick the checkbox or an arrow, A does it. These edits only
-change a pending list, the rows show it, and nothing is applied or saved. **Apply** (disabled while the pending list equals the one in use) gives
+change a pending list, the rows show it, and nothing is applied or saved. **Apply** and **Discard changes** sit side by side on one row under the list. **Apply** (disabled while the pending list equals the one in use) gives
 the list to the readers once, which reload, and saves the config once, also
 during a mission. **Discard changes** (same rule) resets the pending list to the
 one in use. Leaving the menu drops pending edits silently, without asking.

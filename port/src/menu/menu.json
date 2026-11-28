@@ -43,12 +43,7 @@
       ] },
       { "name": "Asset packs", "controls": [
         { "id": "packs", "type": "packlist",
-          "help": "Replacement textures and other assets: the .passets files in the assetpacks folder next to the game. Tick a pack to use it. The ticked packs are numbered: where two have the same texture, the lower number wins. The arrows change the order. The mod's own assets always win. Nothing changes until you choose Apply." },
-        { "id": "packdirty", "key": "__AssetPackDirty", "label": "Changed", "type": "toggle", "show": "false" },
-        { "id": "packapply", "key": "__AssetPackApply", "label": "Apply", "type": "action", "disabled": "!packdirty",
-          "help": "Use the packs as listed now and save them. Leaving the menu without applying drops the changes." },
-        { "id": "packdiscard", "key": "__AssetPackDiscard", "label": "Discard changes", "type": "action", "disabled": "!packdirty",
-          "help": "Go back to the packs in use." }
+          "help": "Replacement textures and other assets: the .passets files in the assetpacks folder next to the game. Tick a pack to use it. The ticked packs are numbered: where two have the same texture, the lower number wins. The arrows change the order. The mod's own assets always win. Nothing changes until you choose Apply." }
       ] },
       { "name": "Performance", "show": "platform == 'pc' || dev", "controls": [
         { "id": "msaaHandheld", "key": "Video.MSAAHandheld", "label": "Anti-aliasing (handheld)", "type": "slider", "dev": "switch",

@@ -98,7 +98,7 @@ the `packlist` control is one row per pack (title, author faded under it, a chec
 game feeds it through `menu::setPackList` (`optionsMenuAssetPackRows` / `optionsMenuAssetPackAct`). The pad moves
 between rows with Up / Down, picks the checkbox or an arrow with Left / Right, and A does it. The edits go to a
 pending list in `optionsoverlay.c`; nothing is applied until the action `__AssetPackApply` (`texpackSetPacks` once, then `configSave`). It and `__AssetPackDiscard` are disabled
-while the hidden toggle `__AssetPackDirty` (pending differs from `texpackPacks()`) is off. Leaving the
+while `__AssetPackDirty` (a value the control reads, pending differs from `texpackPacks()`) is off. The two buttons are the last row of the `packlist` control, side by side (Left / Right on the pad). Leaving the
 menu drops pending edits (`optionsMenuAssetPackDiscard`). The list is
 stored in `Video.AssetPacks` (`port/src/texpack.c`, `docs/specs/asset-packs.md`).
 

@@ -322,11 +322,10 @@ void startCapture(const Control& c, int slot) {
 
 /* The asset packs, one row each: "1. Title" with the author under it (faded), then the checkbox and the two arrows on the
  * right. A row is taller when it has an author line. */
-float packRowH(int i, float u) { return (g_packs[i].author.empty() ? 4.2f : 5.6f) * u; }
+float packRowH(int i, float u) { return i >= (int)g_packs.size() ? 4.4f * u : (g_packs[i].author.empty() ? 4.2f : 5.6f) * u; }   /* i == the count: the Apply / Discard row */
 float packListH(float u) {
-    if (g_packs.empty()) return 4.6f * u;
-    float h = 0.4f * u;
-    for (size_t i = 0; i < g_packs.size(); i++) h += packRowH((int)i, u);
+    float h = 0.4f * u + (g_packs.empty() ? 4.6f * u : 0.0f);
+    for (size_t i = 0; i <= g_packs.size(); i++) h += packRowH((int)i, u);
     return h;
 }
 bool packCanMove(int i, int dir) {
@@ -344,12 +343,12 @@ void packDo(int row, int what) {
 }
 
 void drawPackList(ImDrawList* dl, const Control& c, int fi, float x, float y, float w, float u) {
-    if (g_packs.empty()) {
-        text(dl, g_body, 1.6f * u, ImVec2(x + 1.2f * u, y + (4.6f * u - 1.6f * u) * 0.5f), kMut, tr("No asset packs in the assetpacks folder").c_str());
-        return;
-    }
     const float bs = 2.8f * u, cb = 2.1f * u;
     float ry = y + 0.2f * u;
+    if (g_packs.empty()) {
+        text(dl, g_body, 1.6f * u, ImVec2(x + 1.2f * u, y + (4.6f * u - 1.6f * u) * 0.5f), kMut, tr("No asset packs in the assetpacks folder").c_str());
+        ry += 4.6f * u;
+    }
     int num = 0;
     for (int i = 0; i < (int)g_packs.size(); i++) {
         const PackRow p = g_packs[i];   /* a copy: an action below replaces the list */
@@ -387,6 +386,31 @@ void drawPackList(ImDrawList* dl, const Control& c, int fi, float x, float y, fl
         text(dl, g_head, th, ImVec2(tx, ty), p.on ? kInk : kMut, title.c_str());
         if (!p.author.empty()) text(dl, g_body, ah, ImVec2(tx, ty + th + 0.5f * u), kMut, (tr("by") + " " + p.author).c_str());
         ry += rh;
+    }
+    {   /* Apply and Discard changes, side by side under the list: only while something is pending */
+        double dirtyV = 0;
+        const bool dirty = g_bindGet && g_bindGet("__AssetPackDirty", &dirtyV) && dirtyV != 0;
+        const int n = (int)g_packs.size();
+        const float rh = packRowH(n, u), bh = 3.1f * u, by = ry + (rh - bh) * 0.5f;
+        const bool rowFocus = g_focus == fi && g_packRow == n;
+        const char* const labels[2] = { "Apply", "Discard changes" };
+        const char* const keys[2] = { "__AssetPackApply", "__AssetPackDiscard" };
+        float bx = x + 1.2f * u;
+        for (int b = 0; b < 2; b++) {
+            const std::string lab = tr(labels[b]);
+            const float bw = maxf(14.0f * u, textSize(g_head, 1.55f * u, lab.c_str()).x + 3.0f * u);
+            char id[64];
+            snprintf(id, sizeof id, "##%s_b%d", c.id.c_str(), b);
+            if (hit(id, ImVec2(bx, by), ImVec2(bw, bh)) && dirty) {
+                g_focus = fi; g_packRow = n; g_packCol = b;
+                if (g_actionHandler) g_actionHandler(keys[b]);
+                return;
+            }
+            box(dl, ImVec2(bx, by), ImVec2(bx + bw, by + bh), IM_COL32(21, 22, 15, 255), kRule);
+            textCenter(dl, g_head, 1.55f * u, ImVec2(bx, by), ImVec2(bx + bw, by + bh), dirty ? kInk : kDisabled, lab.c_str());
+            if (rowFocus && g_packCol == b && dirty) focusFrame(dl, ImVec2(bx, by), ImVec2(bx + bw, by + bh), u);
+            bx += bw + 1.0f * u;
+        }
     }
 }
 
@@ -975,7 +999,7 @@ void draw(float W, float H) {
             }
 
     if (g_packRows) g_packRows(&g_packs);
-    if (g_packRow >= (int)g_packs.size()) g_packRow = (int)g_packs.size() - 1;
+    if (g_packRow > (int)g_packs.size()) g_packRow = (int)g_packs.size();   /* the last row is the buttons */
     if (g_packRow < 0) g_packRow = 0;
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -1111,18 +1135,24 @@ void draw(float W, float H) {
             const int nPacks = (int)g_packs.size();
             if (up) {
                 if (inPacks && g_packRow > 0) g_packRow--;
-                else if (g_focus > 0) { g_focus--; if (vis.controls[g_focus]->type == CT_PACKLIST) g_packRow = nPacks > 0 ? nPacks - 1 : 0; }
+                else if (g_focus > 0) { g_focus--; if (vis.controls[g_focus]->type == CT_PACKLIST) g_packRow = nPacks; }
             }
             if (down) {
-                if (inPacks && g_packRow < nPacks - 1) g_packRow++;
+                if (inPacks && g_packRow < nPacks) g_packRow++;
                 else if (g_focus < (int)vis.controls.size() - 1) { g_focus++; if (vis.controls[g_focus]->type == CT_PACKLIST) g_packRow = 0; }
             }
             const Control& c = *vis.controls[g_focus];
             const bool dis = controlDisabled(c, g_model, g_state);
             if (c.type == CT_PACKLIST) {   /* Left / Right pick the checkbox or an arrow of the row, A does it */
+                const int maxCol = g_packRow == nPacks ? 1 : 2;   /* the buttons row has two */
                 if (left && g_packCol > 0) g_packCol--;
-                if (right && g_packCol < 2) g_packCol++;
-                if (ok && nPacks > 0) packDo(g_packRow, g_packCol);
+                if (right && g_packCol < maxCol) g_packCol++;
+                if (g_packCol > maxCol) g_packCol = maxCol;
+                if (ok) {
+                    double dv = 0;
+                    if (g_packRow < nPacks) packDo(g_packRow, g_packCol);
+                    else if (g_bindGet && g_bindGet("__AssetPackDirty", &dv) && dv != 0 && g_actionHandler) g_actionHandler(g_packCol == 0 ? "__AssetPackApply" : "__AssetPackDiscard");
+                }
             } else if (!dis && c.type == CT_BIND) {
                 if (left) g_slotSel = 0;
                 if (right) g_slotSel = 1;
@@ -1218,8 +1248,8 @@ void draw(float W, float H) {
         }
         if (g_focus >= 0 && g_focus < (int)rows.size()) {   /* keep the focused row in view: the only thing that moves the scroll */
             float rt = rows[g_focus].y, rb = rt + rows[g_focus].h;
-            if (vis.controls[g_focus]->type == CT_PACKLIST && g_packRow < (int)g_packs.size()) {   /* follow the row, not the whole list */
-                float o = 0.2f * u;
+            if (vis.controls[g_focus]->type == CT_PACKLIST) {   /* follow the row, not the whole list */
+                float o = 0.2f * u + (g_packs.empty() ? 4.6f * u : 0.0f);
                 for (int k = 0; k < g_packRow; k++) o += packRowH(k, u);
                 rt = rows[g_focus].y + o;
                 rb = rt + packRowH(g_packRow, u);
