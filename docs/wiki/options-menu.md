@@ -89,14 +89,18 @@ The `key` decides it:
 |---|---|---|
 | `Video.*`, `Input.*`, `Game.*`, `Audio.*` | `ge007.ini` (`config.c`) | the row table in `optionsoverlay.c` (`rowByKey`) |
 | `Bond.*` | the selected save file (the game's watch settings, per profile) | `watchsettings.c` |
-| `__Name` (value) | computed: `__DisplayMode`, `__Resolution`, `__BondFile`, `__AssetPackSel`, `__AssetPackOn`, `Audio.Device` | `optionsMenuGet` / `optionsMenuSet` |
+| `__Name` (value) | computed: `__DisplayMode`, `__Resolution`, `__BondFile`, `__AssetPackSel`, `__AssetPackOn`, `__AssetPackDirty`, `Audio.Device` | `optionsMenuGet` / `optionsMenuSet` |
 | `__Name` (action) | — | `optionsMenuAction` (`__QuitToDesktop`, `__RestartGame`, `__UpdateCheck`, `__AssignDevices`, `__ResetBindings`…) |
 
 Lists only the game knows (resolutions, audio devices, asset packs) are filled at run time with
 `menu::setOptionLabels`. The asset packs are a list the player orders with plain controls:
 `__AssetPackSel` is the highlighted row (the enabled packs first, numbered in their order, then the
 others), `__AssetPackOn` enables or disables it, and the actions `__AssetPackUp` / `__AssetPackDown`
-move it; `menuRefreshAssetPacks` (`menu_game.cpp`) rebuilds the labels after each change. The list is
+move it. These edit a pending list in `optionsoverlay.c`; nothing is applied until the action
+`__AssetPackApply` (`texpackSetPacks` once, then `configSave`). It and `__AssetPackDiscard` are disabled
+while the hidden toggle `__AssetPackDirty` (pending differs from `texpackPacks()`) is off. Leaving the
+menu drops pending edits (`optionsMenuAssetPackDiscard`). `menuRefreshAssetPacks` (`menu_game.cpp`)
+rebuilds the labels after each change. The list is
 stored in `Video.AssetPacks` (`port/src/texpack.c`, `docs/specs/asset-packs.md`).
 
 ## Defaults and the ini
