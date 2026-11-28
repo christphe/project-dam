@@ -27,6 +27,7 @@
 #include "texpack.h"
 #include "ge_texpacks.h"
 #include "ge_assetstack.h"
+#include "ge_pkg.h"
 #include "ge_png.h"
 
 #define REG_SIZE 16384            /* registered textures kept; cleared when full */
@@ -181,6 +182,48 @@ void texpackInit(void)
 }
 
 const char *texpackPacks(void) { return s_inUse; }
+
+/* A path inside a pack: no "..", no drive, no leading slash. */
+static int relOk(const char *rel)
+{
+    if (!rel || !rel[0] || rel[0] == '/' || rel[0] == '\\' || strchr(rel, ':')) return 0;
+    for (const char *p = rel; *p; p++)
+        if (p[0] == '.' && p[1] == '.' && (p == rel || p[-1] == '/' || p[-1] == '\\')) return 0;
+    return 1;
+}
+
+int assetRead(const char *rel, unsigned char **out, unsigned long *len, int *from)
+{
+    char path[1400];
+    uint8_t *buf = NULL;
+    size_t n = 0;
+    *out = NULL; *len = 0;
+    if (from) *from = ASSET_FROM_NONE;
+    if (!relOk(rel)) return 0;
+    if (s_modDir[0]) {
+        snprintf(path, sizeof path, "%s/%s", s_modDir, rel);
+        if (pkgReadFile(path, &buf, &n)) { *out = buf; *len = (unsigned long)n; if (from) *from = ASSET_FROM_MOD; return 1; }
+    }
+    for (int i = 0; i < assetStackCount(s_stack); i++) {
+        if (!assetStackOpened(s_stack, i)) continue;
+        snprintf(path, sizeof path, "%s/%s", assetStackRoot(s_stack, i), rel);
+        if (pkgReadFile(path, &buf, &n)) { *out = buf; *len = (unsigned long)n; if (from) *from = i; return 1; }
+    }
+    return 0;
+}
+
+int assetHas(const char *rel)
+{
+    char path[1400];
+    if (!relOk(rel)) return 0;
+    if (s_modDir[0]) { snprintf(path, sizeof path, "%s/%s", s_modDir, rel); if (pkgExists(path)) return 1; }
+    for (int i = 0; i < assetStackCount(s_stack); i++) {
+        if (!assetStackOpened(s_stack, i)) continue;
+        snprintf(path, sizeof path, "%s/%s", assetStackRoot(s_stack, i), rel);
+        if (pkgExists(path)) return 1;
+    }
+    return 0;
+}
 
 void texpackPackWritten(const char *file, int add)
 {

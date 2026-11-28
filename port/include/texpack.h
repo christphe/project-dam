@@ -30,6 +30,13 @@ void texpackSetMod(const char *dir);
 /* The packs in assetpacks/ and texturepacks/ (sorted file names, display names), for the menu. Returns how many (up to max). */
 int texpackListPacks(char (*files)[128], char (*names)[64], int max);
 
+/* Any file of the asset packs by its path inside a pack ("labels/text_en.json", "sounds/sfx/sfx.json"): the active mod's
+ * first, then the enabled packs in order (docs/specs/asset-packs.md). *out and *len: the bytes; `from` (may be
+ * NULL) gets -2 for the mod or the pack's position. Free *out with pkgFree (ge_pkg.h). 1 when found. Game thread only (it reads through the package layer). */
+int assetRead(const char *rel, unsigned char **out, unsigned long *len, int *from);
+/* 1 when some pack or the mod has that file. */
+int assetHas(const char *rel);
+
 void texpackRegister(const void *data, int texnum, int bytes);   /* texLoad: texture `texnum` unpacked at `data`, `bytes` long */
 
 /* 0 when the pack has no picture for the texture holding `addr`, else a value for fast3d's cache key (changes with the pack
