@@ -156,6 +156,22 @@ unsigned fontsBuildLatin(const char *json, unsigned long jlen, const char *key, 
     return pos;
 }
 
+/* The block of a font with no ink: all 94 glyphs have zero width and height (nothing drawn; every glyph still advances by
+ * the one-pixel gap, a space by 5), the line height kept by giving the glyph of '|' (record 91) top = `line`. `size` bytes,
+ * as the engine expects (the ROM's block size). Returns `size`, 0 when it is too small. */
+unsigned fontsBuildEmptyLatin(unsigned char *dst, unsigned size, int line)
+{
+    int i;
+    if (size < PIX_START + 8) return 0;
+    memset(dst, 0, size);
+    for (i = 0; i < NGLYPHS; i++) {
+        unsigned char *r = dst + 4 * KERN_N + 24 * i;
+        be32(r, i); be32(r + 20, (int)PIX_START);   /* the pixels point at zeros inside the block */
+    }
+    be32(dst + 4 * KERN_N + 24 * 91 + 4, line);
+    return size;
+}
+
 void fontsCompareLatin(const unsigned char *a, const unsigned char *b, unsigned n, unsigned *compared, unsigned *diffs)
 {
     unsigned c = 0, d = 0;

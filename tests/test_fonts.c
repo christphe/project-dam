@@ -84,6 +84,21 @@ int main(void)
         atlas[6 * CW] = keep;
     }
 
+    /* an empty font: zero-size glyphs, the line height kept in the glyph of '|', and the rest of the block zero */
+    {
+        const unsigned char *r;
+        GE_CHECK_EQ_INT((int)fontsBuildEmptyLatin(blk2, 100, 13), 0);   /* too small */
+        GE_CHECK_EQ_INT((int)fontsBuildEmptyLatin(blk2, 9392, 13), 9392);
+        r = blk2 + 676 + 24 * 91;
+        GE_CHECK_EQ_INT((int)be(r + 4) + (int)be(r + 8), 13);   /* top + height = the line height */
+        r = blk2 + 676 + 24 * 40;
+        GE_CHECK_EQ_INT((int)be(r + 8), 0);                      /* height */
+        GE_CHECK_EQ_INT((int)be(r + 12), 0);                     /* width */
+        GE_CHECK_EQ_INT((int)be(r + 20), 0xB80);                 /* the pixels point inside the block */
+        fontsCompareLatin(blk2, blk2, 9392, &c, &d);
+        GE_CHECK_EQ_INT((int)d, 0);
+    }
+
     /* Japanese: slot 2k level (k % 4), slot 2k+1 level 3 - (k % 4) at pixel (px) = row + px, clamped */
     for (i = 0; i < 64; i++) {
         int x0 = (i % 32) * 16, y0 = (i / 32) * 12, r, p;

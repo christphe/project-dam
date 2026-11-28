@@ -108,7 +108,7 @@ static unsigned s_fontGen;      /* assetStackGen() the fonts were built from */
 static u32 s_fontPcSize[2];     /* bytes allocated for each Latin font: a reload happens in place and must fit */
 
 /* One Latin font in the PC layout, filled into `f` (`cap` bytes, 0 = size it and allocate). The N64-layout block comes
- * from the asset stack (fontsLatinBlock), else from the ROM segment; romdataFixupFont re-lays it out either way.
+ * from the asset stack (fontsLatinBlock), else an empty font; from the ROM segment only with GE_ROM_FONTS=1; romdataFixupFont re-lays it out either way.
  * pixeldata is left as an offset from the font base (the caller adds the base). GE_FONTS_CHECK=1 (dev) compares the pack
  * with the ROM, once. Returns the font, NULL when a reload does not fit. */
 static struct font *loadLatinFont(int which, void *romStart, u32 n64len, struct font *f, u32 cap)
@@ -119,8 +119,13 @@ static struct font *loadLatinFont(int which, void *romStart, u32 n64len, struct 
     u32 pcsize;
 
     if (n && n != n64len) {
-        sysLogPrintf(LOG_WARNING, "fonts: the pack's %s font is %u bytes, the ROM's %u: reading the ROM", which ? "large" : "small", n, (unsigned)n64len);
+        sysLogPrintf(LOG_WARNING, "fonts: the pack's %s font is %u bytes, the engine expects %u", which ? "large" : "small", n, (unsigned)n64len);
         n = 0;
+    }
+    if (!n && blk && !fontsRomOnly()) {
+        /* no font in any pack or mod: an empty one (no ink, the line height kept), the ROM is not read (GE_ROM_FONTS=1 reads it) */
+        sysLogPrintf(LOG_WARNING, "fonts: no %s font in any pack or mod: nothing is drawn with it", which ? "large" : "small");
+        n = fontsBuildEmptyLatin(blk, n64len, which ? 15 : 13);
     }
     if (fontsCheckEnabled() && !checked[which]) {
         u8 *rom = (u8 *)malloc(n64len);
