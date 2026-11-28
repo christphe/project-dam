@@ -1,0 +1,11 @@
+local function rec(k, v) message(k .. '=' .. tostring(v)) end
+hud.hide(true); hud.hide(false); countdown.set(5)
+rec('left', countdown.left()); rec('alarm', alarm.is_on()); rec('exiting', mission.exiting())
+rec('armour', player(0):armour()); rec('destroyed', tag(7):is_destroyed()); rec('room', chr(9):in_room_of(1))
+rec('pir', tostring(player_in_room(1))); rec('state', door(5):state())
+tag(7):set_invincible(true); chr(9):set_invincible(true); objectives.fail_all()
+tag(7):set_active(true); tag(7):set_damage('none'); tag(7):set_hidden(true); tag(7):same_room_as(player(0)); door(5):set_usable_by_guards(true)
+rec('facing', player(0):facing()); local sx, sy, sz = player(0):eye(); rec('eye', tostring(sx) .. tostring(sy) .. tostring(sz))
+rec('health', player(0):health()); player(0):kill(); rec('gobj', give_object(tag(7))); rec('iir', item_in_room(3, 12))
+explosions_around_players(true); mission.killed_in_action(); rec('players', mission.players())
+rec('done', 1)

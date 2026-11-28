@@ -48,6 +48,9 @@ add_library(ge_mission STATIC
   "${CMAKE_SOURCE_DIR}/port/mission/mission_dir.c"
   "${CMAKE_SOURCE_DIR}/port/mission/mission_thumb.c"
   "${CMAKE_SOURCE_DIR}/port/mission/mission_lua.cpp"
+  "${CMAKE_SOURCE_DIR}/port/mission/mission_lua_guard.cpp"
+  "${CMAKE_SOURCE_DIR}/port/mission/mission_lua_world.cpp"
+  "${CMAKE_SOURCE_DIR}/port/mission/mission_lua_cinema.cpp"
   "${GE_MISSION_LIB_C}"
   ${GE_LUAU_SRC}
 )

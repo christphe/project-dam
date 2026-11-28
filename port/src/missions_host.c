@@ -36,6 +36,7 @@
 #include "mission.h"
 #include "mission_apply.h"
 #include "mission_lua.h"
+#include "mission_host_guard.h"
 #include "missions.h"
 #include "missions_priv.h"
 #include "joy.h"   /* joyGetButtonsPressedThisFrame: guard use, as the co-op revive */
@@ -83,7 +84,14 @@ void missionsHostReset(void)
     s_nprop = 0;
     s_setupKey = NULL;
     s_winSent = 0;
+    missionsHostGuardReset();
+    missionsHostWorldReset();
+    missionsHostCinemaReset();
 }
+
+/* #165: what the campaign API's domains share (missions_priv.h). */
+int missionsHostPropCount(void) { return s_nprop; }
+void *missionsHostPropRec(int prop) { return (prop >= 0 && prop < s_nprop) ? (void *)s_prop[prop] : NULL; }
 
 /* ---- callbacks ------------------------------------------------------------ */
 
@@ -1016,6 +1024,62 @@ static void hWin(void *ud)
     missionRtEnd(s_rt, 1);
 }
 
+/* text(id) (#165): the game's own string through langGet (the loaded banks: the level's and the global ones), in the
+ * language the ROM plays. The final line break the game keeps on most lines is dropped; the caller lays text out. */
+static int hText(void *ud, int id, char *out, size_t outlen)
+{
+    const u8 *s;
+    size_t n = 0;
+    (void)ud;
+    if (!out || outlen < 2) return 0;
+    s = langGet(id);
+    if (!s) return 0;
+    while (s[n] && n + 1 < outlen) { out[n] = (char)s[n]; n++; }
+    while (n > 0 && out[n - 1] == '\n') n--;
+    out[n] = '\0';
+    return 1;
+}
+
+/* chr(n) / tag(n) (#165): a setup prop by the ids the setup itself uses. */
+static int hChrProp(void *ud, int chrnum)
+{
+    (void)ud;
+    for (int i = 0; i < s_nprop; i++)
+        if (s_prop[i]->type == PROPDEF_GUARD && ((GuardRecord *)s_prop[i])->chrnum == chrnum) return i;
+    return -1;
+}
+
+static int hPropChr(void *ud, int prop)
+{
+    (void)ud;
+    if (prop < 0 || prop >= s_nprop || s_prop[prop]->type != PROPDEF_GUARD) return -1;
+    return ((GuardRecord *)s_prop[prop])->chrnum;
+}
+
+/* missions_priv.h: fn runs with `player` as the current player (the game's per-player calls). */
+void missionsHostWithPlayer(int player, void (*fn)(void *), void *arg) { withPlayer(player, fn, arg); }
+
+/* missions_priv.h: a revivable setup guard lying down (the guard domain skips it, as the setup methods do). */
+int missionsHostGuardDown(int prop) { return guardDown(prop); }
+
+/* A mission pad's number from its string id: the guard domain knows the pad table (missions_host_guard.c). */
+static int hPadById(void *ud, const char *id)
+{
+    const MissionHostGuard *g = missionsHostGuard();
+    return (g && g->pad_by_id) ? g->pad_by_id(g->ud, id) : -1;
+}
+
+static int hTagProp(void *ud, int tag)
+{
+    ObjectRecord *o;
+    (void)ud;
+    o = objFindByTagId(tag);
+    if (!o) return -1;
+    for (int i = 0; i < s_nprop; i++)
+        if ((void *)s_prop[i] == (void *)o) return i;
+    return -1;
+}
+
 /* mission.fail(): the level ends as the game ends it when the player dies (bondview2.c: bossRunTitleStage), with no
  * end_of_mission_briefing(): no progress save, the objectives screen shows the mission as not completed. */
 static void hFail(void *ud)
@@ -1171,6 +1235,9 @@ static void startRuntime(void)
     host.guard_near_miss = hGuardNearMiss; host.guards_near = hGuardsNear; host.guard_hits = hGuardHits;
     host.guard_health = hGuardHealth; host.guard_set_health = hGuardSetHealth;
     host.guard_set_revivable = hGuardSetRevivable; host.guard_is_down = hGuardIsDown;
+    host.text = hText; host.chr_prop = hChrProp; host.tag_prop = hTagProp; host.prop_chr = hPropChr;
+    host.pad_by_id = hPadById;
+    host.guard_ext = missionsHostGuard(); host.world_ext = missionsHostWorld(); host.cinema_ext = missionsHostCinema();
     s_nkeepBody = 0;
     s_ngu = 0;
     s_nrev = 0;
@@ -1257,6 +1324,9 @@ void missionsFrameTick(void)
     missionRtTick(s_rt, dt);
     keepBodiesTick();
     objectiveLinesTick();
+    missionsHostGuardTick();
+    missionsHostWorldTick();
+    missionsHostCinemaTick();
 }
 
 /* The status the objective screens show. */

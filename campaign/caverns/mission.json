@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "name": "text:9C91",
+  "level": "caverns",
+  "description": "",
+  "briefing": "",
+  "level_ai": false,
+  "level_intro": false,
+  "scripts": [
+    {
+      "use": "caverns",
+      "target": {
+        "kind": "mission"
+      }
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+spawn(function()
+  local e = wait(event('anim_end', { chr = 7 }))
+  message('anim_end ' .. e.chr)
+end)
+on('guard_damaged', function(e) message('damaged ' .. e.chr .. ' ' .. tostring(e.prop)) end, { chr = 5001 })

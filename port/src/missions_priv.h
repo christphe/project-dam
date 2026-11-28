@@ -20,4 +20,24 @@ extern struct BriefingData *ptrbriefingdata;   /* front.c */
 int  missionsKeepLevelObjectives(void);   /* missions_ui.c: the mission keeps the level's briefing, objectives and exit */
 void missionsHostReset(void);          /* missions_host.c: drop the running scripts */
 
+/* #165, the campaign API's domains (port/mission/mission_lua_ext.h): missions_host_<domain>.c fill these in. */
+struct MissionHostGuard; struct MissionHostWorld; struct MissionHostCinema;
+const struct MissionHostGuard  *missionsHostGuard(void);
+const struct MissionHostWorld  *missionsHostWorld(void);
+const struct MissionHostCinema *missionsHostCinema(void);
+/* missions_host.c helpers the domains share (setup props of the running level, run with a player current). */
+int   missionsHostPropCount(void);
+void *missionsHostPropRec(int prop);      /* PropDefHeaderRecord * of setup prop `prop`, NULL: none */
+void  missionsHostWithPlayer(int player, void (*fn)(void *), void *arg);
+/* Per-tick hooks of the domains, called from the runtime tick (after the scripts ran); NULL-safe to leave empty. */
+void  missionsHostGuardTick(void);
+void  missionsHostWorldTick(void);
+void  missionsHostCinemaTick(void);
+/* #165 second pass, shared between the domains */
+int   missionsHostSceneActive(void);       /* missions_host_cinema.c: a cinema.begin scene is running (guards are blind) */
+int   missionsHostGuardDown(int prop);     /* missions_host.c: a revivable setup guard lies down (no order reaches it) */
+void  missionsHostGuardReset(void);       /* a level starts or the runtime stops: each domain drops its state */
+void  missionsHostWorldReset(void);
+void  missionsHostCinemaReset(void);
+
 #endif

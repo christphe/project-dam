@@ -25,6 +25,11 @@ Install
 Settings, saves and logs live in switch/project-dam/data/ (ge007.ini,
 ge007.eep, ge007.log; ge007-crash.log after a crash).
 
+The solo campaign rewritten as Luau scripts ships as a mod:
+switch/project-dam/mods/campaign.pmod (copied with step 1). Pick it on the
+Mods screen to play the campaign on the mission scripts instead of the
+original level logic; the original campaign stays as it is.
+
 Controls
 --------
 The buttons follow the labels on the controllers. Hold ZL to aim; in aim

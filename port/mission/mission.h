@@ -58,7 +58,15 @@
  *   "keep_level_objectives": false,               optional: true = the level keeps its own briefing, objectives and end of
  *                                                 mission; this mission's "objectives" (and objectives.add) come after the level's
  *                                                 and must be complete too before the level's exit ends the mission
- *   "pads": [                                     new pads; referenced by their string id
+ *   "level_ai": false,                            optional (default true): false = every AI list of the level's setup (its
+ *                                                 character and background lists) is emptied, so only the mission's scripts
+ *                                                 drive its guards, vehicles and story (the Luau campaign, #165). The game's
+ *                                                 18 global lists are code, not setup data: they stay
+ *   "level_intro": false,                         optional (default true): false = the setup's intro cameras, swirl and
+ *                                                 intro animation are removed (its start pad, items, ammo, outfit and
+ *                                                 watch time stay), so the level starts in play and a script stages
+ *                                                 the intro with the camera API (#165)
+ *   "pads": [                                    new pads; referenced by their string id
  *     { "id": "p1", "pos": [x, y, z], "look": [x, y, z], "room": 12 }
  *   ],
  *   "zones": [ { "id": "z1", "pos": [x, y, z], "radius": 150, "room": 12 } ],
@@ -267,6 +275,8 @@ typedef struct Mission {
     char description[MISSION_TEXT_LEN];
     char briefing[2048];
     int keep_level_objectives;      /* "keep_level_objectives": the level keeps its briefing, objectives and exit; the mission's are added after */
+    int level_ai_off;               /* "level_ai": false: the setup's own AI lists are emptied (missionApplySetupEx) */
+    int level_intro_off;            /* "level_intro": false: the setup's intro cameras / swirl / animation are removed */
     MissionPad *pads;             int npads;
     MissionZone *zones;           int nzones;
     MissionGuardOp *guards;       int nguards;

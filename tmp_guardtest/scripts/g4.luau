@@ -1,0 +1,7 @@
+local g = chr(7)
+message('n ' .. tostring(g:exists()) .. tostring(g:exists()) .. tostring(g:teleport(1)) .. tostring(g:preset_pad()) .. tostring(g:spotted_player()))
+g:patrol(1) g:hit(1, 2) g:set_ai(3)
+message('s ' .. tostring(spawn_guard({ pad = 1, body = 2 })) .. #all_guards() .. mission.civilians_killed() .. g:grenade_chance())
+message('w ' .. tostring(g:witnessed()) .. ' ' .. tostring(g:is_moving()))
+message('x ' .. tostring(g:held_weapon()) .. tostring(g:spot_near_player()) .. tostring(g:drop_grenade()) .. tostring(g:drop(door(1))) .. tostring(g:give_object(door(1))))
+g:set_flag_raw(1, true) g:set_flag_raw(1, false)

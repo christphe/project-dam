@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "name": "text:9C8C",
+  "level": "cuba",
+  "description": "",
+  "level_ai": false,
+  "level_intro": false,
+  "scripts": [
+    {
+      "use": "cuba",
+      "target": {
+        "kind": "mission"
+      }
+    }
+  ]
+}

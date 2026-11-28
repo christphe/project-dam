@@ -39,6 +39,30 @@ int missionsKeepLevelObjectives(void)
     return m && m->keep_level_objectives;
 }
 
+/* A mission string may be a reference to the game's own text, "text:XXXX" (4 hex digits, a langGet id): its name,
+ * description, briefing and objective texts. Resolved here, wherever the mission UI shows one, in the language played;
+ * anything else (or a text the loaded banks do not have) is shown as written. One of 4 rotating buffers per call. */
+static const char *tx(const char *s)
+{
+    static char ring[4][MISSION_TEXT_LEN * 4 + 8];
+    static int next;
+    char *out;
+    char *end = NULL;
+    long id;
+    const char *t;
+    size_t n = 0;
+    if (!s || strncmp(s, "text:", 5) != 0 || strlen(s) != 9) return s;
+    id = strtol(s + 5, &end, 16);
+    if (!end || *end != 0 || id < 0x400 || id > 0xB3FF) return s;
+    t = (const char *)langGet((s32)id);
+    if (!t || !t[0]) return s;
+    out = ring[next++ & 3];
+    while (t[n] && n + 1 < sizeof ring[0]) { out[n] = t[n]; n++; }
+    while (n > 0 && out[n - 1] == '\n') n--;   /* the game's lines end in a line break; the caller lays text out */
+    out[n] = 0;
+    return out;
+}
+
 /* ---- briefing ------------------------------------------------------------ */
 
 int missionsHeaderLines(char *l1, char *l2, int size)
@@ -48,9 +72,9 @@ int missionsHeaderLines(char *l1, char *l2, int size)
     if (!missionsObjectivesActive()) return 0;
     if (mod[0]) {
         snprintf(l1, size, "Mission %d: %s\n", slot >= 0 ? slot + 1 : 1, mod);
-        snprintf(l2, size, "%s\n", missionsName());
+        snprintf(l2, size, "%s\n", tx(missionsName()));
     } else {
-        snprintf(l1, size, "%s\n", missionsName());
+        snprintf(l1, size, "%s\n", tx(missionsName()));
         snprintf(l2, size, "\n");
     }
     return 1;
@@ -66,8 +90,8 @@ const char *missionsBriefingPageText(int page)
     static char buf[MISSION_TEXT_LEN + 2048 + 8];
     if (!missionsObjectivesActive() || missionsKeepLevelObjectives()) return NULL;   /* kept: the level's own pages */
     if (page == 1) {   /* BRIEFING_OVERVIEW: the mission's name and briefing */
-        const char *b = missionsBriefing();
-        snprintf(buf, sizeof buf, "%s\n\n%s\n", missionsName(), b[0] ? b : "No briefing.");
+        const char *b = tx(missionsBriefing());
+        snprintf(buf, sizeof buf, "%s\n\n%s\n", tx(missionsName()), b[0] ? b : "No briefing.");
     } else {           /* M, Q, Moneypenny: a mission has one briefing page */
         buf[0] = 0;
     }
@@ -113,7 +137,7 @@ const char *missionsPauseObjText(int i)
         }
         return buf;
     }
-    textWrap(0x73, (char *)missionRtObjectiveText(missionsRuntime(), i - lc), buf, ptrFontBankGothicChars, ptrFontBankGothic);
+    textWrap(0x73, (char *)tx(missionRtObjectiveText(missionsRuntime(), i - lc)), buf, ptrFontBankGothicChars, ptrFontBankGothic);
     n = strlen(buf);
     if (n == 0 || buf[n - 1] != '\n') {
         if (n + 2 < sizeof buf) { buf[n] = '\n'; buf[n + 1] = 0; }
@@ -126,8 +150,8 @@ const char *missionsPausePageText(int page)
     static char buf[MISSION_TEXT_LEN + 2048 + 8];
     if (page == 0 || missionsKeepLevelObjectives()) return NULL;
     if (page == 1) {
-        const char *b = missionsBriefing();
-        snprintf(buf, sizeof buf, "%s\n\n%s\n", missionsName(), b[0] ? b : "No briefing.");
+        const char *b = tx(missionsBriefing());
+        snprintf(buf, sizeof buf, "%s\n\n%s\n", tx(missionsName()), b[0] ? b : "No briefing.");
     } else {
         buf[0] = 0;
     }
@@ -188,7 +212,7 @@ Gfx *missionsObjectivesDraw(Gfx *gdl, int ytop, int withStatus)
     }
     n = rt ? missionRtObjectiveCount(rt) : m->nobjectives;
     for (i = 0; i < n; i++) {
-        const char *t = rt ? missionRtObjectiveText(rt, i) : m->objectives[i].text;
+        const char *t = tx(rt ? missionRtObjectiveText(rt, i) : m->objectives[i].text);
         int od = rt ? missionRtObjectiveDifficulty(rt, i) : m->objectives[i].difficulty;
         if (od > (int)diff) continue;
         gdl = drawObjective(gdl, ytop, withStatus, shown, &lines, t, rt && missionRtObjectiveComplete(rt, i));

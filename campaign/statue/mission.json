@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "name": "text:9C86",
+  "level": "statue",
+  "description": "",
+  "level_ai": false,
+  "level_intro": false,
+  "scripts": [
+    {
+      "use": "statue",
+      "target": {
+        "kind": "mission"
+      }
+    }
+  ]
+}
