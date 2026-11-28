@@ -44,7 +44,7 @@ state you want to look at. Commands go through [dev.py](dev-py.md).
 | `GE_COOP=1..4`, `GE_PADS=N` | Co-op without the menu; force N controller seats. Always together ([coop.md](coop.md)). |
 | `GE_STARTWEAPON=N` | Start with that item (8 = KF7). |
 | `GE_INPUTSCRIPT="frame:BUTTONS;..."` | Scripted input for player 1 (`GE_INPUTSCRIPT_P1..P3` for the others), counted in controller reads: `120:START;180:A`, or `300:ZHOLD` to hold fire from 300. Token list: the header of `port/src/input_script.c`. |
-| `GE_ROM_TEXTURES=1` | Draw every texture from the ROM's own decode; the asset-pack stack (mod and packs) is bypassed. For comparing a pack against the ROM. |
+| `GE_ROM_TEXTURES=1` | Draw every texture from the ROM's own decode; the asset-pack stack (mod and packs) is bypassed. Without it a texture no mod or pack has is a magenta/black checker (log: `missing texture N`), never the ROM's bytes. |
 | `GE_ROM_SOUNDS=1` | Sound effects from the ROM's sound bank instead of the asset packs' `sounds/sfx/` (the default; `port/src/sounds.c`). For comparing the two. |
 | `GE_MENUGOTO=tab,entry[,focus]` | Open the options menu on that page ([options-menu.md](options-menu.md)). |
 | `GE_ROM_LABELS=1` | Read the game's text from the ROM's language banks instead of the asset packs' `labels/text_<lang>.json` (A/B runs; `port/src/labels.c`). |

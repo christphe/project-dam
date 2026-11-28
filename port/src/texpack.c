@@ -62,6 +62,11 @@ typedef struct {
 } Pic;
 static Pic s_pic[TEXPACK_MAX_TEXNUM + 1];
 static size_t s_picBytes;
+#define CHECKER_SIZE 8
+#define MISSING_LOG_MAX 64        /* "missing texture" warnings: one per texture number, up to this many */
+static uint8_t s_checker[CHECKER_SIZE * CHECKER_SIZE * 4];   /* magenta / black, made on first use */
+static uint8_t s_warned[TEXPACK_MAX_TEXNUM + 1];
+static int s_warnedN;
 static unsigned s_picTick;
 static unsigned s_picGen;         /* the s_gen the pictures belong to: the render thread drops them when it changes */
 
@@ -317,13 +322,12 @@ unsigned texpackSalt(const void *addr, int fromTile, int *texnum, uint32_t *offs
     *texnum = -1;
     *offset = 0;
     if (romTextures()) return 0;                            /* GE_ROM_TEXTURES=1: the ROM's own decode, stack bypassed */
-    if (!s_modIx && !assetStackCount(s_stack)) return 0;   /* no pack, no mod textures: one unlocked test per import */
     pthread_mutex_lock(&s_lock);
     if (s_picGen != s_gen) { picsClear(); s_picGen = s_gen; }
     {
         uint32_t off = 0;
         const int n = lookupLocked(normAddr(addr), fromTile, &off);
-        if (n >= 0 && hasSource(n) && !s_pic[n].failed) {
+        if (n >= 0) {   /* a registered texture: the picture, or the checker when no pack has it or it cannot be read */
             *texnum = n;
             *offset = off;
             salt = ((0x5EA70000u ^ (s_gen * 2654435761u)) + (unsigned)n * 40503u + off * 2246822519u) | 1u;
@@ -344,6 +348,28 @@ static void evictFor(size_t need)
     }
 }
 
+/* The stand-in for a texture no mod and no pack has (or whose picture cannot be read): a small magenta / black checker; the
+ * vertex pass normalises texture coordinates by the tile's texel count, so any size keeps the UVs working. */
+static const uint8_t *checkerPixels(int texnum, int missing, int *w, int *h)
+{
+    if (!s_checker[3]) {
+        for (int y = 0; y < CHECKER_SIZE; y++)
+            for (int x = 0; x < CHECKER_SIZE; x++) {
+                uint8_t *d = s_checker + (y * CHECKER_SIZE + x) * 4;
+                const int on = ((x / 2) + (y / 2)) & 1;
+                d[0] = on ? 255 : 0; d[1] = 0; d[2] = on ? 255 : 0; d[3] = 255;
+            }
+    }
+    if (missing && !s_warned[texnum]) {
+        s_warned[texnum] = 1;
+        if (++s_warnedN <= MISSING_LOG_MAX)
+            sysLogPrintf(LOG_WARNING, "asset packs: missing texture %d (no mod, no pack has textures/%d.png): a checker is drawn%s",
+                         texnum, texnum, s_warnedN == MISSING_LOG_MAX ? " (further missing textures are not logged)" : "");
+    }
+    *w = *h = CHECKER_SIZE;
+    return s_checker;
+}
+
 const uint8_t *texpackPixels(int texnum, int fmt, int maxSize, int *w, int *h)
 {
     const uint8_t *out = NULL;
@@ -358,7 +384,7 @@ const uint8_t *texpackPixels(int texnum, int fmt, int maxSize, int *w, int *h)
         int pw = 0, ph = 0;
         if (assetStackReadTexture(s_stack, s_modIx, texnum, &file, &len) && gePngDecode(file, len, &pw, &ph, &rgba)) {
             if (pw > maxSize || ph > maxSize) {
-                sysLogPrintf(LOG_WARNING, "asset packs: textures/%d.png is %dx%d, over this GPU's %d: the game's own is drawn", texnum, pw, ph, maxSize);
+                sysLogPrintf(LOG_WARNING, "asset packs: textures/%d.png is %dx%d, over this GPU's %d: a checker is drawn", texnum, pw, ph, maxSize);
                 free(rgba);
                 p->failed = 1;
             } else {
@@ -370,7 +396,7 @@ const uint8_t *texpackPixels(int texnum, int fmt, int maxSize, int *w, int *h)
                 s_picBytes += n * 4;
             }
         } else {
-            sysLogPrintf(LOG_WARNING, "asset packs: textures/%d.png is not readable (an 8-bit PNG, not interlaced, is expected): the game's own is drawn", texnum);
+            sysLogPrintf(LOG_WARNING, "asset packs: textures/%d.png is not readable (an 8-bit PNG, not interlaced, is expected): a checker is drawn", texnum);
             p->failed = 1;
         }
         free(file);
@@ -390,6 +416,8 @@ const uint8_t *texpackPixels(int texnum, int fmt, int maxSize, int *w, int *h)
             if (p->lum) out = p->lum;
         }
         *w = p->w; *h = p->h;
+    } else {
+        out = checkerPixels(texnum, !hasSource(texnum), w, h);
     }
     pthread_mutex_unlock(&s_lock);
     return out;
