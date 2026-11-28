@@ -222,21 +222,38 @@ int sfxWavSamples(const unsigned char *wav, size_t len, const unsigned char **pc
 
 extern char *getenv(const char *);
 
-static SfxEffect *sEff;            /* [SFX_MAX_ID], read-only after sfxInit */
-static unsigned char *sArena;
-static uint32_t sArenaUsed;
-static int sActive, sInited, sMaxId;
-static unsigned char sWarned[SFX_MAX_ID];
+/* Two sets: a reload builds into the idle one and then flips, and the previous set stays intact, so a voice still releasing
+ * from it reads valid PCM. A set's PCM addresses carry its slot (SFX_SET_STRIDE apart). */
+typedef struct SfxSet {
+    SfxEffect *eff;                 /* [SFX_MAX_ID], read-only once published */
+    unsigned char *arena;
+    uint32_t used;
+    int maxId;
+    unsigned char warned[SFX_MAX_ID];
+} SfxSet;
+
+static SfxSet sSet[2];
+static volatile int sCur;           /* the published set */
+static volatile int sActive;
+static int sInited, sRomForced;
 
 int sfxActive(void) { return sActive; }
-int sfxCount(void) { return sMaxId + 1; }
+int sfxCount(void) { return sActive ? sSet[sCur].maxId + 1 : 0; }
+int sfxSet(void) { return sCur; }
 
-static void sfxFree(void)
+int sfxGenChanged(unsigned *built, unsigned now)
 {
-    free(sEff);
-    free(sArena);
-    sEff = NULL;
-    sArena = NULL;
+    if (*built == now)
+        return 0;
+    *built = now;
+    return 1;
+}
+
+static void setFree(SfxSet *s)
+{
+    free(s->eff);
+    free(s->arena);
+    memset(s, 0, sizeof *s);
 }
 
 int sfxInit(void)
@@ -244,32 +261,41 @@ int sfxInit(void)
     unsigned char *js = NULL;
     unsigned long jlen = 0;
     const char *rom;
-    int n, id, loaded = 0, bad = 0;
+    int n, id, loaded = 0, bad = 0, slot;
+    SfxSet *s;
 
-    if (sInited)
-        return sActive;
-    sInited = 1;
-    rom = getenv("GE_ROM_SOUNDS");
-    if (rom && *rom && *rom != '0') {
-        sysLogPrintf(LOG_INFO, "sounds: GE_ROM_SOUNDS set, effects from the ROM sound bank");
-        return 0;
+    if (!sInited) {
+        sInited = 1;
+        rom = getenv("GE_ROM_SOUNDS");
+        if (rom && *rom && *rom != '0') {
+            sRomForced = 1;
+            sysLogPrintf(LOG_INFO, "sounds: GE_ROM_SOUNDS set, effects from the ROM sound bank");
+        }
     }
+    if (sRomForced)
+        return 0;
+    slot = sActive ? sCur ^ 1 : sCur;   /* never build into the published set */
+    s = &sSet[slot];
+    setFree(s);
     if (!assetRead("sounds/sfx/sfx.json", &js, &jlen, NULL)) {
         sysLogPrintf(LOG_WARNING, "sounds: no sounds/sfx/sfx.json in the asset packs, effects from the ROM sound bank");
+        sActive = 0;
         return 0;
     }
-    sEff = (SfxEffect *)calloc(SFX_MAX_ID, sizeof *sEff);
-    sArena = (unsigned char *)calloc(1, SFX_ARENA_BYTES);
-    if (!sEff || !sArena) {
-        sfxFree();
+    s->eff = (SfxEffect *)calloc(SFX_MAX_ID, sizeof *s->eff);
+    s->arena = (unsigned char *)calloc(1, SFX_ARENA_BYTES);
+    if (!s->eff || !s->arena) {
+        setFree(s);
         pkgFree(js);
+        sActive = 0;
         return 0;
     }
-    n = sfxParseJson((const char *)js, jlen, sEff, SFX_MAX_ID);
+    n = sfxParseJson((const char *)js, jlen, s->eff, SFX_MAX_ID);
     pkgFree(js);
     if (n < 0) {
         sysLogPrintf(LOG_ERROR, "sounds: sfx.json is not readable, effects from the ROM sound bank");
-        sfxFree();
+        setFree(s);
+        sActive = 0;
         return 0;
     }
     for (id = 1; id < SFX_MAX_ID; id++) {
@@ -278,42 +304,45 @@ int sfxInit(void)
         unsigned long wlen = 0;
         const unsigned char *pcm;
         uint32_t ns;
-        SfxEffect *x = &sEff[id];
+        SfxEffect *x = &s->eff[id];
         if (!x->present)
             continue;
-        if (id > sMaxId)
-            sMaxId = id;
+        if (id > s->maxId)
+            s->maxId = id;
         snprintf(path, sizeof path, "sounds/sfx/sfx_%04d.wav", id);
         if (!assetRead(path, &wav, &wlen, NULL)) {
             bad++;
             continue;
         }
-        if (!sfxWavSamples(wav, wlen, &pcm, &ns) || ns == 0 || (uint64_t)sArenaUsed + (uint64_t)ns * 2 + 1024 > SFX_ARENA_BYTES) {
+        if (!sfxWavSamples(wav, wlen, &pcm, &ns) || ns == 0 || (uint64_t)s->used + (uint64_t)ns * 2 + 1024 > SFX_ARENA_BYTES) {
             pkgFree(wav);
             bad++;
             continue;
         }
-        x->pcm_off = sArenaUsed;
+        x->pcm_off = ((uint32_t)slot * SFX_SET_STRIDE) + s->used;
         x->pcm_samples = ns;
-        memcpy(sArena + sArenaUsed, pcm, (size_t)ns * 2);   /* little-endian hosts only (all targets) */
-        sArenaUsed += (ns * 2 + 15u) & ~15u;
+        memcpy(s->arena + s->used, pcm, (size_t)ns * 2);   /* little-endian hosts only (all targets) */
+        s->used += (ns * 2 + 15u) & ~15u;
         pkgFree(wav);
         loaded++;
     }
+    sCur = slot;
     sActive = 1;
     sysLogPrintf(LOG_INFO, "sounds: %d effects from the asset packs (%d json entries, %d without a usable wav), %u KB of PCM", loaded, n,
-                 bad, (unsigned)(sArenaUsed / 1024));
+                 bad, (unsigned)(s->used / 1024));
     return 1;
 }
 
 const SfxEffect *sfxGet(int id)
 {
+    SfxSet *s;
     if (!sActive || id <= 0 || id >= SFX_MAX_ID)
         return NULL;
-    if (sEff[id].present && sEff[id].pcm_samples)
-        return &sEff[id];
-    if (!sWarned[id]) {
-        sWarned[id] = 1;
+    s = &sSet[sCur];
+    if (s->eff && s->eff[id].present && s->eff[id].pcm_samples)
+        return &s->eff[id];
+    if (s->eff && !s->warned[id]) {
+        s->warned[id] = 1;
         sysLogPrintf(LOG_WARNING, "sounds: effect %d has no usable entry in the asset packs (silence)", id);
     }
     return NULL;
@@ -322,14 +351,17 @@ const SfxEffect *sfxGet(int id)
 int sfxFetch(uint32_t addr, void *dst, uint32_t len)
 {
     uint32_t off;
-    if (!sActive || addr < SFX_ADDR_BASE)
+    const SfxSet *s;
+    if (addr < SFX_ADDR_BASE || addr - SFX_ADDR_BASE >= 2 * SFX_SET_STRIDE)
         return 0;
     off = addr - SFX_ADDR_BASE;
-    if (off >= sArenaUsed) {
+    s = &sSet[off / SFX_SET_STRIDE];
+    off %= SFX_SET_STRIDE;
+    if (!s->arena || off >= s->used) {
         memset(dst, 0, len);
     } else {
-        uint32_t n = sArenaUsed - off < len ? sArenaUsed - off : len;
-        memcpy(dst, sArena + off, n);
+        uint32_t n = s->used - off < len ? s->used - off : len;
+        memcpy(dst, s->arena + off, n);
         if (n < len)
             memset((unsigned char *)dst + n, 0, len - n);
     }

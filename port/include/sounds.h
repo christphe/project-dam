@@ -37,16 +37,21 @@ int sfxParseJson(const char *json, size_t len, SfxEffect *eff, int max);
 /* A canonical PCM WAV (mono, 16 bit): points *pcm at its samples (little-endian, inside `wav`). 1 on success. */
 int sfxWavSamples(const unsigned char *wav, size_t len, const unsigned char **pcm, uint32_t *nsamples);
 
-/* Game thread, once (again is a no-op). Returns 1 when the pack sounds are in use, 0 for the ROM path (GE_ROM_SOUNDS=1, or
- * no sfx.json in the stack). */
+/* Game thread: (re)loads the effects from the current stack, into the idle one of two sets, then publishes it (the previous
+ * set stays readable for voices still releasing; the caller stops the playing effects first). Returns 1 when the pack sounds
+ * are in use, 0 for the ROM path (GE_ROM_SOUNDS=1, or no sfx.json in the stack). */
 int sfxInit(void);
 int sfxActive(void);
+int sfxSet(void);                         /* the published set (0/1) */
 int sfxCount(void);                       /* highest effect number + 1 */
 /* The effect `id`, or NULL when sfx.json has no usable entry for it (one log line per id). Any thread, after sfxInit. */
 const SfxEffect *sfxGet(int id);
 
 /* The engine's sample fetch addresses of a pack effect lie from SFX_ADDR_BASE: base of effect = SFX_ADDR_BASE + pcm_off. */
 #define SFX_ADDR_BASE 0xE0000000u
+#define SFX_SET_STRIDE 0x01000000u   /* the second set's PCM lies this far above the first's */
+/* Pure: 1 (and *built = now) when the asset stack generation `now` differs from the one the sounds were built from. */
+int sfxGenChanged(unsigned *built, unsigned now);
 /* Audio thread: when `addr` is in the pack window copies `len` bytes of the arena at that address into dst (zero past the
  * end) and returns 1; else 0. */
 int sfxFetch(uint32_t addr, void *dst, uint32_t len);

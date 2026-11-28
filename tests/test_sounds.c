@@ -67,5 +67,15 @@ int main(void)
     wav[22] = 2;
     GE_CHECK(!sfxWavSamples(wav, sizeof wav, &pcm, &ns));    /* stereo */
 
+    /* the stack generation check: a change is seen once, then the new generation is the built one */
+    {
+        unsigned built = 5;
+        GE_CHECK_EQ_INT(sfxGenChanged(&built, 5), 0);
+        GE_CHECK_EQ_INT(sfxGenChanged(&built, 6), 1);
+        GE_CHECK_EQ_INT(built, 6);
+        GE_CHECK_EQ_INT(sfxGenChanged(&built, 6), 0);
+        GE_CHECK_EQ_INT(sfxGenChanged(&built, 0), 1);   /* wrap-around counts as a change too */
+    }
+
     return GE_TEST_END();
 }
