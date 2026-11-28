@@ -3,25 +3,25 @@
 
   python tools_pc/modelview/modelview.py pc [viewer options]   build and open the viewer (detached)
         viewer options go through: --shot FILE.png (renders one frame, writes it, exits; waits for it) --w N --h N
-        --export DIR --body CgreyguardZ --head CheadkarlZ --specs 0|1 --hair 0|1 --bodyscale 0|1 --model FILE|BODY+HEAD
+        --export DIR|PACK --body CgreyguardZ --head CheadkarlZ --specs 0|1 --hair 0|1 --bodyscale 0|1 --model FILE|BODY+HEAD
         --tier 0|1 --method GAME|FLAT|PN|PHONG|BUTTERFLY|LOOP|HEAD --passes 1|2 --crease DEG --clamp F --splitjoint 0|1
         --view side|split|sub|orig --wire 0|1 --edges 0|1 --checker 0|1 --normals 0|1 --light 0|1 --smooth 0|1
-        --game DIR (the game folder: texturepacks/ and mods/) --mod X.pmod|folder|name --texpack NAME|path
+        --game DIR (the game folder: assetpacks/ and mods/) --mod X.pmod|folder|name --texpack NAME|path
   python tools_pc/modelview/modelview.py export [--rom FILE] [--all-animations]
-        write the character export into tools_pc/modelview/data/export (ge007-export, built in Docker)
+        write the base asset pack ge007.passets into tools_pc/modelview/data/export (ge007-export, built in Docker)
   python tools_pc/modelview/modelview.py selftest              PNG decoding, pose maths and the HEAD method, no export needed
   python tools_pc/modelview/modelview.py shots --out DIR [--anim NAME --frame N] [--clean] [--models A,B+C,...] [--methods FLAT,PN,...]
         one screenshot per model and method plus DIR/index.html (a model is a body, a head, or BODY+HEAD)
 
-The characters come from the static export (characters/characters.json + one glTF per body and head,
-docs/specs/characters.md), made from your own ROM: --export DIR, else MODELVIEW_EXPORT, else
-tools_pc/modelview/data/export (`modelview.py export` writes it). The Windows g++ comes from MODELVIEW_GXX
+The characters come from the base asset pack ge007.passets (characters/characters.json + one glTF per body and head inside it,
+docs/specs/characters.md, docs/specs/asset-packs.md), made from your own ROM. --export takes the folder holding ge007.passets, or the pack
+itself (a tar or a folder); else MODELVIEW_EXPORT, else tools_pc/modelview/data/export (`modelview.py export` writes it). The Windows g++ comes from MODELVIEW_GXX
 (environment or <repo>/.env), else SEAVIEW_GXX. Textures are resolved by key through the active mod (--mod, partial)
-over the chosen texture pack (--texpack, complete; ge007.ptexpack, the export's own, by default), docs/specs/texture-packs.md; the game
-folder holding texturepacks/ and mods/ comes from --game, else MODELVIEW_GAME, else a build folder of this checkout. Settings are saved in tools_pc/modelview/data/modelview.ini
+over the chosen texture pack (--texpack, complete; ge007.passets, the export's own, by default), docs/specs/texture-packs.md; the game
+folder holding assetpacks/ and mods/ comes from --game, else MODELVIEW_GAME, else a build folder of this checkout. Settings are saved in tools_pc/modelview/data/modelview.ini
 (git ignores data/ and build/). Nothing from the ROM is written into the repo outside data/.
 """
-import argparse, html, json, os, re, subprocess, sys
+import argparse, html, json, os, re, subprocess, sys, tarfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -53,16 +53,39 @@ def exporter_version():
         return None
 
 
+def pack_of(d):
+    """the asset pack of an export root: d itself when it is a .passets (tar or folder), else d/ge007.passets; None when there is none"""
+    c = d if d.lower().endswith(".passets") else os.path.join(d, "ge007.passets")
+    return c if os.path.exists(c) else None
+
+
+def pack_read(pack, rel):
+    """the bytes of a file inside an asset pack (an uncompressed ustar tar, or a folder); None when it is not there"""
+    if os.path.isdir(pack):
+        try:
+            return open(os.path.join(pack, *rel.split("/")), "rb").read()
+        except OSError:
+            return None
+    try:
+        with tarfile.open(pack, "r:") as tf:
+            f = tf.extractfile(rel)
+            return f.read() if f else None
+    except (OSError, KeyError, tarfile.TarError):
+        return None
+
+
 def export_state(d):
-    """(characters dir, its exporter version) for an export dir or its characters/ folder; (None, None) when absent"""
-    for c in (d, os.path.join(d, "characters")):
-        j = os.path.join(c, "characters.json")
-        if os.path.isfile(j):
-            try:
-                return os.path.abspath(c), json.load(open(j, encoding="utf-8")).get("exporter_version")
-            except (OSError, ValueError):
-                return os.path.abspath(c), None
-    return None, None
+    """(the path --export takes, the exporter version) for an export root (a folder holding ge007.passets, or the pack); (None, None) when absent"""
+    pack = pack_of(d)
+    if not pack:
+        return None, None
+    raw = pack_read(pack, "characters/characters.json")
+    if raw is None:
+        return None, None
+    try:
+        return os.path.abspath(d), json.loads(raw.decode("utf-8")).get("exporter_version")
+    except ValueError:
+        return os.path.abspath(d), None
 
 
 def find_export(env, extra):
@@ -82,12 +105,12 @@ def find_export(env, extra):
 
 
 def find_game(env, extra):
-    """--game (passed through untouched), MODELVIEW_GAME, else a build folder of this checkout that has texturepacks/ or mods/; None = unknown"""
+    """--game (passed through untouched), MODELVIEW_GAME, else a build folder of this checkout that has assetpacks/ or mods/; None = unknown"""
     if "--game" in extra:
         return None
     cands = ([env["MODELVIEW_GAME"]] if env.get("MODELVIEW_GAME") else []) + [os.path.join(r, b) for r in devenv.roots() for b in ("build-win", "build-linux", "build-pc")]
     for d in cands:
-        if os.path.isdir(os.path.join(d, "texturepacks")) or os.path.isdir(os.path.join(d, "mods")):
+        if os.path.isdir(os.path.join(d, "assetpacks")) or os.path.isdir(os.path.join(d, "mods")):
             return os.path.abspath(d)
     return None
 
@@ -120,7 +143,7 @@ def build(env):
     for f in ("imgui.cpp", "imgui_draw.cpp", "imgui_tables.cpp", "imgui_widgets.cpp"):
         obj(gxx, os.path.join(imgui, f), ["-std=c++17", "-I", imgui, "-w"])
     obj(gcc, os.path.join(third, "cjson", "cJSON.c"), ["-w"])
-    for f in ("ge_pkg.c", "ge_png.c", "ge_texpacks.c", "ge_tex.c"):   # plain C; no zlib in this toolchain: ge_png.c uses its built-in inflate and stored deflate (GE_PNG_NO_ZLIB)
+    for f in ("ge_pkg.c", "ge_png.c", "ge_texpacks.c", "ge_tex.c", "ge_assetstack.c"):   # plain C; no zlib in this toolchain: ge_png.c uses its built-in inflate and stored deflate (GE_PNG_NO_ZLIB)
         obj(gcc, os.path.join(assets, f), ["-I", assets, "-I", os.path.join(third, "cjson"), "-DGE_PNG_NO_ZLIB", "-w"])
 
     exe = os.path.join(bdir, "modelview.exe")

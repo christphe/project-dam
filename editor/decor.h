@@ -1,4 +1,5 @@
-// The level decor (rooms) read from the static glTF export (port/export/, issue #150): <level>.gltf + .bin + textures/N.png.
+// The level decor (rooms) read from the static glTF export (port/export/, issue #150): levels/<level>/<level>.gltf + .bin inside the asset
+// pack ge007.passets (a tar or a folder; the path may run through it, it is read with ge_pkg), its pictures textures/N.png in the pack.
 // Pure CPU, no GL: Scene uploads it, Level turns its triangles into the picking set. Vertices are in world units
 // (the node translation is applied here), colours are the game's own sRGB-space shade values (the glTF holds them linear).
 #pragma once
@@ -24,8 +25,8 @@ struct DecorTex {
     std::string key;             // the texture key (material extras.texture): the game's texture number in decimal, or a mod's own key; "" when unknown
     int texnum = -1;             // the game's texture number (the key as a number), -1 for a mod's own key / no key
     int origW = 0, origH = 0;    // the ROM picture's size (the entry's width / height), = w, h when not known
-    std::string path;            // the file the pixels came from (inside a .ptexpack / .pmod, or the glTF's own picture)
-    int source = -1;             // -1 the game's own picture (ge007.ptexpack, or the glTF's own), 0 the open mod's, 1 another texture pack's
+    std::string path;            // the file the pixels came from (inside a .passets / .pmod, or the glTF's own picture)
+    int source = -1;             // -1 the game's own picture (ge007.passets, or the glTF's own), 0 the open mod's, 1 another texture pack's
     int surface = -1;            // the resolved surface class (texpackSurfaceName), -1 unknown
 };
 

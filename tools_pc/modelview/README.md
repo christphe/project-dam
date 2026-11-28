@@ -3,7 +3,7 @@
 A PC dev viewer to judge how a subdivision method treats a character: original and subdivided next to each
 other, with the edges coloured by why they stayed straight. It shows a **body and a head put together as the
 game does** (`makeonebody`: the head file hangs off the body's neck joint), read from the **character export**
-(`characters/characters.json` and one glTF per body and per head, [docs/specs/characters.md](../../docs/specs/characters.md)).
+(`characters/characters.json` and one glTF per body and per head, inside the base asset pack `ge007.passets`, [docs/specs/characters.md](../../docs/specs/characters.md), [docs/specs/asset-packs.md](../../docs/specs/asset-packs.md)).
 The export is made from **your own ROM** by `ge007-export` and lives outside the repo or in the git-ignored
 `data/`; the viewer never reads the ROM itself. `shots` refuses an output dir inside the repo (outside `data/`).
 A procedural test mannequin (original, not a game character) is always available.
@@ -17,11 +17,11 @@ usable in the converter). **HEAD** (viewer-only, experimental, for heads): Loop 
 ## Setup
 
 A Windows g++ (MinGW-w64), as for seaview: set `MODELVIEW_GXX` (or `SEAVIEW_GXX`) in `<repo>/.env` or the
-environment (see `.env.example`). The export: `--export DIR` (the `characters` folder or the export folder above
-it), else `MODELVIEW_EXPORT`, else `tools_pc/modelview/data/export`, which `modelview.py export` writes:
+environment (see `.env.example`). The export: `--export DIR` (the folder holding `ge007.passets`, or the pack itself, an uncompressed tar or a folder; read
+through `ge_pkg`, nothing is unpacked), else `MODELVIEW_EXPORT`, else `tools_pc/modelview/data/export`, which `modelview.py export` writes:
 `ge007-export` of this checkout, built and run in the pinned build image (Docker), on the ROM from `--rom`,
 `MODELVIEW_ROM`, `N64_ROM` or a game `data/` folder. A game export works too (`ge007 --export-levels DIR` writes
-`DIR/characters`). When the export was written by another exporter version than the checkout's
+`DIR/ge007.passets`, and the game's first launch writes `<game>/assetpacks/ge007.passets`). When the export was written by another exporter version than the checkout's
 (`EX_EXPORTER_VERSION`), `modelview.py pc` says so. Without an export the viewer shows the mannequin only. In a
 git worktree the main checkout's `.env` is used if the worktree has none. No zlib is needed: `pc/mv_zlib.cpp` backs
 the PNG reader and the converter's inflate calls (`pc/shim/zlib.h`). Builds go to `build/`, settings to
@@ -30,9 +30,9 @@ the PNG reader and the converter's inflate calls (`pc/shim/zlib.h`). Builds go t
 **Textures.** A material is drawn from the texture its key names (material `extras.texture`;
 [docs/specs/texture-packs.md](../../docs/specs/texture-packs.md)): the active **mod** (partial: its `textures/<key>.png` and
 `textures.json` merge field by field) over the chosen **texture pack** (complete). One pack is always chosen:
-`ge007.ptexpack`, the game's own, by default (`<game>/texturepacks/ge007.ptexpack` when the game wrote it, else the export's own
-copy beside `characters/`). The glTF's own image is used only when no source has the key (an export without `ge007.ptexpack`).
-The game folder (holding `texturepacks/` and `mods/`) is `--game DIR`, else `MODELVIEW_GAME`, else a `build-win` / `build-linux` /
+`ge007.passets`, the game's own, by default (`<game>/assetpacks/ge007.passets` when the game wrote it, else the export's own
+pack, the one the characters are read from). The glTF's own image (`../../textures/<n>.png` inside the pack) is used only when no source has the key.
+The game folder (holding `assetpacks/` and `mods/`) is `--game DIR`, else `MODELVIEW_GAME`, else a `build-win` / `build-linux` /
 `build-pc` folder of the checkout that has one of them; without one, only `--mod` / `--texpack` paths work and the Mod list has
 just None. A pack that lacks textures of ge007 is refused (greyed out in the list, "incomplete: N textures missing"; on the
 command line a note and ge007 is used): packs are never mixed.
@@ -53,7 +53,7 @@ Options (they win over the `.ini`): `--export DIR`, `--body FILE` and `--head FI
 `--method GAME|FLAT|PN|PHONG|BUTTERFLY|LOOP|HEAD`, `--passes 1|2`, `--crease DEG`, `--clamp F` (PN bulge clamp),
 `--splitjoint 0|1`, `--view side|split|sub|orig`, `--wire --edges --checker --normals --light --smooth 0|1`,
 `--w --h` (shot size), `--game DIR`, `--mod X.pmod|folder|name` (a path, or the name of a mod in `<game>/mods`) and
-`--texpack NAME|path` (a pack in `<game>/texturepacks`, with or without `.ptexpack`, or a path); the `.ini` keys are
+`--texpack NAME|path` (a pack in `<game>/assetpacks`, with or without `.passets`, or a path); the `.ini` keys are
 `game=`, `mod=` and `texpack=`. Relative `--shot`, `--export`, `--game` and `--mod` / `--texpack` paths that exist are taken from
 where you run the command. `shots` takes `--mod` and `--texpack` too.
 
@@ -76,7 +76,7 @@ where you run the command. `shots` takes `--mod` and `--texpack` too.
   when the head has no such part; **Body scale from the table** (0.95 for one body, 1 for the others) and, for
   information, `pov` (the scale of the root motion) and the body's sex. Below: triangles of the body, the head,
   the sunglasses and the hair, and how many textures loaded. Above them the **Mod** list (None, the entries of
-  `<game>/mods`) and the **Pack** list (ge007, then `<game>/texturepacks`): changing either redraws the model with the new
+  `<game>/mods`) and the **Pack** list (ge007, then `<game>/assetpacks`): changing either redraws the model with the new
   textures; lists are read again each time they open.
 - **Animation** panel: all 170 animations, from the export's `animations/<name>.gltf` (one animation on the guard rig
   per file, listed in `characters.json`, loaded when chosen), retargeted onto the chosen body by node name: the animated rotations on the body's own joints, the root's height times the
@@ -100,7 +100,7 @@ where you run the command. `shots` takes `--mod` and `--texpack` too.
 `pc/mv_mesh.h` (the data model: joint-local vertices, UV, RGBA, joint id, layer; joints with a rest offset; materials
 with the export's image), `pc/mv_export.h/.cpp` (the export: `characters.json` through cJSON, the glTF through
 cgltf, body + head assembly, posing from `animations/<name>.gltf` retargeted by node name, and the texture
-sources `mv_tex_*`: the mod over the pack through `ge_assets` (`port/assets/`: `ge_pkg.c`, `ge_png.c`, `ge_texpacks.c`, `ge_tex.c`, built without zlib, `GE_PNG_NO_ZLIB`)), `pc/mv_subdiv.h/.cpp` (the method
+sources `mv_tex_*`: the mod over the pack through `ge_assets` (`port/assets/`: `ge_pkg.c`, `ge_png.c`, `ge_texpacks.c`, `ge_tex.c`, `ge_assetstack.c`, built without zlib, `GE_PNG_NO_ZLIB`)), `pc/mv_subdiv.h/.cpp` (the method
 interface, edge classification, FLAT, PN through `conv_subdiv.c`, PHONG, BUTTERFLY, LOOP), `pc/mv_head.cpp` (HEAD),
 `pc/mv_mannequin.cpp` (the test model), `pc/modelview.cpp` (window, GL, the ImGui panel, `.ini`),
 `pc/mv_imgui.h/.cpp` (ImGui renderer and input; ImGui, cgltf and cJSON are `port/third_party`), `pc/mv_zlib.cpp` +

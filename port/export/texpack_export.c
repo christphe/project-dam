@@ -103,7 +103,7 @@ int ex_export_textures(const char *rom_path, const char *pack_dir, ExLogFn log, 
 
     memset(&js, 0, sizeof js);
     ex_jp(&js, "{\n  \"name\": \"GoldenEye 007\",\n  \"author\": \"Rare\",\n  \"description\": ");
-    ex_jstr(&js, "The game's own textures, exported from your ROM. GoldenEye 007 (c) 1997 Nintendo / Rare.");
+    ex_jstr(&js, "The game's own assets (textures, levels, models, characters, labels, music, sounds), exported from your ROM. GoldenEye 007 (c) 1997 Nintendo / Rare.");
     ex_jp(&js, ",\n  \"base\": true,\n  \"region\": "); ex_jstr(&js, region);
     ex_jp(&js, ",\n  \"exporter_version\": %d\n}\n", EX_EXPORTER_VERSION);
     snprintf(path, sizeof path, "%s/pack.json", pack_dir);
@@ -115,65 +115,4 @@ int ex_export_textures(const char *rom_path, const char *pack_dir, ExLogFn log, 
     ex_tex_table_close(&tbl);
     free(rom);
     return bad;
-}
-
-int ex_pack_version(const char *pack_dir)
-{
-    char path[1300], buf[2048];
-    FILE *f;
-    size_t n;
-    const char *p;
-    snprintf(path, sizeof path, "%s/pack.json", pack_dir);
-    f = fopen(path, "rb");
-    if (!f) return -1;
-    n = fread(buf, 1, sizeof buf - 1, f);
-    fclose(f);
-    buf[n] = 0;
-    p = strstr(buf, "\"exporter_version\"");
-    if (!p) return -1;
-    p = strchr(p + 18, ':');
-    if (!p) return -1;
-    p++;
-    while (*p == ' ' || *p == '\t') p++;
-    if (*p < '0' || *p > '9') return -1;
-    return atoi(p);
-}
-
-/* Removes a pack folder written by ex_export_textures (its known files; the folders when they are empty). */
-static void remove_pack(const char *dir)
-{
-    char path[1300];
-    for (int n = 0; n < PACK_TEXTURES; n++) {
-        snprintf(path, sizeof path, "%s/textures/%d.png", dir, n);
-        remove(path);
-    }
-    snprintf(path, sizeof path, "%s/textures", dir);
-#ifdef _WIN32
-    _rmdir(path);
-#else
-    rmdir(path);
-#endif
-    snprintf(path, sizeof path, "%s/pack.json", dir); remove(path);
-    snprintf(path, sizeof path, "%s/textures.json", dir); remove(path);
-#ifdef _WIN32
-    _rmdir(dir);
-#else
-    rmdir(dir);
-#endif
-}
-
-int ex_ensure_base_pack(const char *rom_path, const char *pack_dir, ExLogFn log, void *user)
-{
-    char tmp[1300];
-    if (ex_pack_version(pack_dir) == EX_EXPORTER_VERSION) return 1;
-    snprintf(tmp, sizeof tmp, "%s.tmp", pack_dir);
-    remove_pack(tmp);                      /* a killed earlier run */
-    if (ex_export_textures(rom_path, tmp, log, user)) { remove_pack(tmp); return -1; }
-    remove_pack(pack_dir);                 /* the older pack (rename does not replace a folder on Windows) */
-    if (rename(tmp, pack_dir)) {
-        ex_logf(log, user, "texture pack: cannot rename %s to %s", tmp, pack_dir);
-        remove_pack(tmp);
-        return -1;
-    }
-    return 0;
 }

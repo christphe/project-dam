@@ -46,51 +46,12 @@ extern void gunRequestHandWeaponChange(enum GUNHAND hand, s32 nextWeapon, s32 cy
 #include "input/input_types.h"
 #include "input/n64bridge.h"
 #include "input/style_modern.h"
-#include "input/style_enhanced.h"
-#include "input/style_original.h"
 #include "input/input_internal.h"
 
 struct aimSlotState g_inputAimSt[4];
-int inputAimModeGet(void)
-{
-    if (g_inputAimStyleLegacy == 2 && g_inputAimMode == AIMMODE_N64) {   /* one-time migration */
-        g_inputAimMode = AIMMODE_CENTRED;
-    }
-    g_inputAimStyleLegacy = 0;
-    g_inputPdMouseAim = 0;
-    /* D422: every slot gets the configured mode (the aim state is per slot;
-     * inputPadDirectCompute is stateless and acts on inputSlotPlayer()). */
-    /* the style belongs to the device that aims, and is fixed from the moment the aim begins to the moment it ends */
-    static int latched = -1;
-    const int dev = g_inputAimDevMouse ? AIMMODE_CENTRED : g_inputAimMode;   /* the mouse always aims Centered; Input.AimMode is the gamepad's */
-    struct player *p = inputSlotPlayer();
-    if (p && p->insightaimmode) {
-        if (latched < 0) latched = dev;
-        return latched;
-    }
-    latched = -1;
-    return dev;
-}
-
 /* Auto-aim is for a pad: while the mouse is the device that aims (player 1), the game gets it off (GE_AUTOAIM_ON). */
 extern s32 get_cur_playernum(void);
 int portAimIsMouse(void) { return g_inputAimDevMouse && get_cur_playernum() == 0; }
-
-/* D337: which device drove aim last. PD picks its crosshair damp per input
- * device; the mouse integration must not swallow a gamepad's stick aim just
- * because the mouse happens to be grabbed. Set by mouse motion, cleared by a
- * deflected pad stick (inputComputePad). */
-
-/* D338: Input.AimRange -- how far the N64-mode crosshair can travel.
- *   0 = PC (default, the GEPD/mouse-injector feel): the crosshair reaches the
- *       screen edge, camera edge-scroll from 72% of the way there.
- *   1 = N64: the original stick limits. N64 aim turns the crosshair by
- *       stick*0.65/80 per tick, so full deflection settles at 65% of the
- *       half-width whatever the weapon damp, and the camera starts turning past
- *       stick 60/80 -- 75% of that range (~49% of the half-width). */
-int g_inputAimRange = 0;
-double inputAimRangeScale(void)   { return g_inputAimRange ? 0.65 : 1.0; }
-static double aimEdgeThreshold(void) { return g_inputAimRange ? 0.75 : (double)GEPD_EDGE_THRESHOLD; }
 
 /* D422: FOV of the player that owns the polled slot. In a split-screen
  * stage the poll thread's viGetFovY() is whichever player the game thread
@@ -106,183 +67,8 @@ static f32 slotFovY(void)
     return viGetFovY();
 }
 
-int inputPdMouseAimEnabled(void)
-{
-    const char *e = GE_ENVSTR("GE_PDMOUSEAIM");
-    if (e) return atoi(e) != 0;
-    return inputAimModeGet() == AIMMODE_N64 && !g_inputAimLegacyGepd;
-}
-
-/* D194 GEPD-aim state. Touched ONLY in inputComputePad (game thread), the
- * same confinement as every other static here. The per-poll grabbed delta
- * drives the view, so there is no free-running angle accumulator for
- * multi-tick catch-up (D193) to double-consume; the frac carry only dithers
- * this poll's stick quantization. */
-/* D194 GEPD-mirror aim state: the crosshair position accumulator in game
- * units (±GEPD_CROSSHAIR_LIMIT at the screen edge). Written straight into
- * inputSlotPlayer()->crosshair_x/y_pos + gun_azimuth_angle/turning each tick;
- * bondview2's damped crosshair update keeps running and is simply
- * overwritten each tick (GEPD model, D194). */
-/* D422: the aim accumulators are per controller slot (seat), so any slot can
- * own a centred / GEPD aim state (online-ready input layer). Only the
- * keyboard/mouse block touches them today, and it runs for slot 0 only, so
- * solo reads/writes exactly slot 0 as before. AIMS = the slot being polled;
- * off the poll (g_inputSlot == -1, game thread) it is slot 0, as before. */
-struct aimSlotState g_inputAimSt[4];
-/* D194 absolute (cursor-anchored) aim mode -- GEPD "mouse injector" style.
- *
- * Instead of synthesizing a velocity stick from this poll's mouse delta
- * (which can only ever be one of ten discrete (stick-60)/10 speeds, with a
- * hard 10%-speed floor on the smallest nonzero nudge), drive the game's own
- * aim-speed plant as a closed position loop: the cursor's screen position IS
- * the desired aim direction. On RMB press / every mouse move we record the
- * view angles that would put the point under the cursor at screen center;
- * each poll we emit a stick proportional to the remaining angular error, so
- * the crosshair slews to the cursor and HOLDS there -- stationary cursor =
- * stationary aim (even while walking), no floor jump, no release snap.
- *
- * Returns 1 if it handled this poll (callers must use outSx/outSy); 0 means
- * fall back to the legacy velocity stick (grabbed mouse, menus, gamepad,
- * degenerate geometry).
- */
-/* D194 GEPD-mirror aim -- direct crosshair/camera writes.
- *
- * Mirrors MouseInjectorPlugin (games/goldeneye.c) in model:
- *   - mouse motion moves a crosshair POSITION accumulator (not the view),
- *     clamped to ±GEPD_CROSSHAIR_LIMIT (the screen edge);
- *   - the accumulator is written straight into crosshair_x/y_pos and the
- *     gun/arm pose (gun_azimuth_angle/turning) via GEPD's formulas;
- *   - the view only scrolls when the crosshair passes 72% toward the edge:
- *     cam += (ratio-0.72)*475*timestep*(fov/basefov);
- *   - no look stick is emitted while active. bondview2's damped crosshair
- *     auto-centre (caclulate_gun_crosshair_position_rotation) keeps RUNNING
- *     -- exactly like GEPD, which patches nothing there: the per-frame
- *     overwrite simply wins over the damping, and the game derives
- *     crosshair_angle (HUD crosshair + aim ray) and field_FFC (arm/gun
- *     screen offset in gunUpdateAndFire) from our written values. On aim
- *     release we stop writing and the game's damping eases everything back
- *     to centre itself.
- *
- * Sensitivity: Input.GepdSens (GEPD SENSITIVITY setting; default 20 ~= 1:1
- * window-px per crosshair-screen-px at full zoom).
- *
- * Returns 1 if it handled this poll (callers must NOT emit a look stick);
- * 0 means fall back to the legacy velocity stick.
- */
-/* Accumulate this poll's mouse delta into the aim position. Shared by both
- * aim models: GEPD pushes the result into crosshair_x/y_pos itself, PD feeds
- * it to the game's integrator as the turn (see Input.PdMouseAim). Returns 0
- * if aim is not usable this poll. */
-int inputAimGepdAccumulate(double dxPx, double dyLook)
-{
-    struct player *p = inputSlotPlayer();
-
-    /* Needs the grabbed-cursor relative deltas (capture mode, locked in a
-     * stage) and a live player. dxPx/dyLook are this poll's px. */
-    if (!g_inputAimAbsolute || !g_inputMouseGrabbed || p == NULL)
-        return 0;
-
-    /* On entry adopt the game's current position (GEPD adopts every
-     * non-aim frame; input.c does that in the !aimHeld branch). */
-    if (!AIMS.gepdHeldPrev) {
-        AIMS.crossX = (double) p->crosshair_x_pos;
-        AIMS.crossY = (double) p->crosshair_y_pos;
-    }
-    AIMS.gepdHeldPrev = 1;
-
-    /* Crosshair position: GEPD crosshairpos += delta/10 * (SENS/292). */
-    /* D194/D238: master sensitivity scales aim mode too, so MouseSensitivity
-     * moves BOTH hipfire and aim together ("in line"); GepdSens sets the
-     * aim-mode offset from that shared baseline. At master=100 this is
-     * exactly the M-123-calibrated feel. */
-    double sens = (double) g_inputGepdSens / 2920.0 * (g_inputMouseSensitivity / 100.0);
-    AIMS.crossX += dxPx * sens;
-    AIMS.crossY += dyLook * sens;      /* +dyLook = look down = crosshair down */
-    if (AIMS.crossX >  GEPD_CROSSHAIR_LIMIT) AIMS.crossX =  GEPD_CROSSHAIR_LIMIT;
-    if (AIMS.crossX < -GEPD_CROSSHAIR_LIMIT) AIMS.crossX = -GEPD_CROSSHAIR_LIMIT;
-    if (AIMS.crossY >  GEPD_CROSSHAIR_LIMIT) AIMS.crossY =  GEPD_CROSSHAIR_LIMIT;
-    if (AIMS.crossY < -GEPD_CROSSHAIR_LIMIT) AIMS.crossY = -GEPD_CROSSHAIR_LIMIT;
-    return 1;
-}
-
-/* Camera edge-scroll: past GEPD_EDGE_THRESHOLD (72%) of the way to the
- * crosshair limit, scroll the view proportionally to the overshoot, scaled by
- * zoom like GEPD's (fov/basefov). This belongs to the aim POSITION, not to
- * whichever model owns the crosshair, so both call it -- PD's model needs it
- * too, or dragging the crosshair to the edge no longer moves the camera. */
-void inputAimGepdEdgeScroll(void)
-{
-    struct player *p = inputSlotPlayer();
-    f32 fov = slotFovY();
-
-    double rX = AIMS.crossX / GEPD_CROSSHAIR_LIMIT;
-    double rY = AIMS.crossY / GEPD_CROSSHAIR_LIMIT;
-    double aimx = 0.0, aimy = 0.0;
-    const double th = aimEdgeThreshold();   /* D338 */
-    if (rX >  th) aimx = (rX - th) * GEPD_SCROLL_SPEED / 60.0;
-    else if (rX < -th) aimx = (rX + th) * GEPD_SCROLL_SPEED / 60.0;
-    if (rY >  th) aimy = (rY - th) * GEPD_SCROLL_SPEED / 60.0;
-    else if (rY < -th) aimy = (rY + th) * GEPD_SCROLL_SPEED / 60.0;
-
-    f32 scale = (fov > 0.0f) ? fov / GEPD_BASE_FOV : 1.0f;
-    if (aimx != 0.0) {
-        /* GEPD does a bare `camx += ...` -- no [0,360) wrap. The game never
-         * wraps vv_theta in on-foot play either (bondviewApplyVertaTheta only
-         * sin/cos's it; the tank code is the sole wraper), so keep the
-         * accumulator unbounded. Wrapping turned a small negative edge-scroll
-         * step into a one-tick +360 spike in the raw value (D194 playtest log,
-         * line 534: cam 0.5 -> 359.7). */
-        p->vv_theta += (f32) aimx * scale;
-    }
-    if (aimy != 0.0) {
-        p->vv_verta -= (f32) aimy * scale;   /* crosshair low -> look down */
-        if (p->vv_verta >  90.0f) p->vv_verta =  90.0f;
-        if (p->vv_verta < -90.0f) p->vv_verta = -90.0f;
-    }
-}
-
-int inputAimGepdCompute(double dxPx, double dyLook)
-{
-    struct player *p = inputSlotPlayer();
-
-    if (!inputAimGepdAccumulate(dxPx, dyLook))
-        return 0;
-
-    f32 fov = slotFovY();
-    f32 fovratio = (fov > 0.0f) ? fov / GEPD_BASE_FOV : 1.0f;
-
-    /* Pre-overwrite residue: what last tick's damped update left behind
-     * (crosshair_pos = pos*damp + turn, gunfire.c caclulate_gun_crosshair_...
-     * runs AFTER our write each tick). The gap between this and our write
-     * below is the game-side turn term (autoaimx/y or speedtheta*0.3) --
-     * logged for the D194 spazz diagnosis. */
-    double resX = (double) p->crosshair_x_pos;
-    double resY = (double) p->crosshair_y_pos;
-
-    /* Crosshair + gun/arm pose (GEPD formulas, RATIOFACTOR=1 for our 4:3
-     * viewport; failsafe weapon offsets 0.15/0 as in goldeneye.c). */
-    p->crosshair_x_pos = (f32) (AIMS.crossX * inputAimRangeScale());   /* D338 */
-    p->crosshair_y_pos = (f32) (AIMS.crossY * inputAimRangeScale());
-    p->gun_azimuth_angle   = (f32) (AIMS.crossX * (1.11f + 0.15f * 1.5f) + fovratio - 1.0f);
-    p->gun_azimuth_turning = (f32) (AIMS.crossY * 1.11f + fovratio - 1.0f);
-
-    inputAimGepdEdgeScroll();
-
-    if (configGetInputLog()) {
-        /* ct = g_ClockTimer: game ticks batched into this poll. If the
-         * displayed crosshair shrinks by damp^ct with ct varying tick to
-         * tick (frame-pacing catch-up), game= will show fluctuating shrink
-         * at d=(0,0) -- the multi-tick spazz hypothesis. */
-        sysLogPrintf(LOG_NOTE,
-            "GE_INPUTLOG gepdaim d=(%.1f,%.1f) cross=(%.2f,%.2f) game=(%.2f,%.2f) aa=(%.2f,%.2f) st=%.3f sv=%.3f ct=%d cam=(%.1f,%.1f)",
-            dxPx, dyLook, AIMS.crossX, AIMS.crossY, resX, resY,
-            (double)p->autoaimx, (double)p->autoaimy,
-            (double)p->speedtheta, (double)p->speedverta,
-            g_ClockTimer, (double)p->vv_theta, (double)p->vv_verta);
-    }
-    return 1;
-}
-
+/* D422: the aim state is per controller slot (seat). AIMS = the slot being polled;
+ * off the poll (g_inputSlot == -1, game thread) it is slot 0. */
 /* WI-1 (GEPD-INPUT-PLAN.md #89): hipfire direct camera write.
  *
  * Mirrors GEPD's hipfire branch (games/goldeneye.c): `camx += XPOS/10 *
@@ -435,9 +221,6 @@ int inputHipDirectCompute(double dxPx, double dyLook)
  * turn rates after the natural-turn curve, as the game would hold them. */
 void inputPadAimSway(struct player *p, double speedTheta, double speedVerta)
 {
-    if (inputAimModeGet() != AIMMODE_CENTRED) {
-        return;
-    }
     p->gun_azimuth_angle   -= (f32)(speedTheta * 0.3);    /* trails the turn */
     p->gun_azimuth_turning -= (f32)(-speedVerta * 0.1);
 }
@@ -547,37 +330,6 @@ int inputPadDirectCompute(int dx, int dy)
             "GE_INPUTLOG paddirect d=(%d,%d) cam=(%.1f,%.1f)",
             dx, dy, (double)p->vv_theta, (double)p->vv_verta);
     }
-    return 1;
-}
-
-/* --- Input.PdMouseAim: the port side of PD's mouse-aim model ----------------
- * See the flag's comment above for the design. PD's own implementation lives
- * in its GAME files (bondmove.c/bondgun.c) behind `#ifndef PLATFORM_N64`, with
- * the port supplying the input; we mirror that with `#ifdef PORT` hooks in
- * GE's aim path (sub_GAME_7F067FBC, gunfire.c).
- *
- * The port accumulates the mouse delta (inputAimGepdAccumulate, shared with GEPD's
- * model) and the game's own crosshair integrator does the rest. PD's range is
- * swivelpos in [-1,1] == the screen edge, which is what the game's display
- * formula maps to half a screen width; GEPD's crosshair limit is that same
- * edge in its own units, so dividing by it gives PD's units. */
-int portMouseAimPdActive(void)
-{
-    /* D337: only while the mouse is the device driving aim -- otherwise the
-     * pad's stick turn (the N64 path, weapon damp) must reach the game. */
-    return inputPdMouseAimEnabled() && g_inputMouseGrabbed && g_inputAimDevMouse;
-}
-
-int portMouseAimPdGetTurn(f32 *tx, f32 *ty)
-{
-    if (!portMouseAimPdActive() || g_CurrentPlayer == NULL)
-        return 0;
-    if (inputMpSplit() && player_num != 0)   /* D416: the mouse owns player 0 only */
-        return 0;
-    /* Game thread: never AIMS (g_inputSlot belongs to the poll thread). The mouse
-     * lives on slot 0 (D422). */
-    if (tx) *tx = (f32) (g_inputAimSt[0].crossX / GEPD_CROSSHAIR_LIMIT * inputAimRangeScale());   /* D338 */
-    if (ty) *ty = (f32) (g_inputAimSt[0].crossY / GEPD_CROSSHAIR_LIMIT * inputAimRangeScale());
     return 1;
 }
 

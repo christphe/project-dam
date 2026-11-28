@@ -40,7 +40,7 @@ static int clampStick(int v)
     return v;
 }
 
-/* The stick roles of the port-driven styles (Modern, Enhanced): the menu stick,
+/* The stick roles of the Modern style: the menu stick,
  * SOLITARE (left = digital moves, right = look) or HONEY (left analog, right
  * digital), chosen by ctx.menu and cfg.naturalPitch. */
 void inputMapSticks(const InputSnapshot *in, InputStrategyState *st, InputCommands *o)
@@ -107,7 +107,7 @@ static int safeAxis(int v)
 
 int inputDirectMoveDecide(const InputContext *ctx, const InputCommands *cmds, int *walk, int *strafe)
 {
-    if (cmds->mode != INMODE_SOLITARE) return 0;   /* menu, HONEY (the left stick is already the analog N64 stick), Original */
+    if (cmds->mode != INMODE_SOLITARE) return 0;   /* menu, HONEY (the left stick is already the analog N64 stick) */
     if (!ctx->padDrives || !ctx->facePlayable) return 0;   /* keyboard seat; menu / watch / pause / locked / dead / tank are not playable */
     if (ctx->menu || ctx->tank || ctx->dead || ctx->aiming) return 0;   /* aiming keeps the C-bit moves */
     *walk = safeAxis(cmds->walk);

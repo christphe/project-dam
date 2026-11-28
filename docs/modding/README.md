@@ -112,19 +112,20 @@ texture number `n` (0 to 4095, the game's own numbering) in every mission of the
 - **Where it shows:** in the editor's view, and in the game while one of the mod's missions is played, over the player's
   texture pack (below). *Check mod* flags a file in `textures/` that is not `<number>.png` or not a readable PNG.
 
-## Texture packs
+## Asset packs (texture packs)
 
-A texture pack replaces the game's textures everywhere, for every level and mod. It is a `.ptexpack` file, a plain
-uncompressed `tar` like a `.pmod`, holding:
+An asset pack replaces the game's textures everywhere, for every level and mod (other kinds of assets follow: `docs/specs/asset-packs.md`).
+It is a `.passets` file (`.ptexpack`, the older name, still works), a plain uncompressed `tar` like a `.pmod`, holding:
 
 ```
 pack.json              optional: {"name": "...", "author": "...", "description": "..."}
 textures/<n>.png       the picture of texture n (same rules as a mod's textures above)
 ```
 
-Put it in `texturepacks/` next to the game's `data/` folder (on the Switch `sdmc:/switch/project-dam/texturepacks/`) and
-choose it in the game's menu, Video > Texture pack (one pack at a time; *None* turns it off). The change shows at once,
-also in a mission. A mod's own textures win over the pack's. An unpacked folder `X.ptexpack/` works like the file. To make one: `tar -cf mine.ptexpack pack.json
+Put it in `assetpacks/` next to the game's `data/` folder (on the Switch `sdmc:/switch/project-dam/assetpacks/`; the older
+`texturepacks/` is still read) and enable it in the game's menu, Video > Asset packs. Any number of packs can be enabled:
+where two have the same texture, the one higher in the order wins, and every pack may be partial. The change shows at once,
+also in a mission. A mod's own textures win over the pack's. An unpacked folder `X.passets/` works like the file. To make one: `tar -cf mine.passets pack.json
 textures` from the pack's folder.
 
 The editor draws a level with the pack of your choice (Mod tab > Textures, or Tools > Settings), to see how a mission looks

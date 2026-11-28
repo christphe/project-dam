@@ -28,7 +28,7 @@ that edits them. How the menu binds them: [options-menu.md](options-menu.md).
   but still read by a migration are listed in `legacy` (`Video.NativeWidescreen`,
   `Video.WidescreenAuto` today).
 - **Keys outside the table:** some are registered without a default here: the key and pad
-  bindings (`Input.Bind.*`, `Input.Pad.*`), per-player device choices (`Input.Player<N>Pad`),
+  bindings (`Input.Bind.*`), per-player device choices (`Input.Player<N>Pad`),
   `Dev.Mode` (shows the menu's dev rows), `Menu.Language`, the `Debug.*` keys, and
   `Game.LookAheadLevel` (0..3, `port/src/switch/nxgame.c`: the Original / Low / Medium / High part
   of the per-profile Look ahead, written by the menu; one value for every profile).
@@ -49,7 +49,7 @@ that edits them. How the menu binds them: [options-menu.md](options-menu.md).
     `Game.AimZoom`. Off the Switch only (the Switch uses its docked/handheld state). `GE_HANDHELD=1` overrides it;
     `packaging/linux-arm64/project-dam-handheld.sh` sets it (#131).
 - **Per-profile settings** (`Bond.*` in the menu: music and FX volume, aim control, auto-aim, look ahead (Off, Original, Low, Medium or High; only Off / Original is in the save, the level is `Game.LookAheadLevel` above),
-  sight and ammo on screen, control style of the Original scheme) are not in the ini, apart from that level: they live
+  sight and ammo on screen) are not in the ini, apart from that level: they live
   in the save file, as on the N64.
 - **One-off override (test builds):** `GE_CFG="Key=value;Key2=value2"` sets values for one run and
   the ini is not written back. See [testing-on-switch.md](testing-on-switch.md).
@@ -76,14 +76,8 @@ option's position or its `value` in `menu.json`.
 | `Game.ScreenShakeIntensity` | 1 | 1 | Video > Effects > Explosion shake |
 | `Game.SkipIntro` | 0 | 0 | Game > Gameplay > Skip intro |
 | `Game.SplitScreen` | 0 | 0 | Video > Display > Split screen |
-| `Input.AimMode` | 1 | 1 | Input > Aiming > Aim style |
-| `Input.AimRange` | 0 | 0 | Input > Aiming > Aim range |
-| `Input.ControlScheme` | 2 | 2 | Input > Style > Control style (0 Enhanced, 1 Original, 2 Modern) |
-| `Input.ControlScheme2` | 2 | 2 | Input > Style > Control style, for player 2 |
-| `Input.ControlScheme3` | 2 | 2 | Input > Style > Control style, for player 3 |
-| `Input.ControlScheme4` | 2 | 2 | Input > Style > Control style, for player 4 |
 | `Input.CrosshairCursor` | 1 | 1 | Input > Mouse > Crosshair pointer |
-| `Input.CrouchMode` | 1 | 1 | Input > Style > Crouch |
+| `Input.CrouchMode` | 1 | 1 | Input > Controls > Crouch |
 | `Input.MouseEnabled` | 1 | 1 | Input > Mouse > Mouse enabled |
 | `Input.MouseInvertY` | 0 | 0 | Input > Mouse > Invert look |
 | `Input.MouseRawInput` | 0 | 0 | Input > Mouse > Raw input |
@@ -99,10 +93,6 @@ option's position or its `value` in `menu.json`.
 | `Input.PadLookSensX` | 85 | 100 | Input > Look and sticks > Horizontal look sensitivity |
 | `Input.PadLookSensY` | 85 | 100 | Input > Look and sticks > Vertical look sensitivity |
 | `Input.PadLookSmooth` | 2 | 0 | Input > Look and sticks > Look smoothing |
-| `Input.PadPreset` | 0 | 0 | Input > Style > Layout (Enhanced) |
-| `Input.PadPreset2` | 0 | 0 | Input > Style > Layout, for player 2 |
-| `Input.PadPreset3` | 0 | 0 | Input > Style > Layout, for player 3 |
-| `Input.PadPreset4` | 0 | 0 | Input > Style > Layout, for player 4 |
 | `Input.PadSouthpaw` | 0 | 0 | Input > Look and sticks > Southpaw |
 | `Input.PadTriggerPct` | 10 | 25 | Input > Look and sticks > Trigger threshold |
 | `Input.PadTurnAccel` | 2 | — | Input > Look and sticks > Turn acceleration |
@@ -134,7 +124,7 @@ option's position or its `value` in `menu.json`.
 | `Video.SafeAreaCrop` | 1 | 1 | Video > Display > Crop overscan |
 | `Video.SkyScale` | — | 0 | Video > Performance > Sky and sea detail |
 | `Video.TextureFilter` | 1 | 1 | Video > Performance > Texture filter |
-| `Video.TexturePack` | "" | "" | Video > Texture pack (a file name in `texturepacks/`; not in `defaults.json`: empty means none) |
+| `Video.AssetPacks` | "" | "" | Video > Asset packs: the enabled packs, file names in `assetpacks/` (or `texturepacks/`), highest priority first, `;`-separated; not in `defaults.json`: empty means none. An older `Video.TexturePack` moves into it once (`docs/specs/asset-packs.md`) |
 | `Video.VSync` | 1 | 1 | Video > Performance > VSync |
 | `Video.Visuals` | 2 | 2 | Video > Display > Visuals |
 

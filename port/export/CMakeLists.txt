@@ -33,6 +33,10 @@ configure_file("${CMAKE_CURRENT_BINARY_DIR}/anim_names.h.tmp" "${CMAKE_CURRENT_B
 file(GLOB EXPORT_SRC "${CMAKE_CURRENT_SOURCE_DIR}/*.c")
 list(FILTER EXPORT_SRC EXCLUDE REGEX "ge007_export_cli[.]c$")
 list(FILTER EXPORT_SRC EXCLUDE REGEX "zz_[^/]*[.]c$")
+# the audio export (music as MIDI + SF2, sound effects as WAV) goes into the base asset pack too
+foreach(_a ge_audio_common ge_audio_seq ge_audio_bank ge_audio_sf2 ge_audio_sfx ge_audio_dirs)
+  list(APPEND EXPORT_SRC "${CMAKE_CURRENT_SOURCE_DIR}/audio/${_a}.c")
+endforeach()
 add_library(ge007_export STATIC ${EXPORT_SRC})
 target_include_directories(ge007_export PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(ge007_export PRIVATE "${ZLIB_INCLUDE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/generated")

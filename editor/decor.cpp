@@ -18,6 +18,7 @@ extern "C" {
 
 extern "C" {
 #include "ge_pkg.h"
+#include "ge_png.h"
 #include "ge_tex.h"
 }
 
@@ -39,6 +40,40 @@ static std::string dirOf(const std::string &p)
     const size_t s = p.find_last_of("/\\");
     return s == std::string::npos ? std::string(".") : p.substr(0, s);
 }
+
+// A path with its "a/.." pairs collapsed and backslashes made '/': the glTFs of an asset pack name their pictures "../../textures/N.png", and
+// the package layer (ge_pkg.h) takes the path as it is.
+static std::string normPath(const std::string &in)
+{
+    std::vector<std::string> seg;
+    std::string cur, out;
+    const bool abs = !in.empty() && (in[0] == '/' || in[0] == '\\');
+    for (size_t i = 0; i <= in.size(); i++) {
+        if (i == in.size() || in[i] == '/' || in[i] == '\\') {
+            if (cur == "..") {
+                if (!seg.empty() && seg.back() != ".." && seg.back().find(':') == std::string::npos) seg.pop_back();
+                else seg.push_back(cur);
+            } else if (!cur.empty() && cur != ".") seg.push_back(cur);
+            cur.clear();
+        } else cur += in[i];
+    }
+    if (abs) out = "/";
+    for (size_t i = 0; i < seg.size(); i++) out += (i ? "/" : "") + seg[i];
+    return out;
+}
+
+// cgltf's file reader, through the package layer: a .bin inside an asset pack (a tar or a folder) reads like a loose file.
+static cgltf_result pkgGltfRead(const cgltf_memory_options *, const cgltf_file_options *, const char *path, cgltf_size *size, void **data)
+{
+    uint8_t *buf = nullptr;
+    size_t n = 0;
+    if (!pkgReadFile(normPath(path).c_str(), &buf, &n)) return cgltf_result_file_not_found;
+    *size = n;
+    *data = buf;
+    return cgltf_result_success;
+}
+
+static void pkgGltfRelease(const cgltf_memory_options *, const cgltf_file_options *, void *data) { pkgFree(data); }
 
 static bool extrasInt(const cgltf_extras &ex, const char *key, int &out)
 {
@@ -89,14 +124,20 @@ static bool resolveTexture(const TexSet &texs, const std::string &key, DecorTex 
 DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out, std::string &msg, const TexSet *texs, bool model)
 {
     out = Decor();
-    FILE *probe = fopen(gltfPath.c_str(), "rb");
-    if (!probe) { msg = "no glTF export at " + gltfPath; return DECOR_MISSING; }
-    fclose(probe);
+    // The glTF is read through the package layer, so gltfPath may sit inside an asset pack tar ("<x>/ge007.passets/levels/dam/dam.gltf");
+    // the .bin comes through the same reader (opt.file) and the pictures by their texture key (ge_tex), else by the uri, normalised.
+    uint8_t *json = nullptr;
+    size_t jsonLen = 0;
+    if (!pkgReadFile(normPath(gltfPath).c_str(), &json, &jsonLen)) { msg = "no glTF export at " + gltfPath; return DECOR_MISSING; }
 
     cgltf_options opt;
     memset(&opt, 0, sizeof opt);
+    opt.file.read = pkgGltfRead;
+    opt.file.release = pkgGltfRelease;
     cgltf_data *data = nullptr;
-    if (cgltf_parse_file(&opt, gltfPath.c_str(), &data) != cgltf_result_success) { msg = "cannot parse " + gltfPath; return DECOR_BAD; }
+    const cgltf_result parsed = cgltf_parse(&opt, json, jsonLen, &data);
+    pkgFree(json);
+    if (parsed != cgltf_result_success) { msg = "cannot parse " + gltfPath; return DECOR_BAD; }
     struct Guard { cgltf_data *d; ~Guard() { cgltf_free(d); } } guard{ data };
 
     int ver = 0;
@@ -106,7 +147,7 @@ DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out
         msg = "glTF export has exporter_version " + std::to_string(ver) + ", this build writes " + std::to_string(expectVersion);
         return DECOR_STALE;
     }
-    if (cgltf_load_buffers(&opt, data, gltfPath.c_str()) != cgltf_result_success) { msg = "cannot read the .bin of " + gltfPath; return DECOR_BAD; }
+    if (cgltf_load_buffers(&opt, data, normPath(gltfPath).c_str()) != cgltf_result_success) { msg = "cannot read the .bin of " + gltfPath; return DECOR_BAD; }
 
     const std::string dir = dirOf(gltfPath);
     std::map<std::string, int> texOfImage;   // texture key (or image uri) -> index in out.tex
@@ -146,12 +187,19 @@ DecorResult decorLoad(const std::string &gltfPath, int expectVersion, Decor &out
                     bool got = !key.empty() && texs && resolveTexture(*texs, key, dt, out.texWarnings);
                     if (!got) {   // no source has it: the glTF's own picture
                         int w = 0, h = 0;
-                        const std::string p = dir + "/" + t->image->uri;
+                        const std::string p = normPath(dir + "/" + t->image->uri);
+                        uint8_t *file = nullptr, *px = nullptr;
+                        size_t flen = 0;
                         dt.rgba.clear();
-                        if (readPng(p.c_str(), w, h, dt.rgba)) {
-                            dt.w = dt.origW = w; dt.h = dt.origH = h; dt.path = p; dt.source = -1; dt.surface = -1;
-                            got = true;
-                            if (texs && texs->pack()) noSource.push_back(key.empty() ? std::string(t->image->uri) : key);
+                        if (pkgReadFile(p.c_str(), &file, &flen)) {
+                            if (gePngDecode(file, flen, &w, &h, &px)) {
+                                dt.rgba.assign(px, px + (size_t)w * h * 4);
+                                free(px);
+                                dt.w = dt.origW = w; dt.h = dt.origH = h; dt.path = p; dt.source = -1; dt.surface = -1;
+                                got = true;
+                                if (texs && texs->pack()) noSource.push_back(key.empty() ? std::string(t->image->uri) : key);
+                            }
+                            pkgFree(file);
                         }
                     }
                     if (got) { out.tex.push_back(std::move(dt)); ti = texOfImage.emplace(id, (int)out.tex.size() - 1).first; }

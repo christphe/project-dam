@@ -1,4 +1,4 @@
-/* The weapon wheel and the gadget wheel of the Modern control style (Input.ControlScheme 2).
+/* The weapon wheel and the gadget wheel of the pad control style.
  *
  * LB held opens the weapon wheel, RB the gadget wheel: the right stick picks a sector, letting go of the button
  * equips it. While a wheel is open the player's pad is neutral (no look, no move), and the menu layer draws the
@@ -129,7 +129,7 @@ void portWheelGameTick(void)
         const int pd = inputSlotPadSeat(seat);
         int kind = KIND_NONE, n = 0;
         struct WheelItem items[WHEEL_MAX];
-        if (p && inputPadIsModern(seat)) {
+        if (p) {
             const int lb = inputPadButton(pd, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) != 0;
             const int rb = inputPadButton(pd, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) != 0;
             const int want = lb ? KIND_WEAPONS : (rb ? KIND_GADGETS : KIND_NONE);

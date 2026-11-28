@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Compare a static glTF level export (ge007-export, issue #150) with the
-game's own capture of the same level (`ge007 -level_NN --export-level DIR`,
-level.rec, issue #102).
+"""Compare the static export (the base asset pack ge007.passets, ge007-export, issue #150) with the
+game's own capture of a level (`ge007 -level_NN --export-level DIR`, level.rec, issue #102).
 
-  python tools_pc/export_vs_levelrec.py <gltf_level_dir> <levelrec_dir>
+<pack> is ge007.passets (an uncompressed ustar tar, or a folder made with --folder), or a folder holding it; it is read in
+place (tarfile), nothing is unpacked. The level is the capture's own (<levelrec_dir>/level.json "level"), or LEVEL when given.
+
+  python tools_pc/export_vs_levelrec.py <pack> <levelrec_dir> [LEVEL]
 
 Checks:
   * textures: every texture the glTF uses is found among the level.rec
@@ -12,23 +14,23 @@ Checks:
   * geometry: triangles per room, glTF node "room_<n>" vs the level.rec runs
     owned by room n.
 
-  python tools_pc/export_vs_levelrec.py --models <models_dir> <levelrec_dir>
+  python tools_pc/export_vs_levelrec.py --models <pack> <levelrec_dir>
 
 compares every object model of the level.rec (owners of kind 1, "object <n>")
-with <models_dir>/models.json (ge007-export, issue #119): triangle count of the
+with the pack's models/models.json (ge007-export, issue #119): triangle count of the
 default scene and the set of textures (matched by pixels, padded copies
 included).
 
-  python tools_pc/export_vs_levelrec.py --setup <setup.json> <levelrec_dir>
+  python tools_pc/export_vs_levelrec.py --setup <pack> <levelrec_dir> [setup.json|setup_mp.json]
 
-compares a setup.json (docs/specs/setup.md) with the capture's level.json: `scale`,
+compares the level's levels/<level>/setup.json of the pack (docs/specs/setup.md) with the capture's level.json: `scale`,
 the set of object model numbers (plus ammo box slot models with a quantity) against
 the `models[]` entries with guard false, the guard `body` values against the
 guard true entries; and, when that level.json has `pads`, every pad within float32
 precision.
-  python tools_pc/export_vs_levelrec.py --characters <characters_dir> <levelrec_dir>
+  python tools_pc/export_vs_levelrec.py --characters <pack> <levelrec_dir>
 
-compares every `guard <body id>` owner of the level.rec with <characters_dir>/characters.json
+compares every `guard <body id>` owner of the level.rec with the pack's characters/characters.json
 (docs/specs/characters.md): (1) every near-LOD triangle of the ROM body (raw positions) occurs in the capture;
 (2) the capture's joint matrices equal S(model scale) x G of some (animation, frame) of the export (accepted at
 1e-3; a blended live pose is reported, not failed); (3) the heads whose every vertex occurs in the capture.
@@ -37,9 +39,13 @@ Both inputs are ROM-derived and stay in the user's data folders. Stdlib only.
 """
 import json
 import os
+import posixpath
 import struct
 import sys
 import zlib
+
+import export_check   # the pack reader (tar or folder), same folder
+from export_check import Pack
 
 FNV_OFF, FNV_PRIME, MASK = 1469598103934665603, 1099511628211, (1 << 64) - 1
 
@@ -56,22 +62,20 @@ def fnv(rgba, w, h):
 
 
 
-def texture_png(gltf_dir, n):
-    """The picture of texture n for a glTF in gltf_dir: the base pack ge007.ptexpack the export points into
-    (docs/specs/texture-packs.md, found in a parent folder), else an older export's own textures/<n>.png."""
-    d = os.path.abspath(gltf_dir)
-    while True:
-        cand = os.path.join(d, "ge007.ptexpack", "textures", "%d.png" % n)
-        if os.path.isfile(cand):
-            return cand
-        up = os.path.dirname(d)
-        if up == d:
-            return os.path.join(gltf_dir, "textures", "%d.png" % n)
-        d = up
+PK = None   # the open pack
 
-def read_png(path):
-    data = open(path, "rb").read()
-    assert data[:8] == b"\x89PNG\r\n\x1a\n", path
+
+def rdjson(rel):
+    return json.loads(PK.read(rel).decode("utf-8"))
+
+
+def texture_png(n):
+    """The bytes of the picture of texture n: textures/<n>.png of the pack (the glTFs point at it with ../../textures/<n>.png)."""
+    return PK.read("textures/%d.png" % n)
+
+
+def read_png(data):
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
     pos, idat, w, h = 8, b"", 0, 0
     while pos < len(data):
         n, typ = struct.unpack(">I4s", data[pos:pos + 8])
@@ -180,8 +184,8 @@ def read_levelrec_models(path):
     return tex, models
 
 
-def compare_models(mdir, rdir):
-    idx = json.load(open(os.path.join(mdir, "models.json")))["models"]
+def compare_models(rdir):
+    idx = rdjson("models/models.json")["models"]
     tex, rec = read_levelrec_models(os.path.join(rdir, "level.rec"))
     bad = 0
     print("model file                      tris(ours/capture)  textures(ours/capture)  match")
@@ -191,7 +195,7 @@ def compare_models(mdir, rdir):
         ctris, ctex = rec[n]
         ours = []   # (texnum, hash, w, h, rgba)
         for tn in e.get("textures", []):
-            w, h, rgba = read_png(texture_png(os.path.join(mdir, os.path.dirname(e["gltf"])), tn))
+            w, h, rgba = read_png(texture_png(tn))
             ours.append((tn, fnv(rgba, w, h), w, h, rgba))
         matched, unmatched = set(), []
         for tn, hs, w, h, rgba in ours:
@@ -268,9 +272,9 @@ def compare_stan(g, rdir):
     return 1 if (room_bad or pt_bad or len(mine) != len(ref) or unresolved or bad_nb) else 0
 
 
-def compare_setup(sp, rdir):
-    """setup.json against level.json of a capture: scale, object model set, guard bodies (and pads when present)."""
-    s = json.load(open(sp))
+def compare_setup(rdir, name="setup.json"):
+    """The pack's setup.json of the capture's level against level.json: scale, object model set, guard bodies (and pads when present)."""
+    s = rdjson("levels/%s/%s" % (capture_level(rdir), name))
     ref = json.load(open(os.path.join(rdir, "level.json")))
     bad = 0
     sc = abs(s["scale"] - ref["scale"]) <= 1e-6 * abs(ref["scale"]) + 1e-6
@@ -357,9 +361,9 @@ def m4trs(t, q):
 
 def load_body(cdir, e):
     """The ROM body of a characters.json entry: stored-position triangles per list, the skin, per-frame joint matrices."""
-    gp = os.path.join(cdir, e["gltf"])
-    g = json.load(open(gp))
-    binb = open(gp[:-5] + ".bin", "rb").read()
+    gp = posixpath.join(cdir, e["gltf"])
+    g = rdjson(gp)
+    binb = PK.read(gp[:-5] + ".bin")
 
     def acc(ai):
         a = g["accessors"][ai]
@@ -438,8 +442,9 @@ def load_body(cdir, e):
     return tris, anims, skin
 
 
-def compare_characters(cdir, rdir):
-    cj = json.load(open(os.path.join(cdir, "characters.json")))
+def compare_characters(rdir):
+    cdir = "characters"
+    cj = rdjson(posixpath.join(cdir, "characters.json"))
     ents = {e["id"]: e for e in cj["characters"]}
     runs = read_levelrec_runs(os.path.join(rdir, "level.rec"))
     bad = 0
@@ -506,8 +511,8 @@ def compare_characters(cdir, rdir):
         hits = []
         for h in heads:
             try:
-                hg = json.load(open(os.path.join(cdir, h["gltf"])))
-                hb = open(os.path.join(cdir, h["gltf"])[:-5] + ".bin", "rb").read()
+                hg = rdjson(posixpath.join(cdir, h["gltf"]))
+                hb = PK.read(posixpath.join(cdir, h["gltf"])[:-5] + ".bin")
             except OSError:
                 continue
             tot = ok = 0
@@ -528,16 +533,42 @@ def compare_characters(cdir, rdir):
     return 1 if bad else 0
 
 
+def capture_level(rdir):
+    return json.load(open(os.path.join(rdir, "level.json")))["level"]
+
+
+def open_pack(arg):
+    """arg: ge007.passets (tar or folder), or a folder holding it"""
+    if os.path.isfile(arg) or (os.path.isdir(arg) and os.path.isfile(os.path.join(arg, "pack.json"))):
+        return Pack(arg)
+    cand = os.path.join(arg, "ge007.passets")
+    if os.path.exists(cand):
+        return Pack(cand)
+    raise OSError("no asset pack at %s (pass ge007.passets, or the folder holding it)" % arg)
+
+
 def main():
-    if sys.argv[1] == "--setup":
-        return compare_setup(sys.argv[2], sys.argv[3])
-    if sys.argv[1] == "--characters":
-        return compare_characters(sys.argv[2], sys.argv[3])
-    if sys.argv[1] == "--models":
-        return compare_models(sys.argv[2], sys.argv[3])
-    gdir, rdir = sys.argv[1], sys.argv[2]
-    level = os.path.basename(os.path.normpath(gdir))
-    g = json.load(open(os.path.join(gdir, level + ".gltf")))
+    global PK
+    args = sys.argv[1:]
+    mode = args.pop(0) if args and args[0] in ("--setup", "--characters", "--models") else None
+    if len(args) < 2:
+        print(__doc__)
+        return 2
+    try:
+        PK = open_pack(args[0])
+    except OSError as e:
+        print("export_vs_levelrec: %s" % e)
+        return 2
+    export_check.PK = PK
+    rdir = args[1]
+    if mode == "--setup":
+        return compare_setup(rdir, args[2] if len(args) > 2 else "setup.json")
+    if mode == "--characters":
+        return compare_characters(rdir)
+    if mode == "--models":
+        return compare_models(rdir)
+    level = args[2] if len(args) > 2 else capture_level(rdir)
+    g = rdjson("levels/%s/%s.gltf" % (level, level))
     tex, rec_tris = read_levelrec(os.path.join(rdir, "level.rec"))
     rec_by_hash = {t[0]: t for t in tex}
 
@@ -545,7 +576,7 @@ def main():
                    if m.get("extras", {}).get("texnum", -1) >= 0})
     exact, padded, runtime, close, missing = 0, 0, [], [], []
     for n in used:
-        w, h, rgba = read_png(texture_png(gdir, n))
+        w, h, rgba = read_png(texture_png(n))
         if fnv(rgba, w, h) in rec_by_hash:
             exact += 1
             continue

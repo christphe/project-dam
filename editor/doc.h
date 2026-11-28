@@ -56,15 +56,15 @@ struct Level {
     std::vector<OwnerInfo> owners;     // parallel to rec.owners
     std::vector<LTri> roomTris;        // room geometry for picking (the glTF decor's when it is in use, else level.rec's)
     std::vector<LTri> roomTrisRec;     // the same from level.rec's room runs
-    // The decor (rooms) from the static glTF export (<gltf root>/<level>/<level>.gltf, issue #150); level.rec then only supplies
+    // The decor (rooms) from the static glTF export (<pack>/levels/<level>/<level>.gltf in ge007.passets, issue #150); level.rec then only supplies
     // the models (props, guards). GE_EDITOR_DECOR=rec forces level.rec's rooms.
     bool hasDecor = false;
     Decor decor;
-    std::string gltfRoot;              // the folder holding <level>/<level>.gltf; "" = look beside / inside the export folder
+    std::string gltfRoot;              // the folder holding ge007.passets (the game cache); "" = look beside / inside the export folder
     const TexSet *texSet = nullptr;    // the sources the decor's and the props' textures are resolved through: the open mod over the chosen texture pack (Doc owns it)
     std::string decorNote;             // what decor is drawn and why (for the log)
     bool decorNeedsExport = false;     // there is no current glTF export: the editor may run the game to write it
-    // The static model export (<gltf root>/models/, issue #119): the props are drawn from it when `useModels`, else from level.rec's
+    // The static model export (<pack>/models/ in ge007.passets, issue #119): the props are drawn from it when `useModels`, else from level.rec's
     // model runs (GE_EDITOR_MODELS=rec forces that). Guards always come from level.rec. The library is also the Props browser's "All models".
     ModelLib models;
     bool useModels = false;
@@ -216,13 +216,13 @@ struct Doc {
     void reloadDecor();
     // Reloads the decor when its texture sources changed (a mod opened or closed, another texture pack chosen).
     void syncModTextures();
-    // ---- texture packs: <game>/texturepacks/X.ptexpack (ge_texpacks.h); exactly one is chosen, ge007.ptexpack by default; the open mod's
+    // ---- texture packs: <game>/assetpacks/X.passets (ge_texpacks.h; an older X.ptexpack works too); exactly one is chosen, ge007.passets by default; the open mod's
     // textures are merged over it (docs/specs/texture-packs.md) ----
-    std::string texPack;                            // the chosen pack's file name ("hd.ptexpack"), "" = ge007.ptexpack
+    std::string texPack;                            // the chosen pack's file name ("hd.passets"), "" = ge007.passets
     TexSet texSet;                                  // the open mod and the chosen pack, what Level::texSet points at
-    std::string texturePacksRoot() const;           // the game's texturepacks folder: next to its data folder
-    std::string exportPackRoot() const;             // the export folder holding ge007.ptexpack (the open level's, else the game's cache), "" none
-    std::string basePackRoot() const;               // ge007.ptexpack: the game's copy, else the export's, "" none
+    std::string texturePacksRoot() const;           // the game's assetpacks folder: next to its data folder
+    std::string exportPackRoot() const;             // the export root holding ge007.passets (the open level's pack, else the game's cache), "" none
+    std::string basePackRoot() const;               // ge007.passets: the game's copy, else the export's, "" none
     std::string chosenPackRoot() const;             // the chosen pack's root ("" when there is no pack at all)
     std::string texSetSignature() const;            // what texSet should have been opened from now
     void openTexSet();                              // (re)opens texSet from the open mod and the chosen pack; the mod is read afresh

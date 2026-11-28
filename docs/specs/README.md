@@ -20,6 +20,7 @@ Rules for these pages:
 |---|---|
 | [level-decor.md](level-decor.md) | A level's decor file: header, room table, compressed room blocks, vertices, room positions, level scale, which file belongs to which level |
 | [textures.md](textures.md) | The texture bank: where the size table and the data are, the per-texture header, the two decompression families, the 13 pixel formats |
+| [asset-packs.md](asset-packs.md) | Asset packs: the `.passets` layout, where packs are found, the stack (`Video.AssetPacks`, the mod over the player's ordered, partial packs), the base pack, the menu. |
 | [texture-packs.md](texture-packs.md) | Texture packs: the `.ptexpack` layout, `pack.json`, `textures.json` (texture keys, surface and impact-sound classes, alpha rule, detail fields, reserved material fields), resolving a texture (mod over the chosen pack, packs complete), the base pack `ge007.ptexpack` the exporter writes and how the glTF exports point into it |
 | [display-lists.md](display-lists.md) | The display-list commands the room blocks use, including GE's texture-reference command, and how texture coordinates map to UVs |
 | [characters.md](characters.md) | Guard bodies and heads: the body/head table, how a head attaches, the shared skeleton and its half-rotation matrices, matrix skinning, the rest and bind poses, placement scale and `pov`, the animation table and frame / root-motion bit format, the skinned glTF export and its check against `level.rec` |

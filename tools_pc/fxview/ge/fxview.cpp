@@ -12,7 +12,7 @@
 //           --dzoom F  --walltex N  --texel F  --wallshade F  --sun 0|1 --sunaz DEG --sunel DEG  --pt 0|1 --ptx --pty --pth --ptr
 //   cluster: --dist N --holes N --cmat 0..6 --holesize F --seed N --fov DEG --sun 0|1 --diag coverage|veye|uv|pom|pomalpha|deriv
 //   common: --backend gl|vk|deko3d  --w N --h N  --frames N  --ui 0|1  --out DIR  --rom FILE.z64  --shaders DIR
-//           textures: --pack ge007.ptexpack (default: texturepacks/ beside the game, else written from the ROM into --out)  --texpack NAME|PATH  --mod PATH
+//           textures: --pack ge007.passets or a folder holding it (default: assetpacks/ beside the game, else written from the ROM into --out)  --texpack NAME|PATH  --mod PATH
 //           --probeframe N (default 12)  --probe X,Y (repeat)  --dump FILE.ppm  --shot FILE.png  --hold N  --selftest
 //
 // --probe X,Y (window pixels, top-left origin): "PROBE x y r g b a" in the log. --dump / --shot / --probe take frame 12 (the frame
@@ -1009,10 +1009,10 @@ int main(int argc, char **argv) {
         else if (!fxRomOpen(rom)) logf("fxview: ROM %s: %s", rom.c_str(), fxRomNote().c_str());
         else logf("fxview: %s (%s)", fxRomNote().c_str(), rom.c_str());
     }
-    {   // the textures: ge007.ptexpack (the game's own picture of every texture) under the chosen pack and mod; written from the ROM when absent
+    {   // the textures: ge007.passets (the game's own picture of every texture) under the chosen pack and mod; written from the ROM when absent
         std::string base = fxTexFindBase(a.pack, rom);
         if (base.empty() && !rom.empty()) {
-            const std::string made = a.out + "ge007.ptexpack";
+            const std::string made = a.out + "ge007.passets";
             std::string note;
             if (fxTexEnsureBase(rom, made, note)) base = made;
             logf("fxview: %s", note.c_str());

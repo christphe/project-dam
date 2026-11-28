@@ -20,7 +20,7 @@ to the log), --shot FILE.png, --w N --h N, --rom FILE.z64; tabs: --t SECONDS --t
 metal|wood|glass|water|snow|dirt|stone|blood --explo 0..20 (and --mrate --mscale --mvis --trrange --trperiod --bperiod --etail --tyaw --tpitch --tzoom --twall --twalltex --tseed);
 decal --view sheet [--page N]. Settings are saved to <out>/fxview.ini (loaded unless --shot/--probe/--dump; arguments win).
 
-The textures come from ge007.ptexpack (ge_assets): --pack, else FXVIEW_PACK, else texturepacks/ beside the game (build-win/...), else it is written from the
+The textures come from ge007.passets (ge_assets): --pack (the pack or a folder holding it), else FXVIEW_PACK, else assetpacks/ beside the game (build-win/...), else it is written from the
 ROM into the output folder once. The ROM: --rom, else FXVIEW_ROM / MODELVIEW_ROM / N64_ROM (environment or <repo>/.env, the main checkout's in a worktree), else the game's
 data/ folder (build-win/data, the Ryujinx SD's switch/project-dam/data). Nothing ROM-derived is written into the repo: shots and
 decalshots refuse an output dir inside it (except tools_pc/fxview/data/, git-ignored).
@@ -75,9 +75,9 @@ def find_rom(env):
 
 
 def find_pack(env):
-    """ge007.ptexpack: FXVIEW_PACK (environment), else a build folder of this checkout (or the main one) that has texturepacks/ge007.ptexpack; None = the viewer writes it from the ROM"""
+    """ge007.passets: FXVIEW_PACK (environment), else a build folder of this checkout (or the main one) that has assetpacks/ge007.passets; None = the viewer writes it from the ROM"""
     c = [os.environ["FXVIEW_PACK"]] if os.environ.get("FXVIEW_PACK") else []
-    c += [os.path.join(r, b, "texturepacks", "ge007.ptexpack") for r in devenv.roots() for b in ("build-win", "build-linux", "build-pc")]
+    c += [os.path.join(r, b, "assetpacks", "ge007.passets") for r in devenv.roots() for b in ("build-win", "build-linux", "build-pc")]
     for p in c:
         if os.path.isdir(p) or os.path.isfile(p):
             return os.path.abspath(p)

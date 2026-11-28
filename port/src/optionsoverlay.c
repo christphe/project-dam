@@ -61,6 +61,8 @@ extern MENU current_menu;
 #include "audio.h"
 #include "updatecheck.h"
 #include "texpack.h"
+#include "ge_assetstack.h"
+void menuRefreshAssetPacks(void);   /* menu_game.cpp: the list labels again */
 #include "../fast3d/gfx_api.h"
 
 /* file2.c; same extern as watchsettings.c (not in a header). */
@@ -103,7 +105,6 @@ extern void display_image_at_position(Gfx **DL, f32 *xypos, f32 *halfedxy, s32 w
 
 enum { ROW_TOGGLE, ROW_SLIDER, ROW_ENUM, ROW_MSAA, ROW_RES, ROW_ACTION, ROW_FPSCAP,
        ROW_HEADER, ROW_BOND_FILE, ROW_BIND /* key / mouse-button capture */,
-       ROW_PADBIND /* D469: gamepad button capture (per seat) */,
        ROW_PADSEAT /* D469: which controller seat the pad rows edit */,
        ROW_AUDIODEV /* D470: audio output device (string, cycles Default + enumerated) */,
        ROW_PADDEV /* the gamepad this player uses (Auto + the connected controllers) */ };
@@ -118,31 +119,18 @@ static const char *const kRenderer[]  = { "OpenGL", "Vulkan", NULL };   /* Video
 static const char *const kSkyScale[]   = { "Full", "Half (faster)", "Quarter (fastest)", NULL };   /* Video.SkyScale */
 static const char *const kVisuals[]   = { "Original", "Fixed", "Enhanced", NULL };   /* Video.Visuals (D982) */
 static const char *const kTexFilter[] = { "Nearest", "Bilinear", "3-point", "Trilinear", NULL };   /* Trilinear option (playtest 2026-10-03) */
-static const char *const kPadPreset[] = { "1.1 Jinx", "1.2 Christmas", "1.3 Frost", "Custom", "1.4 Elektra", NULL };   /* D498: index = stored value; inputPadPresetStep gives the display order */
-/* D516: the game's own control styles, shown in Original (index = style value). */
-static const char *const kOrigStyle[] = { "1.1 Honey", "1.2 Solitaire", "1.3 Kissy", "1.4 Goodnight",
-                                          "2.1 Plenty", "2.2 Galore", "2.3 Domino", "2.4 Goodhead", NULL };
 static int s_padSeat = 0;   /* D469: seat edited by the Controller page rows */
 static const char *const kCoopHealth[] = { "+0%", "+50%", "+100%", NULL };   /* project-dam: coop.c, per extra player */
 static const char *const kAimAssist[] = { "Off", "Low", "High", NULL };   /* project-dam: nxgame.c */
 static const char *const kAimEntry[]  = { "Off", "Move view", "Centre crosshair", NULL };   /* project-dam: nxgame.c */
-#define PAD_PAGE_ALWAYS portIsConsole()   /* the console's Controller page is always the gamepad one (no keyboard/mouse) */
 #if defined(__SWITCH__)
-static const char *const kControlScheme[] = { "Extended", "Original", "Modern", NULL };   /* D513/D554: display text only (index = stored value) */
-#else
-static const char *const kControlScheme[] = { "Enhanced", "Original", "Modern", NULL };   /* PC: the Mode row, same values */
-#endif
-#if defined(__SWITCH__)
-static const char *const kAimMode[]   = { "Original", "Centered", NULL };   /* D337; project-dam: the weapon sway is part of Centered */
 static const char *const kTurnAccel[] = { "Off", "Low", "High", NULL };   /* project-dam */
 static const char *const kAimZoom[]   = { "Off", "1.5x", "2x", NULL };    /* project-dam */
 #else
-static const char *const kAimMode[]   = { "Original", "Centered", NULL };   /* D337 */
 #endif
 static const char *const kLookAhead[] = { "Off", "Original", "Low", "Medium", "High", NULL };   /* project-dam #85: Bond.LookAhead */
 static int displayModeNow(void);   /* defined with the preset helpers below */
 static const char *const kDisplayModeName[3];
-static const char *const kAimRange[]  = { "Extended", "Original", NULL };             /* D338 */
 #if defined(__SWITCH__)
 static const int         kMsaaSeq[]   = { 1, 2, 4, 8 };   /* project-dam: 16x is capped to 8 by the driver */
 #else
@@ -229,10 +217,6 @@ struct Row {
     const char        *shownWhen;
     int                shownValue;
     int               *showPtr;
-    /* D516: 1 = only with the port's controls (Input.ControlScheme Enhanced / Modern), 2 = only with Original.
-     * Resolved to schemePtr at init (shownWhen can't express a second condition). */
-    int                schemeOnly;
-    int               *schemePtr;
 
     /* D346: value-text decoration (display only). unit is appended to integer
      * slider values ("%"/"x"); dispDiv>0 divides the raw value before display
@@ -252,7 +236,7 @@ struct Row {
      * hidden on its section page). */
     int                hub;
 };
-static int rowSchemeOk(const struct Row *r);   /* D516 */
+static int rowDynamicOk(const struct Row *r);
 
 /* Every dialog ends with a separator + Back row (PD pattern). Both are
  * non-config ROW_ACTION rows, so every "skip ROW_ACTION" loop (resets, probes)
@@ -377,26 +361,14 @@ static struct Row rows[] = {
     { .key="__SelPlayerC4", .label="Player 4", .kind=ROW_ACTION },
     SEP_BACK(SelPlayerC),
 
-    /* D469: preset selector; Custom unlocks per-seat, per-action pad rebinding
-     * (two slots per action, pad-driven capture). */
 #if defined(__SWITCH__)
     { .key="__HdrController", .label="CONTROLLER", .kind=ROW_HEADER },
-    { .key="Input.ControlScheme", .label="Control style", .kind=ROW_ENUM, .step=1, .names=kControlScheme },   /* D513 */
 #else
     { .key="__HdrController", .label="INPUT", .kind=ROW_HEADER },
     /* What this player plays with. Player 1 chooses keyboard + mouse or a gamepad
      * (players 2-4 are always gamepads); a gamepad player picks which controller. */
     { .key="Input.P1Type", .label="Input type", .kind=ROW_ENUM, .step=1, .names=kP1Type },
     { .key="Input.PlayerPad", .label="Controller", .kind=ROW_PADDEV },
-    { .key="Input.ControlScheme", .label="Mode", .kind=ROW_ENUM, .step=1, .names=kControlScheme },   /* D513: Enhanced | Original */
-    /* D337: N64 = the N64 aim model (crosshair travels, camera edge-scrolls)
-     * with the mouse fed through the game's integrator at PD's mouse damp --
-     * the default. CENTRED (PC) = opt-in FPS-style aim (#104), not N64.
-     * Device-neutral (D404): applies to every aim input. */
-    { .key="Input.AimMode", .label="Aim style", .kind=ROW_ENUM, .step=1, .names=kAimMode },
-    /* D338: how far the N64-style crosshair travels. Hidden while the aim
-     * style is CENTRED (PC), where the crosshair doesn't travel. */
-    { .key="Input.AimRange", .label="Aim range", .kind=ROW_ENUM, .step=1, .names=kAimRange, .hiddenIfOn="Input.AimMode" },
     /* Keyboard + mouse rows (player 1 on the keyboard + mouse only), flat on this page. */
     { .key="__KbmBegin", .label="", .kind=ROW_ACTION },
     /* PD parity (maintainer list 2026-10-04): the long-standing ini key finally gets a row; default on. */
@@ -414,39 +386,23 @@ static struct Row rows[] = {
     { .key="__OpenBindings", .label="Key bindings", .kind=ROW_ACTION },   /* a sub-menu */
     { .key="__KbmEnd", .label="", .kind=ROW_ACTION },
 #endif
-    { .key="Input.PadPreset", .label="Layout presets", .kind=ROW_ENUM, .step=1, .names=kPadPreset, .schemeOnly=1 },
-    { .key="__OpenLayout", .label="Show layout", .kind=ROW_ACTION, .schemeOnly=1 },   /* a sub-menu: the preset drawn on a pad */
-    /* D516: Original shows the game's own styles (the save's, per seat), not the port presets. */
-    { .key="Bond.Control", .label="Layout presets", .kind=ROW_ENUM, .step=1, .names=kOrigStyle,
-      .found=1, .uiMax=7, .cfgMax=7, .schemeOnly=2 },
-    { .key="Input.Pad.Fire", .label="Fire", .kind=ROW_PADBIND, .shownWhen="Input.PadPreset", .shownValue=3, .schemeOnly=1 },
-    { .key="Input.Pad.Aim", .label="Aim", .kind=ROW_PADBIND, .shownWhen="Input.PadPreset", .shownValue=3, .schemeOnly=1 },
-    { .key="Input.Pad.Use", .label="Use/back", .kind=ROW_PADBIND, .shownWhen="Input.PadPreset", .shownValue=3, .schemeOnly=1 },
-    { .key="Input.Pad.Reload", .label="Reload", .kind=ROW_PADBIND, .shownWhen="Input.PadPreset", .shownValue=3, .schemeOnly=1 },
-    { .key="Input.Pad.Crouch", .label="Crouch", .kind=ROW_PADBIND, .shownWhen="Input.PadPreset", .shownValue=3, .schemeOnly=1 },
-    { .key="Input.Pad.NextWeapon", .label="Next weapon", .kind=ROW_PADBIND, .shownWhen="Input.PadPreset", .shownValue=3, .schemeOnly=1 },
-    { .key="Input.Pad.PrevWeapon", .label="Previous weapon", .kind=ROW_PADBIND, .shownWhen="Input.PadPreset", .shownValue=3, .schemeOnly=1 },
-    { .key="Input.Pad.Gadget", .label="Cycle gadget", .kind=ROW_PADBIND, .shownWhen="Input.PadPreset", .shownValue=3, .schemeOnly=1 },
-    { .key="Input.Pad.Start", .label="Pause/start", .kind=ROW_PADBIND, .shownWhen="Input.PadPreset", .shownValue=3, .schemeOnly=1 },
 #if defined(__SWITCH__)
     /* project-dam: the aim rows live here on the console (no Mouse page), grouped between two separators. */
-    { .key="__SepGapC1", .label="", .kind=ROW_ACTION, .schemeOnly=1 },
-    { .key="__SepC1", .label="Aim", .kind=ROW_ACTION, .schemeOnly=1 },
-    { .key="Input.AimMode", .label="Aim style", .kind=ROW_ENUM, .step=1, .names=kAimMode, .schemeOnly=1 },
-    { .key="Input.AimRange", .label="Aim range", .kind=ROW_ENUM, .step=1, .names=kAimRange, .hiddenIfOn="Input.AimMode", .schemeOnly=1 },
-    { .key="Input.PadAimLookSens", .label="Aim sensitivity", .kind=ROW_SLIDER, .step=5, .schemeOnly=1 },   /* project-dam */
-    { .key="Game.AimZoom", .label="Aim zoom (handheld)", .kind=ROW_ENUM, .step=1, .names=kAimZoom, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },   /* project-dam: nxgame.c */
-    { .key="Game.AimAssist", .label="Aim assist", .kind=ROW_ENUM, .step=1, .names=kAimAssist, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },       /* project-dam: nxgame.c */
-    { .key="Game.AimEntry", .label="Aim entry", .kind=ROW_ENUM, .step=1, .names=kAimEntry, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },           /* project-dam: nxgame.c */
-    { .key="Game.AimStop", .label="Stop on aim", .kind=ROW_TOGGLE, .step=1, .names=kOnOff, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },           /* project-dam: nxgame.c */
+    { .key="__SepGapC1", .label="", .kind=ROW_ACTION },
+    { .key="__SepC1", .label="Aim", .kind=ROW_ACTION },
+    { .key="Input.PadAimLookSens", .label="Aim sensitivity", .kind=ROW_SLIDER, .step=5 },   /* project-dam */
+    { .key="Game.AimZoom", .label="Aim zoom (handheld)", .kind=ROW_ENUM, .step=1, .names=kAimZoom },   /* project-dam: nxgame.c */
+    { .key="Game.AimAssist", .label="Aim assist", .kind=ROW_ENUM, .step=1, .names=kAimAssist },       /* project-dam: nxgame.c */
+    { .key="Game.AimEntry", .label="Aim entry", .kind=ROW_ENUM, .step=1, .names=kAimEntry },           /* project-dam: nxgame.c */
+    { .key="Game.AimStop", .label="Stop on aim", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },           /* project-dam: nxgame.c */
     { .key="__SepGapC2", .label="", .kind=ROW_ACTION },
     { .key="__SepC2", .label="Look and sticks", .kind=ROW_ACTION },
 #else
     /* The pad's Centered aim helpers (nxgame.c), shown while the aim style is Centered. */
-    { .key="Input.PadAimLookSens", .label="Aim sensitivity", .kind=ROW_SLIDER, .step=5, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },
-    { .key="Game.AimAssist", .label="Aim assist", .kind=ROW_ENUM, .step=1, .names=kAimAssist, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },
-    { .key="Game.AimEntry", .label="Aim entry", .kind=ROW_ENUM, .step=1, .names=kAimEntry, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },
-    { .key="Game.AimStop", .label="Stop on aim", .kind=ROW_TOGGLE, .step=1, .names=kOnOff, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },
+    { .key="Input.PadAimLookSens", .label="Aim sensitivity", .kind=ROW_SLIDER, .step=5 },
+    { .key="Game.AimAssist", .label="Aim assist", .kind=ROW_ENUM, .step=1, .names=kAimAssist },
+    { .key="Game.AimEntry", .label="Aim entry", .kind=ROW_ENUM, .step=1, .names=kAimEntry },
+    { .key="Game.AimStop", .label="Stop on aim", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
 #endif
     { .key="Input.PadLookInvertY", .label="Invert look", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
     /* Wave A: per-stick deadzone + right-stick (natural-pitch) feel options. */
@@ -455,8 +411,8 @@ static struct Row rows[] = {
     { .key="Input.PadLookSensX", .label="Horizontal look sensitivity", .kind=ROW_SLIDER, .step=5 },
     { .key="Input.PadLookSensY", .label="Vertical look sensitivity", .kind=ROW_SLIDER, .step=5 },
 #if defined(__SWITCH__)
-    { .key="Input.PadLookCurve", .label="Look precision", .kind=ROW_SLIDER, .step=25, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },    /* project-dam */
-    { .key="Input.PadTurnAccel", .label="Turn acceleration", .kind=ROW_ENUM, .step=1, .names=kTurnAccel, .hiddenIfOff="Input.AimMode", .schemeOnly=1 },
+    { .key="Input.PadLookCurve", .label="Look precision", .kind=ROW_SLIDER, .step=25 },    /* project-dam */
+    { .key="Input.PadTurnAccel", .label="Turn acceleration", .kind=ROW_ENUM, .step=1, .names=kTurnAccel },
 #endif
     { .key="Input.PadLookSmooth", .label="Look smoothing", .kind=ROW_SLIDER, .step=1 },   /* D506: raw 0-10, shown as whole % */
     { .key="Input.PadSouthpaw", .label="Southpaw", .kind=ROW_TOGGLE, .step=1, .names=kOnOff },
@@ -466,15 +422,6 @@ static struct Row rows[] = {
     { .key="__ResetController", .label="Reset to defaults", .kind=ROW_ACTION },
     SEP_BACK(Controller),
 
-    /* Controller > Layout: the selected seat's preset drawn on a pad (optionsoverlay.c drawLayout).
-     * The blank rows only reserve the picture's height. */
-    { .key="__HdrLayout", .label="LAYOUT", .kind=ROW_HEADER },
-    { .key="__Blank1", .label="", .kind=ROW_ACTION }, { .key="__Blank2", .label="", .kind=ROW_ACTION },
-    { .key="__Blank3", .label="", .kind=ROW_ACTION }, { .key="__Blank4", .label="", .kind=ROW_ACTION },
-    { .key="__Blank5", .label="", .kind=ROW_ACTION }, { .key="__Blank6", .label="", .kind=ROW_ACTION },
-    { .key="__Blank7", .label="", .kind=ROW_ACTION }, { .key="__Blank8", .label="", .kind=ROW_ACTION },
-    { .key="__Blank9", .label="", .kind=ROW_ACTION },
-    SEP_BACK(Layout),
 
     /* PD Key Bindings: one flat list (movement binds, separator, action binds).
      * Mouse buttons 1-5 share the visible slots with keys; pads stay fixed. */
@@ -617,7 +564,6 @@ int optionsRowHeaderParent(int i)
     /* Select player is the Controller hub entry; its Controller page nests under it. */
     if (!strcmp(rows[i].key, "__HdrController")) return rowIndexByKey("__HdrSelPlayerC");
     if (!strcmp(rows[i].key, "__HdrVideoAdv")) return rowIndexByKey("__HdrVideo");
-    if (!strcmp(rows[i].key, "__HdrLayout")) return rowIndexByKey("__HdrController");
 #if !defined(__SWITCH__)
     /* PC: Key bindings open from player 1's Input page (a sub-menu). */
     if (!strcmp(rows[i].key, "__HdrBindings")) return rowIndexByKey("__HdrController");
@@ -667,7 +613,6 @@ int optionsRowChildHeader(int i)
     const char *key = rows[i].key;
     if (!strncmp(key, "__SelPlayerC", 12)) return rowIndexByKey("__HdrController");
     if (!strcmp(key, "__OpenVideoAdv")) return rowIndexByKey("__HdrVideoAdv");
-    if (!strcmp(key, "__OpenLayout")) return rowIndexByKey("__HdrLayout");
 #if !defined(__SWITCH__)
     if (!strcmp(key, "__OpenBindings")) return rowIndexByKey("__HdrBindings");
 #endif
@@ -705,37 +650,8 @@ static SDL_SpinLock s_bindCaptureLock;
 static int s_bindPending = -1, s_bindCaptureRow = -1, s_bindError = 0;
 static SDL_atomic_t s_bindHold; /* captured key/mouse button, shared with pad poll */
 
-/* D469: gamepad capture (Controller page). Same modal flag as the key/mouse
- * capture (so F10/Back/Start cannot close the page mid-capture), but driven
- * by the edited seat's pad. Arming: nothing is accepted until every source
- * is released (the A press that opened the modal must not bind itself).
- * Cancel: Esc, tap B, or tap Back (either pad 0 or the edited pad), so a
- * controller-only user is never trapped (D395). Clear: Delete, or HOLD Back.
- * B itself is bindable by HOLDING it (a tap cancels). */
-static int s_padCapMode = 0, s_padCapRow = -1, s_padCapSeat = 0, s_padCapArmed = 0, s_padCapSwallow = 0;
-static uint64_t s_padCapBackT = 0, s_padCapBT = 0;
-#define PADCAP_HOLD_US 600000
-
 static void bindingBegin(struct Row *r)
 {
-    if (r && r->found && r->kind == ROW_PADBIND) {
-        SDL_AtomicLock(&s_bindCaptureLock);
-        s_bindPending = -1;
-        SDL_AtomicUnlock(&s_bindCaptureLock);
-        s_bindError = 0;
-        s_padCapMode = 1;
-        s_padCapRow = (int)(r - rows);
-        s_padCapSeat = s_padSeat;
-        s_padCapArmed = 0;
-        s_padCapSwallow = 0;
-        s_padCapBackT = s_padCapBT = 0;
-        s_bindCaptureRow = s_padCapRow;
-        SDL_AtomicSet(&s_bindPadCancelHold, 0);
-        SDL_AtomicSet(&s_bindHold, SDL_SCANCODE_UNKNOWN);
-        SDL_AtomicSet(&s_bindCaptureActive, 1);
-        return;
-    }
-    s_padCapMode = 0;
     if (!r || !r->found || r->kind != ROW_BIND) return;
     SDL_AtomicLock(&s_bindCaptureLock);
     s_bindPending = -1;
@@ -770,14 +686,6 @@ int optionsBindingKeyDown(const SDL_KeyboardEvent *ev)
     if ((ev->keysym.sym == SDLK_F4 && (ev->keysym.mod & KMOD_ALT))) return 0;
     if (ev->repeat) return 1;
     SDL_Scancode sc = ev->keysym.scancode;
-    if (s_padCapMode) {   /* D469: pad capture takes only Esc (cancel) / Delete (clear) from the keyboard */
-        if (sc == SDL_SCANCODE_ESCAPE || sc == SDL_SCANCODE_DELETE) {
-            SDL_AtomicLock(&s_bindCaptureLock);
-            if (s_bindPending < 0) s_bindPending = (int)sc;
-            SDL_AtomicUnlock(&s_bindCaptureLock);
-        }
-        return 1;
-    }
     if (sc == SDL_SCANCODE_F10 || sc == SDL_SCANCODE_F12 ||
         sc == SDL_SCANCODE_UNKNOWN) return 1;
     SDL_AtomicLock(&s_bindCaptureLock);
@@ -790,7 +698,6 @@ int optionsBindingKeyDown(const SDL_KeyboardEvent *ev)
 int optionsBindingMouseDown(const SDL_MouseButtonEvent *ev)
 {
     if (!optionsBindingCaptureActive()) return 0;
-    if (s_padCapMode) return 1;   /* D469: swallow clicks during a pad capture */
     if (ev->button >= 1 && ev->button <= 5) {
         SDL_AtomicLock(&s_bindCaptureLock);
         if (s_bindPending < 0) s_bindPending = INPUT_BIND_MOUSE(ev->button);
@@ -802,92 +709,8 @@ int optionsBindingMouseDown(const SDL_MouseButtonEvent *ev)
 /* The capturing screen calls this once per input tick. Return 1 while the
  * modal is active and through the captured key's release, so it cannot
  * simultaneously trigger menu navigation or a second action. */
-static void padCapFinish(void)
-{
-    SDL_AtomicSet(&s_bindCaptureActive, 0);
-    s_padCapSwallow = 1;   /* swallow until every button is released again */
-}
-
-static int padCaptureTick(void)
-{
-    int seat = s_padCapSeat;
-    unsigned raw = inputPadHeldSources(seat);
-    int back = inputPadButton(seat, SDL_CONTROLLER_BUTTON_BACK) || inputPadButton(inputOverlayOwnerPad(), SDL_CONTROLLER_BUTTON_BACK);
-    int bHeld = inputPadButton(seat, SDL_CONTROLLER_BUTTON_B) || inputPadButton(inputOverlayOwnerPad(), SDL_CONTROLLER_BUTTON_B);
-    int act = inputPadActionForKey(rows[s_padCapRow].key);
-    uint64_t now = sysGetMicroseconds();
-
-    SDL_AtomicLock(&s_bindCaptureLock);
-    int key = s_bindPending;
-    s_bindPending = -1;
-    SDL_AtomicUnlock(&s_bindCaptureLock);
-    if (key == SDL_SCANCODE_ESCAPE) { padCapFinish(); return 1; }
-    if (key == SDL_SCANCODE_DELETE) {
-        inputPadBindingSet(seat, act, rows[s_padCapRow].bindSlot, -1);
-        configSave();
-        padCapFinish();
-        return 1;
-    }
-    if (!s_padCapArmed) {   /* release-before-capture arming */
-        if (!raw && !back && !bHeld) s_padCapArmed = 1;
-        return 1;
-    }
-    /* Back: tap = cancel, hold = clear */
-    if (back) {
-        if (!s_padCapBackT) s_padCapBackT = now;
-        if (now - s_padCapBackT >= PADCAP_HOLD_US) {
-            inputPadBindingSet(seat, act, rows[s_padCapRow].bindSlot, -1);
-            configSave();
-            sysLogPrintf(LOG_INFO, "pad bind: %s seat %d slot %d cleared", rows[s_padCapRow].key, seat + 1, rows[s_padCapRow].bindSlot + 1);
-            padCapFinish();
-        }
-        return 1;
-    } else if (s_padCapBackT) {
-        padCapFinish();   /* released early: cancel */
-        return 1;
-    }
-    /* B: tap = cancel, hold = bind B (to the edited pad only) */
-    if (bHeld) {
-        if (!s_padCapBT) s_padCapBT = now;
-        if (now - s_padCapBT >= PADCAP_HOLD_US && (raw & 2u)) {
-            inputPadBindingSet(seat, act, rows[s_padCapRow].bindSlot, 1 /* b */);
-            configSave();
-            sysLogPrintf(LOG_INFO, "pad bind: %s seat %d slot %d = b", rows[s_padCapRow].key, seat + 1, rows[s_padCapRow].bindSlot + 1);
-            padCapFinish();
-        }
-        return 1;
-    } else if (s_padCapBT) {
-        padCapFinish();   /* tap: cancel */
-        return 1;
-    }
-    for (int src = 0; src < inputPadSourceCount(); src++) {
-        if (raw & (1u << src)) {
-            inputPadBindingSet(seat, act, rows[s_padCapRow].bindSlot, src);
-            configSave();
-            sysLogPrintf(LOG_INFO, "pad bind: %s seat %d slot %d = %s", rows[s_padCapRow].key, seat + 1,
-                         rows[s_padCapRow].bindSlot + 1, inputPadSourceName(src));
-            padCapFinish();
-            return 1;
-        }
-    }
-    return 1;
-}
-
 int optionsBindingCaptureTick(void)
 {
-    if (s_padCapMode) {   /* D469 */
-        if (optionsBindingCaptureActive()) return padCaptureTick();
-        if (s_padCapSwallow) {
-            unsigned raw = inputPadHeldSources(s_padCapSeat);
-            if (raw || inputPadButton(inputOverlayOwnerPad(), SDL_CONTROLLER_BUTTON_B) || inputPadButton(inputOverlayOwnerPad(), SDL_CONTROLLER_BUTTON_A) ||
-                inputPadButton(inputOverlayOwnerPad(), SDL_CONTROLLER_BUTTON_X) || inputPadButton(inputOverlayOwnerPad(), SDL_CONTROLLER_BUTTON_BACK) ||
-                inputPadButton(s_padCapSeat, SDL_CONTROLLER_BUTTON_BACK))
-                return 1;
-            s_padCapSwallow = 0;
-        }
-        s_padCapMode = 0;
-        return 0;
-    }
     /* D395: capture only accepts keyboard/mouse. A controller B must be
      * able to cancel a modal entered with a keyboard/mouse; swallow B until
      * release so that the same press cannot also back out of the page. */
@@ -1244,9 +1067,8 @@ static int rowInputOk(const struct Row *r)
     if (idx > rowIndexByKey("__KbmBegin") && idx < rowIndexByKey("__KbmEnd")) return t != 1;
     if (!strcmp(r->key, "Input.P1Type")) return s_padSeat == 0 && !console;
     if (!strcmp(r->key, "Input.PlayerPad")) return !kbm;
-    /* device-neutral: Mode, aim style, aim range; page furniture */
-    if (isSepRow(r) || isBackRow(r) || !strcmp(r->key, "Input.ControlScheme") ||
-        !strcmp(r->key, "Input.AimMode") || !strcmp(r->key, "Input.AimRange")) return 1;
+    /* device-neutral: page furniture */
+    if (isSepRow(r) || isBackRow(r)) return 1;
     return !kbm;   /* the gamepad rows */
 }
 #else
@@ -1327,7 +1149,7 @@ static void overlayUpdateVisible(void)
                 !(rows[i].hidePtr && *rows[i].hidePtr) &&
                 !(rows[i].hideOffPtr && *rows[i].hideOffPtr == 0) &&
                 (!rows[i].showPtr || *rows[i].showPtr == rows[i].shownValue) &&
-                rowSchemeOk(&rows[i]) && rowPlatformOk(&rows[i]))
+                rowDynamicOk(&rows[i]) && rowPlatformOk(&rows[i]))
                 s_visIdx[s_visN++] = i;
         }
     }
@@ -1421,22 +1243,12 @@ static void overlayOpenHeader(int hdr)
     sysLogPrintf(LOG_INFO, "optionsoverlay: opened %s", rows[hdr].label);
 }
 
-/* D518: pad presets are per seat. The "Layout preset" row and the Custom-only
- * bind rows (shownWhen Input.PadPreset) must follow the selected seat, so
- * re-point them whenever the seat changes; input.c reads each seat's own
- * value, so editing another player's preset can't touch this one. */
+/* The Controller page edits the selected player's seat. */
 static void padSetSeat(int seat)
 {
     if (seat < 0 || seat > 3) return;
     s_padSeat = seat;
     watchSettingsSetControlSeat(seat);
-    int *pp = inputPadPresetPtr(seat), *cs = inputControlSchemePtr(seat);
-    for (int i = 0; i < NUM_ROWS; i++) {
-        if (!strcmp(rows[i].key, "Input.PadPreset")) rows[i].ptr = pp;
-        else if (!strcmp(rows[i].key, "Input.ControlScheme")) rows[i].ptr = cs;   /* per player, like the preset */
-        else if (rows[i].kind == ROW_PADBIND) rows[i].showPtr = pp;
-        if (rows[i].schemeOnly) rows[i].schemePtr = cs;
-    }
 }
 
 /* The Controller row: Auto + the connected controllers; the choice is stored per player. */
@@ -1580,7 +1392,7 @@ static void overlayInit(void)
     for (int i = 0; i < NUM_ROWS; i++) {
         if (rows[i].kind == ROW_RES || rows[i].kind == ROW_ACTION ||
             rows[i].kind == ROW_HEADER || rows[i].kind == ROW_BOND_FILE ||
-            rows[i].kind == ROW_PADSEAT || rows[i].kind == ROW_PADBIND || rows[i].kind == ROW_AUDIODEV || rows[i].kind == ROW_PADDEV ||
+            rows[i].kind == ROW_PADSEAT || rows[i].kind == ROW_AUDIODEV || rows[i].kind == ROW_PADDEV ||
             watchSettingsFieldForKey(rows[i].key) >= 0) {
             rows[i].found = 1;   /* not config-backed */
             continue;
@@ -1605,8 +1417,6 @@ static void overlayInit(void)
             if (rows[i].shownWhen &&
                 strcmp(rows[j].key, rows[i].shownWhen) == 0)
                 rows[i].showPtr = rows[j].ptr;
-            if (rows[i].schemeOnly && strcmp(rows[j].key, "Input.ControlScheme") == 0)
-                rows[i].schemePtr = rows[j].ptr;
         }
     }
     /* D356: on a header row, saveScoped means "this section contains
@@ -1647,7 +1457,7 @@ static void overlayInit(void)
             { "__HdrMouse", "Input.MouseSensitivity", "Input.MouseRawInput" },
 #endif
             { "__HdrSelPlayerC", "__SelPlayerC1", "__SelPlayerC4" },
-            { "__HdrController", "Input.ControlScheme", NULL },
+            { "__HdrController", "__KbmBegin", NULL },
             { "__HdrBindings", "Input.Bind.Forward", "__ResetBindings" },
             { "__HdrGame", "Bond.AimControl", "__ResetGame" },
         };
@@ -1760,16 +1570,15 @@ static void overlayInit(void)
     }
 }
 
-/* D516: scheme-conditional rows (see Row.schemeOnly). */
-static int rowSchemeOk(const struct Row *r)
+/* Rows whose visibility depends on live state. */
+static int rowDynamicOk(const struct Row *r)
 {
     if (!strcmp(r->key, "__UpdateOpen")) {   /* D551 */
         if (updateCheckAvailable() == NULL) return 0;
         ((struct Row *)r)->label = updateInstallStatus();   /* the row text follows the install (Switch) */
         return 1;
     }
-    if (!r->schemeOnly || !r->schemePtr) return 1;
-    return (*r->schemePtr == 1) == (r->schemeOnly == 2);   /* 1 = Original */
+    return 1;
 }
 
 static double rowGet(const struct Row *r)
@@ -1832,8 +1641,6 @@ static struct Row *rowByKey(const char *key)
     int i = rowIndexByKey(key);
     return i < 0 ? NULL : &rows[i];
 }
-
-static int s_linkDepth = 0;   /* re-entrancy guard for the sens link below */
 
 static void rowSet(struct Row *r, double v);
 
@@ -1901,28 +1708,6 @@ static void rowSetCommit(struct Row *r, double v, int commit)
         nxGameApply();
     }
 
-    /* Linked aim/turn sensitivity (Input.SensLink, default on): moving either
-     * knob scales the other to hold the stock default ratio -- AimModeSens 38
-     * : MouseTurnSpeed 50 (the D194/D238 calibrated defaults). */
-    if (!s_linkDepth && strcmp(r->key, "Input.SensLink") != 0) {
-        struct Row *lk = rowByKey("Input.SensLink");
-        if (lk && lk->found && *(int *)lk->ptr != 0) {
-            struct Row *o = NULL;
-            double nv = 0.0;
-            if (strcmp(r->key, "Input.MouseTurnSpeed") == 0) {
-                o = rowByKey("Input.AimModeSens");
-                nv = v * 38.0 / 50.0;
-            } else if (strcmp(r->key, "Input.AimModeSens") == 0) {
-                o = rowByKey("Input.MouseTurnSpeed");
-                nv = v * 50.0 / 38.0;
-            }
-            if (o && o->found) {
-                s_linkDepth = 1;
-                rowSet(o, nv);
-                s_linkDepth = 0;
-            }
-        }
-    }
 }
 
 static void rowSet(struct Row *r, double v) { rowSetCommit(r, v, 1); }
@@ -1982,10 +1767,6 @@ static void rowAdjust(struct Row *r, int dir)
     }
     case ROW_ENUM: {
         double lo = r->cfgMin, hi = r->cfgMax;
-        if (!strcmp(r->key, "Input.PadPreset")) {   /* D498: step through the preset display order (0,1,2,4,3) */
-            rowSetStepWatch(r, (double)inputPadPresetStep((int)lround(v), dir));
-            break;
-        }
         if (!strcmp(r->key, "Video.CrosshairColor")) {
             /* D569 (PD model): Original sprite or a Custom RGB colour; the old
              * named presets (1..7) are migrated to Custom at startup (video.c). */
@@ -2030,7 +1811,6 @@ static void rowAdjust(struct Row *r, int dir)
         break;
     }
     case ROW_BIND:
-    case ROW_PADBIND:
         r->bindSlot = (r->bindSlot + dir + INPUT_BIND_SLOTS) % INPUT_BIND_SLOTS;
         break;
     case ROW_PADSEAT:
@@ -2151,9 +1931,6 @@ static void ddBuild(const struct Row *r)
         if (!strcmp(r->key, "Video.TextureFilter")) {   /* D499 menu order */
             static const int o4[4] = { 0, 1, 3, 2 };
             for (int i = 0; i < 4 && i < cnt; i++) order[n++] = o4[i];
-        } else if (!strcmp(r->key, "Input.PadPreset")) {   /* D498 display order */
-            int c = 0;
-            do { order[n++] = c; c = inputPadPresetStep(c, +1); } while (c != 0 && n < cnt);
         } else {
             for (int i = 0; i < cnt; i++) order[n++] = i;
         }
@@ -2419,7 +2196,6 @@ static void rowResetSection(int iReset)
         struct Row *r = &rows[j];
         if (r->kind == ROW_ACTION) continue;             /* reset rows, Quit */
         if (strcmp(r->key, "__Resolution") == 0) continue;  /* documented exclusion */
-        if (strcmp(r->key, "Bond.Control") == 0) continue;  /* D516: the save's style is not a port setting; reset leaves it */
         if (r->kind == ROW_BIND) {
             nBinds += inputBindingResetKey(r->key);
             r->bindSlot = 0;
@@ -2427,11 +2203,6 @@ static void rowResetSection(int iReset)
         }
         if (r->kind == ROW_AUDIODEV) { audioDeviceRequest(""); continue; }   /* D470 */
         if (r->kind == ROW_PADDEV) { inputPadPrefSet(s_padSeat, ""); continue; }
-        if (r->kind == ROW_PADBIND) {   /* D469: reset the action on every seat */
-            inputPadBindingReset(inputPadActionForKey(r->key));
-            r->bindSlot = 0;
-            continue;
-        }
         if (r->kind == ROW_PADSEAT) continue;
         int field = watchSettingsFieldForKey(r->key);
         if (field >= 0) {
@@ -2670,15 +2441,87 @@ void optionsOverlayBack(void)
 
 int optionsOverlayMouseActive(void) { return s_mouseActive; }   /* D567 */
 
+/* The asset packs as the menu lists them: the enabled ones first, in their order, then the others (by file name). */
+#define PACKS_VIEW_MAX 64
+typedef struct {
+    int n, nOn;
+    char files[PACKS_VIEW_MAX][128], names[PACKS_VIEW_MAX][64];
+    int on[PACKS_VIEW_MAX];
+} PacksView;
+static int s_packSel;   /* the highlighted row of the asset-pack list */
+
+static void packsView(PacksView *v)
+{
+    static char found[PACKS_VIEW_MAX][128], fnames[PACKS_VIEW_MAX][64];
+    static char list[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
+    const int nf = texpackListPacks(found, fnames, PACKS_VIEW_MAX);
+    const int nl = assetPackListParse(texpackPacks(), list, ASSETPACK_MAX);
+    v->n = v->nOn = 0;
+    for (int i = 0; i < nl && v->n < PACKS_VIEW_MAX; i++) {   /* enabled, in order; a pack that is gone shows by its file name */
+        const char *name = list[i];
+        for (int k = 0; k < nf; k++) if (!strcmp(found[k], list[i])) { name = fnames[k]; break; }
+        snprintf(v->files[v->n], 128, "%s", list[i]);
+        snprintf(v->names[v->n], 64, "%s", name);
+        v->on[v->n++] = 1;
+        v->nOn++;
+    }
+    for (int k = 0; k < nf && v->n < PACKS_VIEW_MAX; k++) {
+        if (assetPackListFind(list, nl, found[k]) >= 0) continue;
+        snprintf(v->files[v->n], 128, "%s", found[k]);
+        snprintf(v->names[v->n], 64, "%s", fnames[k]);
+        v->on[v->n++] = 0;
+    }
+}
+
+static void packsApply(const PacksView *v)
+{
+    static char list[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
+    char text[ASSETPACK_LIST_LEN];
+    int n = 0;
+    for (int i = 0; i < v->n && n < ASSETPACK_MAX; i++) if (v->on[i]) snprintf(list[n++], ASSETPACK_FILE_LEN, "%s", v->files[i]);
+    assetPackListFormat(list, n, text, sizeof text);
+    texpackSetPacks(text);
+    configSave();
+    menuRefreshAssetPacks();
+}
+
+/* Enables row `i` (it goes last among the enabled ones) or disables it; the highlight follows the pack. */
+static void packsSetEnabled(PacksView *v, int i, int on)
+{
+    char file[128];
+    if (v->on[i] == on) return;
+    snprintf(file, sizeof file, "%s", v->files[i]);
+    v->on[i] = on;
+    packsApply(v);
+    packsView(v);
+    for (int k = 0; k < v->n; k++) if (!strcmp(v->files[k], file)) s_packSel = k;
+}
+
+/* Moves the highlighted enabled pack up (-1) or down (+1) in the order. */
+static void packsMove(int dir)
+{
+    PacksView v;
+    packsView(&v);
+    const int i = s_packSel, j = s_packSel + dir;
+    if (i < 0 || i >= v.nOn || j < 0 || j >= v.nOn) return;
+    {
+        char f[128], nm[64];
+        memcpy(f, v.files[i], sizeof f); memcpy(v.files[i], v.files[j], sizeof f); memcpy(v.files[j], f, sizeof f);
+        memcpy(nm, v.names[i], sizeof nm); memcpy(v.names[i], v.names[j], sizeof nm); memcpy(v.names[j], nm, sizeof nm);
+    }
+    s_packSel = j;
+    packsApply(&v);
+}
+
 int optionsMenuGet(const char *key, double *out)
 {
     if (!strcmp(key, "__DisplayMode")) { *out = videoGetDisplayMode(); return 1; }
     if (!strcmp(key, "__Resolution")) { *out = s_resSel; return 1; }
-    if (!strcmp(key, "__TexturePack")) {   /* the selected pack's place in the list, 0 = none */
-        static char files[64][128], names[64][64];
-        const int n = texpackListPacks(files, names, 64);
-        *out = 0;
-        for (int i = 0; i < n; i++) if (!strcmp(files[i], texpackSelected())) { *out = i + 1; break; }
+    if (!strcmp(key, "__AssetPackSel")) { *out = s_packSel; return 1; }
+    if (!strcmp(key, "__AssetPackOn")) {   /* the highlighted pack is enabled */
+        PacksView v;
+        packsView(&v);
+        *out = s_packSel < v.n && v.on[s_packSel];
         return 1;
     }
     if (!strcmp(key, "__BondFile")) {   /* the save file the profile settings are read from */
@@ -2714,11 +2557,18 @@ void optionsMenuSet(const char *key, double value)
         else if (k - 1 < audioDeviceRefresh()) audioDeviceRequest(audioDeviceName(k - 1));
         return;
     }
-    if (!strcmp(key, "__TexturePack")) {
-        static char files[64][128], names[64][64];
-        const int k = (int)lround(value), n = texpackListPacks(files, names, 64);
-        texpackSelect(k >= 1 && k <= n ? files[k - 1] : "");
-        configSave();
+    if (!strcmp(key, "__AssetPackSel")) {
+        PacksView v;
+        packsView(&v);
+        s_packSel = (int)lround(value);
+        if (s_packSel < 0 || s_packSel >= v.n) s_packSel = 0;
+        return;
+    }
+    if (!strcmp(key, "__AssetPackOn")) {   /* enable: last in the order; disable: out of the list */
+        PacksView v;
+        packsView(&v);
+        if (s_packSel >= v.n) return;
+        packsSetEnabled(&v, s_packSel, lround(value) != 0);
         return;
     }
     if (!strcmp(key, "__Resolution")) {
@@ -2736,16 +2586,24 @@ void optionsMenuSet(const char *key, double value)
 int optionsMenuResCount(void) { return s_resFitN; }
 
 /* The texture pack list for the menu: "None", then the packs in texturepacks/ (display names). */
-int optionsMenuTexPackCount(void)
+/* The asset-pack list for the menu: "1. HD", "2. GoldenEye 007" for the enabled packs in their order, then the others
+ * by name ("No asset pack" when the folders hold none). */
+int optionsMenuAssetPackCount(void)
 {
-    static char files[64][128], names[64][64];
-    return texpackListPacks(files, names, 64) + 1;
+    PacksView v;
+    packsView(&v);
+    return v.n ? v.n : 1;
 }
-const char *optionsMenuTexPackLabel(int i)
+const char *optionsMenuAssetPackLabel(int i)
 {
-    static char files[64][128], names[64][64];
-    const int n = texpackListPacks(files, names, 64);
-    return i <= 0 || i > n ? "None" : names[i - 1];
+    static char label[96];
+    PacksView v;
+    packsView(&v);
+    if (!v.n) return "No asset pack";
+    if (i < 0 || i >= v.n) return "";
+    if (v.on[i]) snprintf(label, sizeof label, "%d. %s", i + 1, v.names[i]);
+    else snprintf(label, sizeof label, "%s", v.names[i]);
+    return label;
 }
 
 #ifndef GE_MENU_RUN_STAGE
@@ -2810,6 +2668,8 @@ void optionsMenuAction(const char *key)
     if (!strcmp(key, "__UpdateOpen")) { updateCheckOpenReleases(); return; }
     if (!strcmp(key, "__UpdateInstall")) { updateInstall(); return; }   /* Switch: download, check, replace; PC: the page */
     if (!strcmp(key, "__UpdateCheck")) { updateCheckRun(); return; }
+    if (!strcmp(key, "__AssetPackUp")) { packsMove(-1); return; }
+    if (!strcmp(key, "__AssetPackDown")) { packsMove(1); return; }
     if (!strcmp(key, "__RestartGame")) {   /* D443: the orderly D344 quit, then main.c relaunches */
         sysLogPrintf(LOG_INFO, "menu: restart game requested");
         configSave();
@@ -3115,20 +2975,6 @@ static void overlayHandleInputLocked(void)
         }
     }
 
-    /* D469: Y or Delete clears the selected pad-binding slot (one press, no modal). */
-    {
-        static int prevYClr = 0, prevDelClr = 0;
-        int yNow = inputPadButton(inputOverlayOwnerPad(), SDL_CONTROLLER_BUTTON_Y), delNow = ks[SDL_SCANCODE_DELETE];
-        if (s_section >= 0 && s_sel > 0 && ((yNow && !prevYClr) || (delNow && !prevDelClr))) {
-            struct Row *cr = &rows[s_visIdx[s_sel]];
-            if (cr->kind == ROW_PADBIND) {
-                inputPadBindingSet(s_padSeat, inputPadActionForKey(cr->key), cr->bindSlot, -1);
-                configSave();
-            }
-        }
-        prevYClr = yNow; prevDelClr = delNow;
-    }
-
     /* ---- keyboard / D-pad nav (clamped at the ends; scroll follows).
      * D347: hold-to-repeat so a controller (and held keys) can traverse the
      * list without one-press-per-row. */
@@ -3182,10 +3028,7 @@ static void overlayHandleInputLocked(void)
                 } else {
                 struct Row *r = &rows[s_visIdx[s_sel]];
                 int keyConfirm = ks[SDL_SCANCODE_RETURN] || ks[SDL_SCANCODE_KP_ENTER];
-                if (r->kind == ROW_PADBIND && dir > 0 && accept && !rightNav) {
-                    bindingBegin(r);   /* D469: A/X/Enter starts pad capture; D-pad right changes the slot */
-                    adjDir = 0;
-                } else if (r->kind == ROW_BIND && dir > 0 && keyConfirm) {
+                if (r->kind == ROW_BIND && dir > 0 && keyConfirm) {
                     bindingBegin(r);
                     adjDir = 0;
                 } else if (r->kind == ROW_BIND && dir > 0 && accept && !rightNav) {
@@ -3324,7 +3167,7 @@ static void overlayHandleInputLocked(void)
                             s_dragRow = i;
                             int field = watchSettingsFieldForKey(r->key);
                             SDL_AtomicSet(&s_dragWatchField, field + 1);
-                        } else if (r->kind == ROW_BIND || r->kind == ROW_PADBIND) {
+                        } else if (r->kind == ROW_BIND) {
                             bindingBegin(r); /* mouse selects slot via arrows; click captures */
                         } else {
                             if (rowIsDropdown(r)) ddOpen(i);
@@ -3375,11 +3218,6 @@ static void valueText(int i, char *out, int n)
         int f = watchSettingsFolder();
         if (f < 0) snprintf(out, n, "Select a profile");
         else snprintf(out, n, "%d", f + 1);
-        return;
-    }
-    if (watchSettingsFieldForKey(r->key) == WATCH_SETTING_CONTROL) {   /* D516 */
-        if (v < 0) snprintf(out, n, "Not in a mission");
-        else snprintf(out, n, "%s", kOrigStyle[v > 7 ? 7 : (int)v]);
         return;
     }
     if (watchSettingsFieldForKey(r->key) >= 0 && !watchSettingsAvailable()) {
@@ -3439,29 +3277,6 @@ static void valueText(int i, char *out, int n)
     }
     if (r->kind == ROW_PADSEAT) {
         snprintf(out, n, "Pad %d%s", s_padSeat + 1, inputPadSeatPresent(s_padSeat) ? "" : " (none)");
-        return;
-    }
-    if (r->kind == ROW_PADBIND) {
-        if (optionsBindingCaptureActive() && i == s_bindCaptureRow) {
-            snprintf(out, n, "Press a button...");
-        } else {
-            static const char *const kSlotName[INPUT_BIND_SLOTS] = { "Primary", "Secondary" };
-            char nm[32];
-            inputPadBindingText(s_padSeat, inputPadActionForKey(r->key), r->bindSlot, nm, sizeof(nm));
-            static const struct { const char *a, *b; } pretty[] = {
-                { "leftshoulder", "LB" }, { "rightshoulder", "RB" }, { "lefttrigger", "LT" },
-                { "righttrigger", "RT" }, { "leftstick", "L-Click" }, { "rightstick", "R-Click" },
-                { "dpup", "D-Up" }, { "dpdown", "D-Down" }, { "dpleft", "D-Left" }, { "dpright", "D-Right" },
-            };
-            const char *show = nm;
-            for (size_t k = 0; k < sizeof(pretty) / sizeof(pretty[0]); k++)
-                if (!strcmp(nm, pretty[k].a)) show = pretty[k].b;
-            {   /* D471: PlayStation / Nintendo names for the pad being edited */
-                const char *fam = inputPadSourceFamilyName(s_padSeat, nm);
-                if (fam) show = fam;
-            }
-            snprintf(out, n, "%s: %s", kSlotName[r->bindSlot], show);
-        }
         return;
     }
     if (r->kind == ROW_BIND) {
@@ -3981,20 +3796,17 @@ static int tipWrap(const char *tip, s32 av, char *l1, size_t n1, char *l2, size_
  * placeholders stay; hintFit() also falls back to Xbox letters as a last resort. */
 struct HintLine { const char *full, *compact; };
 static const struct HintLine kHint[] = {
-    /*  0 */ { "Press a pad button, or hold {B} to bind {B}", "Press a button   Hold {B}: Bind {B}" },
-    /*  1 */ { "Tap {B}/Esc: Cancel   Hold {BACK}: Clear",    "Tap {B}: Cancel   Hold {BACK}: Clear" },
-    /*  2 */ { "Press a key or mouse button (1-5)",           "Press key or mouse 1-5" },
-    /*  3 */ { "{B}/Esc: Cancel   Del: Clear",                "{B}: Cancel   Del: Clear" },
-    /*  4 */ { "{A}/Enter: Select",                           "{A}: Select" },
-    /*  5 */ { "{B}/Esc/F10: Close",                          "{B}/Esc/F10: Close" },
-    /*  6 */ { "{A}/Enter: Bind   Left/Right: Slot   {Y}: Clear", "{A}: Bind   L/R: Slot   {Y}: Clear" },
-    /*  7 */ { "{B}/Esc: Back   F10: Close",                  "{B}: Back   F10: Close" },
-    /*  8 */ { "Keyboard and mouse only   Left/Right: Slot",  "Keys/mouse only   L/R: Slot" },
-    /*  9 */ { "Enter: Bind   {B}/Esc: Back",                 "Enter: Bind   {B}: Back" },
-    /* 10 */ { "{A}/Enter: Select   Left/Right: Change",      "{A}: Select   L/R: Change" },
-    /* 11 */ { "{LB}/{RB}: Tabs   {B}/Esc: Back   {START}: Close", "{LB}/{RB}: Tabs   {B}: Back" },
+    /*  0 */ { "Press a key or mouse button (1-5)",           "Press key or mouse 1-5" },
+    /*  1 */ { "{B}/Esc: Cancel   Del: Clear",                "{B}: Cancel   Del: Clear" },
+    /*  2 */ { "{A}/Enter: Select",                           "{A}: Select" },
+    /*  3 */ { "{B}/Esc/F10: Close",                          "{B}/Esc/F10: Close" },
+    /*  4 */ { "{B}/Esc: Back   F10: Close",                  "{B}: Back   F10: Close" },
+    /*  5 */ { "Keyboard and mouse only   Left/Right: Slot",  "Keys/mouse only   L/R: Slot" },
+    /*  6 */ { "Enter: Bind   {B}/Esc: Back",                 "Enter: Bind   {B}: Back" },
+    /*  7 */ { "{A}/Enter: Select   Left/Right: Change",      "{A}: Select   L/R: Change" },
+    /*  8 */ { "{LB}/{RB}: Tabs   {B}/Esc: Back   {START}: Close", "{LB}/{RB}: Tabs   {B}: Back" },
 };
-enum { H_PADCAP1, H_PADCAP2, H_KEYCAP1, H_KEYCAP2, H_HUB1, H_HUB2, H_CTRL1, H_BACK, H_BIND1, H_BIND2, H_SEC1, H_TABS };
+enum { H_KEYCAP1, H_KEYCAP2, H_HUB1, H_HUB2, H_BACK, H_BIND1, H_BIND2, H_SEC1, H_TABS };
 static void tipSelfCheck(void);
 
 
@@ -4043,7 +3855,6 @@ static void tabLabel(int k, int active, char *out, int n)
     const char *sub = NULL;
     char tmp[24];
     if (!strcmp(key, "__HdrVideoAdv")) sub = "Advanced";
-    else if (!strcmp(key, "__HdrLayout")) { snprintf(tmp, sizeof(tmp), "P%d Layout", s_padSeat + 1); sub = tmp; }
     else if (!strcmp(key, "__HdrBindings")) { snprintf(tmp, sizeof(tmp), "P%d Keys", s_padSeat + 1); sub = tmp; }
     else if (!strcmp(key, "__HdrController")) { snprintf(tmp, sizeof(tmp), "Player %d", s_padSeat + 1); sub = tmp; }
     if (sub) snprintf(out, n, "%s: %s", base, sub);
@@ -4102,183 +3913,6 @@ static Gfx *drawTabStripText(Gfx *gdl, const struct OvLayout *o)
     inputPadHelpFmt(r, sizeof(r), "{RB}");
     gdl = drawBody(gdl, cl, o->top + 1, l, PD_ITEM_UNFOCUSED);
     gdl = drawBodyR(gdl, cr, o->top + 1, r, PD_ITEM_UNFOCUSED);
-    return gdl;
-}
-
-/* ------------------------------------------------------------------------ */
-/* Controller > Layout: the selected player's preset drawn on a pad.          */
-/* ------------------------------------------------------------------------ */
-
-static int onLayoutPage(void)
-{
-    return s_section >= 0 && !strcmp(rows[s_section].key, "__HdrLayout");
-}
-
-struct PadLook {
-    const char *lt, *rt, *lb, *rb;   /* trigger / shoulder names */
-    const char *face[4];             /* A B X Y: what the pad family prints on them (or a shape) */
-    int pos[4];                      /* A B X Y -> slot: 0 top, 1 left, 2 right, 3 bottom */
-};
-static struct PadLook padLook(void)
-{
-    int fam = inputPadFamily(inputOverlayOwnerPad());
-    if (fam == 2)   /* Nintendo: A right, B bottom, X top, Y left */
-        return (struct PadLook){ "ZL", "ZR", "L", "R", { "A", "B", "X", "Y" }, { 2, 3, 0, 1 } };
-    if (fam == 1)   /* PlayStation: cross bottom, circle right, square left, triangle top */
-        return (struct PadLook){ "L2", "R2", "L1", "R1", { "X", "O", "#", "^" }, { 3, 2, 1, 0 } };
-    /* Xbox: A bottom, B right, X left, Y top */
-    return (struct PadLook){ "LT", "RT", "LB", "RB", { "A", "B", "X", "Y" }, { 3, 2, 1, 0 } };
-}
-
-/* Stored preset value (0 Jinx, 1 Christmas, 2 Frost, 3 Custom, 4 Elektra) -> stick roles (D394 table). */
-static const char *const kLeftStickRole[5]  = { "Move / strafe", "Move / turn", "Look / strafe", "", "Look / turn" };
-static const char *const kRightStickRole[5] = { "Look / turn", "Look / strafe", "Move / turn", "", "Move / strafe" };
-
-/* The pad is computed, not drawn from an image: each part is a signed-distance shape (circle, rounded
- * box, smooth union of those), filled row by row. A run of fully covered pixels is one rectangle; the
- * edge pixels are single rectangles whose alpha is their coverage, so the outline is smooth at any
- * size. One silhouette serves a generic Xbox or Switch Pro pad (sticks upper-left / lower-right). */
-enum { PS_CIRCLE, PS_BOX, PS_BODY, PS_CROSS };
-struct PShape {
-    int kind;
-    double x, y, a, b, r;   /* centre, extents, corner radius */
-};
-static double sdCircle(double px, double py, double cx, double cy, double r) { return hypot(px - cx, py - cy) - r; }
-static double sdBox(double px, double py, double cx, double cy, double hx, double hy, double r)
-{
-    double dx = fabs(px - cx) - hx + r, dy = fabs(py - cy) - hy + r;
-    return hypot(dx > 0 ? dx : 0, dy > 0 ? dy : 0) + (dx > dy ? (dx < 0 ? dx : 0) : (dy < 0 ? dy : 0)) - r;
-}
-static double sdSmin(double a, double b, double k)
-{
-    double h = k - fabs(a - b);
-    if (h < 0) h = 0;
-    return (a < b ? a : b) - h * h * 0.25 / k;
-}
-static double shapeDist(const struct PShape *s, double px, double py)
-{
-    switch (s->kind) {
-    case PS_CIRCLE: return sdCircle(px, py, s->x, s->y, s->r);
-    case PS_BOX:    return sdBox(px, py, s->x, s->y, s->a, s->b, s->r);
-    case PS_CROSS: {   /* d-pad: two bars */
-        double h = sdBox(px, py, s->x, s->y, s->a, s->b, s->r), v = sdBox(px, py, s->x, s->y, s->b, s->a, s->r);
-        return h < v ? h : v;
-    }
-    default: {   /* PS_BODY: a centre block and two grips, blended */
-        double c = sdBox(px, py, s->x, s->y - 6, 50, 19, 16);
-        double l = sdCircle(px, py, s->x - 44, s->y + 12, 21), r = sdCircle(px, py, s->x + 44, s->y + 12, 21);
-        return sdSmin(sdSmin(c, l, 14), r, 14);
-    }
-    }
-}
-static void shapeBounds(const struct PShape *s, s32 *x0, s32 *y0, s32 *x1, s32 *y1)
-{
-    double hx = s->a, hy = s->b;
-    if (s->kind == PS_CIRCLE) hx = hy = s->r;
-    else if (s->kind == PS_CROSS) hx = hy = (s->a > s->b ? s->a : s->b);
-    else if (s->kind == PS_BODY) { hx = 70; hy = 40; }
-    *x0 = (s32)floor(s->x - hx) - 3; *x1 = (s32)ceil(s->x + hx) + 3;
-    *y0 = (s32)floor(s->y - hy) - 3; *y1 = (s32)ceil(s->y + hy) + 3;
-    if (s->kind == PS_BODY) *y0 = (s32)floor(s->y - 30) - 3;
-}
-static Gfx *fillShape(Gfx *gdl, const struct PShape *s, double grow, u32 rgba)
-{
-    s32 bx0, by0, bx1, by1;
-    shapeBounds(s, &bx0, &by0, &bx1, &by1);
-    gdl = aaBegin(gdl);
-    for (s32 y = by0; y < by1; y++) {
-        s32 run = -1;
-        for (s32 x = bx0; x <= bx1; x++) {
-            double cov = 0.0;
-            if (x < bx1) {
-                cov = 0.5 - (shapeDist(s, x + 0.5, y + 0.5) - grow);
-                cov = cov < 0 ? 0 : (cov > 1 ? 1 : cov);
-            }
-            if (cov >= 0.999) { if (run < 0) run = x; continue; }
-            if (run >= 0) { gdl = aaPiece(gdl, run, y, x, y + 1, rgba, 1.0); run = -1; }
-            if (cov > 0.02) gdl = aaPiece(gdl, x, y, x + 1, y + 1, rgba, cov);
-        }
-    }
-    return gdl;
-}
-/* a part with an accent ring when the preset uses it */
-static Gfx *drawPart(Gfx *gdl, struct PShape s, u32 fill, int used)
-{
-    if (used) gdl = fillShape(gdl, &s, 1.1, 0x9be37ad0u);
-    return fillShape(gdl, &s, 0.0, fill);
-}
-
-static Gfx *layoutLabel(Gfx *gdl, s32 cx, s32 cy, const char *t)   /* centred on a part */
-{
-    return drawBody(gdl, cx - bodyWidth(t) / 2, cy - 6, t, PD_ITEM_UNFOCUSED);
-}
-
-/* pass 0 = the pad's shapes, pass 1 = every text. Both walk the same coordinates. */
-static Gfx *drawLayout(Gfx *gdl, const struct OvLayout *o, int pass)
-{
-    int preset = *inputPadPresetPtr(s_padSeat);
-    const s32 cx = (o->left + o->right) / 2, y0 = o->contentY + 3, cy = y0 + 50;
-    if (preset < 0 || preset > 4) preset = 0;
-    if (preset == 3) {   /* Custom: nothing fixed to draw */
-        if (pass == 1) {
-            static const char *const l[3] = { "Custom layout", "Every action is bound one by one", "on the Controller page" };
-            for (int i = 0; i < 3; i++)
-                gdl = drawBody(gdl, cx - bodyWidth(l[i]) / 2, y0 + 30 + i * 14, l[i], i ? PD_ITEM_UNFOCUSED : PD_TITLE_TEXT);
-        }
-        return gdl;
-    }
-    const struct PadLook pl = padLook();
-    /* face diamond: slots top, left, right, bottom around (fx, fy) */
-    const double fx = cx + 36, fy = cy - 4;
-    const double slotX[4] = { fx, fx - 9, fx + 9, fx }, slotY[4] = { fy - 9, fy, fy, fy + 9 };
-    const double lsx = cx - 34, lsy = cy - 4, rsx = cx + 14, rsy = cy + 12, dpx = cx - 17, dpy = cy + 12;
-    if (pass == 0) {
-        struct PShape body = { PS_BODY, cx, cy, 0, 0, 0 };
-        gdl = fillShape(gdl, &body, 1.2, 0x9be37a60u);   /* outline */
-        gdl = fillShape(gdl, &body, 0.0, 0x16241aeeu);
-        gdl = drawPart(gdl, (struct PShape){ PS_BOX, cx - 42, cy - 39, 14, 4, 4 }, 0x24372aeeu, 1);   /* triggers */
-        gdl = drawPart(gdl, (struct PShape){ PS_BOX, cx + 42, cy - 39, 14, 4, 4 }, 0x24372aeeu, 1);
-        gdl = drawPart(gdl, (struct PShape){ PS_BOX, cx - 40, cy - 27, 17, 3.2, 3 }, 0x24372aeeu, 1);   /* shoulders */
-        gdl = drawPart(gdl, (struct PShape){ PS_BOX, cx + 40, cy - 27, 17, 3.2, 3 }, 0x24372aeeu, 0);
-        gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, lsx, lsy, 0, 0, 10 }, 0x0b110cffu, 1);   /* sticks: recess + cap */
-        gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, lsx, lsy, 0, 0, 7 }, 0x2c4231ffu, 0);
-        gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, rsx, rsy, 0, 0, 10 }, 0x0b110cffu, 1);
-        gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, rsx, rsy, 0, 0, 7 }, 0x2c4231ffu, 0);
-        gdl = drawPart(gdl, (struct PShape){ PS_CROSS, dpx, dpy, 8, 2.8, 1.2 }, 0x2c4231ffu, 0);   /* d-pad */
-        for (int b = 0; b < 4; b++)
-            gdl = drawPart(gdl, (struct PShape){ PS_CIRCLE, slotX[pl.pos[b]], slotY[pl.pos[b]], 0, 0, 5.2 }, 0x0b110cffu, 1);
-        return gdl;
-    }
-    const s32 xr = cx - 68, xl = cx + 68;   /* label columns: right edge of the left one, left edge of the right one */
-    gdl = layoutLabel(gdl, (s32)(cx - 42), cy - 39, pl.lt);
-    gdl = layoutLabel(gdl, (s32)(cx + 42), cy - 39, pl.rt);
-    gdl = layoutLabel(gdl, (s32)(cx - 40), cy - 27, pl.lb);
-    gdl = layoutLabel(gdl, (s32)(cx + 40), cy - 27, pl.rb);
-    gdl = layoutLabel(gdl, (s32)lsx, (s32)lsy, "LS");
-    gdl = layoutLabel(gdl, (s32)rsx, (s32)rsy, "RS");
-    for (int b = 0; b < 4; b++)
-        gdl = layoutLabel(gdl, (s32)slotX[pl.pos[b]], (s32)slotY[pl.pos[b]], pl.face[b]);
-    gdl = drawBodyR(gdl, xr, cy - 45, "Aim", PD_ITEM_UNFOCUSED);
-    gdl = drawBodyR(gdl, xr, cy - 33, "Aim", PD_ITEM_UNFOCUSED);
-    gdl = drawBodyR(gdl, xr, cy - 12, kLeftStickRole[preset], PD_ITEM_UNFOCUSED);
-    gdl = drawBodyR(gdl, xr, cy + 0, "Click: crouch", PD_ITEM_TAG);
-    gdl = drawBodyR(gdl, xr, cy + 13, "D-pad", PD_ITEM_UNFOCUSED);
-    gdl = drawBody(gdl, xl, cy - 45, "Fire", PD_ITEM_UNFOCUSED);
-    gdl = drawBody(gdl, xl, cy - 33, "None", PD_ITEM_TAG);
-    {   /* face buttons in A, B, X, Y order -> their actions */
-        static const char *const act[4] = { "Use", "Gadget", "Reload", "Next weapon" };
-        for (int b = 0; b < 4; b++) {
-            char line[40];
-            snprintf(line, sizeof(line), "%s  %s", pl.face[b], act[b]);
-            gdl = drawBody(gdl, xl, cy - 20 + b * 12, line, PD_ITEM_UNFOCUSED);
-        }
-    }
-    gdl = drawBody(gdl, xl, cy + 28, kRightStickRole[preset], PD_ITEM_UNFOCUSED);
-    gdl = drawBody(gdl, xl, cy + 40, "Click: crouch", PD_ITEM_TAG);
-    {
-        const char *foot = "Sticks: up-down / left-right";
-        gdl = drawBody(gdl, cx - bodyWidth(foot) / 2, y0 + 105, foot, PD_ITEM_TAG);
-    }
     return gdl;
 }
 
@@ -4429,20 +4063,13 @@ static Gfx *overlayEmitLocked(void)
 
     /* Hint texts (computed here so the hint panel fills before any text draws). */
     const struct HintLine *help1 = NULL, *help2 = NULL;
-    if (optionsBindingCaptureActive() && s_padCapMode) {
-        help1 = &kHint[H_PADCAP1];
-        help2 = &kHint[H_PADCAP2];
-    } else if (optionsBindingCaptureActive()) {
+    if (optionsBindingCaptureActive()) {
         help1 = &kHint[H_KEYCAP1];
         help2 = &kHint[H_KEYCAP2];
     } else {   /* D556: control hints are always drawn (never tied to the pointer) */
         if (s_section < 0) {
             help1 = &kHint[H_HUB1];
             help2 = &kHint[H_HUB2];
-        } else if (!strcmp(rows[s_section].key, "__HdrController") &&
-                   (PAD_PAGE_ALWAYS || (s_sel >= 0 && s_sel < s_visN && rows[s_visIdx[s_sel]].kind == ROW_PADBIND))) {
-            help1 = &kHint[H_CTRL1];
-            help2 = &kHint[H_TABS];
         } else if (!strcmp(rows[s_section].key, "__HdrBindings")) {
             help1 = &kHint[H_BIND1];
             help2 = &kHint[H_BIND2];
@@ -4534,11 +4161,9 @@ static Gfx *overlayEmitLocked(void)
     }
 
     if (s_section >= 0 && rootOfSection(s_section) >= 0) gdl = drawTabStripRects(gdl, &o);
-    if (onLayoutPage()) gdl = drawLayout(gdl, &o, 0);
 
     /* ---- pass 2: text ---- */
     gdl = microcode_constructor(gdl);
-    if (onLayoutPage()) gdl = drawLayout(gdl, &o, 1);
 
     for (int p = p0; p <= pLast; p++) {
         const struct Row *r = &rows[s_visIdx[p]];
@@ -4734,7 +4359,7 @@ int optionsRowIsShown(int i)
     struct Row *r = rowAt(i);
     return r && r->found && !(r->hidePtr && *r->hidePtr) && !(r->hideOffPtr && *r->hideOffPtr == 0) &&
            !isSepRow(r) && !isBackRow(r) &&   /* F10-only furniture */
-           (!r->showPtr || *r->showPtr == r->shownValue) && rowSchemeOk(r) && rowInputOk(r) &&
+           (!r->showPtr || *r->showPtr == r->shownValue) && rowDynamicOk(r) && rowInputOk(r) &&
            (r->kind != ROW_BOND_FILE || current_menu == MENU_FILE_SELECT);   /* front-end profile chooser */
 }
 
@@ -4753,8 +4378,6 @@ static const struct { const char *key, *help; } kRowHelp[] = {
     { "Video.CrosshairColor", "Original keeps the game's red sight. Custom: set Red, Green and Blue (0-255)." },
     { "Video.CrosshairHealthColor", "The crosshair shifts from green to red as your health drops." },
     { "Game.ScreenShakeIntensity", "Sets how strongly explosions shake the screen." },
-    { "Input.AimMode", "Original lets the crosshair move. Centered keeps it in the middle." },
-    { "Input.AimRange", "Sets how far the crosshair can move from the center." },
     { "Game.AimZoom", "Zooms in while you aim, to hit heads on the small screen. Handheld only." },
     { "Game.AimAssist", "Slows the aim stick while the crosshair is on or near an enemy." },
     { "Game.AimEntry", "Aim starts on Auto-aim's target: view follows it, or crosshair centres." },
@@ -4773,9 +4396,6 @@ static const struct { const char *key, *help; } kRowHelp[] = {
     { "Video.SkyScale", "How sharp the Enhanced sky and sea are. Half draws them at a quarter of the pixels, Quarter at a sixteenth: faster, softer." },
     { "Video.Visuals", "Fixed: the original game's display flaws corrected. Enhanced: also a richer sky, scenery and effects." },
     { "Input.CrosshairCursor", "Uses the crosshair as the mouse pointer in this menu." },
-    { "Input.ControlScheme", "Modern, the remastered layouts (Enhanced) or the original game's controls." },
-    { "Bond.Control", "The original game's control presets." },
-    { "Input.PadPreset", "Xbox Series-style presets, or your own custom layout." },
     { "Input.PadSouthpaw", "Swaps the fire and aim triggers." },
     { "Bond.AutoAim", "Bond automatically aims at nearby targets." },
     { "Bond.LookAhead", "Tilts the view to the slope. Low/Medium/High: how fast." },
@@ -4895,8 +4515,6 @@ void optionsRowTitle(int i, char *out, int n)
         snprintf(out, n, "SELECT PLAYER");
     else if (!strcmp(r->key, "__HdrVideoAdv"))
         snprintf(out, n, "VIDEO ADVANCED");
-    else if (!strcmp(r->key, "__HdrLayout"))
-        snprintf(out, n, "PLAYER %d LAYOUT", s_padSeat + 1);
     else
         snprintf(out, n, "%s", r->label);
 }
@@ -4952,13 +4570,7 @@ int optionsRowIsSlider(int i)
 int optionsRowIsBind(int i)
 {
     struct Row *r = rowAt(i);
-    return r && (r->kind == ROW_BIND || r->kind == ROW_PADBIND);
-}
-
-int optionsRowIsPadBind(int i)
-{
-    struct Row *r = rowAt(i);
-    return r && r->kind == ROW_PADBIND;
+    return r && r->kind == ROW_BIND;
 }
 
 void optionsRowBeginBind(int i)
@@ -5099,7 +4711,6 @@ static int probeVerifySection(int iReset)
         struct Row *r = &rows[j];
         if (r->kind == ROW_ACTION) continue;
         if (strcmp(r->key, "__Resolution") == 0) continue;   /* documented exclusion */
-        if (strcmp(r->key, "Bond.Control") == 0) continue;   /* D516 */
         int field = watchSettingsFieldForKey(r->key);
         if (field >= 0) {
             int want = watchSettingsBlankValue((enum WatchSettingField)field);

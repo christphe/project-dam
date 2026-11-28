@@ -1,4 +1,5 @@
-// modelview: see mv_export.h. glTF through cgltf, characters.json through cJSON (both vendored in port/third_party).
+// modelview: see mv_export.h. glTF through cgltf, characters.json through cJSON (both vendored in port/third_party). The export is the asset
+// pack ge007.passets (a tar or a folder): every file is read through ge_pkg (port/assets/ge_pkg.h), cgltf gets the .bin through it too.
 #include "mv_export.h"
 #include <algorithm>
 #include <windows.h>
@@ -16,12 +17,13 @@ extern "C" {
 #include "cJSON.h"
 #include "ge_tex.h"
 #include "ge_png.h"
+#include "ge_pkg.h"
 }
 
 bool mv_inflate_raw(const uint8_t* src, size_t n, std::vector<uint8_t>& out);   // mv_zlib.cpp
 
 namespace {
-std::string g_dir;                       // the characters folder
+std::string g_dir;                       // the characters folder (<pack>/characters, in the asset pack)
 std::vector<MvCharEntry> g_chars;
 int g_version = -1;
 std::vector<MvAnimInfo> g_anims;         // of the body built last
@@ -38,13 +40,40 @@ float g_pov = 1;                         // the body's pov: the shared file's ro
 struct Img { int w = 0, h = 0; std::vector<uint8_t> rgba; bool ok = false; };
 std::map<std::string, Img> g_imgs;
 
-std::string readText(const std::string& p) {
-    FILE* f = fopen(p.c_str(), "rb"); if (!f) return "";
-    std::string s; char b[65536]; size_t n;
-    while ((n = fread(b, 1, sizeof b, f))) s.append(b, n);
-    fclose(f); return s;
+// A path with its "a/.." pairs collapsed and backslashes made '/': the glTFs of the pack name their pictures "../../textures/N.png" and the
+// package layer takes a path as it is.
+std::string normPath(const std::string& in) {
+    std::vector<std::string> seg; std::string cur, out;
+    const bool abs = !in.empty() && (in[0] == '/' || in[0] == '\\');
+    for (size_t i = 0; i <= in.size(); i++) {
+        if (i == in.size() || in[i] == '/' || in[i] == '\\') {
+            if (cur == "..") { if (!seg.empty() && seg.back() != ".." && seg.back().find(':') == std::string::npos) seg.pop_back(); else seg.push_back(cur); }
+            else if (!cur.empty() && cur != ".") seg.push_back(cur);
+            cur.clear();
+        } else cur += in[i];
+    }
+    if (abs) out = "/";
+    for (size_t i = 0; i < seg.size(); i++) out += (i ? "/" : "") + seg[i];
+    return out;
 }
-bool isFile(const std::string& p) { FILE* f = fopen(p.c_str(), "rb"); if (f) fclose(f); return f != nullptr; }
+bool readBytes(const std::string& p, std::vector<uint8_t>& out) {
+    uint8_t* b = nullptr; size_t n = 0;
+    if (!pkgReadFile(normPath(p).c_str(), &b, &n)) return false;
+    out.assign(b, b + n); pkgFree(b); return true;
+}
+std::string readText(const std::string& p) {
+    uint8_t* b = nullptr; size_t n = 0;
+    if (!pkgReadFile(normPath(p).c_str(), &b, &n)) return "";
+    std::string s((const char*)b, n); pkgFree(b); return s;
+}
+bool isFile(const std::string& p) { return pkgExists(normPath(p).c_str()) != 0; }
+// cgltf's file reader through the package layer: the .bin of a glTF inside the pack's tar
+cgltf_result pkgGltfRead(const cgltf_memory_options*, const cgltf_file_options*, const char* path, cgltf_size* size, void** data) {
+    uint8_t* b = nullptr; size_t n = 0;
+    if (!pkgReadFile(normPath(path).c_str(), &b, &n)) return cgltf_result_file_not_found;
+    *size = n; *data = b; return cgltf_result_success;
+}
+void pkgGltfRelease(const cgltf_memory_options*, const cgltf_file_options*, void* data) { pkgFree(data); }
 std::string dirOf(const std::string& p) { const size_t k = p.find_last_of("/\\"); return k == std::string::npos ? std::string(".") : p.substr(0, k); }
 const char* jstr(const cJSON* o, const char* k) { const cJSON* v = cJSON_GetObjectItemCaseSensitive(o, k); return cJSON_IsString(v) ? v->valuestring : ""; }
 double jnum(const cJSON* o, const char* k, double d) { const cJSON* v = cJSON_GetObjectItemCaseSensitive(o, k); return cJSON_IsNumber(v) ? v->valuedouble : d; }
@@ -90,8 +119,11 @@ void jointColour(int j, float* rgb) {
 
 cgltf_data* loadGltf(const std::string& path, std::string& err) {
     cgltf_options o = {}; cgltf_data* d = nullptr;
-    if (cgltf_parse_file(&o, path.c_str(), &d) != cgltf_result_success) { err = "cannot parse " + path; return nullptr; }
-    if (cgltf_load_buffers(&o, d, path.c_str()) != cgltf_result_success) { cgltf_free(d); err = "cannot load the buffers of " + path; return nullptr; }
+    o.file.read = pkgGltfRead; o.file.release = pkgGltfRelease;
+    std::vector<uint8_t> json;
+    if (!readBytes(path, json)) { err = "cannot read " + path; return nullptr; }
+    if (cgltf_parse(&o, json.data(), json.size(), &d) != cgltf_result_success) { err = "cannot parse " + path; return nullptr; }
+    if (cgltf_load_buffers(&o, d, normPath(path).c_str()) != cgltf_result_success) { cgltf_free(d); err = "cannot load the buffers of " + path; return nullptr; }
     return d;
 }
 const cgltf_node* nodeByName(const cgltf_data* d, const std::string& name) {
@@ -112,7 +144,7 @@ int materialOf(MvMesh& out, const cgltf_material* m, const std::string& gdir) {
         else if (cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(e, "texnum"))) mt.key = std::to_string((int)jnum(e, "texnum", -1));
         cJSON_Delete(e);
     }
-    mt.image = gdir + "/" + t->image->uri;
+    mt.image = normPath(gdir + "/" + t->image->uri);
     if (mt.key.empty()) {   // no extras at all: the number in the picture's file name
         const int n = texpackTexnumOfName(t->image->uri);
         if (n >= 0) mt.key = std::to_string(n);
@@ -189,9 +221,12 @@ bool mv_export_open(const std::string& dirIn, std::string& err) {
     g_chars.clear(); g_dir.clear(); g_version = -1;
     std::string dir = dirIn;
     while (!dir.empty() && (dir.back() == '/' || dir.back() == '\\')) dir.pop_back();
-    if (!isFile(dir + "/characters.json") && isFile(dir + "/characters/characters.json")) dir += "/characters";
+    // --export takes the folder holding ge007.passets, or the pack itself (a tar or a folder); the characters are in its characters/
+    const bool isPack = dir.size() > 8 && dir.compare(dir.size() - 8, 8, ".passets") == 0;
+    for (const std::string& c : { isPack ? dir + "/characters" : dir + "/ge007.passets/characters", dir + "/characters", dir })
+        if (isFile(c + "/characters.json")) { dir = c; break; }
     const std::string text = readText(dir + "/characters.json");
-    if (text.empty()) { err = "no characters.json in " + dirIn; return false; }
+    if (text.empty()) { err = "no characters/characters.json in the asset pack " + dirIn + " (--export takes the folder holding ge007.passets, or the pack)"; return false; }
     cJSON* root = cJSON_Parse(text.c_str());
     if (!root) { err = dir + "/characters.json is not valid JSON"; return false; }
     g_version = (int)jnum(root, "exporter_version", -1);
@@ -403,13 +438,8 @@ bool mv_export_pose(int anim, float frame, int nj, std::vector<float>& pose) {
 bool mv_export_image(const std::string& path, int& w, int& h, std::vector<uint8_t>& rgba) {
     auto it = g_imgs.find(path);
     if (it == g_imgs.end()) {
-        Img im; FILE* f = fopen(path.c_str(), "rb");
-        if (f) {
-            std::vector<uint8_t> b; uint8_t buf[65536]; size_t n;
-            while ((n = fread(buf, 1, sizeof buf, f))) b.insert(b.end(), buf, buf + n);
-            fclose(f);
-            im.ok = pngDecode(b, im.w, im.h, im.rgba);
-        }
+        Img im; std::vector<uint8_t> b;
+        if (readBytes(path, b)) im.ok = pngDecode(b, im.w, im.h, im.rgba);
         it = g_imgs.emplace(path, std::move(im)).first;
     }
     w = it->second.w; h = it->second.h; rgba = it->second.rgba;
@@ -419,23 +449,23 @@ bool mv_export_image(const std::string& path, int& w, int& h, std::vector<uint8_
 
 // ---- texture sources (docs/specs/texture-packs.md): the active mod over the chosen pack ----------------------------------
 // A material is drawn from the texture its key names (material extras.texture): the mod's entry merged field by field over
-// the chosen pack's, the pack being ge007.ptexpack (the game's own) or a complete other pack: ge_assets' GeTexSet (port/assets/ge_tex.h).
-// The glTF's own image URI is used only when no source has the key (an export without ge007.ptexpack beside it).
+// the chosen pack's, the pack being ge007.passets (the game's own) or a complete other pack: ge_assets' GeTexSet (port/assets/ge_tex.h).
+// The glTF's own image URI is used only when no source has the key (an export without ge007.passets beside it).
 namespace {
-std::string g_game;                       // the game folder (holds texturepacks/ and mods/), "" unknown
+std::string g_game;                       // the game folder (holds assetpacks/ and mods/), "" unknown
 std::string g_modRoot, g_packRoot, g_baseRoot, g_texNote;
 GeTexSet* g_texSet = nullptr;
 std::set<std::string> g_texWarned;        // the warnings printed since the sources were opened (a missing picture is asked for every frame)
 int g_texGen = 0;
 std::string slash(std::string p) { for (char& c : p) if (c == '\\') c = '/'; return p; }
 bool exists(const std::string& p) { WIN32_FILE_ATTRIBUTE_DATA a; return GetFileAttributesExA(p.c_str(), GetFileExInfoStandard, &a) != 0; }
-std::string exportRoot() {   // the export folder above characters/: where the export's own ge007.ptexpack is
+std::string exportRoot() {   // the asset pack above characters/ (a tar or a folder): the export's own ge007.passets
     std::string d = slash(g_dir);
     while (!d.empty() && d.back() == '/') d.pop_back();
     const size_t k = d.find_last_of('/');
     return k == std::string::npos ? "" : d.substr(0, k);
 }
-std::string packsDir() { return g_game.empty() ? "" : g_game + "/texturepacks"; }
+std::string packsDir() { return g_game.empty() ? "" : g_game + "/assetpacks"; }
 std::string modsDir() { return g_game.empty() ? "" : g_game + "/mods"; }
 std::string findBase() { char b[1024]; geTexBaseRoot(packsDir().c_str(), exportRoot().c_str(), b, sizeof b); return b; }
 }  // namespace
@@ -486,7 +516,7 @@ bool mv_tex_use(const std::string& modIn, const std::string& packIn) {
         return slash(v);
     };
     const std::string mod = resolve(modIn, modsDir(), ".pmod");
-    const std::string pack = packIn.empty() || packIn == "ge007" || packIn == "ge007.ptexpack" ? "" : resolve(packIn, packsDir(), ".ptexpack");
+    const std::string pack = packIn.empty() || packIn == "ge007" || packIn == "ge007.passets" || packIn == "ge007.ptexpack" ? "" : resolve(packIn, packsDir(), ".passets");
     const std::string base = findBase();
     if (!g_texSet) g_texSet = geTexSetNew();
     g_texGen++;
@@ -543,9 +573,9 @@ int mv_export_selftest() {
         const float x = 1 * p[0] + p[9], y = 1 * p[1] + p[10];
         if (fabsf(x - 1) > 1e-5f || fabsf(y - 3) > 1e-5f) { fail++; fprintf(stderr, "selftest FAIL trs (%g %g)\n", x, y); }
     }
-    {   // the texture sources: ge007.ptexpack as the default, a mod over it, a pack that is incomplete
+    {   // the texture sources: ge007.passets as the default, a mod over it, a pack that is incomplete
         char tmp[MAX_PATH]; GetTempPathA(sizeof tmp, tmp);
-        const std::string T = slash(std::string(tmp)) + "mv_texsel", P = T + "/texturepacks", B = P + "/ge007.ptexpack", M = T + "/mods/m.pmod", L = P + "/lack.ptexpack";
+        const std::string T = slash(std::string(tmp)) + "mv_texsel", P = T + "/assetpacks", B = P + "/ge007.passets", M = T + "/mods/m.pmod", L = P + "/lack.passets";
         std::vector<std::string> files, dirs;
         auto mk = [&](const std::string& d) { if (CreateDirectoryA(d.c_str(), nullptr)) dirs.push_back(d); };
         auto txt = [&](const std::string& p, const char* s) { FILE* f = fopen(p.c_str(), "wb"); if (f) { fputs(s, f); fclose(f); files.push_back(p); } };

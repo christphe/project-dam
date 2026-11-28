@@ -5,7 +5,7 @@
  * the device and the game say this poll) to InputCommands (what the player asks
  * for). A strategy includes no SDL header and reads no game global: the adapter
  * in port/src/input.c fills the snapshot and applies the commands, so a strategy
- * is tested with plain tables (tests/test_input_*.c, no platform, no game).
+ * is tested with plain tables (tests/test_input_modern.c, no platform, no game).
  *
  * Today the commands are bridged to the emulated N64 pad (n64bridge.c). The
  * fields are semantic (fire, use, zoom ...) so a later step can hand them to
@@ -36,15 +36,9 @@ enum { INFAM_XBOX = 0, INFAM_PS = 1, INFAM_NINTENDO = 2 };
  * state inside the strategy. The order is input.c's PA_* order (asserted there). */
 enum {
     INACT_FIRE, INACT_AIM, INACT_USE, INACT_RELOAD, INACT_CROUCH, INACT_NEXTWPN,
-    INACT_PREVWPN, INACT_GADGET, INACT_START, INACT_COUNT
+    INACT_START, INACT_COUNT
 };
 #define INACT_BIT(a) (1u << (a))
-
-/* The N64 buttons the Original style binds (index order = input.c's NB_*). */
-enum {
-    INNB_A, INNB_B, INNB_Z, INNB_R, INNB_L, INNB_CU, INNB_CD, INNB_CL, INNB_CR, INNB_START,
-    INNB_DU, INNB_DD, INNB_DL, INNB_DR, INNB_COUNT
-};
 
 #define INPUT_STICK_MAX        80       /* the N64 stick range the game reads */
 #define INPUT_RSTICK_THRESHOLD 0x4000   /* a stick as a digital button (raw SDL units) */
@@ -71,12 +65,7 @@ typedef struct InputSettings {
     int lookSmooth;             /* 0 = off .. 10 */
     int lookInvertY;
     int triggerPct;             /* trigger press point, % of travel */
-    int naturalPitch;           /* SOLITARE stick roles (left = digital moves, right = look) vs HONEY (Enhanced: already
-                                 * resolved with the preset, see inputEnhancedRoles; Original ignores it) */
-    int stickSwap;              /* Enhanced: the two sticks swap roles (1.3 Frost, 1.4 Elektra), never in menus */
-    int n64StickFeel;           /* Original: 1 = the accurate N64 stick response, 0 = deadzone + rescale as the others */
-    uint32_t bind[INACT_COUNT];     /* Enhanced: the INB_* sources bound to each action (the adapter resolves preset / Custom strings) */
-    uint32_t n64Bind[INNB_COUNT];   /* Original: the INB_* sources bound to each N64 button */
+    int naturalPitch;           /* SOLITARE stick roles (left = digital moves, right = look) vs HONEY */
 } InputSettings;
 
 typedef struct InputSnapshot {
@@ -111,20 +100,13 @@ typedef struct InputCommands {
     int slowStrafeL, slowStrafeR;   /* aiming: the left stick strafes slowly */
     int zoomIn, zoomOut;        /* aiming a scoped weapon: D-pad up / down */
     int fire, aim;              /* triggers (before the southpaw swap) */
-    int fireDigital, aimDigital;    /* Enhanced: a non-trigger source bound to fire / aim (LB aim): ORed AFTER the southpaw swap */
     int useEdge, reloadEdge;    /* pressed this poll (gameplay) */
-    int nextWeapon, prevWeapon; /* pressed this poll (gameplay, tank) */
-    int gadgetEdge;             /* pressed this poll: cycle the gadget */
+    int nextWeapon;             /* pressed this poll (gameplay, tank) */
     int crouch;                 /* held (gameplay) */
     int menuAccept, menuCancel; /* front end / watch: the fixed accept / cancel faces */
     int start;
     int dpadUp, dpadDown, dpadLeft, dpadRight;
     uint32_t actionsHeld;       /* INACT_BIT set: becomes next poll's prevActions */
-    /* Original: the strict virtual N64 pad. When n64Raw is set the pad's whole contribution to the button
-     * mask is n64Buttons (GE_CONT_* bits, the right stick's digital C included): the bridge ORs it in and
-     * nothing else (no southpaw swap, no port action). The left stick still comes out as moveX / moveY. */
-    int n64Raw;
-    unsigned n64Buttons;
 } InputCommands;
 
 /* The only state a strategy keeps between polls (one per seat). */
@@ -151,6 +133,6 @@ int inputDirectMoveDecide(const InputContext *ctx, const InputCommands *cmds, in
  * on top of the stick, each axis clamped to +-INPUT_DIRECT_MAX. Opposite inputs cancel. */
 #define INPUT_DIRECT_MAX       (INPUT_STICK_MAX - 5)   /* the game's "safe" stick scale at the rim */
 void inputDirectMoveAddKeys(int fwd, int back, int left, int right, int *walk, int *strafe);
-void inputMapSticks(const InputSnapshot *in, InputStrategyState *st, InputCommands *out);   /* Modern / Enhanced stick roles */
+void inputMapSticks(const InputSnapshot *in, InputStrategyState *st, InputCommands *out);   /* Modern stick roles */
 
 #endif

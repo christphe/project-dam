@@ -7,12 +7,15 @@
 
 // <game dir>/data/exports/<level>, absolute. "" when there is no game exe.
 std::string exportDirFor(const std::string &gameExe, const std::string &level);
-// The static glTF export of every level (`ge007 --export-levels DIR`, issue #150): <game dir>/data/exports/gltf/, beside the
-// per-level folders; <level>/<level>.gltf + .bin + textures/ inside. ROM-derived like the rest of the cache. "" when there is no game exe.
+// The static export of every level (`ge007 --export-levels DIR`): <game dir>/data/exports/gltf/, beside the per-level folders; it
+// holds the base asset pack ge007.passets (a tar; levels/<level>/<level>.gltf + .bin, models/, textures/ inside). ROM-derived like the
+// rest of the cache. "" when there is no game exe.
 std::string gltfDirFor(const std::string &gameExe);
+// The asset pack of an export root: `root` itself when it is a .passets (a tar or a folder), else <root>/ge007.passets; "" when neither exists.
+std::string assetPackIn(const std::string &root);
 // EX_EXPORTER_VERSION of port/export/export.h: the glTF export version this build reads.
 int exportGltfVersion();
-// <dir>/<level>/<level>.gltf exists and was written with exportGltfVersion().
+// The pack under `dir` (assetPackIn) exists and its pack.json says exportGltfVersion().
 bool gltfCurrent(const std::string &dir, const std::string &level);
 // Both files of a finished export are there.
 bool exportPresent(const std::string &dir);

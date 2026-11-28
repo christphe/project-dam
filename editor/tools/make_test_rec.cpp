@@ -8,7 +8,7 @@
 // file in the same sidecar format into OUTDIR/data/pccg-ntsc-final/ (manifest.csv + pccg.bin); point the
 // editor at it with GE_EDITOR_DATA=OUTDIR/data.
 //
-// It also writes a synthetic glTF decor into OUTDIR/gltf/bunker1/ (tools/synth_gltf.h; the editor looks in <export>/gltf/ too), which the
+// It also writes a synthetic glTF decor into the pack OUTDIR/gltf/ge007.passets/levels/bunker1/ (tools/synth_gltf.h; the editor looks in <export>/gltf/ too), which the
 // editor draws instead of level.rec's rooms (GE_EDITOR_DECOR=rec shows level.rec's).
 //
 //   make_test_rec OUTDIR            (OUTDIR is created by the caller)

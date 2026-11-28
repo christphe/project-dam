@@ -6,17 +6,16 @@
 
 extern "C" {
 #include "cJSON.h"
+#include "ge_pkg.h"
 }
 
 static bool readFile(const std::string &path, std::string &out)
 {
-    FILE *f = fopen(path.c_str(), "rb");
-    if (!f) return false;
-    char buf[65536];
-    size_t n;
-    out.clear();
-    while ((n = fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
-    fclose(f);
+    uint8_t *buf = nullptr;
+    size_t n = 0;
+    if (!pkgReadFile(path.c_str(), &buf, &n)) return false;
+    out.assign((const char *)buf, n);
+    pkgFree(buf);
     return true;
 }
 
@@ -27,9 +26,9 @@ bool ModelLib::open(const std::vector<std::string> &roots, const TexSet *texs)
     m_entries.clear(); m_index.clear(); m_cache.clear(); m_dir.clear();
     namespace fs = std::filesystem;
     for (const std::string &root : roots) {
-        const std::string dir = (fs::path(root) / "models").string();
+        const std::string dir = root + "/models";   // root: the asset pack (a tar or a folder), read through the package layer
         std::string text;
-        if (!readFile((fs::path(dir) / "models.json").string(), text)) continue;
+        if (!readFile(dir + "/models.json", text)) continue;
         cJSON *j = cJSON_Parse(text.c_str());
         if (!j) { printf("[editor] models: %s/models.json is not valid JSON\n", dir.c_str()); continue; }
         const cJSON *arr = cJSON_GetObjectItemCaseSensitive(j, "models"), *e;

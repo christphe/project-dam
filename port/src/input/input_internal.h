@@ -248,36 +248,20 @@ extern s32 lvlGetCurrentStageToLoad(void);
 #define MENU_CURSOR_MID_V   120.0
 
 struct aimSlotState {
-    double crossX, crossY;   /* was s_gepdCrossX/Y */
-    int gepdHeldPrev;        /* aim held last tick -> adopt on entry */
     int aimHeldPrev;         /* was s_aimHeldPrev */
     int centreClearTicks;    /* was s_centreClearTicks */
 };
-enum { AIMMODE_N64 = 0, AIMMODE_CENTRED = 1 };
 #define AIMS (g_inputAimSt[(g_inputSlot > 0 && g_inputSlot < 4) ? g_inputSlot : 0])
 extern int g_inputSlot;
-extern int g_inputGepdSens;
 extern int g_inputMouseTurnSpeed;
 extern int g_inputMouseSensitivity;
-extern int g_inputAimAbsolute;
 extern int g_inputMouseDirectLook;
-extern int g_inputPdMouseAim;
-extern int g_inputAimMode;
 extern int g_inputAimDevMouse;
-extern int g_inputAimLegacyGepd;
-extern int g_inputAimStyleLegacy;
 extern double g_inputHipThetaDegOut;
 extern int g_inputPadLookCurve;
 extern int g_inputPadTurnAccel;
 int inputMpSplit(void);
 struct player * inputSlotPlayer(void);
-extern int g_inputAimRange;
-int inputAimModeGet(void);
-double inputAimRangeScale(void);
-int inputPdMouseAimEnabled(void);
-int inputAimGepdAccumulate(double dxPx, double dyLook);
-void inputAimGepdEdgeScroll(void);
-int inputAimGepdCompute(double dxPx, double dyLook);
 void inputSwayFeedTheta(double deg);
 int inputHipDirectCompute(double dxPx, double dyLook);
 void inputPadAimSway(struct player *p, double speedTheta, double speedVerta);

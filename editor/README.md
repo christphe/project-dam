@@ -20,8 +20,8 @@ an original level prop by its number; the game resolves each uuid to the setup p
 other props no longer shifts a script's references. Format: `port/mission/mission.h`.
 
 **The decor comes from glTF.** The rooms (the level's walls, floors, scenery) are drawn from the static glTF export of the game
-(`port/export/`, issue #150: `ge007 --export-levels DIR` writes `DIR/<level>/<level>.gltf` + `.bin` + `textures/N.png` for every level),
-read by `decor.cpp` with the vendored cgltf. It lives in `<game dir>/data/exports/gltf/`, beside the per-level `level.rec` folders. When it
+(`port/export/`, issue #150: `ge007 --export-levels DIR` writes the base asset pack `DIR/ge007.passets`, a tar; `levels/<level>/<level>.gltf` + `.bin` inside, the pictures `textures/N.png` at the pack's root, for every level),
+read by `decor.cpp` with the vendored cgltf: the glTF is read from the tar (or from a pack folder) with `ge_pkg`, and cgltf gets the `.bin` through the same reader (`cgltf_options.file.read`). It lives in `<game dir>/data/exports/gltf/`, beside the per-level `level.rec` folders. When it
 is missing, or its `asset.extras.exporter_version` is not the one this build reads (`EX_EXPORTER_VERSION`), the editor runs
 `<game> --export-levels <that folder>` once in the background (about two seconds for all levels) and reloads the decor when it is done
 (the log says "glTF export done"); *Tools > Settings > Re-export all cached levels* redoes it too. Without a game executable the view
@@ -32,7 +32,7 @@ depth offset kept. Clicking the floor, the Zone tool and the surface snap use th
 level.rec's rooms (to compare the two). The glTF also carries the level's collision floor ("stan", `docs/specs/stan.md`) as a hidden
 `collision` node (scene 1, not drawn as decor): *View > Stan tiles* (or `--floor`) draws it from there as filled translucent tiles with
 the edges that have no neighbour (walls) highlighted, and falls back to `level.json`'s `stan` when the glTF has none (or with
-`GE_EDITOR_DECOR=rec`); the log says which ("floor: glTF collision (N tiles)" / "floor: level.json"). `make_test_rec` also writes a synthetic glTF (`<dir>/gltf/bunker1/`, the editor looks in
+`GE_EDITOR_DECOR=rec`); the log says which ("floor: glTF collision (N tiles)" / "floor: level.json"). `make_test_rec` also writes a synthetic glTF (a pack folder `<dir>/gltf/ge007.passets/levels/bunker1/`, the editor looks in
 `<export>/gltf/` too).
 
 **Where the data comes from.** The renderer-only part (models, stan tiles, portals, the
@@ -133,9 +133,9 @@ reused); a prop with no model at all is a box. Everything is replayed through th
 fast3d OpenGL backend, so textures and colours match the game (fog is off).
 
 **Props come from the model export.** Object props (doors, crates, consoles, vehicles, items; not guards) are drawn from the static
-model export (`port/export/`, issue #119): `models/models.json` and `models/<name>/<name>.gltf`, one glTF per model number in model
-units, written beside the level folders by the same `ge007 --export-levels DIR` (so in `<game dir>/data/exports/gltf/models/`, or in
-`gltf/models/` next to the level exports; the editor looks where it looks for the decor). `decor.cpp` reads it with the same material
+model export (`port/export/`, issue #119): `models/models.json` and `models/<name>/<name>.gltf` inside `ge007.passets`, one glTF per model number in model
+units, written beside the level folders by the same `ge007 --export-levels DIR` (so in `<game dir>/data/exports/gltf/ge007.passets`, or in
+`gltf/ge007.passets` next to the level exports; the editor looks where it looks for the decor). `decor.cpp` reads it with the same material
 mapping as the rooms, default scene only (the most detailed level of detail, switchable parts visible, joints in their rest pose, so a
 vehicle is a whole vehicle where level.rec's capture collapses every joint to the origin). Each model is read and uploaded on first
 use. Scale = the model's `base_scale` (0.1 for most props) x the record's extra scale (u8.8); placement = the pad, the pad's yaw and
@@ -225,8 +225,8 @@ level's own models (an object of type 3 with that model, item none).
 * **Textures (Mod tab).** Decor and props (`models.cpp`) resolve each texture by its key (material `extras.texture`; an older
   glTF: the number in the image file name) through the open mod, merged field by field over the chosen texture pack, and read
   the glTF's own picture only when no source has the key (`TexSet` in `texset.h`, `decorLoad`; the format is
-  `docs/specs/texture-packs.md`, parsed by `port/assets/ge_texpacks.h`). Exactly one pack is chosen: `ge007.ptexpack` (the game's own,
-  `<game>/texturepacks/ge007.ptexpack` else the export's copy) by default, or another complete `<game>/texturepacks/X.ptexpack`,
+  `docs/specs/texture-packs.md`, parsed by `port/assets/ge_texpacks.h`). Exactly one pack is chosen: `ge007.passets` (the game's own,
+  `<game>/assetpacks/ge007.passets` else the export's copy; the older `ge007.ptexpack` is still found) by default, or another complete `<game>/assetpacks/X.passets` (or `.ptexpack`),
   a tar or a folder; one that lacks textures of ge007 is greyed out in the list with the reason and cannot be chosen. The mod's
   `textures/<n>.png` replace the picture of texture `n`, its `textures.json` changes other fields. *Pick a surface* puts the
   texture number of the clicked decor triangle in the field (`LTri::texnum`, `Hit::texnum`); *Replace...* / *Remove*; the texture

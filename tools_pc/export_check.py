@@ -1,38 +1,104 @@
 #!/usr/bin/env python3
-"""Validate a ge007-export output directory (issue #150). Stdlib only.
+"""Validate the base asset pack ge007.passets written by ge007-export (issue #150, docs/specs/asset-packs.md). Stdlib only.
 
-usage: export_check.py <out_dir>
+usage: export_check.py <pack>
 
-<out_dir>/models and <out_dir>/characters are checked as their own indexes (models.json, characters.json).
-For every <out_dir>/<level>/<level>.gltf: the JSON parses; every bufferView and
+<pack> is ge007.passets itself (an uncompressed ustar tar, or a folder made with --folder), or a folder holding it.
+A tar is read in place with tarfile; nothing is unpacked. Paths below are inside the pack.
+
+models/ and characters/ are checked as their own indexes (models/models.json, characters/characters.json).
+For every levels/<level>/<level>.gltf: the JSON parses; every bufferView and
 accessor fits the .bin; index values are below the vertex count; POSITION
 min/max match the data; every image file exists and is a valid PNG; every
 referenced material / texture / sampler / image exists. Prints rooms /
 primitives / triangles / textures per level; exits non-zero on any error.
 
-For every <out_dir>/<level>/setup.json and setup_mp.json (docs/specs/setup.md): the
+For every levels/<level>/setup.json and setup_mp.json (docs/specs/setup.md): the
 schema (format, version, header, pads, props, ...), every record's `raw` has the size
 of its type, every link / pad / waypoint / tag reference resolves, and every AI list's
 byte range lies inside the file.
 
-<out_dir>/ge007.ptexpack (docs/specs/texture-packs.md): pack.json fields, textures.json (version 1, exactly the keys
+The pack's own textures (docs/specs/texture-packs.md): pack.json fields, textures.json (version 1, exactly the keys
 "0".."2697", valid names, alpha rule by format), every non-null image exists and is a PNG of width x height. Every glTF
-image URI resolves to a file of that pack, every textured material carries extras.texture, and no glTF folder has a
-textures/ folder of its own any more.
+image URI ("../../textures/<n>.png" from levels/<level>/, models/<name>/, characters/<name>/) resolves to a file of the pack,
+every textured material carries extras.texture, and no glTF folder has a textures/ folder of its own. labels/ holds the text
+export (text_<lang>.json, names.json).
 """
 import json
 import os
+import posixpath
 import struct
 import sys
+import tarfile
 import zlib
+
+
+class Pack:
+    """The asset pack: a folder, or an uncompressed tar read in place. Paths are '/'-separated and relative to the pack root."""
+
+    def __init__(self, path):
+        self.path = path
+        self.dir = os.path.isdir(path)
+        self.files = {}   # tar: name -> member
+        self.dirs = set([""])
+        self.tf = None
+        if not self.dir:
+            self.tf = tarfile.open(path, "r:")
+            for m in self.tf.getmembers():
+                n = m.name
+                while n.startswith("./"):
+                    n = n[2:]
+                n = n.rstrip("/")
+                if m.isdir():
+                    self.dirs.add(n)
+                elif m.isfile():
+                    self.files[n] = m
+                    d = posixpath.dirname(n)
+                    while d and d not in self.dirs:
+                        self.dirs.add(d)
+                        d = posixpath.dirname(d)
+
+    def read(self, rel):
+        if self.dir:
+            with open(os.path.join(self.path, *rel.split("/")), "rb") as f:
+                return f.read()
+        m = self.files.get(rel)
+        if m is None:
+            raise OSError("no %s in %s" % (rel, self.path))
+        return self.tf.extractfile(m).read()
+
+    def isfile(self, rel):
+        return os.path.isfile(os.path.join(self.path, *rel.split("/"))) if self.dir else rel in self.files
+
+    def isdir(self, rel):
+        return os.path.isdir(os.path.join(self.path, *rel.split("/"))) if self.dir else rel in self.dirs
+
+    def listdir(self, rel):
+        if self.dir:
+            return sorted(os.listdir(os.path.join(self.path, *rel.split("/")) if rel else self.path))
+        pre = rel + "/" if rel else ""
+        out = set()
+        for n in list(self.files) + list(self.dirs):
+            if n and n != rel and n.startswith(pre):
+                out.add(n[len(pre):].split("/")[0])
+        return sorted(out)
+
+
+PK = None   # the open Pack
+
+
+def rdjson(rel):
+    return json.loads(PK.read(rel).decode("utf-8"))
+
+
+def pjoin(*a):
+    return posixpath.join(*a)
 
 CT = {5120: ("b", 1), 5121: ("B", 1), 5122: ("h", 2), 5123: ("H", 2), 5125: ("I", 4), 5126: ("f", 4)}
 NC = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
 
 
-def check_png(path):
-    with open(path, "rb") as f:
-        d = f.read()
+def check_png(d):
     if d[:8] != b"\x89PNG\r\n\x1a\n":
         return "bad signature"
     p = 8
@@ -67,15 +133,14 @@ def check_png(path):
     return None
 
 
-PACK_VER = [None]   # exporter_version of ge007.ptexpack/pack.json, for the glTF check
+PACK_VER = [None]   # exporter_version of pack.json, for the glTF check
 SURFACES = ["default", "stone", "wood", "metal", "glass", "water", "snow", "dirt", "mud", "tile", "metalobj", "chr", "glass_xlu"]
 FORMATS = ["rgba32", "rgba16", "rgb24", "rgb15", "ia16", "ia8", "ia4", "i8", "i4", "ci8_rgba16", "ci4_rgba16", "ci8_ia16", "ci4_ia16"]
 NTEXTURES = 2698
 
 
-def png_size(path):
-    with open(path, "rb") as f:
-        d = f.read(24)
+def png_size(d):
+    d = d[:24]
     return struct.unpack(">II", d[16:24])
 
 
@@ -83,13 +148,11 @@ def _class_ok(v):
     return v in SURFACES or (isinstance(v, str) and v.startswith("class") and v[5:].isdigit() and 13 <= int(v[5:]) <= 15)
 
 
-def check_pack(root):
-    """<root>/ge007.ptexpack: the game's base texture pack. Returns (errors, images, null images)."""
+def check_pack():
+    """The pack's own files: pack.json and the base textures. Returns (errors, images, null images)."""
     errs = []
-    pd = os.path.join(root, "ge007.ptexpack")
     try:
-        with open(os.path.join(pd, "pack.json"), encoding="utf-8") as f:
-            pj = json.load(f)
+        pj = rdjson("pack.json")
     except Exception as e:  # noqa: BLE001
         return ["pack.json: %s" % e], 0, 0
     for k in ("name", "author", "description"):
@@ -106,8 +169,7 @@ def check_pack(root):
     else:
         PACK_VER[0] = pj["exporter_version"]
     try:
-        with open(os.path.join(pd, "textures.json"), encoding="utf-8") as f:
-            tj = json.load(f)
+        tj = rdjson("textures.json")
     except Exception as e:  # noqa: BLE001
         return errs + ["textures.json: %s" % e], 0, 0
     if tj.get("version") != 1:
@@ -154,17 +216,16 @@ def check_pack(root):
                 want = (tw, th) if (tw, th) != (ew, eh) else (None, None)
                 if (e.get("tile_width"), e.get("tile_height")) != want:
                     errs.append(w + "tile size %r x %r, expected %r x %r" % (e.get("tile_width"), e.get("tile_height"), *want))
-        ip = os.path.join(pd, img)
-        if not os.path.isfile(ip):
+        if not PK.isfile(img):
             errs.append(w + "image missing: %s" % img)
             continue
-        er = check_png(ip)
+        ib = PK.read(img)
+        er = check_png(ib)
         if er:
             errs.append(w + "png %s: %s" % (img, er))
-        elif png_size(ip) != (e.get("width"), e.get("height")):
-            errs.append(w + "png is %dx%d, textures.json says %sx%s" % (png_size(ip) + (e.get("width"), e.get("height"))))
-    td = os.path.join(pd, "textures")
-    npng = len([n for n in os.listdir(td) if n.endswith(".png")]) if os.path.isdir(td) else 0
+        elif png_size(ib) != (e.get("width"), e.get("height")):
+            errs.append(w + "png is %dx%d, textures.json says %sx%s" % (png_size(ib) + (e.get("width"), e.get("height"))))
+    npng = len([n for n in PK.listdir("textures") if n.endswith(".png")]) if PK.isdir("textures") else 0
     if npng != nimg:
         errs.append("%d PNG files in textures/, %d non-null images in textures.json" % (npng, nimg))
     return errs, nimg, nnull
@@ -271,20 +332,19 @@ def check_collision(g, accs, views, binb, name):
 
 
 def check_level(root, name, report=True):
+    """<root>/<name>/<name>.gltf in the pack (root: levels, models or characters)."""
     errs = []
-    d = os.path.join(root, name)
-    gp = os.path.join(d, name + ".gltf")
+    d = pjoin(root, name)
+    gp = pjoin(d, name + ".gltf")
     try:
-        with open(gp, encoding="utf-8") as f:
-            g = json.load(f)
+        g = rdjson(gp)
     except Exception as e:  # noqa: BLE001
         return ["gltf: %s" % e], None
     if g.get("asset", {}).get("version") != "2.0":
         errs.append("asset.version")
-    bp = os.path.join(d, name + ".bin")
+    bp = pjoin(d, name + ".bin")
     try:
-        with open(bp, "rb") as f:
-            binb = f.read()
+        binb = PK.read(bp)
     except OSError as e:
         return ["bin: %s" % e], None
     bufs = g.get("buffers", [])
@@ -364,7 +424,7 @@ def check_level(root, name, report=True):
                 errs.append("material %d: textured but extras.texture is %r" % (i, key))
             else:
                 src = g["textures"][bc["index"]]["source"]
-                if src < nimg and not g["images"][src]["uri"].endswith("/ge007.ptexpack/textures/%s.png" % key):
+                if src < nimg and posixpath.normpath(pjoin(d, g["images"][src]["uri"])) != "textures/%s.png" % key:
                     errs.append("material %d: extras.texture %s does not match image %s" % (i, key, g["images"][src]["uri"]))
         elif "texture" in (mt.get("extras") or {}):
             errs.append("material %d: extras.texture without a texture" % i)
@@ -372,21 +432,21 @@ def check_level(root, name, report=True):
         if "mesh" in node and node["mesh"] >= len(g.get("meshes", [])):
             errs.append("node %s: bad mesh" % node.get("name"))
     for im in g.get("images", []):
-        ip = os.path.normpath(os.path.join(d, im["uri"]))
-        if "ge007.ptexpack/textures/" not in im["uri"]:
-            errs.append("image %s does not point into ge007.ptexpack" % im["uri"])
-        if not os.path.isfile(ip):
+        ip = posixpath.normpath(pjoin(d, im["uri"]))
+        if not ip.startswith("textures/"):
+            errs.append("image %s does not point into the pack's textures/" % im["uri"])
+        if not PK.isfile(ip):
             errs.append("image missing: %s" % im["uri"])
         else:
-            e = check_png(ip)
+            e = check_png(PK.read(ip))
             if e:
                 errs.append("png %s: %s" % (im["uri"], e))
-    if os.path.isdir(os.path.join(d, "textures")):
-        errs.append("textures/ folder next to the glTF (the pictures are in ge007.ptexpack)")
+    if PK.isdir(pjoin(d, "textures")):
+        errs.append("textures/ folder next to the glTF (the pictures are in the pack's textures/)")
     ev = (g.get("asset", {}).get("extras") or {}).get("exporter_version")
     if PACK_VER[0] is not None and ev != PACK_VER[0]:
         errs.append("asset.extras.exporter_version %r != pack.json %r" % (ev, PACK_VER[0]))
-    if report and not os.path.isfile(os.path.join(d, "report.txt")):
+    if report and not PK.isfile(pjoin(d, "report.txt")):
         errs.append("report.txt missing")
     errs += check_collision(g, accs, views, binb, name)
     stats = (len([n for n in g.get("nodes", []) if not (n.get("extras") or {}).get("collision")]), nprim, ntri, nimg, nmat)
@@ -407,8 +467,7 @@ def check_setup(path):
     """Validates one setup.json; returns a list of error strings."""
     errs = []
     try:
-        with open(path, encoding="utf-8") as f:
-            j = json.load(f)
+        j = rdjson(path)
     except Exception as e:  # noqa: BLE001
         return ["setup: %s" % e]
 
@@ -552,8 +611,7 @@ def check_setup(path):
 def check_models(mroot):
     """Models export (issue #119): <mroot>/<model>/<model>.gltf for every entry of models.json."""
     try:
-        with open(os.path.join(mroot, "models.json"), encoding="utf-8") as f:
-            idx = json.load(f)
+        idx = rdjson(pjoin(mroot, "models.json"))
     except Exception as e:  # noqa: BLE001
         print("models: models.json: %s" % e)
         return 1
@@ -568,7 +626,7 @@ def check_models(mroot):
             print("model %d %s: FAILED %s" % (e["model"], e.get("file"), e.get("notes")))
             bad += 1
             continue
-        name = os.path.dirname(e["gltf"])
+        name = posixpath.dirname(e["gltf"])
         errs, st = check_level(mroot, name, report=False)
         if st is None:
             errs = errs or ["no stats"]
@@ -576,8 +634,7 @@ def check_models(mroot):
             for i in range(4):
                 tot[i] += st[i + 0] if i < 3 else st[3]
             try:
-                with open(os.path.join(mroot, e["gltf"]), encoding="utf-8") as f:
-                    g = json.load(f)
+                g = rdjson(pjoin(mroot, e["gltf"]))
                 sc = g["scenes"]
                 nn = len(g["nodes"])
                 for si in sc:
@@ -641,17 +698,16 @@ TXT_EXAMPLES = {"9840": "Hunting Knife\n", "9856": "PP7 Special Issue\n", "986B"
 
 
 def check_text(troot):
-    """Text export (docs/specs/text.md): text_<lang>.json per language set and names.json."""
+    """Text export (docs/specs/text.md), in labels/: text_<lang>.json per language set and names.json."""
     errs = []
-    files = sorted(n for n in os.listdir(troot) if n.startswith("text_") and n.endswith(".json"))
+    files = sorted(n for n in PK.listdir(troot) if n.startswith("text_") and n.endswith(".json"))
     if not files:
         errs.append("no text_<lang>.json")
     region = None
     ngame = 0
     for fn in files:
         try:
-            with open(os.path.join(troot, fn), encoding="utf-8") as f:
-                t = json.load(f)
+            t = rdjson(pjoin(troot, fn))
         except Exception as e:  # noqa: BLE001
             errs.append("%s: %s" % (fn, e))
             continue
@@ -704,8 +760,7 @@ def check_text(troot):
     if files and ngame != 1:
         errs.append("%d sets marked as the game language" % ngame)
     try:
-        with open(os.path.join(troot, "names.json"), encoding="utf-8") as f:
-            nm = json.load(f)
+        nm = rdjson(pjoin(troot, "names.json"))
         for key, n in (("items", 89), ("folders", 29), ("briefings", 20), ("mp_stages", 12), ("mp_characters", 64)):
             if len(nm.get(key, [])) != n:
                 errs.append("names.json: %s has %d entries, spec says %d" % (key, len(nm.get(key, [])), n))
@@ -742,8 +797,7 @@ def check_text(troot):
 def check_characters(croot):
     """Characters export (docs/specs/characters.md): <croot>/<name>/<name>.gltf for every entry of characters.json."""
     try:
-        with open(os.path.join(croot, "characters.json"), encoding="utf-8") as f:
-            idx = json.load(f)
+        idx = rdjson(pjoin(croot, "characters.json"))
     except Exception as e:  # noqa: BLE001
         print("characters: characters.json: %s" % e)
         return 1
@@ -763,14 +817,12 @@ def check_characters(croot):
             print("character %d %s: FAILED %s" % (e["id"], e.get("file"), e.get("notes")))
             bad += 1
             continue
-        name = os.path.dirname(e["gltf"])
+        name = posixpath.dirname(e["gltf"])
         errs, st = check_level(croot, name, report=False)
         if st is not None:
             try:
-                with open(os.path.join(croot, e["gltf"]), encoding="utf-8") as f:
-                    g = json.load(f)
-                with open(os.path.join(croot, name, name + ".bin"), "rb") as f:
-                    binb = f.read()
+                g = rdjson(pjoin(croot, e["gltf"]))
+                binb = PK.read(pjoin(croot, name, name + ".bin"))
                 accs, nodes = g["accessors"], g["nodes"]
                 body = e["kind"] == "body"
                 nb += body
@@ -831,11 +883,9 @@ def check_shared_animations(croot, idx):
         try:
             if not an.get("gltf"):
                 raise ValueError("no gltf")
-            gp = os.path.join(croot, an["gltf"])
-            with open(gp, encoding="utf-8") as f:
-                g = json.load(f)
-            with open(os.path.join(os.path.dirname(gp), g["buffers"][0]["uri"]), "rb") as f:
-                binb = f.read()
+            gp = pjoin(croot, an["gltf"])
+            g = rdjson(gp)
+            binb = PK.read(pjoin(posixpath.dirname(gp), g["buffers"][0]["uri"]))
             nodes = g["nodes"]
             for j in range(16):
                 if not any(nd.get("name", "").startswith("j%d_" % j) and "_half" not in nd["name"] for nd in nodes):
@@ -929,23 +979,40 @@ def check_body_rig(g, binb, e):
     return errs
 
 
+def open_pack(arg):
+    """arg: ge007.passets (tar or folder), or a folder holding it"""
+    if os.path.isdir(arg) and os.path.isfile(os.path.join(arg, "pack.json")):
+        return Pack(arg)
+    if os.path.isfile(arg):
+        return Pack(arg)
+    cand = os.path.join(arg, "ge007.passets")
+    if os.path.exists(cand):
+        return Pack(cand)
+    raise OSError("no asset pack at %s (pass ge007.passets, or the folder holding it)" % arg)
+
+
 def main():
+    global PK
     if len(sys.argv) != 2:
         print(__doc__)
         return 2
-    root = sys.argv[1]
-    levels = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n)) and n not in ("models", "text", "characters", "ge007.ptexpack"))
+    try:
+        PK = open_pack(sys.argv[1])
+    except (OSError, tarfile.TarError) as e:
+        print("export_check: %s" % e)
+        return 2
+    levels = sorted(n for n in PK.listdir("levels") if PK.isdir(pjoin("levels", n))) if PK.isdir("levels") else []
     bad = 0
-    perrs, pimg, pnull = check_pack(root)
+    perrs, pimg, pnull = check_pack()
     for e in perrs[:50]:
-        print("    ERROR: ge007.ptexpack:", e)
+        print("    ERROR: ge007.passets:", e)
     if len(perrs) > 50:
         print("    ... %d more pack errors" % (len(perrs) - 50))
-    print("ge007.ptexpack: %d pictures, %d textures without one, %d errors" % (pimg, pnull, len(perrs)))
+    print("ge007.passets: %d pictures, %d textures without one, %d errors" % (pimg, pnull, len(perrs)))
     bad += 1 if perrs else 0
     tot = [0, 0, 0, 0]
     for n in levels:
-        errs, st = check_level(root, n)
+        errs, st = check_level("levels", n)
         if st:
             print("%-10s rooms %3d  primitives %5d  triangles %7d  textures %3d  materials %4d"
                   % ((n,) + st))
@@ -958,8 +1025,8 @@ def main():
         for e in errs:
             print("    ERROR:", e)
         for sf in ("setup.json", "setup_mp.json"):
-            sp = os.path.join(root, n, sf)
-            if not os.path.isfile(sp):
+            sp = pjoin("levels", n, sf)
+            if not PK.isfile(sp):
                 continue
             serrs = check_setup(sp)
             if sp in SETUP_COUNT:
@@ -971,9 +1038,9 @@ def main():
             bad += 1
     print("%d levels checked, %d with errors; rooms %d primitives %d triangles %d textures %d"
           % (len(levels), bad, tot[0], tot[1], tot[2], tot[3]))
-    mbad = check_models(os.path.join(root, "models")) if os.path.isdir(os.path.join(root, "models")) else 0
-    tbad = check_text(os.path.join(root, "text")) if os.path.isdir(os.path.join(root, "text")) else 0
-    cbad = check_characters(os.path.join(root, "characters")) if os.path.isdir(os.path.join(root, "characters")) else 0
+    mbad = check_models("models") if PK.isdir("models") else 0
+    tbad = check_text("labels") if PK.isdir("labels") else 0
+    cbad = check_characters("characters") if PK.isdir("characters") else 0
     return 1 if bad or mbad or tbad or cbad or not levels else 0
 
 

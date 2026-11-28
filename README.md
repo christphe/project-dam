@@ -119,10 +119,9 @@ Settings, saves and logs live in `switch/project-dam/data/`.
 
 The table uses Xbox-style labels; on the Switch the buttons follow the labels
 printed on the controller, and the options menu shows every binding.
-Everything is rebindable in the options menu. Rare's Xbox control styles are
-presets, and the **Original** control style turns your pad into an N64
-controller. The [user guide](docs/user-guide.md#controls) covers control
-styles, rebinding and split-screen.
+Keyboard and mouse are rebindable in the options menu; the gamepad has one
+layout. The [user guide](docs/user-guide.md#controls) covers controls,
+rebinding and split-screen.
 
 ## What this fork offers
 
@@ -131,16 +130,14 @@ styles, rebinding and split-screen.
   draws every tick, so you get 60 fps with the game, physics and AI running at
   the N64's own speed. The few spots that behaved differently at one tick per
   frame are fixed to match the N64.
-- **Aiming that doesn't feel floaty.** *Aim style* picks the behavior.
-  **Centered** pins the crosshair in the middle and the stick (or mouse) turns
-  the camera directly, like a modern shooter. **Original** keeps the N64's
-  crosshair that moves a little before the camera follows. Both sticks have
+- **Aiming that doesn't feel floaty.** The crosshair stays pinned in the
+  middle and the stick (or mouse) turns the camera directly, like a modern
+  shooter. Both sticks have
   their own sensitivity, deadzone and smoothing; on the Switch, aim zoom and
   aim assist make a head big enough to hit on the handheld screen.
 - **Dual analog built in.** No emulator remapping: the right stick looks, the
-  triggers fire and aim, and every button is rebindable. Rare's Xbox control
-  styles are presets, and the **Original** control style turns the pad into a
-  strict virtual N64 controller.
+  triggers fire and aim, and the weapon and gadget wheels sit on the shoulder
+  buttons.
 - **The whole game.** All 20 solo missions and the credits, every difficulty,
   007 mode and the cheats, plus split-screen multiplayer for up to 4 players.
   **Co-op** runs a solo mission for two to four players in split screen, with
@@ -179,8 +176,8 @@ Yes. You need a ROM of the US (NTSC-U) version, dumped from a cartridge you own.
 **Does it play like the original?**
 Mostly, but that is not this fork's goal. Levels, guards and weapons come from
 the game's own reconstructed source, at its original speed, and the
-**Original** display mode and **Original** control style give you the N64
-picture and controls. The fork also makes changes of its own (see *Where it
+**Original** display mode gives you the N64
+picture. The fork also makes changes of its own (see *Where it
 differs from upstream*), so if you want the logic kept intact, use the
 [upstream port](https://github.com/jkdansereau/goldeneye-pc-port).
 

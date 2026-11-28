@@ -74,10 +74,6 @@ ge_add_pure_test(test_romcheck test_romcheck.c ${CMAKE_SOURCE_DIR}/port/convert/
 set(GE_INPUT_DIR "${CMAKE_SOURCE_DIR}/port/src/input")
 ge_add_pure_test(test_input_modern test_input_modern.c
   ${GE_INPUT_DIR}/input_common.c ${GE_INPUT_DIR}/style_modern.c ${GE_INPUT_DIR}/n64bridge.c)
-ge_add_pure_test(test_input_enhanced test_input_enhanced.c
-  ${GE_INPUT_DIR}/input_common.c ${GE_INPUT_DIR}/style_enhanced.c ${GE_INPUT_DIR}/n64bridge.c)
-ge_add_pure_test(test_input_original test_input_original.c
-  ${GE_INPUT_DIR}/input_common.c ${GE_INPUT_DIR}/style_original.c ${GE_INPUT_DIR}/n64bridge.c)
 
 # The shared mission formats (port/mission, port/levelrec): pure, no core.
 ge_add_pure_test(test_mission_format test_mission_format.c)
@@ -101,7 +97,7 @@ if(GE007_ROM_TESTS)
 endif()
 
 # Mission setup rebuild (port/mission/mission_apply.c) the Luau runtime (mission_lua.cpp) and the thumb.png pixel conversion (mission_thumb.c): pure, no core.
-foreach(_t test_mission_apply test_mission_lua test_mission_thumb test_mission_formula test_mission_pkg test_mission_events test_texpacks_json test_ge_png test_ge_tex
+foreach(_t test_mission_apply test_mission_lua test_mission_thumb test_mission_formula test_mission_pkg test_mission_events test_texpacks_json test_ge_png test_ge_tex test_assetstack
            test_mission_api_guard test_mission_api_world test_mission_api_cinema)
   ge_add_pure_test(${_t} ${_t}.c)
   target_link_libraries(${_t} ge_mission)

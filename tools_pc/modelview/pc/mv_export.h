@@ -17,7 +17,7 @@ struct MvCharEntry {
 
 struct MvAnimInfo { std::string name; int number = -1; int frames = 0; float fps = 30; bool loop = false; };
 
-// dir = the characters folder (holds characters.json) or the export folder above it
+// dir = the folder holding the asset pack ge007.passets, or the pack itself (a tar or a folder; characters/characters.json inside it)
 bool mv_export_open(const std::string& dir, std::string& err);
 bool mv_export_ready();
 const std::string& mv_export_dir();
@@ -51,16 +51,16 @@ bool mv_export_pose(int anim, float frame, int njoints, std::vector<float>& pose
 bool mv_export_image(const std::string& path, int& w, int& h, std::vector<uint8_t>& rgba);
 
 // ---- texture sources (docs/specs/texture-packs.md): the active mod (partial, merged field by field) over the chosen texture
-// pack (complete). ge007.ptexpack, the game's own pack, is the default: <game>/texturepacks/ge007.ptexpack when the game wrote
-// it, else the export's own copy beside characters/. A pack that lacks textures of ge007 is refused (never mixed).
+// pack (complete). ge007.passets, the game's own pack, is the default: <game>/assetpacks/ge007.passets when the game wrote
+// it, else the export's own pack (the one the characters are read from). A pack that lacks textures of ge007 is refused (never mixed).
 struct MvPackChoice { std::string file, path, name, reason; bool base = false; bool usable() const { return reason.empty(); } };
 struct MvModChoice { std::string file, path, name; };
-void mv_tex_init(const std::string& gameDir);          // the game folder (texturepacks/, mods/); "" = none known
+void mv_tex_init(const std::string& gameDir);          // the game folder (assetpacks/, mods/); "" = none known
 const std::string& mv_tex_game();
 std::vector<MvPackChoice> mv_tex_packs();              // ge007 first, then the folder's packs; not selectable ones carry a reason (opens every pack: not cheap)
 std::vector<MvModChoice> mv_tex_mods();                // <game>/mods/*.pmod
 // mod: "" none, else a .pmod / folder path or the name of one in <game>/mods; pack: "" = ge007, else a path or the name of one
-// in <game>/texturepacks. false (and mv_tex_note() says why) when one was refused: ge007 is used, or no mod.
+// in <game>/assetpacks. false (and mv_tex_note() says why) when one was refused: ge007 is used, or no mod.
 bool mv_tex_use(const std::string& mod, const std::string& pack);
 const std::string& mv_tex_note();
 const std::string& mv_tex_mod();                       // what is in use ("" none / ge007)

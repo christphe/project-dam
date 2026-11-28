@@ -492,7 +492,7 @@ static void write_rgba(CvBuf *j, uint32_t c) { ex_jp(j, "[%u,%u,%u,%u]", c >> 24
 void ex_matout_init(MatOut *mo)
 {
     memset(mo, 0, sizeof *mo);
-    mo->pack_depth = 1;
+    mo->pack_depth = 2;   /* <pack>/<kind>/<name>/<name>.gltf -> ../../textures */
     for (int i = 0; i < 9; i++) mo->smap[i] = -1;
 }
 
@@ -524,7 +524,7 @@ int ex_emit_materials(MatOut *mo, const MatCtx *mc)
                 if (ii == mo->nimg) {
                     if (ex_grow((void **)&mo->imgtex, &mo->capimg, mo->nimg + 1, sizeof *mo->imgtex)) return -1;
                     mo->imgtex[mo->nimg++] = (int)k->texnum;
-                    ex_jp(&mo->imgs, "%s{\"uri\":\"%s/ge007.ptexpack/textures/%u.png\"}", ii ? "," : "",
+                    ex_jp(&mo->imgs, "%s{\"uri\":\"%s/textures/%u.png\"}", ii ? "," : "",
                           mo->pack_depth >= 2 ? "../.." : "..", k->texnum);
                 }
                 int sk = (int)(wsm > 2 ? 0 : wsm) * 3 + (int)(wtm > 2 ? 0 : wtm);
