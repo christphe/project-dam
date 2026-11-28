@@ -77,8 +77,9 @@ PC (`videoBootWindowGeometry()`) and on the libnx framebuffer on the Switch. It 
 - **ROM not found** (`romdata.c`): the expected file name and the folder to copy it to. A ROM
   that was found but refused gets the reason instead.
 - **Conversion failed** (`romconvert.c`): asks for an unmodified retail `.z64`; the log has the
-  details. A base asset pack that cannot be written (folder not writable, no space) only logs
-  a warning and boot goes on: the game still reads the ROM.
+  details. A base asset pack that cannot be written (folder not writable, no space) stops boot
+  the same way ("Asset pack not written"): the game reads its assets from the packs. When a
+  rewrite after an exporter update fails but the older pack is still there, boot goes on with it.
 
 Messages wait for a press, then the game quits. Every message also goes to the log. On the PC,
 when no window can be opened, a native message box shows it instead. The text uses an embedded

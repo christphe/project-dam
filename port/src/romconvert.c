@@ -156,9 +156,10 @@ static void rcTexLog(void *user, const char *line)
     sysLogPrintf(LOG_INFO, "romconvert: %s", line);
 }
 
-/* The base asset pack, $S/../assetpacks/ge007.passets (docs/specs/asset-packs.md). Always 1: a pack that cannot be written is
- * logged and boot goes on (the game still reads the ROM). A pack written for the first time is enabled, last in the order;
- * one re-written after an exporter update keeps the player's choice. */
+/* The base asset pack, $S/../assetpacks/ge007.passets (docs/specs/asset-packs.md). 1 = boot goes on. A pack that cannot be
+ * written stops boot with a message (-1): the game reads its assets from the packs, not from the ROM. An older pack still in
+ * place after a failed rewrite is kept and boot goes on. A pack written for the first time is enabled, last in the order; one
+ * re-written after an exporter update keeps the player's choice. */
 static int rcEnsureBasePack(const char *romRelPath)
 {
     char romPath[1024];
@@ -175,9 +176,18 @@ static int rcEnsureBasePack(const char *romRelPath)
     code = ex_ensure_base_asset_pack(romPath, packDir, oldDir, rcTexLog, NULL);
     ex_set_progress(NULL, NULL);
     if (code < 0) {
-        sysLogPrintf(LOG_WARNING, "romconvert: the base asset pack could not be written to %s (boot goes on)", packDir);
-        bootscreenClose();
-        return 1;
+        if (pkgExists(packDir)) {   /* the rewrite failed but the older pack is still there */
+            sysLogPrintf(LOG_WARNING, "romconvert: the base asset pack could not be rewritten; keeping the older %s", packDir);
+            bootscreenClose();
+            return 1;
+        }
+        sysLogPrintf(LOG_ERROR, "romconvert: the base asset pack could not be written to %s - cannot continue", packDir);
+        bootscreenMessage("Asset pack not written",
+            "The game's assets could not be written from your ROM\n"
+            "into the assetpacks folder next to the game.\n"
+            "Check that the folder can be written and that there is free space.\n"
+            "The log has the details.");
+        return -1;
     }
     if (code == 0) {
         sysLogPrintf(LOG_INFO, "romconvert: base asset pack written to %s", packDir);
