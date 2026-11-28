@@ -2657,6 +2657,7 @@ void optionsOverlayToggle(void)
         s_seedPrev = 1;
     }
     SDL_AtomicSet(&s_backPending, 0);
+    optionsMenuAssetPackDiscard();   /* unapplied asset-pack edits do not survive opening or closing the menu */
     sysLogPrintf(LOG_INFO, "optionsoverlay: %s", s_open ? "opened" : "closed");
     if (!s_open) {
         optionsResetClear();   /* D356: closing the overlay disarms a pending reset */
@@ -2680,13 +2681,16 @@ typedef struct {
     int on[PACKS_VIEW_MAX];
 } PacksView;
 static int s_packSel;   /* the highlighted row of the asset-pack list */
+/* The edits wait here until Apply: the enabled packs in order (Video.AssetPacks format); s_packPend says it is in use. */
+static char s_packPendText[ASSETPACK_LIST_LEN];
+static int s_packPend;
 
 static void packsView(PacksView *v)
 {
     static char found[PACKS_VIEW_MAX][128], fnames[PACKS_VIEW_MAX][64];
     static char list[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
     const int nf = texpackListPacks(found, fnames, PACKS_VIEW_MAX);
-    const int nl = assetPackListParse(texpackPacks(), list, ASSETPACK_MAX);
+    const int nl = assetPackListParse(s_packPend ? s_packPendText : texpackPacks(), list, ASSETPACK_MAX);
     v->n = v->nOn = 0;
     for (int i = 0; i < nl && v->n < PACKS_VIEW_MAX; i++) {   /* enabled, in order; a pack that is gone shows by its file name */
         const char *name = list[i];
@@ -2704,15 +2708,49 @@ static void packsView(PacksView *v)
     }
 }
 
+/* The list as text, in the canonical form (parse and format), so two lists compare by string. */
+static void packsCanon(const char *in, char *out, size_t outlen)
+{
+    static char list[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
+    assetPackListFormat(list, assetPackListParse(in, list, ASSETPACK_MAX), out, outlen);
+}
+
+/* The pending list differs from the one in use: Apply and Discard have something to do. */
+static int packsDirty(void)
+{
+    char a[ASSETPACK_LIST_LEN], b[ASSETPACK_LIST_LEN];
+    if (!s_packPend) return 0;
+    packsCanon(s_packPendText, a, sizeof a);
+    packsCanon(texpackPacks(), b, sizeof b);
+    return strcmp(a, b) != 0;
+}
+
+/* An edit: only the pending list changes; nothing is applied or saved until Apply. */
 static void packsApply(const PacksView *v)
 {
     static char list[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
-    char text[ASSETPACK_LIST_LEN];
     int n = 0;
     for (int i = 0; i < v->n && n < ASSETPACK_MAX; i++) if (v->on[i]) snprintf(list[n++], ASSETPACK_FILE_LEN, "%s", v->files[i]);
-    assetPackListFormat(list, n, text, sizeof text);
-    texpackSetPacks(text);
+    assetPackListFormat(list, n, s_packPendText, sizeof s_packPendText);
+    s_packPend = 1;
+    menuRefreshAssetPacks();
+}
+
+/* Apply: the pending list goes to the readers once and is saved once. */
+static void packsCommit(void)
+{
+    if (!packsDirty()) return;
+    texpackSetPacks(s_packPendText);
     configSave();
+    s_packPend = 0;
+    menuRefreshAssetPacks();
+}
+
+/* Discard: back to the list in use. Also what leaving the menu does, without asking. */
+void optionsMenuAssetPackDiscard(void)
+{
+    if (!s_packPend) return;
+    s_packPend = 0;
     menuRefreshAssetPacks();
 }
 
@@ -2749,6 +2787,7 @@ int optionsMenuGet(const char *key, double *out)
     if (!strcmp(key, "__DisplayMode")) { *out = videoGetDisplayMode(); return 1; }
     if (!strcmp(key, "__Resolution")) { *out = s_resSel; return 1; }
     if (!strcmp(key, "__AssetPackSel")) { *out = s_packSel; return 1; }
+    if (!strcmp(key, "__AssetPackDirty")) { *out = packsDirty(); return 1; }
     if (!strcmp(key, "__AssetPackOn")) {   /* the highlighted pack is enabled */
         PacksView v;
         packsView(&v);
@@ -2901,6 +2940,8 @@ void optionsMenuAction(const char *key)
     if (!strcmp(key, "__UpdateCheck")) { updateCheckRun(); return; }
     if (!strcmp(key, "__AssetPackUp")) { packsMove(-1); return; }
     if (!strcmp(key, "__AssetPackDown")) { packsMove(1); return; }
+    if (!strcmp(key, "__AssetPackApply")) { packsCommit(); return; }
+    if (!strcmp(key, "__AssetPackDiscard")) { optionsMenuAssetPackDiscard(); return; }
     if (!strcmp(key, "__RestartGame")) {   /* D443: the orderly D344 quit, then main.c relaunches */
         sysLogPrintf(LOG_INFO, "menu: restart game requested");
         configSave();

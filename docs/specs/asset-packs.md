@@ -100,5 +100,9 @@ new pack is written, and a `ge007.ptexpack` in `Video.AssetPacks` becomes
 
 Video > Asset packs: **Pack** lists the enabled packs first, numbered in their
 order (1 wins over 2), then the others; **Enabled** turns the highlighted pack
-on (it goes last) or off; **Move up** and **Move down** change its place. A
-change shows at once, also during a mission.
+on (it goes last) or off; **Move up** and **Move down** change its place. These
+edits only change a pending list, the labels show it, and nothing is applied or
+saved. **Apply** (disabled while the pending list equals the one in use) gives
+the list to the readers once, which reload, and saves the config once, also
+during a mission. **Discard changes** (same rule) resets the pending list to the
+one in use. Leaving the menu drops pending edits silently, without asking.

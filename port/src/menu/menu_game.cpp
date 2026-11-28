@@ -39,6 +39,7 @@ const char* sysResolvePath(const char* path);
 int portWheelState(int seat, char names[][24], int max, int* sel, int* kind);
 void portSeatRegion(int seat, float* x0, float* y0, float* x1, float* y1);
 int portAssignState(char names[][48], int* step, int* count);
+void optionsMenuAssetPackDiscard(void);
 void optionsMenuSetSeat(int seat);
 int optionsMenuFileSelect(void);
 int optionsMenuInStage(void);
@@ -451,6 +452,7 @@ extern "C" int menuTakeCloseRequest(void) {
 }
 
 extern "C" void menuUiClose(void) {
+    optionsMenuAssetPackDiscard();   /* the menu is closed: unapplied asset-pack edits are dropped */
     if (modsScreenActive()) {   /* the idle branch of the overlay's emit: the Mods screen is up over the mode select */
         runFrame(4);
         return;
