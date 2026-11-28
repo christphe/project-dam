@@ -39,10 +39,11 @@ unsigned labelsGetBankSlots(int bank);   /* the reader's file; 1024 when inactiv
  * on first use and again when assetStackGen() changes (pack toggled, reordered or rewritten, another mod); strings handed out before a reload stay valid through that one reload. */
 void labelsSetLanguage(const char *file, const char *fallback);   /* tests: "labels/text_en.json", NULL */
 void labelsInvalidate(void);
-/* 1 when strings come from the packs: GE_ROM_LABELS unset and the language file loaded. 0 = use the ROM banks. */
+/* 1 when the text comes from the packs (GE_ROM_LABELS unset); 0 = the ROM banks. The file may still be missing: see labelsHasFile. */
 int labelsActive(void);
+int labelsHasFile(void);   /* the language file is loaded; when not, every string is a placeholder */
 const unsigned char *labelsGet(unsigned id);   /* NULL when the id has no string (or labels are not active) */
-/* A visible placeholder for an id the pack lacks but the ROM has; logs the id once. Valid until 8 more calls. */
+/* A visible placeholder for an id the pack lacks (or the whole file) but the ROM bank has; logs the id once. Valid until 8 more calls. */
 const unsigned char *labelsMissing(unsigned id);
 int labelsCheckEnabled(void);   /* GE_LABELS_CHECK set */
 
