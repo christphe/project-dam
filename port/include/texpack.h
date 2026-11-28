@@ -43,13 +43,13 @@ unsigned assetStackGen(void);
 
 void texpackRegister(const void *data, int texnum, int bytes);   /* texLoad: texture `texnum` unpacked at `data`, `bytes` long */
 
-/* 0 when the pack has no picture for the texture holding `addr`, else a value for fast3d's cache key (changes with the pack
+/* 0 when no texture number is registered at `addr` (or GE_ROM_TEXTURES=1), else a value for fast3d's cache key (changes with the pack
  * and the offset). A load by blocks (fromTile 0) must start at the texture; a load by tiles may start inside it (a strip of
  * a wider image): `offset` is how far in, in bytes. */
 unsigned texpackSalt(const void *addr, int fromTile, int *texnum, uint32_t *offset);
 /* The pack's picture of `texnum` as RGBA8 for a tile of RDP format `fmt` (G_IM_FMT_*): an opaque picture replacing an
- * intensity texture (I, IA) gets its luminance as alpha, as the RDP reads those. NULL when it cannot be read or is larger
- * than maxSize on a side. Valid until the next call. */
+ * intensity texture (I, IA) gets its luminance as alpha, as the RDP reads those. A texture no mod and no pack has, or whose picture cannot be read or is larger
+ * than maxSize on a side, gets a small magenta / black checker (one warning per texture number, capped); never NULL for a texture number the salt returned. Valid until the next call. */
 const uint8_t *texpackPixels(int texnum, int fmt, int maxSize, int *w, int *h);
 
 #ifdef __cplusplus

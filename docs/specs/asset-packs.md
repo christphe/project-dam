@@ -46,8 +46,11 @@ Resolution of a key of any kind:
 1. the active mod, if it has the key: **it always wins** (a mod that ships an
    asset needs it replaced);
 2. else the first enabled pack, in the player's order, that has it;
-3. else the key is missing. While the game still draws from the ROM, a missing
-   texture is the game's own; once it draws from the export, each kind gets a
+3. else the key is missing. A missing texture is drawn as a small magenta /
+   black checker (never the ROM's bytes; one warning per texture number in the
+   log, capped; `GE_ROM_TEXTURES=1` forces the ROM decode as a dev token).
+   Textures with no texture number (those the game regenerates in place, the
+   mission thumbnails) keep the game's bytes. Each other kind gets a
    visible fallback (a checker texture, a box model, silence, a default font)
    and a log line.
 
