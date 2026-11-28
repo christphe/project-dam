@@ -11,7 +11,7 @@ namespace menu {
 
 /* CT_CHOICE: buttons side by side. CT_SELECT: a list that opens (long lists). CT_SLIDER with "options" is a slider
  * with one notch per option. */
-enum CtlType { CT_CHOICE, CT_TOGGLE, CT_SLIDER, CT_ACTION, CT_SELECT, CT_BIND, CT_DIAGRAM };   /* CT_BIND: a key or mouse button for an action, two slots */
+enum CtlType { CT_CHOICE, CT_TOGGLE, CT_SLIDER, CT_ACTION, CT_SELECT, CT_BIND, CT_DIAGRAM, CT_PACKLIST };   /* CT_BIND: a key or mouse button for an action, two slots. CT_PACKLIST: the asset packs, one row each (the game fills it: setPackList) */
 
 /* A choice's option: the id is what the logic uses (expressions, defaults, help); the label is the English
  * source text shown to the player, looked up in the translation table (tr) when drawn. */

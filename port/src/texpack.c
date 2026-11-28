@@ -27,6 +27,7 @@
 #include "texpack.h"
 #include "ge_texpacks.h"
 #include "ge_assetstack.h"
+#include "ge_pkg.h"
 #include "ge_png.h"
 
 #define REG_SIZE 16384            /* registered textures kept; cleared when full */
@@ -39,7 +40,7 @@
 #define FMT_IA 3                  /* G_IM_FMT_IA (PR/gbi.h) */
 #define FMT_I 4                   /* G_IM_FMT_I */
 
-static char s_cfgList[ASSETPACK_LIST_LEN];  /* Video.AssetPacks: the enabled packs, in order */
+static char s_cfgList[ASSETPACK_LIST_LEN];  /* Video.AssetPacks: every known pack in order, a disabled one as "-name" */
 static char s_cfgLegacy[TEXPACK_FILE_LEN];  /* Video.TexturePack: the one pack of older versions, migrated by texpackInit */
 static char s_inUse[ASSETPACK_LIST_LEN];
 static AssetStack *s_stack;
@@ -61,6 +62,11 @@ typedef struct {
 } Pic;
 static Pic s_pic[TEXPACK_MAX_TEXNUM + 1];
 static size_t s_picBytes;
+#define CHECKER_SIZE 8
+#define MISSING_LOG_MAX 64        /* "missing texture" warnings: one per texture number, up to this many */
+static uint8_t s_checker[CHECKER_SIZE * CHECKER_SIZE * 4];   /* magenta / black, made on first use */
+static uint8_t s_warned[TEXPACK_MAX_TEXNUM + 1];
+static int s_warnedN;
 static unsigned s_picTick;
 static unsigned s_picGen;         /* the s_gen the pictures belong to: the render thread drops them when it changes */
 
@@ -78,6 +84,14 @@ static const char *const *packsDirs(void)
     snprintf(a, sizeof a, "%s", sysResolvePath("$S/../assetpacks"));
     snprintf(t, sizeof t, "%s", sysResolvePath("$S/../texturepacks"));
     return dirs;
+}
+
+/* GE_ROM_TEXTURES=1 (dev token): every texture is drawn from the ROM's own decode, the mod and the packs are not asked. */
+static int romTextures(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("GE_ROM_TEXTURES"); v = (e && atoi(e) > 0) ? 1 : 0; }
+    return v;
 }
 
 static uintptr_t normAddr(const void *p)
@@ -104,12 +118,14 @@ static void picsClear(void)
 
 void texpackSetPacks(const char *list)
 {
-    static char files[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
+    static char all[ASSETPACK_MAX][ASSETPACK_FILE_LEN], files[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
     static AssetPackInfo info[ASSETPACK_MAX * 2];
     static char rootBuf[ASSETPACK_MAX][800];
     const char *roots[ASSETPACK_MAX];
     char text[ASSETPACK_LIST_LEN];
-    const int n = assetPackListParse(list ? list : "", files, ASSETPACK_MAX);
+    int on[ASSETPACK_MAX];
+    const int nAll = assetPackEntriesParse(list ? list : "", all, on, ASSETPACK_MAX);
+    const int n = assetPackEntriesEnabled(all, on, nAll, files, ASSETPACK_MAX);   /* the stack opens only the enabled ones, in order */
     int found = assetPackScan(packsDirs(), 2, info, ASSETPACK_MAX * 2);
     AssetStack *st;
     if (found > ASSETPACK_MAX * 2) found = ASSETPACK_MAX * 2;
@@ -119,7 +135,7 @@ void texpackSetPacks(const char *list)
         snprintf(rootBuf[i], sizeof rootBuf[i], "%s/%s", dir, files[i]);
         roots[i] = rootBuf[i];
     }
-    assetPackListFormat(files, n, text, sizeof text);
+    assetPackEntriesFormat(all, on, nAll, text, sizeof text);
     snprintf(s_cfgList, sizeof s_cfgList, "%s", text);
     st = assetStackOpen(roots, n);
     for (int i = 0; i < n; i++) {
@@ -169,11 +185,12 @@ void texpackInit(void)
     s_cfgLegacy[0] = 0;
     {   /* the base pack was texturepacks/ge007.ptexpack; it is assetpacks/ge007.passets now */
         static char files[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
-        const int n = assetPackListParse(s_cfgList, files, ASSETPACK_MAX);
+        int on[ASSETPACK_MAX];
+        const int n = assetPackEntriesParse(s_cfgList, files, on, ASSETPACK_MAX);
         const int k = assetPackListFind(files, n, "ge007.ptexpack");
         if (k >= 0) {
             snprintf(files[k], ASSETPACK_FILE_LEN, "%s", "ge007.passets");
-            assetPackListFormat(files, n, s_cfgList, sizeof s_cfgList);
+            assetPackEntriesFormat(files, on, n, s_cfgList, sizeof s_cfgList);
         }
     }
     snprintf(want, sizeof want, "%s", s_cfgList);
@@ -182,19 +199,71 @@ void texpackInit(void)
 
 const char *texpackPacks(void) { return s_inUse; }
 
+/* A path inside a pack: no "..", no drive, no leading slash. */
+static int relOk(const char *rel)
+{
+    if (!rel || !rel[0] || rel[0] == '/' || rel[0] == '\\' || strchr(rel, ':')) return 0;
+    for (const char *p = rel; *p; p++)
+        if (p[0] == '.' && p[1] == '.' && (p == rel || p[-1] == '/' || p[-1] == '\\')) return 0;
+    return 1;
+}
+
+int assetRead(const char *rel, unsigned char **out, unsigned long *len, int *from)
+{
+    char path[1400];
+    uint8_t *buf = NULL;
+    size_t n = 0;
+    *out = NULL; *len = 0;
+    if (from) *from = ASSET_FROM_NONE;
+    if (!relOk(rel)) return 0;
+    if (s_modDir[0]) {
+        snprintf(path, sizeof path, "%s/%s", s_modDir, rel);
+        if (pkgReadFile(path, &buf, &n)) { *out = buf; *len = (unsigned long)n; if (from) *from = ASSET_FROM_MOD; return 1; }
+    }
+    for (int i = 0; i < assetStackCount(s_stack); i++) {
+        if (!assetStackOpened(s_stack, i)) continue;
+        snprintf(path, sizeof path, "%s/%s", assetStackRoot(s_stack, i), rel);
+        if (pkgReadFile(path, &buf, &n)) { *out = buf; *len = (unsigned long)n; if (from) *from = i; return 1; }
+    }
+    return 0;
+}
+
+unsigned assetStackGen(void)
+{
+    unsigned g;
+    pthread_mutex_lock(&s_lock);
+    g = s_gen;
+    pthread_mutex_unlock(&s_lock);
+    return g;
+}
+
+int assetHas(const char *rel)
+{
+    char path[1400];
+    if (!relOk(rel)) return 0;
+    if (s_modDir[0]) { snprintf(path, sizeof path, "%s/%s", s_modDir, rel); if (pkgExists(path)) return 1; }
+    for (int i = 0; i < assetStackCount(s_stack); i++) {
+        if (!assetStackOpened(s_stack, i)) continue;
+        snprintf(path, sizeof path, "%s/%s", assetStackRoot(s_stack, i), rel);
+        if (pkgExists(path)) return 1;
+    }
+    return 0;
+}
+
 void texpackPackWritten(const char *file, int add)
 {
     static char files[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
     char text[ASSETPACK_LIST_LEN];
-    int n = assetPackListParse(s_cfgList, files, ASSETPACK_MAX);
+    int on[ASSETPACK_MAX];
+    int n = assetPackEntriesParse(s_cfgList, files, on, ASSETPACK_MAX);
     const int added = add && assetPackIsFileName(file) && assetPackListFind(files, n, file) < 0 && n < ASSETPACK_MAX;
-    if (added) snprintf(files[n++], ASSETPACK_FILE_LEN, "%s", file);
-    assetPackListFormat(files, n, text, sizeof text);
+    if (added) { snprintf(files[n], ASSETPACK_FILE_LEN, "%s", file); on[n++] = 1; }   /* first write: enabled, last */
+    assetPackEntriesFormat(files, on, n, text, sizeof text);
     texpackSetPacks(text);   /* reopened either way: a pack in the list may not have existed until now */
     if (added) configSave();
 }
 
-int texpackListPacks(char (*files)[128], char (*names)[64], int max)
+int texpackListPacks(char (*files)[128], char (*names)[64], char (*authors)[64], int max)
 {
     static AssetPackInfo info[64];
     int n = assetPackScan(packsDirs(), 2, info, 64);
@@ -203,6 +272,7 @@ int texpackListPacks(char (*files)[128], char (*names)[64], int max)
     for (int i = 0; i < n; i++) {
         snprintf(files[i], 128, "%s", info[i].file);
         snprintf(names[i], 64, "%s", info[i].name);
+        snprintf(authors[i], 64, "%s", info[i].author);
     }
     return n;
 }
@@ -251,13 +321,13 @@ unsigned texpackSalt(const void *addr, int fromTile, int *texnum, uint32_t *offs
     unsigned salt = 0;
     *texnum = -1;
     *offset = 0;
-    if (!s_modIx && !assetStackCount(s_stack)) return 0;   /* no pack, no mod textures: one unlocked test per import */
+    if (romTextures()) return 0;                            /* GE_ROM_TEXTURES=1: the ROM's own decode, stack bypassed */
     pthread_mutex_lock(&s_lock);
     if (s_picGen != s_gen) { picsClear(); s_picGen = s_gen; }
     {
         uint32_t off = 0;
         const int n = lookupLocked(normAddr(addr), fromTile, &off);
-        if (n >= 0 && hasSource(n) && !s_pic[n].failed) {
+        if (n >= 0) {   /* a registered texture: the picture, or the checker when no pack has it or it cannot be read */
             *texnum = n;
             *offset = off;
             salt = ((0x5EA70000u ^ (s_gen * 2654435761u)) + (unsigned)n * 40503u + off * 2246822519u) | 1u;
@@ -278,6 +348,28 @@ static void evictFor(size_t need)
     }
 }
 
+/* The stand-in for a texture no mod and no pack has (or whose picture cannot be read): a small magenta / black checker; the
+ * vertex pass normalises texture coordinates by the tile's texel count, so any size keeps the UVs working. */
+static const uint8_t *checkerPixels(int texnum, int missing, int *w, int *h)
+{
+    if (!s_checker[3]) {
+        for (int y = 0; y < CHECKER_SIZE; y++)
+            for (int x = 0; x < CHECKER_SIZE; x++) {
+                uint8_t *d = s_checker + (y * CHECKER_SIZE + x) * 4;
+                const int on = ((x / 2) + (y / 2)) & 1;
+                d[0] = on ? 255 : 0; d[1] = 0; d[2] = on ? 255 : 0; d[3] = 255;
+            }
+    }
+    if (missing && !s_warned[texnum]) {
+        s_warned[texnum] = 1;
+        if (++s_warnedN <= MISSING_LOG_MAX)
+            sysLogPrintf(LOG_WARNING, "asset packs: missing texture %d (no mod, no pack has textures/%d.png): a checker is drawn%s",
+                         texnum, texnum, s_warnedN == MISSING_LOG_MAX ? " (further missing textures are not logged)" : "");
+    }
+    *w = *h = CHECKER_SIZE;
+    return s_checker;
+}
+
 const uint8_t *texpackPixels(int texnum, int fmt, int maxSize, int *w, int *h)
 {
     const uint8_t *out = NULL;
@@ -292,7 +384,7 @@ const uint8_t *texpackPixels(int texnum, int fmt, int maxSize, int *w, int *h)
         int pw = 0, ph = 0;
         if (assetStackReadTexture(s_stack, s_modIx, texnum, &file, &len) && gePngDecode(file, len, &pw, &ph, &rgba)) {
             if (pw > maxSize || ph > maxSize) {
-                sysLogPrintf(LOG_WARNING, "asset packs: textures/%d.png is %dx%d, over this GPU's %d: the game's own is drawn", texnum, pw, ph, maxSize);
+                sysLogPrintf(LOG_WARNING, "asset packs: textures/%d.png is %dx%d, over this GPU's %d: a checker is drawn", texnum, pw, ph, maxSize);
                 free(rgba);
                 p->failed = 1;
             } else {
@@ -304,7 +396,7 @@ const uint8_t *texpackPixels(int texnum, int fmt, int maxSize, int *w, int *h)
                 s_picBytes += n * 4;
             }
         } else {
-            sysLogPrintf(LOG_WARNING, "asset packs: textures/%d.png is not readable (an 8-bit PNG, not interlaced, is expected): the game's own is drawn", texnum);
+            sysLogPrintf(LOG_WARNING, "asset packs: textures/%d.png is not readable (an 8-bit PNG, not interlaced, is expected): a checker is drawn", texnum);
             p->failed = 1;
         }
         free(file);
@@ -324,6 +416,8 @@ const uint8_t *texpackPixels(int texnum, int fmt, int maxSize, int *w, int *h)
             if (p->lum) out = p->lum;
         }
         *w = p->w; *h = p->h;
+    } else {
+        out = checkerPixels(texnum, !hasSource(texnum), w, h);
     }
     pthread_mutex_unlock(&s_lock);
     return out;

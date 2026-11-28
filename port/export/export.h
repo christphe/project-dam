@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define EX_EXPORTER_VERSION 12  /* written to every glTF (asset.extras.exporter_version); bump on any output change */
+#define EX_EXPORTER_VERSION 13  /* written to every glTF (asset.extras.exporter_version); bump on any output change */
 
 /* ---- textures (tex_decode.c, docs/specs/textures.md) --------------------- */
 
@@ -109,6 +109,12 @@ int ex_export_models(const char *rom_path, const char *out_dir, ExLogFn log, voi
  * and the item / mission folder / briefing / multiplayer name tables to <out_dir>/names.json.
  * Returns the number of failures (0 = all written). `log` may be NULL. */
 int ex_export_text(const char *rom_path, const char *out_dir, ExLogFn log, void *user);
+/* ---- fonts (font_export.c, docs/specs/fonts.md) ---- */
+
+/* Exports the four fonts to <out_dir>/fonts.json and <out_dir>/fonts/{small,large,jp_narrow,jp_wide}.png (8-bit greyscale).
+ * Returns the number of failures (0 = all written). `log` may be NULL. */
+int ex_export_fonts(const char *rom_path, const char *out_dir, ExLogFn log, void *user);
+
 /* ---- characters (char_export.c, docs/specs/characters.md) ----------------- */
 
 /* Exports every guard body (skinned, with the selected animations) and head (rigid) of the character table into

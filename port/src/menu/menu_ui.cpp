@@ -100,6 +100,10 @@ std::string (*g_keyText)(const char*, int) = nullptr;
 void (*g_keyBegin)(const char*, int) = nullptr;
 bool (*g_keyActive)() = nullptr;
 void (*g_actionHandler)(const char*) = nullptr;
+int (*g_packRows)(std::vector<PackRow>*) = nullptr;   /* the asset-pack list: the game fills the rows ... */
+int (*g_packAct)(int, int) = nullptr;                  /* ... and does what a row is asked (0 toggle, 1 up, 2 down) */
+std::vector<PackRow> g_packs;                          /* the rows as of this frame */
+int g_packRow = 0, g_packCol = 0;                      /* the focused row; 0 its checkbox, 1 up, 2 down */
 std::string g_capId;
 int g_capSlot = 0, g_slotSel = 0;
 bool g_capturing = false;   /* a key or button is being captured: the menu keeps still */
@@ -314,6 +318,100 @@ void startCapture(const Control& c, int slot) {
     g_capSlot = slot;
     g_slotSel = slot;
     if (g_keyBegin) g_keyBegin(c.key.c_str(), slot);
+}
+
+/* The asset packs, one row each: "1. Title" with the author under it (faded), then the checkbox and the two arrows on the
+ * right. A row is taller when it has an author line. */
+float packRowH(int i, float u) { return i >= (int)g_packs.size() ? 4.4f * u : (g_packs[i].author.empty() ? 4.2f : 5.6f) * u; }   /* i == the count: the Apply / Discard row */
+float packListH(float u) {
+    float h = 0.4f * u + (g_packs.empty() ? 4.6f * u : 0.0f);
+    for (size_t i = 0; i <= g_packs.size(); i++) h += packRowH((int)i, u);
+    return h;
+}
+bool packCanMove(int i, int dir) {
+    if (i < 0 || i >= (int)g_packs.size()) return false;
+    const int j = i + dir;   /* any pack moves, enabled or not; only the ends of the list stop it */
+    return j >= 0 && j < (int)g_packs.size();
+}
+void packDo(int row, int what) {
+    if (!g_packAct) return;
+    if (what != 0 && !packCanMove(row, what == 1 ? -1 : 1)) return;
+    g_packRow = g_packAct(row, what);
+    if (g_packRows) g_packRows(&g_packs);
+    if (g_packRow >= (int)g_packs.size()) g_packRow = (int)g_packs.size() - 1;
+    if (g_packRow < 0) g_packRow = 0;
+}
+
+void drawPackList(ImDrawList* dl, const Control& c, int fi, float x, float y, float w, float u) {
+    const float bs = 2.8f * u, cb = 2.1f * u;
+    float ry = y + 0.2f * u;
+    if (g_packs.empty()) {
+        text(dl, g_body, 1.6f * u, ImVec2(x + 1.2f * u, y + (4.6f * u - 1.6f * u) * 0.5f), kMut, tr("No asset packs in the assetpacks folder").c_str());
+        ry += 4.6f * u;
+    }
+    int num = 0;
+    for (int i = 0; i < (int)g_packs.size(); i++) {
+        const PackRow p = g_packs[i];   /* a copy: an action below replaces the list */
+        const float rh = packRowH(i, u);
+        const bool rowFocus = g_focus == fi && g_packRow == i;
+        if (rowFocus) dl->AddRectFilled(ImVec2(x, ry), ImVec2(x + w, ry + rh), kGoldSoft);
+        const float downX = x + w - 1.2f * u - bs, upX = downX - 0.6f * u - bs, cbX = upX - 1.8f * u - cb;
+        const float by = ry + (rh - bs) * 0.5f, cy = ry + (rh - cb) * 0.5f;
+        char id[64];
+        snprintf(id, sizeof id, "##%s_c%d", c.id.c_str(), i);
+        if (hit(id, ImVec2(cbX, cy), ImVec2(cb + 1.0f * u, cb))) { g_focus = fi; g_packRow = i; g_packCol = 0; packDo(i, 0); return; }
+        box(dl, ImVec2(cbX, cy), ImVec2(cbX + cb, cy + cb), IM_COL32(13, 14, 12, 255), p.on ? kGold : kRule);
+        if (p.on) {
+            const float k = cb * 0.18f;
+            const ImVec2 tick[3] = { ImVec2(cbX + cb * 0.2f, cy + cb * 0.52f), ImVec2(cbX + cb * 0.42f, cy + cb * 0.74f), ImVec2(cbX + cb * 0.82f, cy + cb * 0.26f) };
+            dl->AddPolyline(tick, 3, kGold, ImDrawFlags_None, k);
+        }
+        if (rowFocus && g_packCol == 0) focusFrame(dl, ImVec2(cbX, cy), ImVec2(cbX + cb, cy + cb), u);
+        for (int d = 0; d < 2; d++) {   /* the arrows: up, down */
+            const float bx = d == 0 ? upX : downX;
+            const bool can = packCanMove(i, d == 0 ? -1 : 1);
+            snprintf(id, sizeof id, "##%s_m%d_%d", c.id.c_str(), i, d);
+            if (hit(id, ImVec2(bx, by), ImVec2(bs, bs)) && can) { g_focus = fi; g_packRow = i; g_packCol = 1 + d; packDo(i, 1 + d); return; }
+            box(dl, ImVec2(bx, by), ImVec2(bx + bs, by + bs), IM_COL32(21, 22, 15, 255), kRule);
+            const float m = bs * 0.5f, t = bs * 0.2f;
+            const ImU32 col = can ? kInk : kDisabled;
+            if (d == 0) dl->AddTriangleFilled(ImVec2(bx + m, by + m - t), ImVec2(bx + m - t * 1.3f, by + m + t * 0.8f), ImVec2(bx + m + t * 1.3f, by + m + t * 0.8f), col);
+            else dl->AddTriangleFilled(ImVec2(bx + m, by + m + t), ImVec2(bx + m + t * 1.3f, by + m - t * 0.8f), ImVec2(bx + m - t * 1.3f, by + m - t * 0.8f), col);
+            if (rowFocus && g_packCol == 1 + d && can) focusFrame(dl, ImVec2(bx, by), ImVec2(bx + bs, by + bs), u);
+        }
+        const std::string title = p.on ? std::to_string(++num) + ". " + p.name : p.name;   /* numbered by place among the enabled */
+        const float tx = x + 1.2f * u, th = 1.7f * u, ah = 1.3f * u;
+        const float blockH = th + (p.author.empty() ? 0.0f : 0.5f * u + ah);
+        const float ty = ry + (rh - blockH) * 0.5f;
+        text(dl, g_head, th, ImVec2(tx, ty), p.on ? kInk : kMut, title.c_str());
+        if (!p.author.empty()) text(dl, g_body, ah, ImVec2(tx, ty + th + 0.5f * u), kMut, (tr("by") + " " + p.author).c_str());
+        ry += rh;
+    }
+    {   /* Apply and Discard changes, side by side under the list: only while something is pending */
+        double dirtyV = 0;
+        const bool dirty = g_bindGet && g_bindGet("__AssetPackDirty", &dirtyV) && dirtyV != 0;
+        const int n = (int)g_packs.size();
+        const float rh = packRowH(n, u), bh = 3.1f * u, by = ry + (rh - bh) * 0.5f;
+        const bool rowFocus = g_focus == fi && g_packRow == n;
+        const char* const labels[2] = { "Apply", "Discard changes" };
+        const char* const keys[2] = { "__AssetPackApply", "__AssetPackDiscard" };
+        float bx = x + 1.2f * u;
+        for (int b = 0; b < 2; b++) {
+            const std::string lab = tr(labels[b]);
+            const float bw = maxf(14.0f * u, textSize(g_head, 1.55f * u, lab.c_str()).x + 3.0f * u);
+            char id[64];
+            snprintf(id, sizeof id, "##%s_b%d", c.id.c_str(), b);
+            if (hit(id, ImVec2(bx, by), ImVec2(bw, bh)) && dirty) {
+                g_focus = fi; g_packRow = n; g_packCol = b;
+                if (g_actionHandler) g_actionHandler(keys[b]);
+                return;
+            }
+            box(dl, ImVec2(bx, by), ImVec2(bx + bw, by + bh), IM_COL32(21, 22, 15, 255), kRule);
+            textCenter(dl, g_head, 1.55f * u, ImVec2(bx, by), ImVec2(bx + bw, by + bh), dirty ? kInk : kDisabled, lab.c_str());
+            if (rowFocus && g_packCol == b && dirty) focusFrame(dl, ImVec2(bx, by), ImVec2(bx + bw, by + bh), u);
+            bx += bw + 1.0f * u;
+        }
+    }
 }
 
 void drawBind(ImDrawList* dl, const Control& c, int fi, float x, float y, float u, bool disabled) {
@@ -621,6 +719,7 @@ void setKeyBinding(std::string (*text)(const char*, int), void (*begin)(const ch
 }
 
 void setActionHandler(void (*handler)(const char*)) { g_actionHandler = handler; }
+void setPackList(int (*rows)(std::vector<PackRow>* out), int (*act)(int row, int what)) { g_packRows = rows; g_packAct = act; }
 
 void setReadout(const char* (*f)(const char*, double)) { g_readout = f; }
 void setTint(void (*f)(int*, int*, int*)) { g_tint = f; }
@@ -893,6 +992,10 @@ void draw(float W, float H) {
                 if (!offered.empty()) g_state.v[c.id] = offered[0];
             }
 
+    if (g_packRows) g_packRows(&g_packs);
+    if (g_packRow > (int)g_packs.size()) g_packRow = (int)g_packs.size();   /* the last row is the buttons */
+    if (g_packRow < 0) g_packRow = 0;
+
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImVec2(W, H));
     ImGui::Begin("##menu", nullptr,
@@ -1022,11 +1125,29 @@ void draw(float W, float H) {
             if (back) { g_root = true; g_rootSel = 1; g_rootArmed = -1; }
             vis.controls = controlsOf(g_entry);
         } else {
-            if (up && g_focus > 0) g_focus--;
-            if (down && g_focus < (int)vis.controls.size() - 1) g_focus++;
+            const bool inPacks = vis.controls[g_focus]->type == CT_PACKLIST;
+            const int nPacks = (int)g_packs.size();
+            if (up) {
+                if (inPacks && g_packRow > 0) g_packRow--;
+                else if (g_focus > 0) { g_focus--; if (vis.controls[g_focus]->type == CT_PACKLIST) g_packRow = nPacks; }
+            }
+            if (down) {
+                if (inPacks && g_packRow < nPacks) g_packRow++;
+                else if (g_focus < (int)vis.controls.size() - 1) { g_focus++; if (vis.controls[g_focus]->type == CT_PACKLIST) g_packRow = 0; }
+            }
             const Control& c = *vis.controls[g_focus];
             const bool dis = controlDisabled(c, g_model, g_state);
-            if (!dis && c.type == CT_BIND) {
+            if (c.type == CT_PACKLIST) {   /* Left / Right pick the checkbox or an arrow of the row, A does it */
+                const int maxCol = g_packRow == nPacks ? 1 : 2;   /* the buttons row has two */
+                if (left && g_packCol > 0) g_packCol--;
+                if (right && g_packCol < maxCol) g_packCol++;
+                if (g_packCol > maxCol) g_packCol = maxCol;
+                if (ok) {
+                    double dv = 0;
+                    if (g_packRow < nPacks) packDo(g_packRow, g_packCol);
+                    else if (g_bindGet && g_bindGet("__AssetPackDirty", &dv) && dv != 0 && g_actionHandler) g_actionHandler(g_packCol == 0 ? "__AssetPackApply" : "__AssetPackDiscard");
+                }
+            } else if (!dis && c.type == CT_BIND) {
                 if (left) g_slotSel = 0;
                 if (right) g_slotSel = 1;
                 if (ok) startCapture(c, g_slotSel);
@@ -1108,6 +1229,7 @@ void draw(float W, float H) {
             const std::string help = tr(helpFor(*c, g_state.get(c->id)));
             float rowH = 4.6f * u;
             if (c->type == CT_DIAGRAM) rowH = (c->widget == "crosshair" ? 17.0f : 27.0f) * u;
+            if (c->type == CT_PACKLIST) rowH = packListH(u);
             if (c->type == CT_CHOICE) {
                 std::vector<Slot> slots;
                 const float ch = layoutChoice(*c, 0, availW, u, &slots);
@@ -1119,7 +1241,13 @@ void draw(float W, float H) {
             cy += total + 0.4f * u;
         }
         if (g_focus >= 0 && g_focus < (int)rows.size()) {   /* keep the focused row in view: the only thing that moves the scroll */
-            const float rt = rows[g_focus].y, rb = rt + rows[g_focus].h;
+            float rt = rows[g_focus].y, rb = rt + rows[g_focus].h;
+            if (vis.controls[g_focus]->type == CT_PACKLIST) {   /* follow the row, not the whole list */
+                float o = 0.2f * u + (g_packs.empty() ? 4.6f * u : 0.0f);
+                for (int k = 0; k < g_packRow; k++) o += packRowH(k, u);
+                rt = rows[g_focus].y + o;
+                rb = rt + packRowH(g_packRow, u);
+            }
             if (rt < g_scrollTarget) g_scrollTarget = rt;
             if (rb > g_scrollTarget + (bottom - top)) g_scrollTarget = rb - (bottom - top);
         }
@@ -1139,8 +1267,8 @@ void draw(float W, float H) {
             if (y0 + rowH < top || y0 > bottom) continue;
             const std::string help = tr(helpFor(c, g_state.get(c.id)));
             const float baseH = rowH - rows[i].helpH;
-            if (g_focus == fi) dl->AddRectFilled(ImVec2(fx, y0), ImVec2(fx + fw, y0 + rowH), kGoldSoft);
-            const std::string lab = (c.type == CT_ACTION || c.type == CT_DIAGRAM) ? std::string() : tr(controlLabel(c, g_state));
+            if (g_focus == fi && c.type != CT_PACKLIST) dl->AddRectFilled(ImVec2(fx, y0), ImVec2(fx + fw, y0 + rowH), kGoldSoft);
+            const std::string lab = (c.type == CT_ACTION || c.type == CT_DIAGRAM || c.type == CT_PACKLIST) ? std::string() : tr(controlLabel(c, g_state));
             text(dl, g_head, 1.7f * u, ImVec2(fx + 1.2f * u, y0 + (4.6f * u - 1.7f * u) * 0.5f), dis ? kDisabled : kInk, lab.c_str());
             std::string tagText = c.tag.empty() ? std::string() : tr(c.tag);
             if (c.restart) tagText += (tagText.empty() ? "" : " ") + tr("(restart)");
@@ -1153,6 +1281,7 @@ void draw(float W, float H) {
             else if (c.type == CT_TOGGLE) drawToggle(dl, c, fi, cx0, y0 + (4.6f * u - 2.1f * u) * 0.5f, u, dis);
             else if (c.type == CT_SLIDER) drawSlider(dl, c, fi, cx0, y0 + (4.6f * u - 2.6f * u) * 0.5f, u, dis);
             else if (c.type == CT_BIND) drawBind(dl, c, fi, cx0, cy2, u, dis);
+            else if (c.type == CT_PACKLIST) drawPackList(dl, c, fi, fx, y0, fw, u);
             else if (c.type == CT_DIAGRAM) drawDiagram(dl, c, fx + 1.0f * u, y0, fw - 2.0f * u, u);   /* the whole width of the form */
             else drawAction(dl, c, fi, cx0, cy2, u, dis);
             if (!help.empty()) text(dl, g_body, 1.4f * u, ImVec2(fx + 1.2f * u, y0 + baseH - 0.2f * u), kMut, help.c_str(), fw - 2.4f * u);

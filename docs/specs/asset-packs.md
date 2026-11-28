@@ -20,7 +20,7 @@ A pack is a folder `X.passets/` or an uncompressed ustar tar `X.passets` (the
 | `music.json`, `music/` | music (MIDI + SF2): reserved |
 | `sounds.json`, `sounds/` | sounds: reserved |
 | `labels.json` | text labels: reserved |
-| `fonts.json`, `fonts/` | fonts: reserved |
+| `fonts.json`, `fonts/` | fonts: [fonts.md](fonts.md) (keys `small`, `large`, `jp_narrow`, `jp_wide`) |
 
 A `.ptexpack` (the older name) is read as a pack with textures only.
 
@@ -32,8 +32,12 @@ name found in both is taken from `assetpacks/`.
 
 ## The stack
 
-`Video.AssetPacks` holds the enabled packs: their file names, highest priority
-first, separated by `;` (`hd.passets;faces.passets`). An older
+`Video.AssetPacks` lists every known pack in the player's order, highest
+priority first, file names separated by `;`; a disabled pack is prefixed with
+`-` (`ge007.passets;-test.passets`). Only the enabled ones are opened, in that
+order. A value without any `-` means that all its packs are enabled (the older
+form), and a pack file name never starts with `-`. A pack found in the folders
+but absent from the list is appended at the end, disabled. An older
 `Video.TexturePack` (one pack) becomes this list once. A pack named in the list
 but not found keeps its place and is skipped until it is back.
 
@@ -42,8 +46,11 @@ Resolution of a key of any kind:
 1. the active mod, if it has the key: **it always wins** (a mod that ships an
    asset needs it replaced);
 2. else the first enabled pack, in the player's order, that has it;
-3. else the key is missing. While the game still draws from the ROM, a missing
-   texture is the game's own; once it draws from the export, each kind gets a
+3. else the key is missing. A missing texture is drawn as a small magenta /
+   black checker (never the ROM's bytes; one warning per texture number in the
+   log, capped; `GE_ROM_TEXTURES=1` forces the ROM decode as a dev token).
+   Textures with no texture number (those the game regenerates in place, the
+   mission thumbnails) keep the game's bytes. Each other kind gets a
    visible fallback (a checker texture, a box model, silence, a default font)
    and a log line.
 
@@ -80,6 +87,7 @@ into `<out>/` (`--folder` writes a folder instead of the tar), and by
 | `models/<name>/<name>.gltf` + `.bin` | the object models |
 | `characters/characters.json`, `characters/<name>/`, `characters/animations/` | bodies, heads and animations ([characters.md](characters.md)) |
 | `labels/` | the game's text per language, and the names tables ([text.md](text.md)) |
+| `fonts.json`, `fonts/<key>.png` | the four fonts: 8-bit greyscale atlases (Latin intensities as stored, Japanese level x 85) and their metrics, kerning and code map ([fonts.md](fonts.md)) |
 | `music/track_NN.mid`, `music/instruments.sf2` | the music as Standard MIDI files and its SoundFont ([audio.md](audio.md)) |
 | `sounds/sfx/sfx_NNNN.wav`, `sounds/sfx/sfx.json`, `sounds/report.txt` | the sound effects and their parameters |
 
@@ -87,7 +95,7 @@ Every glTF sits two folders under the root and names its pictures
 `../../textures/<n>.png`. The pack is rewritten when its `exporter_version`
 differs from the running exporter's; it is built in `ge007.passets.tmp/`, packed
 into `ge007.passets.tartmp` and renamed into place, so a killed run leaves no
-half pack. Fonts are not exported yet.
+half pack.
 
 The game's first launch enables the pack (last in the order) only when it
 writes it for the first time; a rewrite after an exporter update keeps the
@@ -97,7 +105,14 @@ new pack is written, and a `ge007.ptexpack` in `Video.AssetPacks` becomes
 
 ## The menu
 
-Video > Asset packs: **Pack** lists the enabled packs first, numbered in their
-order (1 wins over 2), then the others; **Enabled** turns the highlighted pack
-on (it goes last) or off; **Move up** and **Move down** change its place. A
-change shows at once, also during a mission.
+Video > Asset packs: one row per known pack, in the one order (a disabled pack
+keeps its place); the enabled ones are numbered in that order (1 wins over 2). A row shows the title (pack.json
+"name", else the file name) with the author faded under it (no line when there
+is none), a checkbox that enables or disables the pack in place, and
+up / down arrows that move it, enabled or not (disabled only at the ends of the
+list). With no pack the menu says so. On a pad Up / Down move between
+rows, Left / Right pick the checkbox or an arrow, A does it. These edits only
+change a pending list, the rows show it, and nothing is applied or saved. **Apply** and **Discard changes** sit side by side on one row under the list. **Apply** (disabled while the pending list equals the one in use) gives
+the list to the readers once, which reload, and saves the config once, also
+during a mission. **Discard changes** (same rule) resets the pending list to the
+one in use. Leaving the menu drops pending edits silently, without asking.

@@ -26,7 +26,7 @@ static int suffixOf(const char *name)
 
 int assetPackIsFileName(const char *name)
 {
-    return name && name[0] && name[0] != '.' && strlen(name) < ASSETPACK_FILE_LEN && !strpbrk(name, "/\\;") && suffixOf(name) >= 0;
+    return name && name[0] && name[0] != '.' && name[0] != '-' && strlen(name) < ASSETPACK_FILE_LEN && !strpbrk(name, "/\\;") && suffixOf(name) >= 0;
 }
 
 static void copyStr(char *dst, size_t n, const cJSON *o, const char *key)
@@ -144,6 +144,62 @@ int assetPackListMove(char (*files)[ASSETPACK_FILE_LEN], int n, int from, int to
     else memmove(files[to + 1], files[to], (size_t)(from - to) * ASSETPACK_FILE_LEN);
     memcpy(files[to], tmp, sizeof tmp);
     return 1;
+}
+
+int assetPackEntriesParse(const char *list, char (*files)[ASSETPACK_FILE_LEN], int *on, int max)
+{
+    int n = 0;
+    const char *p = list ? list : "";
+    while (*p && n < max) {
+        const char *end = strchr(p, ';');
+        size_t len = end ? (size_t)(end - p) : strlen(p);
+        const char *s = p;
+        char name[ASSETPACK_FILE_LEN];
+        int enabled = 1;
+        while (len && isSpace(*s)) { s++; len--; }
+        while (len && isSpace(s[len - 1])) len--;
+        if (len && *s == '-') { enabled = 0; s++; len--; }
+        if (len && len < ASSETPACK_FILE_LEN) {
+            memcpy(name, s, len);
+            name[len] = 0;
+            if (assetPackIsFileName(name) && assetPackListFind(files, n, name) < 0) {
+                snprintf(files[n], ASSETPACK_FILE_LEN, "%s", name);
+                on[n++] = enabled;
+            }
+        }
+        if (!end) break;
+        p = end + 1;
+    }
+    return n;
+}
+
+void assetPackEntriesFormat(char (*files)[ASSETPACK_FILE_LEN], const int *on, int n, char *out, size_t outlen)
+{
+    size_t used = 0;
+    if (!out || !outlen) return;
+    out[0] = 0;
+    for (int i = 0; i < n; i++) {
+        const int w = snprintf(out + used, outlen - used, "%s%s%s", i ? ";" : "", on[i] ? "" : "-", files[i]);
+        if (w < 0 || (size_t)w >= outlen - used) { out[used] = 0; return; }   /* never a cut name */
+        used += (size_t)w;
+    }
+}
+
+int assetPackEntriesMove(char (*files)[ASSETPACK_FILE_LEN], int *on, int n, int from, int to)
+{
+    const int flag = from >= 0 && from < n ? on[from] : 0;
+    if (!assetPackListMove(files, n, from, to)) return 0;
+    if (from < to) memmove(on + from, on + from + 1, (size_t)(to - from) * sizeof *on);
+    else memmove(on + to + 1, on + to, (size_t)(from - to) * sizeof *on);
+    on[to] = flag;
+    return 1;
+}
+
+int assetPackEntriesEnabled(char (*files)[ASSETPACK_FILE_LEN], const int *on, int n, char (*out)[ASSETPACK_FILE_LEN], int max)
+{
+    int k = 0;
+    for (int i = 0; i < n && k < max; i++) if (on[i]) snprintf(out[k++], ASSETPACK_FILE_LEN, "%s", files[i]);
+    return k;
 }
 
 struct AssetStack {

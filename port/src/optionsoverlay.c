@@ -62,7 +62,6 @@ extern MENU current_menu;
 #include "updatecheck.h"
 #include "texpack.h"
 #include "ge_assetstack.h"
-void menuRefreshAssetPacks(void);   /* menu_game.cpp: the list labels again */
 #include "../fast3d/gfx_api.h"
 
 /* file2.c; same extern as watchsettings.c (not in a header). */
@@ -621,6 +620,8 @@ int optionsRowChildHeader(int i)
 
 static int  s_inited = 0;
 static volatile int s_open = 0;
+static int s_packRescan = 1;   /* the packs in the folders are read again (the scan opens every pack, so not each frame) */
+void optionsMenuAssetPackDiscard(void);
 /* D519: the overlay reopens where it was closed. Identity = rows[] indices (the table is
  * static; only visibility changes between front end / level / scheme), checked on reopen. */
 static int s_memValid = 0, s_memSec = -1, s_memRow = -1, s_memScroll = 0, s_memSeat = 0;
@@ -2426,6 +2427,8 @@ void optionsOverlayToggle(void)
         s_seedPrev = 1;
     }
     SDL_AtomicSet(&s_backPending, 0);
+    s_packRescan = 1;   /* the folders are read again each time the menu opens or closes */
+    optionsMenuAssetPackDiscard();   /* unapplied asset-pack edits do not survive opening or closing the menu */
     sysLogPrintf(LOG_INFO, "optionsoverlay: %s", s_open ? "opened" : "closed");
     if (!s_open) {
         optionsResetClear();   /* D356: closing the overlay disarms a pending reset */
@@ -2441,73 +2444,114 @@ void optionsOverlayBack(void)
 
 int optionsOverlayMouseActive(void) { return s_mouseActive; }   /* D567 */
 
-/* The asset packs as the menu lists them: the enabled ones first, in their order, then the others (by file name). */
+/* The asset packs as the menu lists them: every known pack in the player's order (Video.AssetPacks), enabled or not. A pack
+ * found in the folders but not in the list comes last, disabled; a listed pack that is gone keeps its place. */
 #define PACKS_VIEW_MAX 64
 typedef struct {
-    int n, nOn;
-    char files[PACKS_VIEW_MAX][128], names[PACKS_VIEW_MAX][64];
+    int n;
+    char files[PACKS_VIEW_MAX][128], names[PACKS_VIEW_MAX][64], authors[PACKS_VIEW_MAX][64];
     int on[PACKS_VIEW_MAX];
 } PacksView;
-static int s_packSel;   /* the highlighted row of the asset-pack list */
+static int s_packSel;   /* the pack the last toggle or move acted on */
+/* The edits wait here until Apply: the whole list (Video.AssetPacks format); s_packPend says it is in use. */
+static char s_packPendText[ASSETPACK_LIST_LEN];
+static int s_packPend;
 
-static void packsView(PacksView *v)
+static void packsViewOf(PacksView *v, const char *base)
 {
-    static char found[PACKS_VIEW_MAX][128], fnames[PACKS_VIEW_MAX][64];
+    static char found[PACKS_VIEW_MAX][128], fnames[PACKS_VIEW_MAX][64], fauthors[PACKS_VIEW_MAX][64];
     static char list[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
-    const int nf = texpackListPacks(found, fnames, PACKS_VIEW_MAX);
-    const int nl = assetPackListParse(texpackPacks(), list, ASSETPACK_MAX);
-    v->n = v->nOn = 0;
-    for (int i = 0; i < nl && v->n < PACKS_VIEW_MAX; i++) {   /* enabled, in order; a pack that is gone shows by its file name */
-        const char *name = list[i];
-        for (int k = 0; k < nf; k++) if (!strcmp(found[k], list[i])) { name = fnames[k]; break; }
+    static int nf;
+    int lon[ASSETPACK_MAX];
+    if (s_packRescan) { nf = texpackListPacks(found, fnames, fauthors, PACKS_VIEW_MAX); s_packRescan = 0; }
+    const int nl = assetPackEntriesParse(base, list, lon, ASSETPACK_MAX);
+    v->n = 0;
+    for (int i = 0; i < nl && v->n < PACKS_VIEW_MAX; i++) {   /* a pack that is gone shows by its file name */
+        const char *name = list[i], *author = "";
+        for (int k = 0; k < nf; k++) if (!strcmp(found[k], list[i])) { name = fnames[k]; author = fauthors[k]; break; }
         snprintf(v->files[v->n], 128, "%s", list[i]);
         snprintf(v->names[v->n], 64, "%s", name);
-        v->on[v->n++] = 1;
-        v->nOn++;
+        snprintf(v->authors[v->n], 64, "%s", author);
+        v->on[v->n++] = lon[i];
     }
-    for (int k = 0; k < nf && v->n < PACKS_VIEW_MAX; k++) {
+    for (int k = 0; k < nf && v->n < PACKS_VIEW_MAX && v->n < ASSETPACK_MAX; k++) {
         if (assetPackListFind(list, nl, found[k]) >= 0) continue;
         snprintf(v->files[v->n], 128, "%s", found[k]);
         snprintf(v->names[v->n], 64, "%s", fnames[k]);
+        snprintf(v->authors[v->n], 64, "%s", fauthors[k]);
         v->on[v->n++] = 0;
     }
 }
 
-static void packsApply(const PacksView *v)
+static void packsView(PacksView *v) { packsViewOf(v, s_packPend ? s_packPendText : texpackPacks()); }
+
+static void packsText(const PacksView *v, char *out, size_t outlen)
 {
     static char list[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
-    char text[ASSETPACK_LIST_LEN];
-    int n = 0;
-    for (int i = 0; i < v->n && n < ASSETPACK_MAX; i++) if (v->on[i]) snprintf(list[n++], ASSETPACK_FILE_LEN, "%s", v->files[i]);
-    assetPackListFormat(list, n, text, sizeof text);
-    texpackSetPacks(text);
-    configSave();
-    menuRefreshAssetPacks();
+    int on[ASSETPACK_MAX], n = 0;
+    for (int i = 0; i < v->n && n < ASSETPACK_MAX; i++) { snprintf(list[n], ASSETPACK_FILE_LEN, "%s", v->files[i]); on[n++] = v->on[i]; }
+    assetPackEntriesFormat(list, on, n, out, outlen);
 }
 
-/* Enables row `i` (it goes last among the enabled ones) or disables it; the highlight follows the pack. */
+/* The pending list differs from the one in use (both as the menu shows them): Apply and Discard have something to do. */
+static int packsDirty(void)
+{
+    static PacksView a, b;
+    char ta[ASSETPACK_LIST_LEN], tb[ASSETPACK_LIST_LEN];
+    if (!s_packPend) return 0;
+    packsViewOf(&a, s_packPendText);
+    packsViewOf(&b, texpackPacks());
+    packsText(&a, ta, sizeof ta);
+    packsText(&b, tb, sizeof tb);
+    return strcmp(ta, tb) != 0;
+}
+
+/* An edit: only the pending list changes; nothing is applied or saved until Apply. */
+static void packsApply(const PacksView *v)
+{
+    packsText(v, s_packPendText, sizeof s_packPendText);
+    s_packPend = 1;
+}
+
+/* Apply: the pending list goes to the readers once and is saved once. */
+static void packsCommit(void)
+{
+    if (!packsDirty()) return;
+    texpackSetPacks(s_packPendText);
+    configSave();
+    s_packPend = 0;
+}
+
+/* Discard: back to the list in use. Also what leaving the menu does, without asking. */
+void optionsMenuAssetPackDiscard(void)
+{
+    if (!s_packPend) return;
+    s_packPend = 0;
+}
+
+/* Enables or disables row `i`; it keeps its place. */
 static void packsSetEnabled(PacksView *v, int i, int on)
 {
-    char file[128];
     if (v->on[i] == on) return;
-    snprintf(file, sizeof file, "%s", v->files[i]);
     v->on[i] = on;
+    s_packSel = i;
     packsApply(v);
-    packsView(v);
-    for (int k = 0; k < v->n; k++) if (!strcmp(v->files[k], file)) s_packSel = k;
 }
 
-/* Moves the highlighted enabled pack up (-1) or down (+1) in the order. */
+/* Moves the pack at row s_packSel up (-1) or down (+1) in the order, enabled or not. */
 static void packsMove(int dir)
 {
     PacksView v;
     packsView(&v);
     const int i = s_packSel, j = s_packSel + dir;
-    if (i < 0 || i >= v.nOn || j < 0 || j >= v.nOn) return;
+    if (i < 0 || i >= v.n || j < 0 || j >= v.n) return;
     {
         char f[128], nm[64];
+        int o = v.on[i];
+        v.on[i] = v.on[j]; v.on[j] = o;
         memcpy(f, v.files[i], sizeof f); memcpy(v.files[i], v.files[j], sizeof f); memcpy(v.files[j], f, sizeof f);
         memcpy(nm, v.names[i], sizeof nm); memcpy(v.names[i], v.names[j], sizeof nm); memcpy(v.names[j], nm, sizeof nm);
+        memcpy(nm, v.authors[i], sizeof nm); memcpy(v.authors[i], v.authors[j], sizeof nm); memcpy(v.authors[j], nm, sizeof nm);
     }
     s_packSel = j;
     packsApply(&v);
@@ -2517,13 +2561,7 @@ int optionsMenuGet(const char *key, double *out)
 {
     if (!strcmp(key, "__DisplayMode")) { *out = videoGetDisplayMode(); return 1; }
     if (!strcmp(key, "__Resolution")) { *out = s_resSel; return 1; }
-    if (!strcmp(key, "__AssetPackSel")) { *out = s_packSel; return 1; }
-    if (!strcmp(key, "__AssetPackOn")) {   /* the highlighted pack is enabled */
-        PacksView v;
-        packsView(&v);
-        *out = s_packSel < v.n && v.on[s_packSel];
-        return 1;
-    }
+    if (!strcmp(key, "__AssetPackDirty")) { *out = packsDirty(); return 1; }
     if (!strcmp(key, "__BondFile")) {   /* the save file the profile settings are read from */
         const int f = watchSettingsActiveFolder();
         *out = f < 0 ? 0 : f;
@@ -2557,20 +2595,6 @@ void optionsMenuSet(const char *key, double value)
         else if (k - 1 < audioDeviceRefresh()) audioDeviceRequest(audioDeviceName(k - 1));
         return;
     }
-    if (!strcmp(key, "__AssetPackSel")) {
-        PacksView v;
-        packsView(&v);
-        s_packSel = (int)lround(value);
-        if (s_packSel < 0 || s_packSel >= v.n) s_packSel = 0;
-        return;
-    }
-    if (!strcmp(key, "__AssetPackOn")) {   /* enable: last in the order; disable: out of the list */
-        PacksView v;
-        packsView(&v);
-        if (s_packSel >= v.n) return;
-        packsSetEnabled(&v, s_packSel, lround(value) != 0);
-        return;
-    }
     if (!strcmp(key, "__Resolution")) {
         const int k = (int)lround(value);
         if (k < 0 || k >= s_resFitN || k == s_resSel) return;
@@ -2585,25 +2609,34 @@ void optionsMenuSet(const char *key, double value)
 
 int optionsMenuResCount(void) { return s_resFitN; }
 
-/* The texture pack list for the menu: "None", then the packs in texturepacks/ (display names). */
-/* The asset-pack list for the menu: "1. HD", "2. GoldenEye 007" for the enabled packs in their order, then the others
- * by name ("No asset pack" when the folders hold none). */
-int optionsMenuAssetPackCount(void)
+/* The asset-pack list for the menu, one row per pack: the enabled ones first in their order, then the others by name. */
+int optionsMenuAssetPackRows(char (*names)[64], char (*authors)[64], int *on, int max)
 {
     PacksView v;
     packsView(&v);
-    return v.n ? v.n : 1;
+    const int n = v.n < max ? v.n : max;
+    for (int i = 0; i < n; i++) {
+        snprintf(names[i], 64, "%s", v.names[i]);
+        snprintf(authors[i], 64, "%s", v.authors[i]);
+        on[i] = v.on[i];
+    }
+    return n;
 }
-const char *optionsMenuAssetPackLabel(int i)
+
+/* What the menu asked of a row: 0 enable or disable it, 1 / 2 move it up / down. Returns the row the pack is on now. Pending only. */
+int optionsMenuAssetPackAct(int row, int what)
 {
-    static char label[96];
     PacksView v;
     packsView(&v);
-    if (!v.n) return "No asset pack";
-    if (i < 0 || i >= v.n) return "";
-    if (v.on[i]) snprintf(label, sizeof label, "%d. %s", i + 1, v.names[i]);
-    else snprintf(label, sizeof label, "%s", v.names[i]);
-    return label;
+    if (row < 0 || row >= v.n) return row;
+    s_packSel = row;
+    if (what == 0) {
+        packsSetEnabled(&v, row, !v.on[row]);
+        return s_packSel;
+    }
+    s_packSel = row;
+    packsMove(what == 1 ? -1 : 1);
+    return s_packSel;
 }
 
 #ifndef GE_MENU_RUN_STAGE
@@ -2668,8 +2701,8 @@ void optionsMenuAction(const char *key)
     if (!strcmp(key, "__UpdateOpen")) { updateCheckOpenReleases(); return; }
     if (!strcmp(key, "__UpdateInstall")) { updateInstall(); return; }   /* Switch: download, check, replace; PC: the page */
     if (!strcmp(key, "__UpdateCheck")) { updateCheckRun(); return; }
-    if (!strcmp(key, "__AssetPackUp")) { packsMove(-1); return; }
-    if (!strcmp(key, "__AssetPackDown")) { packsMove(1); return; }
+    if (!strcmp(key, "__AssetPackApply")) { packsCommit(); return; }
+    if (!strcmp(key, "__AssetPackDiscard")) { optionsMenuAssetPackDiscard(); return; }
     if (!strcmp(key, "__RestartGame")) {   /* D443: the orderly D344 quit, then main.c relaunches */
         sysLogPrintf(LOG_INFO, "menu: restart game requested");
         configSave();

@@ -22,6 +22,12 @@ Two classes:
 | `GE_EXPORT_NOMODELS=1` | `port/src/levelexport.c:398` | `--export-level`: skip the per-model recordings (rooms, pads and setup only), for a faster export while testing. | live tooling |
 | `GE_INPUTRECORD` | `port/src/input_script.c:296` | Records pad input to a file (D583 Deck harness; `levelbench.sh --record`). | live tooling |
 | `GE_INPUTREPLAY` | `port/src/input_script.c:297` | Replays a `GE_INPUTRECORD` file (`levelbench.sh --replay`; pin `GE_RSEED`). | live tooling |
+| `GE_ROM_TEXTURES=1` | `port/src/texpack.c:88` | Draw every texture from the ROM's own decode; the asset-pack stack (mod and packs) is bypassed (#171, removed when the kinds are validated). | live tooling |
+| `GE_ROM_LABELS=1` | `port/src/labels.c:187` | The game's text from the ROM's language banks instead of the packs' `labels/` (#171). | live tooling |
+| `GE_LABELS_CHECK=1` | `port/src/labels.c:193` | Compare each language bank the game loads with the pack's strings and log the counts. | live tooling |
+| `GE_ROM_SOUNDS=1` | `port/src/sounds.c:269` | Sound effects from the ROM's bank instead of the packs' `sounds/sfx/` (#171). | live tooling |
+| `GE_ROM_FONTS=1` | `port/src/fonts.c:225` | The fonts from the ROM instead of the packs' `fonts/` (#171). | live tooling |
+| `GE_FONTS_CHECK=1` | `port/src/fonts.c:232` | Compare the pack's fonts with the ROM's at the first font load and log the counts. | live tooling |
 | `GE_INTERPLOG` | `port/src/libultra.c:2032` | D578 IPLOG pacing trace (`=<n>` caps the lines). | live diag |
 | `GE_INTERP_ALPHA1` | `port/src/libultra.c:2039` | D578: every interpolated pass exact (identity check). | live diag |
 | `GE_INTERP_FORCE` | `port/src/video.c:1245` | D578: interpolate even when the display refresh is not above the VI rate. | live diag |

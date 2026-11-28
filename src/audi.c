@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #ifdef PORT
 #include "envflag.h"   /* cached getenv for hot-path probes */
+#include "sounds.h"    /* the asset packs' sound effects (amDmaCallback) */
 #endif
 #endif
 #endif
@@ -733,6 +734,12 @@ s32 amDmaCallback(s32 addr, s32 len, void* state)
     dmaPtr->startAddr = addr;
     dmaPtr->lastFrame = g_AudioFrameCount;
 
+#ifdef PORT
+    /* The sound effects of the asset packs (port/src/sounds.c) live in memory: addresses from SFX_ADDR_BASE are served
+     * from there, no DMA (so no message for amClearDmaBuffers to collect). */
+    if (sfxFetch((u32)addr, freeBuffer, AUDIO_DMA_MAX_BUFFER_LENGTH))
+        return (s32)osVirtualToPhysical(freeBuffer) + delta;
+#endif
     osPiStartDma(&g_DmaIOMessageBuffer[g_NextDMa++], OS_MESG_PRI_HIGH, OS_READ, (u32)addr, freeBuffer, AUDIO_DMA_MAX_BUFFER_LENGTH, &g_DmaMessageQueue);
 #if defined(PLATFORM_64BIT)
     if (GE_ENVFLAG("GE_MIXERTRACE")) {

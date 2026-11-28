@@ -39,6 +39,7 @@ const char* sysResolvePath(const char* path);
 int portWheelState(int seat, char names[][24], int max, int* sel, int* kind);
 void portSeatRegion(int seat, float* x0, float* y0, float* x1, float* y1);
 int portAssignState(char names[][48], int* step, int* count);
+void optionsMenuAssetPackDiscard(void);
 void optionsMenuSetSeat(int seat);
 int optionsMenuFileSelect(void);
 int optionsMenuInStage(void);
@@ -393,8 +394,8 @@ void optionsMenuSet(const char* key, double value);
 int optionsMenuResCount(void);
 int optionsMenuAudioCount(void);
 const char* optionsMenuAudioLabel(int i);
-int optionsMenuAssetPackCount(void);
-const char* optionsMenuAssetPackLabel(int i);
+int optionsMenuAssetPackRows(char (*names)[64], char (*authors)[64], int* on, int max);
+int optionsMenuAssetPackAct(int row, int what);
 void optionsMenuSetSeat(int seat);
 void optionsMenuResLabel(int i, char* out, int n);
 const char* optionsMenuBindText(const char* key, int slot);
@@ -418,13 +419,22 @@ static const char* readout(const char* name, double cfg) {
     return buf;
 }
 
-/* The asset-pack list: the packs found now, the enabled ones numbered in their order (a pack added to the folders while
- * the game runs shows the next time the list changes or after a restart). */
-extern "C" void menuRefreshAssetPacks(void) {
-    std::vector<std::string> packs;
-    for (int i = 0; i < optionsMenuAssetPackCount(); i++) packs.push_back(optionsMenuAssetPackLabel(i));
-    menu::setOptionLabels("packsel", packs);
+/* The asset-pack list: one row per pack found, the enabled ones first in their order (the game keeps the pending edits). */
+static int packRows(std::vector<menu::PackRow>* out) {
+    static char names[64][64], authors[64][64];
+    static int on[64];
+    const int n = optionsMenuAssetPackRows(names, authors, on, 64);
+    out->clear();
+    for (int i = 0; i < n; i++) {
+        menu::PackRow r;
+        r.name = names[i];
+        r.author = authors[i];
+        r.on = on[i] != 0;
+        out->push_back(r);
+    }
+    return n;
 }
+static int packAct(int row, int what) { return optionsMenuAssetPackAct(row, what); }
 
 extern "C" void menuBindGame(void) {   /* the menu reads and writes the game's values */
     std::vector<std::string> res;
@@ -437,7 +447,7 @@ extern "C" void menuBindGame(void) {   /* the menu reads and writes the game's v
     std::vector<std::string> dev;
     for (int i = 0; i < optionsMenuAudioCount(); i++) dev.push_back(optionsMenuAudioLabel(i));
     if (!dev.empty()) menu::setOptionLabels("adev", dev);
-    menuRefreshAssetPacks();
+    menu::setPackList(packRows, packAct);
     menu::setBinding(bindGet, bindSet);
     menu::setKeyBinding(keyText, keyBegin, keyActive);
     menu::setActionHandler(doAction);
@@ -451,6 +461,7 @@ extern "C" int menuTakeCloseRequest(void) {
 }
 
 extern "C" void menuUiClose(void) {
+    optionsMenuAssetPackDiscard();   /* the menu is closed: unapplied asset-pack edits are dropped */
     if (modsScreenActive()) {   /* the idle branch of the overlay's emit: the Mods screen is up over the mode select */
         runFrame(4);
         return;

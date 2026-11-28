@@ -144,6 +144,7 @@ CtlType typeOf(const std::string& s, bool* ok) {
     if (s == "select") return CT_SELECT;
     if (s == "bind") return CT_BIND;
     if (s == "diagram") return CT_DIAGRAM;
+    if (s == "packlist") return CT_PACKLIST;
     *ok = false;
     return CT_TOGGLE;
 }

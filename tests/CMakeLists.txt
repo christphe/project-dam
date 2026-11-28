@@ -43,9 +43,14 @@ ge_add_test(test_core_link   test_core_link.c)
 ge_add_test(test_platform    test_platform.c ${GE_TEST_PLATFORM})
 ge_add_test(test_updatecheck test_updatecheck.c)
 ge_add_test(test_defaults    test_defaults.c ${GE_TEST_PLATFORM})
+ge_add_test(test_sounds      test_sounds.c ${GE_TEST_PLATFORM})
 
 # The first-launch GPU benchmark's decision (port/src/gpuprobe.c): pure, no core.
 ge_add_pure_test(test_gpuprobe test_gpuprobe.c ${CMAKE_SOURCE_DIR}/port/src/gpuprobe.c)
+# The labels reader (port/src/labels.c): the asset stack is stubbed in the test.
+ge_add_pure_test(test_labels test_labels.c ${CMAKE_SOURCE_DIR}/port/src/labels.c)
+target_compile_definitions(test_labels PRIVATE LABELS_PURE_TEST)
+target_include_directories(test_labels PRIVATE "${CMAKE_SOURCE_DIR}/port/include" "${CMAKE_SOURCE_DIR}/port/assets")
 # CONSOLE mode precedence (port/include/console.h, header-only): pure, no core.
 ge_add_pure_test(test_console test_console.c)
 
@@ -66,6 +71,10 @@ ge_add_pure_test(test_subdiv test_subdiv.c ${CMAKE_SOURCE_DIR}/port/convert/conv
 # bank is decoded only when GE_TEST_ROM points at a retail .z64 (skipped otherwise).
 add_test(NAME test_export_tex COMMAND test_export_tex)
 set_tests_properties(test_export_tex PROPERTIES TIMEOUT 60)
+
+# The fonts reader (port/src/fonts.c, docs/specs/fonts.md): pure, no core (the test includes the file with FONTS_PURE).
+ge_add_pure_test(test_fonts test_fonts.c)
+target_include_directories(test_fonts PRIVATE "${CMAKE_SOURCE_DIR}/port/include")
 
 # The retail ROM check (port/convert/conv_romcheck.c): pure, no core.
 ge_add_pure_test(test_romcheck test_romcheck.c ${CMAKE_SOURCE_DIR}/port/convert/conv_romcheck.c)
