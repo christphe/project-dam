@@ -19,6 +19,8 @@ Two classes:
 
 | Env var | File:line | What it does | Status |
 |---|---|---|---|
+| `GE_CAMLOG=1` | `port/src/missions_host_cinema.c:1055` | Logs the camera mode and eye/look position once per tick during a scripted intro (compare with the original swirl, mode 7 = POSEND, 4 = FP). | live diag |
+| `GE_MISSIONTRACE=1` | `port/mission/mission_lua.cpp:257` | Writes every raised mission event with its fields to the log (at most 500 lines per runtime), to see what a script reacts to. | live diag |
 | `GE_EXPORT_NOMODELS=1` | `port/src/levelexport.c:398` | `--export-level`: skip the per-model recordings (rooms, pads and setup only), for a faster export while testing. | live tooling |
 | `GE_INPUTRECORD` | `port/src/input_script.c:296` | Records pad input to a file (D583 Deck harness; `levelbench.sh --record`). | live tooling |
 | `GE_INPUTREPLAY` | `port/src/input_script.c:297` | Replays a `GE_INPUTRECORD` file (`levelbench.sh --replay`; pin `GE_RSEED`). | live tooling |
