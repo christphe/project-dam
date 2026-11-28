@@ -266,9 +266,22 @@ LEVELID langGetLangBankIndexFromStagenum(LEVELID level)
 
 #ifdef PORT
 /* The Japanese glyph cache holds pairs copied from the font; forget them when the fonts reload (textFontsSync). */
+static int s_jpnWarned[2];   /* one warning per missing Japanese font, until the next reload */
+
+/* No pair in any pack or mod: a blank glyph, the ROM is not read (GE_ROM_FONTS=1 reads it). */
+static void langJpnBlank(int wide, void *dst, u32 bytes)
+{
+    if (!s_jpnWarned[wide]) {
+        s_jpnWarned[wide] = 1;
+        sysLogPrintf(LOG_WARNING, "fonts: no %s Japanese glyph data in any pack or mod: blank glyphs", wide ? "wide" : "narrow");
+    }
+    memset(dst, 0, bytes);
+}
+
 void langJpnCacheReset(void)
 {
     s32 i;
+    s_jpnWarned[0] = s_jpnWarned[1] = 0;
     if (!g_JpnCacheCacheItems) return;
     for (i = 0; i != 124; i++) {
         g_JpnCacheCacheItems[i].ttl = 0;
@@ -395,8 +408,10 @@ struct jpncharpixels *langGetJpnCharPixels(s32 codepoint)
 #ifdef PORT
 		{
 			unsigned fbytes = 0;   /* the pair from the asset stack (fonts.json), else the ROM (GE_ROM_FONTS=1) */
-			if (!fontsJpnPair(0, (unsigned)(codepoint >> SHIFTAMOUNT), (u8 *)&g_JpnCharCachePixels[freeindexsingle * 8], &fbytes) || fbytes != 0x60)
-				romCopy(&g_JpnCharCachePixels[freeindexsingle * 8], (romptr_t) &_jfontchardataSegmentRomStart + (codepoint >> SHIFTAMOUNT) * 0x60, 0x60);
+			if (!fontsJpnPair(0, (unsigned)(codepoint >> SHIFTAMOUNT), (u8 *)&g_JpnCharCachePixels[freeindexsingle * 8], &fbytes) || fbytes != 0x60) {
+				if (!fontsRomOnly()) langJpnBlank(0, &g_JpnCharCachePixels[freeindexsingle * 8], 0x60);
+				else romCopy(&g_JpnCharCachePixels[freeindexsingle * 8], (romptr_t) &_jfontchardataSegmentRomStart + (codepoint >> SHIFTAMOUNT) * 0x60, 0x60);
+			}
 		}
 #else
 		romCopy(&g_JpnCharCachePixels[freeindexsingle * 8], (romptr_t) &_jfontchardataSegmentRomStart + (codepoint >> SHIFTAMOUNT) * 0x60, 0x60);
@@ -414,8 +429,10 @@ struct jpncharpixels *langGetJpnCharPixels(s32 codepoint)
 #ifdef PORT
 		{
 			unsigned fbytes = 0;
-			if (!fontsJpnPair(1, (unsigned)((codepoint & 0x1fff) >> SHIFTAMOUNT), (u8 *)&g_JpnCharCachePixels[freeindexmulti * 8], &fbytes) || fbytes != 0x80)
-				romCopy(&g_JpnCharCachePixels[freeindexmulti * 8], (romptr_t) &_efontchardataSegmentRomStart + ((codepoint & 0x1fff) >> SHIFTAMOUNT) * 0x80, 0x80);
+			if (!fontsJpnPair(1, (unsigned)((codepoint & 0x1fff) >> SHIFTAMOUNT), (u8 *)&g_JpnCharCachePixels[freeindexmulti * 8], &fbytes) || fbytes != 0x80) {
+				if (!fontsRomOnly()) langJpnBlank(1, &g_JpnCharCachePixels[freeindexmulti * 8], 0x80);
+				else romCopy(&g_JpnCharCachePixels[freeindexmulti * 8], (romptr_t) &_efontchardataSegmentRomStart + ((codepoint & 0x1fff) >> SHIFTAMOUNT) * 0x80, 0x80);
+			}
 		}
 #else
 		romCopy(&g_JpnCharCachePixels[freeindexmulti * 8], (romptr_t) &_efontchardataSegmentRomStart + ((codepoint & 0x1fff) >> SHIFTAMOUNT) * 0x80, 0x80);
