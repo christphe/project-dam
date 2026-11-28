@@ -261,6 +261,19 @@ LEVELID langGetLangBankIndexFromStagenum(LEVELID level)
 }
 
 
+#ifdef PORT
+/* The Japanese glyph cache holds pairs copied from the font; forget them when the fonts reload (textFontsSync). */
+void langJpnCacheReset(void)
+{
+    s32 i;
+    if (!g_JpnCacheCacheItems) return;
+    for (i = 0; i != 124; i++) {
+        g_JpnCacheCacheItems[i].ttl = 0;
+        g_JpnCacheCacheItems[i].codepoint = -1;
+    }
+}
+#endif
+
 void langInit(void) {
     s32 i;
 

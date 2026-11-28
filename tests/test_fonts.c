@@ -70,6 +70,20 @@ int main(void)
     fontsCompareLatin(blk, blk2, size, &c, &d);
     GE_CHECK_EQ_INT((int)d, 3);
 
+    /* a reload: another atlas rebuilt into the same buffer gives the same size and only the changed pixel differs */
+    {
+        unsigned size2, off6 = be(blk + 676 + 24 * 6 + 20);
+        unsigned char keep = atlas[0 * w + 6 * CW];   /* glyph 6 is cell (6, 0): its first pixel */
+        memcpy(blk2, blk, size);
+        atlas[6 * CW] = (unsigned char)(keep ^ 0x55);
+        size2 = fontsBuildLatin(json, (unsigned long)n, "small", atlas, w, h, blk, sizeof blk);
+        GE_CHECK_EQ_INT((int)size2, (int)size);
+        fontsCompareLatin(blk2, blk, size, &c, &d);
+        GE_CHECK_EQ_INT((int)d, 1);
+        GE_CHECK_EQ_INT(blk[off6], keep ^ 0x55);
+        atlas[6 * CW] = keep;
+    }
+
     /* Japanese: slot 2k level (k % 4), slot 2k+1 level 3 - (k % 4) at pixel (px) = row + px, clamped */
     for (i = 0; i < 64; i++) {
         int x0 = (i % 32) * 16, y0 = (i / 32) * 12, r, p;

@@ -8,6 +8,7 @@
 /* D50: font segments are re-laid out from the N64 ROM layout to the PC C
  * layout (see romdataFixupFont). */
 #include "romdata.h"
+#include "texpack.h"  /* assetStackGen: reload the fonts when the stack changes */
 #include "fonts.h"   /* the fonts from the asset packs (docs/specs/fonts.md); GE_ROM_FONTS=1 keeps the ROM */
 #include "system.h"
 #include <stddef.h>
@@ -102,14 +103,20 @@ extern u8 _jfontchardataSegmentRomStart;
 extern u8 _efontchardataSegmentRomStart;
 void romCopy(void *target, void *source, u32 size);
 
-/* One Latin font in the PC layout. The N64-layout block comes from the asset stack (fontsLatinBlock), else from the ROM
- * segment; romdataFixupFont re-lays it out either way. GE_FONTS_CHECK=1 (dev) compares the pack with the ROM, once. */
-static struct font *loadLatinFont(int which, void *romStart, u32 n64len)
+void langJpnCacheReset(void);
+static unsigned s_fontGen;      /* assetStackGen() the fonts were built from */
+static u32 s_fontPcSize[2];     /* bytes allocated for each Latin font: a reload happens in place and must fit */
+
+/* One Latin font in the PC layout, filled into `f` (`cap` bytes, 0 = size it and allocate). The N64-layout block comes
+ * from the asset stack (fontsLatinBlock), else from the ROM segment; romdataFixupFont re-lays it out either way.
+ * pixeldata is left as an offset from the font base (the caller adds the base). GE_FONTS_CHECK=1 (dev) compares the pack
+ * with the ROM, once. Returns the font, NULL when a reload does not fit. */
+static struct font *loadLatinFont(int which, void *romStart, u32 n64len, struct font *f, u32 cap)
 {
     static int checked[2];
     u8 *blk = (u8 *)malloc(n64len);
     unsigned n = blk ? fontsLatinBlock(which, blk, n64len) : 0;
-    struct font *f;
+    u32 pcsize;
 
     if (n && n != n64len) {
         sysLogPrintf(LOG_WARNING, "fonts: the pack's %s font is %u bytes, the ROM's %u: reading the ROM", which ? "large" : "small", n, (unsigned)n64len);
@@ -130,15 +137,21 @@ static struct font *loadLatinFont(int which, void *romStart, u32 n64len)
     }
     if (n) {
         u32 pixStart = 0xB80;   /* where fontsBuildLatin puts the first glyph's pixels */
-        u32 pcsize = (u32)((uintptr_t)&((struct font *)0)->chars + 94 * sizeof(struct fontchar)) + n64len - pixStart;
-        f = (struct font *)mempAllocBytesInBank(pcsize, MEMPOOL_STAGE);
-        memcpy(f, blk, n64len);
+        pcsize = (u32)((uintptr_t)&((struct font *)0)->chars + 94 * sizeof(struct fontchar)) + n64len - pixStart;
     } else {
-        f = (struct font *)mempAllocBytesInBank(romdataFontPcSize((const u8 *)romStart, n64len), MEMPOOL_STAGE);
-        romCopy(f, romStart, n64len);
+        pcsize = romdataFontPcSize((const u8 *)romStart, n64len);
     }
+    if (cap && pcsize > cap) {
+        sysLogPrintf(LOG_WARNING, "fonts: reload of the %s font needs %u bytes, %u are there: keeping the old one", which ? "large" : "small", (unsigned)pcsize, (unsigned)cap);
+        free(blk);
+        return NULL;
+    }
+    if (!f) f = (struct font *)mempAllocBytesInBank(pcsize, MEMPOOL_STAGE);
+    if (n) memcpy(f, blk, n64len);
+    else romCopy(f, romStart, n64len);
     free(blk);
     romdataFixupFont((u8 *)f, n64len);
+    s_fontPcSize[which] = cap ? cap : pcsize;
     return f;
 }
 
@@ -189,7 +202,7 @@ void load_font_tables(void)
 #ifdef PORT
 	{
         u32 n64len = len;
-		ptrFontBankGothic = loadLatinFont(0, (void *) &_fontbankgothicSegmentRomStart, n64len);
+		ptrFontBankGothic = loadLatinFont(0, (void *) &_fontbankgothicSegmentRomStart, n64len, NULL, 0);
 		ptrFontBankGothicChars = ptrFontBankGothic->chars;
 	}
 #else
@@ -209,7 +222,7 @@ void load_font_tables(void)
 #ifdef PORT
 	{
         u32 n64len = len;
-		ptrFontZurichBold = loadLatinFont(1, (void *) &_fontzurichboldSegmentRomStart, n64len);
+		ptrFontZurichBold = loadLatinFont(1, (void *) &_fontzurichboldSegmentRomStart, n64len, NULL, 0);
 		ptrFontZurichBoldChars = ptrFontZurichBold->chars;
 	}
 #else
@@ -225,12 +238,42 @@ void load_font_tables(void)
 		ptrFontZurichBoldChars[i].pixeldata += (uintptr_t)ptrFontZurichBold;
 	}
 #ifdef PORT
+    s_fontGen = assetStackGen();
     checkJpnFonts();
 #endif
 }
 
+#ifdef PORT
+/* Rebuilds both Latin fonts in place when the asset stack changed since they were loaded (a pack toggled or reordered, a pack
+ * rewritten, another mod): same addresses, so every pointer to the font stays valid and sees the new data; the glyph records'
+ * pixeldata is rebased again. The Japanese glyph cache is dropped (fontsLatinBlock drops the atlases, langJpnCacheReset the
+ * copied pairs). Called on the game thread from microcode_constructor, before the frame's text is drawn. */
+void textFontsSync(void)
+{
+    unsigned gen = assetStackGen();
+    u32 n64len;
+    int i;
+
+    if (gen == s_fontGen || !ptrFontBankGothic || !ptrFontZurichBold) return;
+    s_fontGen = gen;
+    n64len = (romptr_t)&_fontbankgothicSegmentEnd - (romptr_t)&_fontbankgothicSegmentStart;
+    if (loadLatinFont(0, (void *) &_fontbankgothicSegmentRomStart, n64len, ptrFontBankGothic, s_fontPcSize[0])) {
+        for (i = 0; i < 94; i++) ptrFontBankGothicChars[i].pixeldata += (uintptr_t)ptrFontBankGothic;
+    }
+    n64len = (romptr_t)&_fontzurichboldSegmentEnd - (romptr_t)&_fontzurichboldSegmentStart;
+    if (loadLatinFont(1, (void *) &_fontzurichboldSegmentRomStart, n64len, ptrFontZurichBold, s_fontPcSize[1])) {
+        for (i = 0; i < 94; i++) ptrFontZurichBoldChars[i].pixeldata += (uintptr_t)ptrFontZurichBold;
+    }
+    langJpnCacheReset();
+    sysLogPrintf(LOG_NOTE, "fonts: reloaded for asset stack generation %u", gen);
+}
+#endif
+
 Gfx *microcode_constructor(Gfx *gdl) //fontGfxSetup
 {
+#ifdef PORT
+	textFontsSync();
+#endif
 	gDPPipeSync(gdl++);
 	gDPSetCycleType(gdl++, G_CYC_1CYCLE);
 	gDPSetColorDither(gdl++, G_CD_DISABLE);
