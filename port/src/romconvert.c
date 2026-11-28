@@ -43,6 +43,8 @@ extern int snprintf(char *str, size_t maxsize, const char *format, ...);
 #include "system.h"
 #include "fs.h"
 #include "bootscreen.h"
+#include "texpack.h"
+#include "ge_pkg.h"
 
 /* Same country→region map as pcmodels.c / pccg.c (finding: plan Q3). */
 static const char *rcRegionForCountry(unsigned char country)
@@ -135,11 +137,12 @@ static int rcConvert(const char *rom, const char *out, int steps)
     return code;
 }
 
-/* port/export/texpack_export.c. Declared here for the same reason as the converter. */
+/* port/export/pack_export.c, texpack_export.c, export_common.c. Declared here for the same reason as the converter. */
 typedef void (*ExLogFn)(void *user, const char *line);
 typedef void (*ExProgressFn)(void *user, int done, int total);
 extern void ex_set_progress(ExProgressFn fn, void *user);
-extern int ex_ensure_base_pack(const char *rom_path, const char *pack_dir, ExLogFn log, void *user);
+extern int ex_ensure_base_asset_pack(const char *rom_path, const char *pack_path, const char *old_texture_pack, ExLogFn log, void *user);
+extern int ex_mkdir_p(const char *path);
 
 static void rcTexProgress(void *user, int done, int total)
 {
@@ -153,26 +156,32 @@ static void rcTexLog(void *user, const char *line)
     sysLogPrintf(LOG_INFO, "romconvert: %s", line);
 }
 
-/* The base texture pack in $S/../texturepacks (the folder texpack.c lists). Always 1: the game itself does not read the
- * pack yet (the editor and modelview do), so a pack that cannot be written is logged and boot goes on. */
+/* The base asset pack, $S/../assetpacks/ge007.passets (docs/specs/asset-packs.md). Always 1: a pack that cannot be written is
+ * logged and boot goes on (the game still reads the ROM). A pack written for the first time is enabled, last in the order;
+ * one re-written after an exporter update keeps the player's choice. */
 static int rcEnsureBasePack(const char *romRelPath)
 {
     char romPath[1024];
-    char packDir[1024];
+    char packDir[1024], oldDir[1024], folder[1024];
     int code;
 
     snprintf(romPath, sizeof(romPath), "%s", sysResolvePath(romRelPath));
-    snprintf(packDir, sizeof(packDir), "%s/ge007.ptexpack", sysResolvePath("$S/../texturepacks"));
+    snprintf(folder, sizeof(folder), "%s", sysResolvePath("$S/../assetpacks"));
+    ex_mkdir_p(folder);
+    snprintf(packDir, sizeof(packDir), "%s/ge007.passets", folder);
+    snprintf(oldDir, sizeof(oldDir), "%s/ge007.ptexpack", sysResolvePath("$S/../texturepacks"));
+    const int had = pkgExists(packDir);
     ex_set_progress(rcTexProgress, NULL);
-    code = ex_ensure_base_pack(romPath, packDir, rcTexLog, NULL);
+    code = ex_ensure_base_asset_pack(romPath, packDir, oldDir, rcTexLog, NULL);
     ex_set_progress(NULL, NULL);
     if (code < 0) {
-        sysLogPrintf(LOG_WARNING, "romconvert: the base texture pack could not be written to %s (boot goes on)", packDir);
+        sysLogPrintf(LOG_WARNING, "romconvert: the base asset pack could not be written to %s (boot goes on)", packDir);
         bootscreenClose();
         return 1;
     }
     if (code == 0) {
-        sysLogPrintf(LOG_INFO, "romconvert: base texture pack written to %s", packDir);
+        sysLogPrintf(LOG_INFO, "romconvert: base asset pack written to %s", packDir);
+        texpackPackWritten("ge007.passets", !had);
         bootscreenClose();
     }
     return 1;

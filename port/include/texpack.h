@@ -21,6 +21,9 @@ void texpackInit(void);                    /* after configLoad: opens the packs 
 /* The enabled packs, file names in order separated by ';' ("" none); also stored in Video.AssetPacks. */
 void texpackSetPacks(const char *list);
 const char *texpackPacks(void);            /* the list in use */
+/* Adds `file` at the end of the list (the lowest priority) when `add` and it is not in it yet (then saves the ini), and opens the
+ * packs again: the base pack is written after texpackInit, so it is only readable from then on. */
+void texpackPackWritten(const char *file, int add);
 /* The active mission's mod (its folder or X.pmod; "" none): its textures/<n>.png come before the pack's. Stopgap until the
  * game draws its levels from glTF (port/src/missions.c calls it on activation and deactivation). */
 void texpackSetMod(const char *dir);
