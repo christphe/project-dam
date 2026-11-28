@@ -81,6 +81,14 @@ static const char *const *packsDirs(void)
     return dirs;
 }
 
+/* GE_ROM_TEXTURES=1 (dev token): every texture is drawn from the ROM's own decode, the mod and the packs are not asked. */
+static int romTextures(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("GE_ROM_TEXTURES"); v = (e && atoi(e) > 0) ? 1 : 0; }
+    return v;
+}
+
 static uintptr_t normAddr(const void *p)
 {
     uintptr_t a = (uintptr_t)p;
@@ -294,6 +302,7 @@ unsigned texpackSalt(const void *addr, int fromTile, int *texnum, uint32_t *offs
     unsigned salt = 0;
     *texnum = -1;
     *offset = 0;
+    if (romTextures()) return 0;                            /* GE_ROM_TEXTURES=1: the ROM's own decode, stack bypassed */
     if (!s_modIx && !assetStackCount(s_stack)) return 0;   /* no pack, no mod textures: one unlocked test per import */
     pthread_mutex_lock(&s_lock);
     if (s_picGen != s_gen) { picsClear(); s_picGen = s_gen; }
