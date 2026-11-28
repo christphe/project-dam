@@ -77,5 +77,17 @@ int main(void)
         GE_CHECK_EQ_INT(sfxGenChanged(&built, 0), 1);   /* wrap-around counts as a change too */
     }
 
+    /* no sfx.json in any pack: the pack sounds are in use and every effect is silent (no fallback to the ROM bank) */
+    sfxInit();
+    GE_CHECK_EQ_INT(sfxActive(), 1);
+    GE_CHECK(sfxGet(1) == NULL);
+    GE_CHECK_EQ_INT(sfxCount(), 0);
+    {
+        unsigned char buf[8];
+        memset(buf, 0xAA, sizeof buf);
+        GE_CHECK_EQ_INT(sfxFetch(SFX_ADDR_BASE, buf, sizeof buf), 1);
+        GE_CHECK_EQ_INT(buf[0], 0);
+    }
+
     return GE_TEST_END();
 }

@@ -39,7 +39,8 @@ int sfxWavSamples(const unsigned char *wav, size_t len, const unsigned char **pc
 
 /* Game thread: (re)loads the effects from the current stack, into the idle one of two sets, then publishes it (the previous
  * set stays readable for voices still releasing; the caller stops the playing effects first). Returns 1 when the pack sounds
- * are in use, 0 for the ROM path (GE_ROM_SOUNDS=1, or no sfx.json in the stack). */
+ * are in use, 0 for the ROM path (GE_ROM_SOUNDS=1 only). A stack without sfx.json is in use too: every effect is silent
+ * (sfxGet is NULL), one warning is logged. */
 int sfxInit(void);
 int sfxActive(void);
 int sfxSet(void);                         /* the published set (0/1) */
@@ -52,6 +53,7 @@ const SfxEffect *sfxGet(int id);
 #define SFX_SET_STRIDE 0x01000000u   /* the second set's PCM lies this far above the first's */
 /* Pure: 1 (and *built = now) when the asset stack generation `now` differs from the one the sounds were built from. */
 int sfxGenChanged(unsigned *built, unsigned now);
+void sfxLogReload(unsigned gen);   /* the "sounds: reloaded for asset stack generation N" log line */
 /* Audio thread: when `addr` is in the pack window copies `len` bytes of the arena at that address into dst (zero past the
  * end) and returns 1; else 0. */
 int sfxFetch(uint32_t addr, void *dst, uint32_t len);

@@ -190,7 +190,8 @@ static void sndPackBuild(void)
 
     sPackGen = assetStackGen();
     sPackGenKnown = 1;
-    if (!sfxInit())
+    sfxInit();
+    if (!sfxActive())   /* GE_ROM_SOUNDS=1: the ROM bank */
         return;
     set = sPackCur ^ 1;
     memset(sPackBuilt[set], 0, sizeof sPackBuilt[set]);
@@ -258,6 +259,7 @@ static void sndPackCheck(void)
         return;
     sndDeactivateAllSfxByFlag(0);
     sndPackBuild();
+    sfxLogReload(sPackGen);
 }
 
 /* The ALSound for effect `idx' (1-based): the pack's, NULL for silence (no usable entry), or `romSound` when the pack
