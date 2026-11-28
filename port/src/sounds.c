@@ -234,11 +234,11 @@ typedef struct SfxSet {
 
 static SfxSet sSet[2];
 static volatile int sCur;           /* the published set */
-static volatile int sActive;
+static volatile int sActive;       /* the pack sounds are in use (not GE_ROM_SOUNDS): a stack without sfx.json is silence */
 static int sInited, sRomForced;
 
 int sfxActive(void) { return sActive; }
-int sfxCount(void) { return sActive ? sSet[sCur].maxId + 1 : 0; }
+int sfxCount(void) { return sActive && sSet[sCur].eff ? sSet[sCur].maxId + 1 : 0; }
 int sfxSet(void) { return sCur; }
 
 int sfxGenChanged(unsigned *built, unsigned now)
@@ -247,6 +247,11 @@ int sfxGenChanged(unsigned *built, unsigned now)
         return 0;
     *built = now;
     return 1;
+}
+
+void sfxLogReload(unsigned gen)
+{
+    sysLogPrintf(LOG_INFO, "sounds: reloaded for asset stack generation %u", gen);
 }
 
 static void setFree(SfxSet *s)
@@ -278,8 +283,9 @@ int sfxInit(void)
     s = &sSet[slot];
     setFree(s);
     if (!assetRead("sounds/sfx/sfx.json", &js, &jlen, NULL)) {
-        sysLogPrintf(LOG_WARNING, "sounds: no sounds/sfx/sfx.json in the asset packs, effects from the ROM sound bank");
-        sActive = 0;
+        sysLogPrintf(LOG_WARNING, "sounds: no sounds/sfx/sfx.json in the asset packs or the mod: the effects are silent");
+        sCur = slot;
+        sActive = 1;
         return 0;
     }
     s->eff = (SfxEffect *)calloc(SFX_MAX_ID, sizeof *s->eff);
@@ -287,15 +293,17 @@ int sfxInit(void)
     if (!s->eff || !s->arena) {
         setFree(s);
         pkgFree(js);
-        sActive = 0;
+        sCur = slot;
+        sActive = 1;
         return 0;
     }
     n = sfxParseJson((const char *)js, jlen, s->eff, SFX_MAX_ID);
     pkgFree(js);
     if (n < 0) {
-        sysLogPrintf(LOG_ERROR, "sounds: sfx.json is not readable, effects from the ROM sound bank");
+        sysLogPrintf(LOG_ERROR, "sounds: sfx.json is not readable: the effects are silent");
         setFree(s);
-        sActive = 0;
+        sCur = slot;
+        sActive = 1;
         return 0;
     }
     for (id = 1; id < SFX_MAX_ID; id++) {
