@@ -12,6 +12,8 @@
 #include "audiotrace.h"   /* D202/M-70: serialized trace writer */
 #ifdef PORT
 #include "envflag.h"   /* cached getenv for hot-path probes */
+#include "sounds.h"    /* the effects from the asset packs */
+#include "texpack.h"   /* assetStackGen */
 #endif
 #endif
 //likely named gslibaudio.c from xbla
@@ -166,6 +168,116 @@ void sndSetSfxSlotVolume(u8 arg0, u16 arg1);
 
 // end forward declarations
 
+#ifdef PORT
+/* The sound effects from the asset packs (port/src/sounds.c) instead of the ROM bank: an ALSound per effect built from
+ * sfx.json (key map, envelope, volume, pan, loop) over a raw 16-bit wave whose data the DMA callback (src/audi.c) serves from
+ * the pack's PCM. Built once on the game thread in sndNewPlayerInit and read-only after. GE_ROM_SOUNDS=1 keeps the bank. */
+#define SND_PACK_MAX 2048
+static ALSound sPackSound[2][SND_PACK_MAX];
+static ALKeyMap sPackKey[2][SND_PACK_MAX];
+static ALEnvelope sPackEnv[2][SND_PACK_MAX];
+static ALWaveTable sPackWave[2][SND_PACK_MAX];
+static ALRawLoop sPackLoop[2][SND_PACK_MAX];
+static u8 sPackBuilt[2][SND_PACK_MAX];
+static int sPackCur;               /* the published set; a rebuild fills the other one and flips */
+static unsigned sPackGen;          /* assetStackGen() the sounds were built from */
+static int sPackGenKnown;
+static __thread int sPackOnAudioThread;   /* set while the sound player's own event calls sndPlaySfx */
+
+static void sndPackBuild(void)
+{
+    int id, n, set;
+
+    sPackGen = assetStackGen();
+    sPackGenKnown = 1;
+    if (!sfxInit())
+        return;
+    set = sPackCur ^ 1;
+    memset(sPackBuilt[set], 0, sizeof sPackBuilt[set]);
+    n = sfxCount();
+    if (n > SND_PACK_MAX)
+        n = SND_PACK_MAX;
+    for (id = 1; id < n; id++) {
+        const SfxEffect *x = sfxGet(id);
+        int cents, kb;
+        ALSound *s = &sPackSound[set][id];
+        ALKeyMap *k = &sPackKey[set][id];
+        ALEnvelope *e = &sPackEnv[set][id];
+        ALWaveTable *w = &sPackWave[set][id];
+
+        if (!x)
+            continue;
+        /* pitch: the engine sums keyBase * 100 + detune; a slide effect keeps its step in the detune */
+        if (x->has_slide) {
+            kb = 60 + x->pitch_cents / 100;
+            cents = x->slide_cents;
+        } else {
+            kb = 60 + (x->pitch_cents + (x->pitch_cents < 0 ? -50 : 50)) / 100;
+            cents = x->pitch_cents - (kb - 60) * 100;
+        }
+        k->velocityMin = (u8)(x->next & 0xFF);
+        k->velocityMax = (u8)((x->next_delay_ms * 3 + 50) / 100);   /* ticks of 33.333 ms */
+        k->keyMin = (u8)((x->volume_group & 0x3F) | (((x->next >> 8) & 3) << 6));
+        k->keyMax = (u8)(((x->flags & 15) << 4) | (x->reverb & 15));
+        k->keyBase = (u8)kb;
+        k->detune = (s8)cents;
+        e->attackTime = x->attack_us;
+        e->decayTime = x->decay_us;
+        e->releaseTime = x->release_us;
+        e->attackVolume = (u8)x->attack_vol;
+        e->decayVolume = (u8)x->decay_vol;
+        w->base = (u8 *)(uintptr_t)(SFX_ADDR_BASE + x->pcm_off);
+        w->len = (s32)(x->pcm_samples * 2);
+        w->type = AL_RAW16_WAVE;
+        w->flags = 1;   /* base is a ROM-side address the DMA callback resolves (as the bank's) */
+        if (x->has_loop) {
+            sPackLoop[set][id].start = x->loop_start;
+            sPackLoop[set][id].end = x->loop_end;
+            sPackLoop[set][id].count = 0xFFFFFFFFu;
+            w->waveInfo.rawWave.loop = &sPackLoop[set][id];
+        } else {
+            w->waveInfo.rawWave.loop = NULL;
+        }
+        s->envelope = e;
+        s->keyMap = k;
+        s->wavetable = w;
+        s->samplePan = (u8)x->pan;
+        s->sampleVolume = (u8)x->sample_volume;
+        s->flags = 0;
+        sPackBuilt[set][id] = 1;
+    }
+    sPackCur = set;
+}
+
+/* The asset stack changed (a pack enabled, disabled or moved, a rewritten pack, a mod switch): stop every playing effect
+ * (so no voice is left reading the old PCM for long), then rebuild from the new stack. Game thread only: called at the top of
+ * sndPlaySfx, never from the sound player's own event. The old set stays valid until the next reload. */
+static void sndPackCheck(void)
+{
+    if (!sPackGenKnown || sPackOnAudioThread || !sfxGenChanged(&sPackGen, assetStackGen()))
+        return;
+    sndDeactivateAllSfxByFlag(0);
+    sndPackBuild();
+}
+
+/* The ALSound for effect `idx' (1-based): the pack's, NULL for silence (no usable entry), or `romSound` when the pack
+ * sounds are off. */
+static ALSound *sndPackSound(s32 idx, ALSound *romSound)
+{
+    if (!sfxActive())
+        return romSound;
+    int cur = sPackCur;
+
+    if (idx <= 0 || idx >= SND_PACK_MAX || !sPackBuilt[cur][idx]) {
+        (void)sfxGet(idx);   /* logs the missing effect once */
+        return NULL;
+    }
+    return &sPackSound[cur][idx];
+}
+#endif
+
+/**
+ * 8B70
 /**
  * 8720    70007B20
  *
@@ -195,6 +307,9 @@ void sndNewPlayerInit(ALSeqpSfxConfig *sfxSeqpConfig)
     alEvtqNew(&g_sndPlayerPtr->evtq, (ALEventListItem *)ptr, sfxSeqpConfig->maxEvents);
 
     D_800243E4.g_sndPlayerSoundStatePtr = g_sndPlayerPtr->sndState;
+#ifdef PORT
+    sndPackBuild();
+#endif
 
     for(i = 1; i < sfxSeqpConfig->maybeSndStateCount; i++)
     {
@@ -673,7 +788,13 @@ void sndHandleEvent(ALSndPlayer *sndp, ALSndpEvent *event) {
                 break;
             case AL_SNDP_PLAY_SFX_EVT:
                 if (soundState->unk3e & SOUND_FLAG_RETRIGGER) {
+#ifdef PORT
+                    sPackOnAudioThread = 1;
+#endif
                     sndPlaySfx(event->playSfx.soundBank, event->playSfx.soundIndex, soundState->state);
+#ifdef PORT
+                    sPackOnAudioThread = 0;
+#endif
                 }
                 break;
 #ifdef PORT
@@ -1084,6 +1205,9 @@ ALSoundState *sndPlaySfx(struct ALBankAlt_s *soundBank, s16 soundIndex, ALSoundS
         return NULL;
     }
 
+#ifdef PORT
+    sndPackCheck();
+#endif
     do
     {
         ALKeyMap *keyMap;
@@ -1107,6 +1231,7 @@ ALSoundState *sndPlaySfx(struct ALBankAlt_s *soundBank, s16 soundIndex, ALSoundS
          * at the bottom of this loop from `keyMap->velocityMin`), whose values
          * live in the same 1-based space. See docs/dev/findings.md D206. */
         sound = (soundBank->instArray[0]->soundArray[soundIndex - 1]);
+        sound = sndPackSound(soundIndex, sound);   /* the asset packs' effect (NULL: silence) or the bank's */
 
         /* D202 diag probe (temporary): trace which soundIndex resolves to
          * which ALSound*, to root-cause the M-52 "wrong sample plays"
@@ -1137,7 +1262,7 @@ ALSoundState *sndPlaySfx(struct ALBankAlt_s *soundBank, s16 soundIndex, ALSoundS
          * byte-scrambled / OOB read. D573 (#108): test the real windows
          * (portAddrIsMapped) instead of a [64 KiB, 16 GiB) literal. */
         {
-            if (!portAddrIsMapped(sound)) {  /* D573: arena views + cart */
+            if (!sound || (!sfxActive() && !portAddrIsMapped(sound))) {  /* D573: arena views + cart; pack sounds are static */
                 return NULL;
             }
         }

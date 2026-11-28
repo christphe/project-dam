@@ -43,6 +43,7 @@ ge_add_test(test_core_link   test_core_link.c)
 ge_add_test(test_platform    test_platform.c ${GE_TEST_PLATFORM})
 ge_add_test(test_updatecheck test_updatecheck.c)
 ge_add_test(test_defaults    test_defaults.c ${GE_TEST_PLATFORM})
+ge_add_test(test_sounds      test_sounds.c ${GE_TEST_PLATFORM})
 
 # The first-launch GPU benchmark's decision (port/src/gpuprobe.c): pure, no core.
 ge_add_pure_test(test_gpuprobe test_gpuprobe.c ${CMAKE_SOURCE_DIR}/port/src/gpuprobe.c)
