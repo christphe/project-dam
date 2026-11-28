@@ -213,23 +213,22 @@ int fontsBuildJpnPair(const char *json, unsigned long jlen, const char *key, con
 #include "ge_pkg.h"
 #include "ge_png.h"
 
-static int envOn(const char *name)
+static int envOn(const char *v)   /* the value of a getenv: set and not "0" */
 {
-    const char *v = getenv(name);
     return v && v[0] && v[0] != '0';
 }
 
 int fontsRomOnly(void)
 {
     static int v = -1;
-    if (v < 0) v = envOn("GE_ROM_FONTS");
+    if (v < 0) v = envOn(getenv("GE_ROM_FONTS"));
     return v;
 }
 
 int fontsCheckEnabled(void)
 {
     static int v = -1;
-    if (v < 0) v = envOn("GE_FONTS_CHECK");
+    if (v < 0) v = envOn(getenv("GE_FONTS_CHECK"));
     return v;
 }
 

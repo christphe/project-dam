@@ -484,12 +484,12 @@ heights 13 and 15.
 | Colour and intensity | high for the rule (from the decompilation); the exact on-screen look of bilinear at 1:1 is inferred |
 | Which font is used where | medium: from the decompilation's call sites, not checked on screen per screen |
 
+The EU and JP Latin font blocks were checked against the US ones: byte-identical
+(same SHA-1 at each region's offset), and the exporter writes identical
+`small` / `large` pictures from all three ROMs.
+
 Unknown or not measured:
 
-1. The EU and JP Latin font blocks were not measured (no ROM here). The
-   decompilation has one copy for all regions and the file table gives equal
-   sizes; a SHA-1 check against the US values above on those ROMs would
-   settle it.
-2. The EU and JP Japanese wide-index maximum was not measured here (US: 105).
-3. The Japanese glyph to Unicode table: not in the ROM (text.md, open
+1. The EU and JP Japanese wide-index maximum was not measured here (US: 105).
+2. The Japanese glyph to Unicode table: not in the ROM (text.md, open
    question 1).
