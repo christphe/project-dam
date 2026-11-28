@@ -58,8 +58,10 @@ A bottom message normally stays 2 s; when another message is queued behind it, t
 line is cleared.
 
 **Fog.** During the fixed shot (and its fade to black) the game loads the level's alternative intro fog and
-view-distance setting; the swirl and the rest of the level use the normal one. UNCERTAIN how much it differs per
-level; a script that cannot switch fog can ignore it.
+view-distance setting; the swirl and the rest of the level use the normal one. It matters: measured on Dam, the
+fixed shots in the normal setting are drowned in fog (the dam and the mountains fade into blue), in the intro one
+they are clear. A script asks for it with cinema.begin({ environment = "intro" }) for the fixed shot; the swirl's
+begin (no environment) goes back to the normal one.
 
 **Transitions.** Fixed shot to swirl: fade to black over 1 s on the fixed view, then the swirl opens at its first
 point with a fade in from black over 1 s. Never a cut.
@@ -127,6 +129,60 @@ a close approximation), or a look target if it has one at that spot.
 cuts to first person (no fade) and the cut is invisible. A script ends its travelling there and resets the
 camera to the player's own view at once.
 
+### Camera position by time (Dam, computed from the rules above, checked on the running port)
+
+Eye point E = (20197.74, 60.31, 16902.07), player facing psi = -90.3 degrees. Positions are the camera's world position; "dist" is the horizontal distance from E; "x / z from E" is the world offset. These are the values a correct swirl must reproduce; the port's scripted swirl was measured at ten of these times (0.52 s to 9.52 s) and agrees within 0.2 units at every one.
+
+| Time (s) | Leg | Camera x | Camera y | Camera z | x from E | y from E | z from E | dist |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 1 (P1) | 15014.0 | 990.3 | 19685.1 | -5184 | 930 | 2783 | 5884 |
+| 0.5 | 1 | 15238.8 | 904.8 | 19694.9 | -4959 | 844 | 2793 | 5691 |
+| 1 | 1 | 15565.5 | 779.2 | 19713.1 | -4632 | 719 | 2811 | 5418 |
+| 1.5 | 1 | 15921.4 | 646.3 | 19721.2 | -4276 | 586 | 2819 | 5122 |
+| 2 | 1 | 16233.9 | 538.8 | 19700.7 | -3964 | 478 | 2799 | 4852 |
+| 2.199 | 2 (P2) | 16330.1 | 510.3 | 19680.5 | -3868 | 450 | 2778 | 4762 |
+| 2.5 | 2 | 16474.9 | 480.2 | 19623.4 | -3723 | 420 | 2721 | 4611 |
+| 3 | 2 | 16637.0 | 478.5 | 19490.5 | -3561 | 418 | 2588 | 4402 |
+| 3.5 | 2 | 16772.5 | 491.0 | 19310.1 | -3425 | 431 | 2408 | 4187 |
+| 3.866 | 3 (P3) | 16902.1 | 478.3 | 19147.7 | -3296 | 418 | 2246 | 3988 |
+| 4 | 3 | 16960.3 | 465.9 | 19080.8 | -3237 | 406 | 2179 | 3902 |
+| 4.5 | 3 | 17199.4 | 400.8 | 18790.1 | -2998 | 340 | 1888 | 3543 |
+| 5 | 3 | 17460.1 | 319.7 | 18456.1 | -2738 | 259 | 1554 | 3148 |
+| 5.5 | 3 | 17725.7 | 241.0 | 18107.2 | -2472 | 181 | 1205 | 2750 |
+| 5.533 | 4 (P4) | 17743.0 | 236.3 | 18084.4 | -2455 | 176 | 1182 | 2725 |
+| 6 | 4 | 17973.8 | 164.7 | 17715.2 | -2224 | 104 | 813 | 2368 |
+| 6.5 | 4 | 18219.3 | 86.7 | 17287.5 | -1978 | 26 | 385 | 2016 |
+| 7 | 4 | 18508.7 | 26.7 | 16935.7 | -1689 | -34 | 34 | 1689 |
+| 7.2 | 5 (P5) | 18647.0 | 12.3 | 16841.4 | -1551 | -48 | -61 | 1552 |
+| 7.5 | 5 | 18957.6 | 3.8 | 16749.9 | -1240 | -56 | -152 | 1249 |
+| 8 | 5 | 19577.5 | 22.9 | 16743.3 | -620 | -37 | -159 | 640 |
+| 8.5 | 5 | 20102.0 | 50.5 | 16796.2 | -96 | -10 | -106 | 143 |
+| 8.622 | 6 (P6) | 20186.3 | 54.3 | 16802.0 | -11 | -6 | -100 | 101 |
+| 9 | 6 | 20298.6 | 71.1 | 16882.6 | 101 | 11 | -19 | 103 |
+| 9.14 | 7 (P7) | 20304.7 | 74.3 | 16902.7 | 107 | 14 | 1 | 107 |
+| 9.5 | 7 | 20261.6 | 69.0 | 16908.9 | 64 | 9 | 7 | 64 |
+| 9.889 | 7 (P8 (hand-over)) | 20197.7 | 60.3 | 16902.1 | 0 | 0 | 0 | 0 |
+
+Leg = the leg's number (leg k runs from Pk to Pk+1 and lasts Pk's duration). Mean camera speed per leg (straight distance between the two points over the leg's duration; the curve is a little longer):
+
+| Leg | From -> to | Duration (s) | Straight distance | Mean speed (units/s) |
+|---|---|---|---|---|
+| 1 | P1 -> P2 | 2.199 | 1401 | 637 |
+| 2 | P2 -> P3 | 1.667 | 782 | 469 |
+| 3 | P3 -> P4 | 1.667 | 1377 | 826 |
+| 4 | P4 -> P5 | 1.667 | 1553 | 932 |
+| 5 | P5 -> P6 | 1.422 | 1540 | 1083 |
+| 6 | P6 -> P7 | 0.518 | 157 | 303 |
+| 7 | P7 -> P8 | 0.75 | 108 | 144 |
+
+**When the swirl ends (timing).** The swirl ends in the very tick where the last leg's timer reaches its duration:
+593.4 ticks (9.889 s) after it opens on Dam, to the tick. The hand-over (body removed, first person, start weapon
+drawn) happens in that tick, with the camera exactly on the eye point. Measured on the port's scripted swirl: the
+camera reached the eye on time, but the script ended 627 ticks (10.45 s) after the swirl opened, 34 ticks (0.57 s)
+late, because it counted the swirl's length by adding up 0.1 s waits (each wait overshoots a little). A script ends
+the swirl when the camera arrives (`camera.wait()`), or measures the elapsed time on the mission clock; it never
+adds up short waits.
+
 ## 3. The intro animation and the body
 
 - At the swirl start (the moment it fades in) the player's third-person body is shown at the player's position and
@@ -162,8 +218,61 @@ camera to the player's own view at once.
   102, 103), overriding the table pose from that moment. Dam's animation 99 at 6 s into the swirl is one of
   these: the body shows the entry 0 pose for 6 s, then animation 99 up to frame 96. Each level spec lists its
   own under Body during the swirl.
-- **When the body disappears.** When 0.5 s of the swirl remain, the body fades out over 0.5 s (opaque to
-  invisible), so it is gone exactly at the hand-over, where it is removed.
+- **When the body disappears.** When 0.5 s of the swirl remain, the body fades out over 0.5 s, from its current
+  opacity to invisible, so it is gone exactly at the hand-over, where it is removed. During the fade the body
+  stays where it is, keeps its animation and keeps the weapon in its hand (the weapon fades with it); the camera
+  reaches the eyes inside the fading head. A script does it with `bond_body():fade(0, 0.5)` (the body's
+  opacity goes to 0 over 0.5 s, the body in place); an instant `show(false)` or a guard's `fade_out` is not it.
+- **The hand-over, in the order the original does it** (the end of the swirl, or a skip's fade to black):
+  1. **The body is removed**, not just made invisible. While the swirl plays the third-person body occupies both of
+     the player's weapon slots (its own model, and the start weapon it holds) and the player's hands are locked
+     empty; that is why no first-person weapon can show during the swirl. Removing the body frees the player's
+     hands: three game ticks (0.05 s) later the game loads the player's weapon models back into both hands. A script
+     that only fades the body to 0 (or hides it) leaves the hands locked: **the player then has no weapon on screen
+     at all, and no draw animation** (measured on our script: the HUD shows the ammo, the gun never appears).
+  2. **First person starts** (the camera is the player's again, input is back, the mission clock runs from here).
+  3. **The start weapon is equipped with the game's draw animation**, in the same tick as step 2: both hands at once.
+     Right hand: the right item of the level's FIRST start-item record; left hand: that record's left item when it
+     has one (dual wield), otherwise empty. A level with no start-item record equips the fist (right hand), left
+     empty. The weapon rises into view during the first moments of control; this is the same animation as selecting
+     a weapon from the watch menu. It is skipped only if the watch menu is mid-animation (never at a hand-over).
+  4. **Screen:** after a skip's fade to black (section 4) the screen fades in from black over 1 s as first person
+     starts. After an unskipped swirl there is nothing to fade (the last point is the eye, the cut is invisible).
+     On Cuba (no intro at all) the screen is black from the first tick and the level script fades in.
+  A script does the same with `bond_body():remove()` (step 1; call it after the body has faded) followed at once by
+  `player(n):force_weapon(item)` (step 3, right hand; the left is emptied: a left item of a dual-wield start is not
+  reachable from the API yet, UNCERTAIN whether any of the 21 solo levels' first start item has one: the exported
+  data carries only the right item). An instant `show(false)` or a guard's `fade_out` is not a removal.
+
+- **Where the body stands and faces.** The body is built where the PLAYER is, turned the way the PLAYER faces (Dam:
+  psi = -90.3 degrees, the same facing the camera frame uses), and nothing places it afterwards: no pad is involved.
+  The start pad's own look direction is a different angle (-37 degrees on Dam). A script that teleports the body to
+  the start pad turns it 53 degrees away from the original's and may push it a little off the player's spot: on the
+  port the body was seen turned and off to the side while the camera, which is built on the player's frame,
+  was right. A script leaves the body where `show(true)` puts it.
+- **What the body holds.** Built with the start weapon (the first start item) in its right hand, as a second model
+  in the player's left weapon slot; this is what makes the pistol hang in the hand. The game does this only
+  because the body is built at the swirl's opening; a body built at that moment by a script must be built the same
+  way. Measured on the port: the body had an EMPTY hand for the whole swirl (the weapon was "held" only in the
+  player's own state), so no gun was ever drawn on it.
+- **The animation names** (the table above; the ids are the game's animation numbers): 61 extending left hand;
+  66 fire standing draw one-handed weapon fast; 97 draw one-handed weapon and look around; 98 draw one-handed weapon
+  and stand up; 99 aim one-handed weapon left and right (Dam's script animation, frames 0 to 96); 100 cock
+  one-handed weapon and turn around; 102 cock one-handed weapon, turn around and stand up; 103 draw one-handed
+  weapon and turn around; 176 bond eye fire. So Dam's body, 6 s into the swirl, goes from the near-still
+  "extending left hand" pose to AIMING the pistol left and right.
+- **The body's intro action.** While the table animation is the body's current action, when it reaches its end
+  frame: if that frame is below 86 the game plays animation 66 frames 86 to 131 (the quick draw) at the same speed,
+  blended over 24 ticks; otherwise the body stands idle. A level script's animation replaces this action (Dam's
+  animation 99 is held on frame 96, so the action never ends).
+- **Animation speed.** Each animation starts at its own speed: 0.5 (30 animation frames a second) unless the
+  table gives one (entry 0: 0.02). The speed of the previous animation NEVER carries over. Measured on the port:
+  the near-still pose's 0.02 leaked into Dam's animation 99, which then crawled at 2 % speed (1.1 frames in
+  3.7 s instead of 96 frames in 3.2 s) and Bond never aimed. A script step without a speed means 0.5.
+- **Open (UNCERTAIN).** On the original, 2.5 to 3.5 s after animation 99 starts (swirl 8.5 to 9.5 s), Bond holds the
+  pistol UPRIGHT by his shoulder, the arm bent. On the port, with the same animation, no weapon and the body turned
+  off, the arm is stretched forward. Re-check once the body is placed and armed as above: if the pose still differs
+  the animation's frame range or the aim-sweep phase is wrong.
 
 ## 4. What the game does at the same time
 

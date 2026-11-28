@@ -5,9 +5,9 @@
 return {
     lines = { 0x7C14, 0x7C15 },   -- the location title, then the time caption: an 8 s shot
     cameras = {   -- 3, one picked at random: position, API yaw / pitch (fov 60)
-        { pos = { -467.68, 374.25, -7190.45 }, yaw = 153.6, pitch = 22.0 },   -- camera 0, room of pad 59
-        { pos = { 3453.03, 2014.25, -9406.21 }, yaw = -116.6, pitch = -16.0 },   -- camera 1, room of pad 59
-        { pos = { -6199.34, 198.88, -16040.75 }, yaw = 75.4, pitch = 0.0 },   -- camera 2, room of pad 59
+        { pos = { -467.68, 374.25, -7190.45 }, yaw = 153.6, pitch = 22.0, pad = 59 },   -- camera 0, room of pad 59
+        { pos = { 3453.03, 2014.25, -9406.21 }, yaw = -116.6, pitch = -16.0, pad = 59 },   -- camera 1, room of pad 59
+        { pos = { -6199.34, 198.88, -16040.75 }, yaw = 75.4, pitch = 0.0, pad = 59 },   -- camera 2, room of pad 59
     },
     swirl = {   -- P0..Pn: offset from the eye point, duration and tension of the leg after the point,
         -- flags (2: player frame, x left, y up, z forward; 4: look at the eye); the camera starts at P1

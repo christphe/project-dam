@@ -8,19 +8,20 @@
 --
 -- The data (a level's <level>_intro_data.luau, in intro.md's units: world units, API degrees, seconds):
 --   lines       { first line's text id, second line's id? }       (intro.md §1, the two text words)
---   cameras     { { pos = {x, y, z}, yaw, pitch } }               fixed cameras: each ONE static point (no
---               waypoints); ONE of them is shown, picked at random with equal odds
---   swirl       { { off = {x, y, z}, time, tension, flags } }     P0..Pn, then the end marker { flags = 1 }:
+--   cameras     { { pos = {x, y, z}, yaw, pitch, pad? } }         fixed cameras: each ONE static point (no
+--               waypoints; pad: a pad in the room the camera stands in); ONE of them is shown, picked at random with equal odds
+--   swirl       { { off = {x, y, z}, time, tension, flags, pad? } }  P0..Pn, then the end marker { flags = 1 }:
 --               off: x left, y up, z forward (flags has 2), else world axes, from the player's eye point;
 --               time / tension: the leg that STARTS at the point; flags 4: look at the eye itself there;
+--               pad: a pad in the room of the point, when known (handed to the camera);
 --               P0 only shapes the first leg (never reached, its time unused), Pn only shapes the last one
 --   intro_anim  the intro-animation record (index into ANIMS below; 0 / nil: the default table pose)
 --   body        { { at, anim, from?, to?, speed?, blend?, hold? } }  a level script's animation of the body,
 --               "at" seconds after the swirl start; it overrides the table pose from its first step on
---   start_pad   the solo start pad (the body is placed there); weapon: the first start item (held by the body)
+--   start_pad   the solo start pad (not used by the swirl: the body stays where the player is); weapon: the first start item (held by the body)
 --
 -- The timeline (intro.md "The timeline"):
---   1. the fixed shot: fade in 1 s; line 1 at 2 s; line 2 at 5 s; fade to black at 8 s (5 s without line 2),
+--   1. the fixed shot (in the level's intro fog): fade in 1 s; line 1 at 2 s; line 2 at 5 s; fade to black at 8 s (5 s without line 2),
 --      black 1 s later. A skip ends the shot at once and its 1 s fade to black follows; the swirl still plays.
 --   2. the swirl: opens AT P1 fading in over 1 s; the camera travels P1..P(n-1), the leg Pk -> Pk+1 lasting
 --      Pk's time (the swirl lasts P1's to P(n-2)'s times; P0's leg never plays), each leg a cardinal spline over
@@ -30,7 +31,8 @@
 --      posed, the start weapon in its right hand, from the swirl's first frame and fades out over its last
 --      0.5 s. A skip while more than 1 s of the swirl remains: fade to black 1 s, the hand-over, fade in 1 s; a
 --      skip later is ignored.
---   3. the hand-over: body hidden, camera.reset(), cinema.finish() (control back; the mission clock starts).
+--   3. the hand-over: the body removed (not hidden: that frees the player's hands, so the start weapon is drawn),
+--      camera.reset(), the start weapon forced in the same tick, cinema.finish() (control back; the clock starts).
 --
 -- Approximations (the API has no closer verb):
 --   - the swirl's curve: camera.move draws the cardinal spline itself (smooth = true, ease "linear"): the
@@ -40,16 +42,17 @@
 --   - the skip test polls cinema.skipped() every POLL seconds (up to POLL late); cinema.skipped() is latched from
 --     cinema.begin(), so the scene is begun again at the swirl start: the press that skipped the fixed shot does
 --     not also skip the swirl (intro.md: two presses skip all of it). TODO(api): a way to clear the skip latch.
---   - the body fade: Target:fade_out() (the API's fade-and-remove); its hand is emptied first so the fade drops
---     nothing on the floor. The body's hands are the player's, so the hand-over puts the start weapon back in
---     every living player's hand (force_weapon; intro.md section 4: the start weapon is in hand at the
---     hand-over; the fist, item 1, means bare-handed). TODO(api): a body fade of a given length (0.5 s) that
---     keeps what it holds.
 --   - the body's weapon (intro.md section 3, checked on Dam): in the right hand from the swirl's first frame,
 --     through every pose. UNCERTAIN(spec): Bunker 1 (the one intro-animation record) may play its frames 7..40
 --     empty-handed and draw at 86..131; not confirmed, so it holds the weapon from the start like every level.
---   - not done (no API): the bold font of the lines, and the intro's alternative fog (intro.md: "a script that
---     cannot switch fog can ignore it").
+--   - the fog: the fixed shot's cinema.begin asks for the level's intro environment (environment = "intro"); the
+--     swirl's cinema.begin() (no environment) goes back to the normal one, and cinema.finish() ends the scene.
+--   - not done (no API): the bold font of the lines.
+--
+-- The body fade (intro.md section 3, as specified): bond_body():fade(0, 0.5) when 0.5 s of the swirl remain;
+-- the body fades in place, still animating, the weapon in its hand fading with it. The body's hands are the
+-- player's, so the hand-over puts the start weapon in every living player's hand (force_weapon; intro.md
+-- section 4: the start weapon is in hand at the hand-over; the fist, item 1, means bare-handed).
 --
 -- Co-op (intro.md: multiplayer has no swirl; the cinema API shows the scene camera in every player's view): the
 -- fixed shot and the swirl play once for everybody; the swirl follows the FIRST LIVING player (player 0 at a level
@@ -60,8 +63,8 @@ local L = require("campaign_lib")
 
 local M = {}
 
-export type Camera = { pos: { number }, yaw: number, pitch: number }
-export type SwirlPoint = { off: { number }?, time: number?, tension: number?, flags: number }
+export type Camera = { pos: { number }, yaw: number, pitch: number, pad: number? }
+export type SwirlPoint = { off: { number }?, time: number?, tension: number?, flags: number, pad: number? }
 export type BodyStep = {
     at: number, anim: number, from: number?, to: number?, speed: number?, blend: number?, hold: boolean?,
 }
@@ -141,7 +144,7 @@ local function fixed_shot(d: Data): boolean
         return false
     end
     local c = cams[math.random(#cams)]          -- one camera, equal odds
-    camera.set({ pos = c.pos, yaw = c.yaw, pitch = c.pitch, fov = FOV, time = 0 })
+    camera.set({ pos = c.pos, yaw = c.yaw, pitch = c.pitch, fov = FOV, time = 0, pad = c.pad })
     screen.fade_out(0)
     screen.fade_in(FADE)                        -- 0 to 1 s
     local lines = d.lines or {}
@@ -218,7 +221,7 @@ local function waypoints(pts: { SwirlPoint }, p: number): ({ CameraPoint }, numb
             end
         end
         prev_yaw = yaw
-        return { pos = c, yaw = yaw, pitch = pitch, fov = FOV, ease = "linear", tension = s.tension or 0.5 }
+        return { pos = c, yaw = yaw, pitch = pitch, fov = FOV, ease = "linear", tension = s.tension or 0.5, pad = s.pad }
     end
     local n = #pts                              -- pts[1] is P0, pts[n] is Pn
     if n < 4 then                               -- no leg (P1 is already P(n-1)): a still camera
@@ -290,32 +293,31 @@ local function swirl(d: Data, hooks: Hooks): (Target?, boolean)
     local points, total = waypoints(pts, p)
     -- the body, shown and posed from the swirl's first frame (intro.md §3)
     local b = bond_body(p)
-    b:show(true)   -- first: the third-person body only exists once shown (teleport / hold_item act on it)
-    if p == 0 and d.start_pad ~= nil then
-        b:teleport(d.start_pad)
-    end
     local w = d.weapon or 0
-    b:hold_item(if w <= 1 then 0 else w, "right")   -- the fist (1) has no model: an empty hand
+    -- before show(true): the body is then built holding the item (after it, hold_item only touches the player's
+    -- hands); the fist (1) has no model: nothing to hold
+    b:hold_item(if w <= 1 then 0 else w, "right")
+    b:show(true)   -- at the player's position and facing; no pad places it (intro.md §3)
+    local t0 = clock()   -- the swirl's time is measured on the mission clock, never by adding up waits
     local anim = spawn(function()
         play_body(b, body_steps(d))
     end)
     local fade = spawn(function()
-        wait(math.max(total - BODY_FADE, 0))
-        anim:cancel()
-        b:hold_item(0, "right")
-        b:fade_out()
+        local left = total - BODY_FADE - (clock() - t0)
+        while left > 0 do
+            wait(left)
+            left = total - BODY_FADE - (clock() - t0)
+        end
+        b:fade(0, BODY_FADE)   -- intro.md §3: fades in place, animation and weapon kept
     end)
     camera.move(points, { smooth = true })
     screen.fade_in(FADE)
     if hooks.swirl then
         spawn(hooks.swirl)
     end
-    local t = 0
-    while t < total do
-        local step = math.min(POLL, total - t)
-        wait(step)
-        t += step
-        if total - t > SKIP_MARGIN and cinema.skipped() then
+    while clock() - t0 < total do
+        wait(math.min(POLL, total - (clock() - t0)))
+        if total - (clock() - t0) > SKIP_MARGIN and cinema.skipped() then
             screen.fade_out(FADE)               -- the skip: 1 s to black, then the hand-over
             wait(FADE)
             camera.stop()
@@ -335,16 +337,17 @@ end
 -- Plays the level's intro (a blocking call: it returns at the hand-over).
 function M.play(d: Data, hooks: Hooks?)
     local h: Hooks = hooks or {}
-    cinema.begin({ keep_bottom_text = true })   -- frozen, invulnerable, HUD hidden, mission clock stopped
+    -- frozen, invulnerable, HUD hidden, mission clock stopped; the fixed shot has the level's intro fog
+    cinema.begin({ keep_bottom_text = true, environment = "intro" })
     local shot = fixed_shot(d)
     local b, skipped = swirl(d, h)
     -- 3. the hand-over: first person at once (the last point is the eye looking ahead: an invisible cut)
     if b ~= nil then
         b:stop_anim()
-        b:show(false)
+        b:remove()   -- removed, not hidden: frees the player's hands (intro.md §3, the hand-over)
     end
     camera.reset()
-    -- intro.md sections 3 / 4: the start weapon in hand at the hand-over (the body's emptied hand is the player's)
+    -- intro.md sections 3 / 4: the start weapon in hand at the hand-over (the body's hand is the player's)
     local w = d.weapon
     if w ~= nil and w > 0 then
         for _, i in L.living() do

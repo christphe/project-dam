@@ -129,7 +129,9 @@ declare extern type Target with
     -- presence
     function exists(self): boolean            -- a guard spawned and alive (a setup guard of another difficulty: false)
     function is_dying(self): boolean          -- in its death animation
-    function remove(self)                     -- gone at once, drops nothing
+    function remove(self)                     -- gone at once, drops nothing. On bond_body(): the third-person body is taken
+                                              -- away (after fade(0, ..)); the player's weapon models come back into his
+                                              -- hands a few ticks later, show(true) makes a new body
     function fade_out(self)                   -- fades away and is removed (drops what it holds)
     function teleport(self, pad: Pad): boolean   -- placed on the pad at once; false: the spot is blocked
     function set_hidden(self, on: boolean)    -- not drawn, not hit, not solid (a guard waiting for its entrance); during
@@ -228,7 +230,11 @@ declare extern type Target with
     function force_weapon(self, item: Item)   -- switch the player to that item
     function push(self, dx: number, dz: number)   -- moves the player by that much at once
     function in_cutscene(self): boolean
-    function show(self, on: boolean)          -- the player's body is (not) drawn in third person
+    function show(self, on: boolean)          -- the player's body is (not) drawn in third person, at once
+    function fade(self, to: number, seconds: number?)   -- bond_body() only: the body's opacity goes from where it is
+                                              -- to `to` (0 invisible .. 1 opaque) over `seconds` (none: at once);
+                                              -- it stays in place, animating, holding what it holds. (fade_out is a
+                                              -- guard's fade-and-remove: on a body it does nothing.)
     function hold_item(self, item: Item, hand: string?)   -- the body holds that item ("right" | "left") in the cinematic;
                                               -- item 0 (unarmed) empties that hand
                                               -- The body's hands ARE the player's: what it holds is what the player
@@ -385,7 +391,7 @@ declare mission: {
 
 declare function pad(n: Pad): Target                    -- a pad as a target (kind "pad"): :pos(), :distance(), :near()
 declare function bond_body(player: number?): Target     -- the player's third-person body in a cinematic (kind "body"):
-                                                        -- :teleport, :anim, :anim_done, :hold_item, :show, :set_shadow
+                                                        -- :teleport, :anim, :anim_done, :hold_item, :show, :fade, :set_shadow
 declare function spawn_guard(opts: {
     chr: number?,                 -- its chr number (a setup guard's slot is refused while that guard is alive)
     pad: Pad,                     -- where it appears
@@ -445,7 +451,11 @@ declare screen: {
 
 declare cinema: {
     begin: (opts: { keep_hud: boolean?, keep_top_text: boolean?, keep_bottom_text: boolean?,
-                    keep_countdown: boolean? }?) -> (),
+                    keep_countdown: boolean?, environment: ("intro" | "level")? }?) -> (),
+                                                        -- environment "intro": the level's intro environment (its own
+                                                        -- fog and view distance, made for the intro's fixed shots)
+                                                        -- until the next begin or finish; "level" (the default): the
+                                                        -- normal one. A level without an intro environment keeps its own
                                                         -- a scripted scene: every player frozen and invulnerable, no
                                                         -- pickups, HUD hidden, guards cannot see players, and the
                                                         -- mission clock (the end-of-level time) stopped until finish()
@@ -470,6 +480,10 @@ export type CameraPoint = {
                                   -- the default): its tangents are tension * (next - previous)
     control: boolean?,            -- on the first or last point of a move: it only shapes the first / last leg's curve
                                   -- (the spline's outer neighbour) and is never travelled
+    pad: Pad?,                    -- the room hint: a pad in the room the camera stands in at this point and on the leg
+                                  -- that starts here (what the renderer draws from). Without it, the floor under the
+                                  -- camera, or with none under it the first floor it looks at. Give it for a camera
+                                  -- outside the level whose view needs a precise room
 }
 
 declare camera: {

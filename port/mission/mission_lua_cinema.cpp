@@ -75,6 +75,13 @@ int c_begin(lua_State *L)
             if (lua_toboolean(L, -1)) keep |= e.bit;
             lua_pop(L, 1);
         }
+        lua_getfield(L, 1, "environment");
+        if (lua_isstring(L, -1)) {
+            if (strcmp(lua_tostring(L, -1), "intro") == 0) keep |= MHC_ENV_INTRO;
+            else if (strcmp(lua_tostring(L, -1), "level") != 0)
+                missionLuaLog(L, "cinema.begin: environment '%s' is unknown (\"intro\" or \"level\")", lua_tostring(L, -1));
+        }
+        lua_pop(L, 1);
     }
     h_->begin(h_->ud, keep);
     return 0;
@@ -235,6 +242,12 @@ bool pointAt(lua_State *L, int idx, MissionCamPoint *pt, const char *who)
     pt->has_tension = hasNum(L, idx, "tension", &pt->tension);
     lua_getfield(L, idx, "control");
     pt->control = lua_toboolean(L, -1) ? 1 : 0;
+    lua_pop(L, 1);
+    lua_getfield(L, idx, "pad");
+    if (!lua_isnil(L, -1)) {
+        pt->pad = missionLuaPadArg(L, lua_gettop(L));
+        if (pt->pad < 0) missionLuaLog(L, "%s: pad is no pad: the floor under the camera gives the room", who);
+    }
     lua_pop(L, 1);
     hasNum(L, idx, "hold", &pt->hold);
     if (pt->hold < 0) pt->hold = 0;
@@ -483,6 +496,43 @@ int b_show(lua_State *L)
 // kind "body".
 int bodyOf(lua_State *L) { return (lua_istable(L, 1) && !strcmp(kindAt(L, 1), "body")) ? playerOf(L, 1) : -1; }
 
+// remove: a guard's remove keeps every target that is not a body; on a body it takes the third-person body away (the
+// player's hands are his own again; show(true) makes a new one).
+int b_remove(lua_State *L)
+{
+    const int p = bodyOf(L);
+    if (p < 0) return passOn(L, 0);
+    NEED(L, "bond_body:remove", body_remove)
+    h_->body_remove(h_->ud, p);
+    return 0;
+}
+
+
+// fade(to, seconds?): the body's opacity goes from where it is to `to` (0..1) over `seconds` (0 / none: at once); the
+// body stays in place, animating, holding what it holds. Only a body has it.
+int b_fade(lua_State *L)
+{
+    const int p = bodyOf(L);
+    if (p < 0) {
+        if (lua_isnoneornil(L, lua_upvalueindex(1))) { missionLuaLog(L, "fade: only on bond_body()"); return 0; }
+        return passOn(L, 0);
+    }
+    double to = luaL_checknumber(L, 2), secs = luaL_optnumber(L, 3, 0.0);
+    if (to < 0) to = 0;
+    if (to > 1) to = 1;
+    NEED(L, "bond_body:fade", body_fade)
+    h_->body_fade(h_->ud, p, (float)to, secs > 0 ? (float)secs : 0.0f);
+    return 0;
+}
+
+// fade_out is a guard's fade-and-remove: on a body it says what to use instead.
+int b_fade_out(lua_State *L)
+{
+    if (bodyOf(L) >= 0) { missionLuaLog(L, "bond_body:fade_out: a guard's verb; a body fades with :fade(0, seconds)"); return 0; }
+    return passOn(L, 0);
+}
+
+
 // The target of aim_at / fire_at: a player or body (0-based; -1 / nil: the first living one), a guard (its chr number)
 // or a pad.
 bool shotTarget(lua_State *L, int idx, int *kind, int *target)
@@ -706,6 +756,9 @@ void missionLuaRegCinema(lua_State *L, int targetMT)
     wrap(L, targetMT, "anim", b_anim);
     wrap(L, targetMT, "anim_done", b_anim_done);
     wrap(L, targetMT, "show", b_show);
+    wrap(L, targetMT, "fade", b_fade);
+    wrap(L, targetMT, "remove", b_remove);
+    wrap(L, targetMT, "fade_out", b_fade_out);
     // #165 second pass: aim_at / fire_at (a guard's), set_invincible (guard + world), set_hidden (guard) are wrapped too
     wrap(L, targetMT, "aim_at", b_aim_at);
     wrap(L, targetMT, "fire_at", b_fire_at);

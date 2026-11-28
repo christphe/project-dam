@@ -34,6 +34,9 @@ void  missionsHostGuardTick(void);
 void  missionsHostWorldTick(void);
 void  missionsHostCinemaTick(void);
 /* #165 second pass, shared between the domains */
+struct coord3d; struct StandTile;
+int   missionsHostCinemaCameraTile(const struct coord3d *pos, const struct coord3d *pos2, struct StandTile **stan,
+                                   struct coord3d *walk);   /* missions_host_cinema.c: the director camera's room tile */
 int   missionsHostSceneActive(void);       /* missions_host_cinema.c: a cinema.begin scene is running (guards are blind) */
 int   missionsHostGuardDown(int prop);     /* missions_host.c: a revivable setup guard lies down (no order reaches it) */
 void  missionsHostGuardReset(void);       /* a level starts or the runtime stops: each domain drops its state */

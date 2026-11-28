@@ -28,6 +28,7 @@ extern "C" {
 #define MHC_KEEP_TOP_TEXT  2
 #define MHC_KEEP_BOTTOM    4
 #define MHC_KEEP_COUNTDOWN 8
+#define MHC_ENV_INTRO      16   /* begin: the level's intro environment (its intro fog and view distance) until the next begin / finish */
 
 /* bond_body:set_body_flags bits */
 #define MHC_BF_HITBOX_CULL 1
@@ -66,6 +67,8 @@ typedef struct MissionCamPoint {
     int    ease;                      /* MHC_EASE_* */
     int    has_tension; float tension;   /* the curve's tension on the leg that starts here (0.5 = Catmull-Rom) */
     int    control;                   /* first / last point of a move: shapes the curve's end, never travelled */
+    int    pad;                       /* the room hint: a pad in the room the camera stands in while at this point or on
+                                       * the leg that starts here (the original pad number); -1: none, the floor under the camera */
 } MissionCamPoint;
 
 static inline void mhcRefInit(MissionCamRef *r) { memset(r, 0, sizeof *r); r->kind = MHC_T_NONE; }
@@ -74,6 +77,7 @@ static inline void mhcPointInit(MissionCamPoint *p)
     memset(p, 0, sizeof *p);
     p->pos.kind = MHC_T_NONE;
     p->look.kind = MHC_T_NONE;
+    p->pad = -1;
 }
 
 typedef struct MissionCinemaAnim {
@@ -113,6 +117,8 @@ typedef struct MissionHostCinema {
     int  (*body_anim_done)(void *ud, int player);
     int  (*body_hold_item)(void *ud, int player, int item, int left_hand);
     void (*body_show)(void *ud, int player, int on);
+    void (*body_remove)(void *ud, int player);   /* the third-person body is taken away; the hands are the player's again */
+    void (*body_fade)(void *ud, int player, float to, float seconds);   /* opacity 0..1 from the current one; 0 s: at once */
     void (*body_set_shadow)(void *ud, int player, int on);
     /* #165 second pass. aim / fire at a target: tkind MHC_T_PROP (target: the guard's chr number), MHC_T_PAD (target:
      * the original pad number) or MHC_T_PLAYER (target: 0-based player, -1: the first living one); 0: the body has no
@@ -138,7 +144,7 @@ typedef struct MissionHostCinema {
 #define MHC_MAX_POINTS  128   /* waypoints, not a sampled curve: the director draws the spline (tension, control points) */
 #define MHC_MAX_CENTRES 8
 
-typedef struct MhcPose { float pos[3]; float yaw, pitch, fov; } MhcPose;   /* degrees; fov 0: not controlled */
+typedef struct MhcPose { float pos[3]; float yaw, pitch, fov; int pad; } MhcPose;   /* degrees; fov 0: not controlled; pad: the room hint, -1 none */
 /* Live position of a reference (a tracked guard, a player ...): 1 when known */
 typedef int (*MhcResolve)(void *ctx, const MissionCamRef *r, float out[3]);
 
@@ -317,6 +323,7 @@ static inline void mhcSample(MhcDirector *d, void *ctx, MhcResolve res, double u
         /* the leg's tension is its start point's (the previous one; the first leg: its end point's) */
         const MissionCamPoint *tp = first ? &d->pts[s] : &d->pts[prv];
         mhcCardinal(out->pos, p0, p1, p2, p3, u, d->smooth, tp->has_tension ? tp->tension : 0.5);
+        out->pad = tp->pad;   /* the room hint of the leg is its start point's too */
     }
 
     /* angles: a look_at point is tracked from the camera's own position; the others use their (inherited) values */
@@ -369,11 +376,13 @@ static inline int mhcStep(MhcDirector *d, double dt, void *ctx, MhcResolve res, 
         t[0] = c[0]; t[1] = c[1] + (float)d->lookHeight; t[2] = c[2];
         mhcLookAngles(out->pos, t, &out->yaw, &out->pitch);
         out->fov = 0;
+        out->pad = -1;
     } else if (d->mode == MHC_STILL) {
         const MissionCamPoint *pt = &d->pts[0];
         float t[3];
         if (!mhcPointPos(pt, ctx, res, out->pos)) memcpy(out->pos, d->cur.pos, sizeof out->pos);
         out->yaw = d->effYaw[0]; out->pitch = d->effPitch[0]; out->fov = d->effFov[0];
+        out->pad = pt->pad;
         if (mhcRefPos(&pt->look, ctx, res, t)) mhcLookAngles(out->pos, t, &out->yaw, &out->pitch);
     } else {
         int guard = 0;

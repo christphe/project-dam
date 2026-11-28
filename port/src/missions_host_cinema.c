@@ -60,6 +60,8 @@ extern enum CAMERAMODE dword_CODE_bss_80079A18; /* CAMERAMODE_INTRO: a camera ob
 extern s32 dword_CODE_bss_80079A1C;
 extern bool currentPlayerIsFadeComplete(void); /* bondview2.c */
 extern MissionRuntime *missionsRuntime(void);  /* missions_host.c */
+extern void fogLoadLevelEnvironment(s32 level_id, s32 intro);   /* bgfog.c: 1 = the level's intro environment */
+
 
 #define NO_PLAYER_SLOTS 4
 /* bondaicommands.h's TARGET_* (that header's macros clash with the host struct's member names, so not included) */
@@ -69,6 +71,8 @@ extern MissionRuntime *missionsRuntime(void);  /* missions_host.c */
 #define TARGET_AIM_ONLY 0x0020
 
 static struct {
+    int camPad;          /* the current pose's room hint (a pad), -1: none */
+    int introEnv;        /* the level's intro environment is loaded (cinema.begin environment = "intro") */
     int    active;            /* between begin and finish */
     int    skipped;
     int    savedTimer, savedInvincible;
@@ -83,6 +87,8 @@ static struct {
     int    frozen, frozenSaved;   /* set_frozen(true) is in force, and the is_timer_active it replaced */
     int    creditsFake;       /* credits.roll on a level with no credits: done at once */
     int    weaponHidden[NO_PLAYER_SLOTS];
+    int    disarm[NO_PLAYER_SLOTS];     /* frames until the hands of a player whose body was removed are given back (0: none) */
+    int    bodyItem[NO_PLAYER_SLOTS];   /* hold_item before show(true): the body is built holding this item (0: none) */
     int    heldRight[NO_PLAYER_SLOTS], heldLeft[NO_PLAYER_SLOTS];
     int    swirlRaised;       /* "intro_swirl" went out */
     int    aimOnly[NO_PLAYER_SLOTS];    /* the body's last aim_at / fire_at only aims */
@@ -160,6 +166,15 @@ static void doEnd(void *a)
     bondviewClearUpperTextDisplayFlag(2);
 }
 
+/* The level's environment (fog, far clip): the intro one or the normal one (what the game's own fixed intro shot and
+ * swirl load). Nothing when it is already the one asked for. */
+static void setIntroEnv(int on)
+{
+    if (on == S.introEnv) return;
+    fogLoadLevelEnvironment(bossGetStageNum(), on);
+    S.introEnv = on;
+}
+
 static void hBegin(void *ud, int keep)
 {
     struct beginArg a;
@@ -177,6 +192,7 @@ static void hBegin(void *ud, int keep)
      * Bond's chr (chrCheckTargetInSight), which a scene leaves alone. */
     is_timer_active = FALSE;
     g_PlayerInvincible = TRUE;
+    setIntroEnv((keep & MHC_ENV_INTRO) != 0);
     S.active = 1;
     S.skipped = 0;
     say("begin");
@@ -198,6 +214,7 @@ static void hFinish(void *ud)
     for (p = 0; p < NO_PLAYER_SLOTS; p++)
         if (S.weaponHidden[p] && playerOk(p)) hideWeaponFor(p, 0);
     hCameraReset(ud);
+    setIntroEnv(0);
     S.active = 0;
     say("finish: control returned");
 }
@@ -327,7 +344,10 @@ static void applyPose(const MhcPose *p)
     s_cam.pos.f[0] = p->pos[0]; s_cam.pos.f[1] = p->pos[1]; s_cam.pos.f[2] = p->pos[2];
     s_cam.theta = (f32)(MHC_PI - (double)p->yaw / MHC_DEG);
     s_cam.verta = (f32)((double)p->pitch / MHC_DEG);
-    s_cam.pad = nearestPad(p->pos);
+    /* the room hint: the point's pad, else the floor under the camera (missionsHostCinemaCameraTile); s_cam.pad must still name
+     * a real pad for the game's path, so it names a nearby one then */
+    S.camPad = p->pad;
+    s_cam.pad = p->pad >= 0 ? p->pad : nearestPad(p->pos);
     if (p->fov > 0) {
         /* the view's field of view is the watch zoom's (bondview2.c: set_cur_player_fovy(zoominfovy) every frame) */
         for (int i = 0; i < getPlayerCount() && i < NO_PLAYER_SLOTS; i++) {
@@ -367,6 +387,10 @@ static void directorKick(void)
     MhcPose pose;
     int fin = 0;
     ensureSceneCamera();
+    /* a new shot: the room the camera was drawn from is forgotten (the renderer finds it again from the new pose's
+     * start tile), as the game does when its own intro changes shot; else the first frames keep the old shot's room */
+    for (int i = 0; i < getPlayerCount() && i < NO_PLAYER_SLOTS; i++)
+        if (g_playerPointers[i]) g_playerPointers[i]->cameratile = NULL;
     if (mhcStep(&S.dir, 0.0, NULL, resolveRef, &pose, &fin)) applyPose(&pose);
 }
 
@@ -630,8 +654,11 @@ static void doAnim(void *a)
     if (!o->move) bits |= 0x40;             /* ANIM_NO_TRANSLATION */
     if (o->blend >= 0) blend = (int)(o->blend * 60.0);
     b->ret = check_if_able_to_then_perform_animation(chr, b->id, o->from < 0 ? 0 : o->from, o->to, (u8)bits, blend) != 0;
-    if (b->ret && o->speed > 0 && o->speed != 1.0)
-        modelSetAnimPlaySpeed(chr->model, (o->reverse ? -0.5f : 0.5f) * (f32)o->speed, 0.0f);
+    /* always set: the model's play speed outlives the animation (a step at speed 0.02 would otherwise slow every later
+     * animation of the body to 2 %: measured on Dam's body, animation 99 crawled after the slow rest pose). 1 = the
+     * game's normal 0.5. */
+    if (b->ret)
+        modelSetAnimPlaySpeed(chr->model, (o->reverse ? -0.5f : 0.5f) * (o->speed > 0 ? (f32)o->speed : 1.0f), 0.0f);
 }
 
 extern s32 animation_table_ptrs1[];
@@ -827,6 +854,10 @@ static int hBodyHoldItem(void *ud, int player, int item, int left_hand)
     if (!playerOk(player)) return 0;
     a.item = item;
     a.left = left_hand;
+    /* no body yet: the body is BUILT holding the item (the original builds the intro body with the start weapon in its right
+     * hand); the player's own hands are not touched */
+    if (!left_hand) S.bodyItem[player] = item;
+    if (!left_hand && !bodyChr(player)) return 1;
     missionsHostWithPlayer(player, doHold, &a);
     return a.ret;
 }
@@ -836,7 +867,27 @@ static int hBodyHoldItem(void *ud, int player, int item, int left_hand)
 static void doShow(void *a)
 {
     struct bodyArg *b = (struct bodyArg *)a;
-    if (b->on && g_CurrentPlayer->prop->chr == NULL) solo_char_load();
+    if (b->on && g_CurrentPlayer->prop->chr != NULL && S.bodyItem[get_cur_playernum()] > 1) {
+        /* a body exists (a scene made it at the level start) but the script asked for one holding an item: build it again,
+         * as the original builds the intro body when the swirl opens (at the player's place and facing, holding the item) */
+        bondviewRemovePlayerBody();
+    }
+    if (b->on && g_CurrentPlayer->prop->chr == NULL) {
+        const int p = get_cur_playernum();
+        if (S.bodyItem[p] > 1) {
+            /* the game gives the body the item only when it is built in the swirl camera mode (the start weapon) */
+            const ITEM_IDS savedItem = starting_weapon[GUNRIGHT];
+            const enum CAMERAMODE savedMode = g_CameraMode;
+            starting_weapon[GUNRIGHT] = (ITEM_IDS)S.bodyItem[p];
+            g_CameraMode = CAMERAMODE_SWIRL;
+            solo_char_load();
+            g_CameraMode = savedMode;
+            starting_weapon[GUNRIGHT] = savedItem;
+        } else {
+            solo_char_load();
+        }
+        S.bodyItem[p] = 0;
+    }
     currentPlayerStartChrFade(0.0f, b->on ? 1.0f : 0.0f);
 }
 
@@ -848,6 +899,56 @@ static void hBodyShow(void *ud, int player, int on)
     if (!playerOk(player)) return;
     a.on = on;
     missionsHostWithPlayer(player, doShow, &a);
+}
+
+/* remove: the original's bondviewRemovePlayerBody (solo): the body goes, and three ticks later the player's weapon models are
+ * loaded back into his hands (the body's model had taken the right hand's buffer and locked both hands) */
+static void doBodyRemove(void *a)
+{
+    (void)a;
+    if (g_CurrentPlayer->prop->chr != NULL) {
+        bondviewRemovePlayerBody();
+        S.disarm[get_cur_playernum()] = 3;
+    }
+}
+
+/* what the game's move code does three ticks after a removal (it does not run while a scene or the frozen path is on): the hands
+ * are unlocked and the weapon models of both hands are loaded back */
+static void doDisarm(void *a)
+{
+    (void)a;
+    if (g_bondviewForceDisarm <= 0) return;
+    g_bondviewForceDisarm = 0;
+    g_CurrentPlayer->lock_hand_model[GUNLEFT] = 0;
+    g_CurrentPlayer->lock_hand_model[GUNRIGHT] = 0;
+    currentPlayerUnEquipWeaponWrapper(GUNLEFT, getCurrentPlayerWeaponId(GUNLEFT));
+    currentPlayerUnEquipWeaponWrapper(GUNRIGHT, getCurrentPlayerWeaponId(GUNRIGHT));
+}
+
+static void hBodyRemove(void *ud, int player)
+{
+    (void)ud;
+    if (!playerOk(player)) return;
+    missionsHostWithPlayer(player, doBodyRemove, NULL);
+}
+
+/* the original's body fade: from the body's current opacity to `to` over `secs` (0: at once); the body stays where it
+ * is, drawn at that opacity (0: not drawn) */
+struct bodyFadeArg { float to, secs; };
+static void doBodyFade(void *a)
+{
+    const struct bodyFadeArg *f = (const struct bodyFadeArg *)a;
+    if (g_CurrentPlayer->prop->chr == NULL) { say("bond_body:fade: the player has no third-person body now (show it first)"); return; }
+    currentPlayerStartChrFade(f->secs * 60.0f, f->to);
+}
+
+static void hBodyFade(void *ud, int player, float to, float seconds)
+{
+    struct bodyFadeArg f;
+    (void)ud;
+    if (!playerOk(player)) return;
+    f.to = to; f.secs = seconds > 0 ? seconds : 0;
+    missionsHostWithPlayer(player, doBodyFade, &f);
 }
 
 static void hBodySetShadow(void *ud, int player, int on)
@@ -933,7 +1034,7 @@ const MissionHostCinema *missionsHostCinema(void)
     h.fade = hFade; h.fading = hFading;
     h.credits_roll = hCreditsRoll; h.credits_done = hCreditsDone;
     h.body_teleport = hBodyTeleport; h.body_anim = hBodyAnim; h.body_anim_done = hBodyAnimDone;
-    h.body_hold_item = hBodyHoldItem; h.body_show = hBodyShow; h.body_set_shadow = hBodySetShadow;
+    h.body_hold_item = hBodyHoldItem; h.body_show = hBodyShow; h.body_fade = hBodyFade; h.body_remove = hBodyRemove; h.body_set_shadow = hBodySetShadow;
     h.body_aim = hBodyAim; h.body_walk = hBodyWalk; h.body_drop_item = hBodyDropItem; h.body_set_gravity = hBodySetGravity;
     h.body_set_flags = hBodySetFlags; h.body_set_invincible = hBodySetInvincible; h.show_hidden_chr = hShowHiddenChr;
     h.set_frozen = hSetFrozen; h.hide_weapon = hHideWeapon; h.in_cutscene = hInCutscene;
@@ -974,6 +1075,8 @@ void missionsHostCinemaTick(void)
 
     camLog(m);
     cameraReturnTick();
+    for (p = 0; p < NO_PLAYER_SLOTS; p++)
+        if (S.disarm[p] > 0 && --S.disarm[p] == 0 && playerOk(p)) missionsHostWithPlayer(p, doDisarm, NULL);
 
     /* "intro_done": the start cameras are over and a player has control (or a script already took the camera) */
     if (!S.introDone && (m == CAMERAMODE_FP || m == CAMERAMODE_FP_NOINPUT || m == CAMERAMODE_POSEND ||
@@ -1025,10 +1128,53 @@ void missionsHostCinemaReset(void)
      * pointers may already be stale when a level start calls this, so nothing is written through them here) */
     memset(&S, 0, sizeof S);
     S.savedTimer = 1;
+    S.camPad = -1;
 }
 
 /* missions_priv.h: a cinema.begin scene is running (the guard domain makes guards blind and deaf meanwhile). */
 int missionsHostSceneActive(void)
 {
     return S.active;
+}
+
+/* coop.c (the frozen-camera hook): the room the director's camera is drawn from. A point with a pad (the room hint,
+ * mission.d.luau CameraPoint.pad) gives it through the camera record's pad, the game's own path. A point without one:
+ * the floor under the camera; with no floor under it (over the void, outside the level), the first floor along its
+ * look direction, and the renderer's walk from that floor back to the camera stops at the level's edge facing it.
+ * Cached per pose (the look search scans every room's tiles at each step). Returns 0 when nothing changed (not the
+ * director's camera, a pad given, or no floor found). */
+#define CAM_ROOM_STEP  150.0f    /* look search: step and reach, world units */
+#define CAM_ROOM_REACH 30000.0f
+int missionsHostCinemaCameraTile(const struct coord3d *pos, const struct coord3d *pos2, StandTile **stan,
+                                 struct coord3d *walk)
+{
+    static struct coord3d lastPos, lastLook, lastWalk;
+    static StandTile *lastTile = NULL;
+    struct coord3d p;
+    StandTile *tile;
+    float dx, dy, dz, len, t;
+
+    if (gBondViewCutscene != &s_cam || bondviewGetCameraMode() != CAMERAMODE_POSEND || S.camPad >= 0) return 0;
+    if (lastTile && memcmp(&lastPos, pos, sizeof lastPos) == 0 && memcmp(&lastLook, pos2, sizeof lastLook) == 0) {
+        tile = lastTile;
+    } else {
+        p = *pos;
+        tile = stanFindTileBelowPos(&p, NULL, NULL);
+        if (!tile) {
+            dx = pos2->f[0] - pos->f[0]; dy = pos2->f[1] - pos->f[1]; dz = pos2->f[2] - pos->f[2];
+            len = sqrtf(dx * dx + dy * dy + dz * dz);
+            if (len > 0) {
+                dx /= len; dy /= len; dz /= len;
+                for (t = CAM_ROOM_STEP; t <= CAM_ROOM_REACH && !tile; t += CAM_ROOM_STEP) {
+                    p.f[0] = pos->f[0] + dx * t; p.f[1] = pos->f[1] + dy * t; p.f[2] = pos->f[2] + dz * t;
+                    tile = stanFindTileBelowPos(&p, NULL, NULL);
+                }
+            }
+        }
+        lastPos = *pos; lastLook = *pos2; lastTile = tile; lastWalk = p;
+    }
+    if (!tile) return 0;   /* no floor under it nor ahead: the nearby pad applyPose named stays */
+    *stan = tile;
+    *walk = lastWalk;
+    return 1;
 }

@@ -96,6 +96,8 @@ static int  cAnim(void *u, int p, const char *name, int id, const MissionCinemaA
 static int  cAnimDone(void *u, int p) { (void)p; return ((Fake *)u)->animDone; }
 static int  cHold(void *u, int p, int item, int left) { callf(u, "hold_item(%d,%d,%d)", p, item, left); return 1; }
 static void cShow(void *u, int p, int on) { callf(u, "show(%d,%d)", p, on); }
+static void cBodyRemove(void *u, int p) { callf(u, "bodyremove(%d)", p); }
+static void cBodyFade(void *u, int p, float to, float s) { callf(u, "fade(%d,%.2f,%.2f)", p, to, s); }
 static void cShadow(void *u, int p, int on) { callf(u, "shadow(%d,%d)", p, on); }
 static void cFrozen(void *u, int p, int on) { callf(u, "frozen(%d,%d)", p, on); }
 static void cHideWeapon(void *u, int p, int on) { callf(u, "hide_weapon(%d,%d)", p, on); }
@@ -120,7 +122,7 @@ static MissionHostCinema cinemaHost(Fake *f)
     c.camera_set = cSet; c.camera_move = cMove; c.camera_moving = cMoving; c.camera_stop = cStop;
     c.fade = cFade; c.fading = cFading; c.credits_roll = cCreditsRoll; c.credits_done = cCreditsDone;
     c.body_teleport = cTeleport; c.body_anim = cAnim; c.body_anim_done = cAnimDone; c.body_hold_item = cHold;
-    c.body_show = cShow; c.body_set_shadow = cShadow; c.set_frozen = cFrozen; c.hide_weapon = cHideWeapon;
+    c.body_show = cShow; c.body_fade = cBodyFade; c.body_remove = cBodyRemove; c.body_set_shadow = cShadow; c.set_frozen = cFrozen; c.hide_weapon = cHideWeapon;
     c.in_cutscene = cInCutscene;
     c.body_aim = cAim; c.body_walk = cWalk; c.body_drop_item = cDrop; c.body_set_gravity = cGravity;
     c.body_set_flags = cFlags; c.body_set_invincible = cInv; c.show_hidden_chr = cShowHidden;
@@ -205,16 +207,24 @@ static void directorTests(void)
     GE_CHECK(mhcStep(&d, 0.5, NULL, dirResolve, &o, &fin) == 1);
     GE_CHECK(near_(o.pos[0], 1) && near_(o.pos[1], 2) && near_(o.pos[2], 3) && near_(o.yaw, 90) && near_(o.pitch, 20) && near_(o.fov, 40));
     GE_CHECK_EQ_INT(fin, 0);
+    GE_CHECK_EQ_INT(o.pad, -1);                                         /* no room hint given */
+    pts[0].pad = 42;
+    mhcSet(&d, &pts[0]);
+    mhcStep(&d, 0.1, NULL, dirResolve, &o, &fin);
+    GE_CHECK_EQ_INT(o.pad, 42);                                         /* the held point's room hint */
 
     /* move with a time: linear halfway; the first point is a cut when there is no camera yet; hold; finish once */
     memset(&d, 0, sizeof d);
     pts[0] = xyzPoint(0, 0, 0); pts[0].has_yaw = 1; pts[0].yaw = 0;
+    pts[0].pad = 7;
     pts[1] = xyzPoint(100, 0, 0); pts[1].has_time = 1; pts[1].time = 2; pts[1].ease = MHC_EASE_LINEAR; pts[1].hold = 1; pts[1].has_yaw = 1; pts[1].yaw = 80;
+    pts[1].pad = 9;
     GE_CHECK(mhcMove(&d, pts, 2, 0, 0));
     mhcStep(&d, 0.0, NULL, dirResolve, &o, &fin);
     GE_CHECK(near_(o.pos[0], 0));                                       /* the cut to point 0 */
     mhcStep(&d, 1.0, NULL, dirResolve, &o, &fin);
     GE_CHECK(near_(o.pos[0], 50) && near_(o.yaw, 40));                  /* halfway in 2 s: position and yaw */
+    GE_CHECK_EQ_INT(o.pad, 7);                                          /* the leg's room hint is its start point's */
     GE_CHECK_EQ_INT(d.mode, MHC_MOVE);
     mhcStep(&d, 1.0, NULL, dirResolve, &o, &fin);
     GE_CHECK(near_(o.pos[0], 100) && near_(o.yaw, 80));                 /* arrived, holding */
@@ -385,6 +395,10 @@ int main(void)
         "message('cut ' .. tostring(player(0):in_cutscene()) .. tostring(player(1):in_cutscene()))\n"
         "player(0):show(false)\n"
         "bond_body():show(true)\n"
+        "bond_body():fade(0, 0.5)\n"
+        "bond_body():fade(0.25)\n"
+        "bond_body():fade_out()\n"
+        "bond_body():remove()\n"
         "cinema.finish()\n"
         "camera.move({ { pos = { x = 5, y = 5, z = 5 } } })\n"
         "camera.wait()\n"
@@ -433,6 +447,9 @@ int main(void)
     GE_CHECK(hasMsg(&f, "cut falsetrue"));
     GE_CHECK(called(&f, "show(0,0);"));                             /* the player's own show */
     GE_CHECK(called(&f, "show(0,1);"));                             /* bond_body() is player 0 */
+    GE_CHECK(called(&f, "fade(0,0.00,0.50);"));                       /* a fade over 0.5 s */
+    GE_CHECK(called(&f, "fade(0,0.25,0.00);"));                       /* a partial opacity, at once */
+    GE_CHECK(called(&f, "bodyremove(0);"));                           /* the body is taken away */
     GE_CHECK(hasMsg(&f, "waited"));                                 /* nothing moving: camera.wait() returns at once */
     f.moving = 0;
     missionRtRaise(rt, "camera_done", NULL, 0);

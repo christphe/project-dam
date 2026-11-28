@@ -1210,6 +1210,10 @@ static struct {
     StandTile     *stan;
 } s_cam;
 
+/* missions_host_cinema.c: a mission script's camera finds its own room (its position, or where it looks) */
+extern int missionsHostCinemaCameraTile(const struct coord3d *pos, const struct coord3d *pos2, struct StandTile **stan,
+                                        struct coord3d *walk);
+
 void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct coord3d *pos2, struct coord3d *offset,
                       struct StandTile **stan, struct coord3d *arg6)
 {
@@ -1217,6 +1221,7 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
     if (!s_active || !coopMirrorCamera()) {
         s_cam.valid = 0;
         bondviewFrozenCameraTick(buttons, oldbuttons, pos, pos2, offset, stan, arg6);
+        missionsHostCinemaCameraTile(pos, pos2, stan, arg6);
         return;
     }
     cur = get_cur_playernum();
@@ -1229,6 +1234,7 @@ void coopFrozenCamera(u16 buttons, u16 oldbuttons, struct coord3d *pos, struct c
         return;
     }
     bondviewFrozenCameraTick(buttons, oldbuttons, pos, pos2, offset, stan, arg6);
+    missionsHostCinemaCameraTile(pos, pos2, stan, arg6);
     if (cur == coopDriver()) {
         s_cam.pos = *pos;
         s_cam.pos2 = *pos2;
