@@ -697,6 +697,55 @@ TXT_EXAMPLES = {"9840": "Hunting Knife\n", "9856": "PP7 Special Issue\n", "986B"
                 "9866": "Sniper Rifle\n", "9C79": "Dam"}
 
 
+def check_fonts():
+    """fonts.json and fonts/*.png (docs/specs/fonts.md): four fonts, 8-bit grey atlases, glyph rectangles inside them."""
+    errs = []
+    try:
+        fj = rdjson("fonts.json")
+    except Exception as e:  # noqa: BLE001
+        print("    ERROR: fonts.json: %s" % e)
+        return 1
+    if fj.get("format") != "ge007-fonts/1":
+        errs.append("format")
+    fonts = fj.get("fonts", {})
+    for key in ("small", "large", "jp_narrow", "jp_wide"):
+        f = fonts.get(key)
+        if not f:
+            errs.append("%s: missing" % key)
+            continue
+        try:
+            d = PK.read(f["image"])
+        except Exception as e:  # noqa: BLE001
+            errs.append("%s: %s" % (key, e))
+            continue
+        e = check_png(d)
+        if e:
+            errs.append("%s: %s" % (key, e))
+            continue
+        w, h = png_size(d)
+        if d[24] != 8 or d[25] != 0:
+            errs.append("%s: not 8-bit greyscale" % key)
+        if f.get("kind") == "latin":
+            g = f.get("glyphs", [])
+            if len(g) != 94 or [x["code"] for x in g] != list(range(33, 127)):
+                errs.append("%s: glyph list" % key)
+            if len(f.get("kerning", [])) != 13 or any(len(r) != 13 for r in f["kerning"]):
+                errs.append("%s: kerning" % key)
+            for x in g:
+                if x["x"] < 0 or x["y"] < 0 or x["x"] + x["w"] > w or x["y"] + x["h"] > h or not 0 <= x["class"] <= 12:
+                    errs.append("%s: glyph %d out of range" % (key, x["code"]))
+                    break
+            print("%-10s %dx%d, %d glyphs, line height %s" % (key, w, h, len(g), f.get("line_height")))
+        else:
+            cw, ch = f["cell"]
+            if f["columns"] * cw != w or ((f["slots"] + f["columns"] - 1) // f["columns"]) * ch != h:
+                errs.append("%s: atlas size %dx%d" % (key, w, h))
+            print("%-10s %dx%d, %d slots" % (key, w, h, f["slots"]))
+    for e in errs:
+        print("    ERROR: fonts:", e)
+    return 1 if errs else 0
+
+
 def check_text(troot):
     """Text export (docs/specs/text.md), in labels/: text_<lang>.json per language set and names.json."""
     errs = []
@@ -1041,7 +1090,8 @@ def main():
     mbad = check_models("models") if PK.isdir("models") else 0
     tbad = check_text("labels") if PK.isdir("labels") else 0
     cbad = check_characters("characters") if PK.isdir("characters") else 0
-    return 1 if bad or mbad or tbad or cbad or not levels else 0
+    fbad = check_fonts() if PK.isfile("fonts.json") else 0
+    return 1 if bad or mbad or tbad or cbad or fbad or not levels else 0
 
 
 if __name__ == "__main__":

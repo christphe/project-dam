@@ -1,7 +1,7 @@
 /* pack_export.c -- the base asset pack ge007.passets (docs/specs/asset-packs.md, "The base pack layout").
  *
  * Every exporter writes into one folder, <pack>.tmp/, laid out as the pack: the textures at its root (pack.json,
- * textures.json, textures/), then levels/, models/, characters/, labels/, music/ and sounds/. Every glTF sits two folders
+ * textures.json, textures/), then levels/, models/, characters/, labels/, fonts/, music/ and sounds/. Every glTF sits two folders
  * under the root and points at ../../textures/<n>.png. The folder is then packed into an uncompressed ustar tar (ge_pkg,
  * read lazily by the game and the tools) and renamed into place, so a killed run never leaves half a pack.
  * CLEAN ROOM like the rest of port/export/.
@@ -92,6 +92,7 @@ int ex_export_pack(const char *rom_path, const char *pack_path, int as_folder, E
     failed += ex_export_characters(rom_path, dir, log, user);
     snprintf(dir, sizeof dir, "%s/labels", tmp);
     failed += ex_export_text(rom_path, dir, log, user);
+    failed += ex_export_fonts(rom_path, tmp, log, user);   /* fonts.json + fonts/ at the root */
     failed += export_audio(rom_path, tmp, log, user);
 
     if (as_folder) {
