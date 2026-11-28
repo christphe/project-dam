@@ -33,7 +33,6 @@ struct Control {
     std::vector<std::string> helpKeys; /* the option id each helpBy[i] belongs to */
     CtlType type = CT_TOGGLE;
     std::vector<Option> options;
-    std::string follows;                                                  /* CT_DIAGRAM: the control whose option picks the layout */
     std::map<std::string, std::map<std::string, std::string>> layouts;    /* CT_DIAGRAM: option id -> slot -> text */
     int vmin = 0, vmax = 100, step = 1;
     double per = 1;                    /* config units in one control unit (before "div") */

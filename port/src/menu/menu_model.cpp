@@ -207,7 +207,6 @@ bool readControl(const Json& j, Control* c, std::string* err) {
     c->step = (int)j.num("step", 1);
     if (c->step < 1) c->step = 1;
     if (c->type == CT_SLIDER && !c->options.empty()) { c->vmin = 0; c->vmax = (int)c->options.size() - 1; c->step = 1; }   /* a notch per option */
-    c->follows = j.str("follows");
     if (const Json* l = j.get("layouts"))
         for (const auto& kv : l->o)
             for (const auto& slot : kv.second.o) c->layouts[kv.first][slot.first] = slot.second.s;

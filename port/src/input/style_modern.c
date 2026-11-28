@@ -1,5 +1,5 @@
 /*
- * The Modern control style (Input.ControlScheme 2), as a pure strategy.
+ * The Modern control style, as a pure strategy.
  *
  *   RT fire, LT aim, R3 crouch, Start; the face buttons go by POSITION, so a
  *   Nintendo pad (A/B and X/Y letters swapped) keeps the same hands:

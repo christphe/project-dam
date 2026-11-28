@@ -235,7 +235,7 @@ static const char *cmdDiff(const InputCommands *g, const InputCommands *w)
     F(mode) F(moveX) F(moveY) F(moveActive) F(lookX) F(lookY) F(lookRawActive)
     F(moveFwd) F(moveBack) F(strafeL) F(strafeR) F(pitchUp) F(pitchDown)
     F(slowStrafeL) F(slowStrafeR) F(zoomIn) F(zoomOut) F(fire) F(aim)
-    F(useEdge) F(reloadEdge) F(nextWeapon) F(prevWeapon) F(gadgetEdge) F(crouch)
+    F(useEdge) F(reloadEdge) F(nextWeapon) F(crouch)
     F(menuAccept) F(menuCancel) F(start) F(dpadUp) F(dpadDown) F(dpadLeft) F(dpadRight) F(actionsHeld)
 #undef F
     return NULL;
@@ -308,8 +308,6 @@ static void testBridge(void)
     memset(&c, 0, sizeof c);
     c.nextWeapon = 1;
     GE_CHECK_EQ_INT(n64BridgeButtons(0, &c, &o), GE_CONT_A);
-    c.nextWeapon = 0; c.prevWeapon = 1;
-    GE_CHECK_EQ_INT(n64BridgeButtons(0, &c, &o), GE_CONT_A | GE_CONT_G);
 
     memset(&c, 0, sizeof c);
     c.menuAccept = 1; c.menuCancel = 1; c.start = 1;

@@ -1,6 +1,6 @@
 /*
  * Commands -> the emulated N64 pad. The bridge the port-driven styles use until
- * the game is driven directly (then this file keeps only the Original style).
+ * the game is driven directly.
  */
 #ifndef PORT_INPUT_N64BRIDGE_H
 #define PORT_INPUT_N64BRIDGE_H
