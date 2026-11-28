@@ -51,6 +51,10 @@ ge_add_pure_test(test_gpuprobe test_gpuprobe.c ${CMAKE_SOURCE_DIR}/port/src/gpup
 ge_add_pure_test(test_labels test_labels.c ${CMAKE_SOURCE_DIR}/port/src/labels.c)
 target_compile_definitions(test_labels PRIVATE LABELS_PURE_TEST)
 target_include_directories(test_labels PRIVATE "${CMAKE_SOURCE_DIR}/port/include" "${CMAKE_SOURCE_DIR}/port/assets")
+# The pack music (port/src/musicseq.c, musicpack.c): the sequencer, the slots and the stack reload, the asset stack stubbed.
+ge_add_pure_test(test_music test_music.c ${CMAKE_SOURCE_DIR}/port/src/musicseq.c ${CMAKE_SOURCE_DIR}/port/src/musicpack.c)
+target_compile_definitions(test_music PRIVATE MPK_PURE_TEST)
+target_include_directories(test_music PRIVATE "${CMAKE_SOURCE_DIR}/port/include" "${CMAKE_SOURCE_DIR}/port/assets")
 # CONSOLE mode precedence (port/include/console.h, header-only): pure, no core.
 ge_add_pure_test(test_console test_console.c)
 
