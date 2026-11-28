@@ -738,7 +738,7 @@ int campaignValidate(const Campaign *c, char *err, size_t errlen)
     if (!uuidok(c->id)) { seterr(err, errlen, "campaign id is not a UUID", c->id); return 0; }
     if (!c->name[0]) { seterr(err, errlen, "campaign has no name", NULL); return 0; }
     if (c->nmissions == 0) { seterr(err, errlen, "campaign has no mission", NULL); return 0; }
-    if (c->nmissions > CAMPAIGN_MAX_MISSIONS) { seterr(err, errlen, "too many missions (max 20)", NULL); return 0; }
+    if (c->nmissions > CAMPAIGN_MAX_MISSIONS) { seterr(err, errlen, "too many missions (max 32)", NULL); return 0; }
     for (int i = 0; i < c->nmissions; i++) {
         const char *d = c->missions[i];
         if (!d[0] || strchr(d, '/') || strchr(d, '\\') || strstr(d, ".."))
