@@ -543,7 +543,7 @@ static void langLabelsCheck(int bank)
 {
     int same = 0, diff = 0, romOnly = 0, packOnly = 0, i;
     static int total[4];
-    if (!labelsCheckEnabled() || !labelsActive() || bank < 0 || bank >= 45) return;
+    if (!labelsCheckEnabled() || !labelsHasFile() || bank < 0 || bank >= 45) return;
     for (i = 0; i < (int)labelsGetBankSlots(bank); i++) {   /* an index at or past the slot count has no string (spec) */
         s32 id = (bank << 10) | i;
         const u8 *rom = langGetRom(id);

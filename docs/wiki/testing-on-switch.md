@@ -47,7 +47,7 @@ state you want to look at. Commands go through [dev.py](dev-py.md).
 | `GE_ROM_TEXTURES=1` | Draw every texture from the ROM's own decode; the asset-pack stack (mod and packs) is bypassed. For comparing a pack against the ROM. |
 | `GE_ROM_SOUNDS=1` | Sound effects from the ROM's sound bank instead of the asset packs' `sounds/sfx/` (the default; `port/src/sounds.c`). For comparing the two. |
 | `GE_MENUGOTO=tab,entry[,focus]` | Open the options menu on that page ([options-menu.md](options-menu.md)). |
-| `GE_ROM_LABELS=1` | Read the game's text from the ROM's language banks instead of the asset packs' `labels/text_<lang>.json` (A/B runs; `port/src/labels.c`). |
+| `GE_ROM_LABELS=1` | Dev flag, until the ROM banks are removed: read the game's text from the ROM's language banks. Without it the text comes only from the asset packs' `labels/text_<lang>.json`; a missing file shows every string as `[0x....]` and logs one warning (`port/src/labels.c`). |
 | `GE_LABELS_CHECK=1` | Compare every language bank the game loads with the pack's strings and log `labels check:` lines with the counts (same / differ / only ROM / only pack). |
 | `GE_ROM_FONTS=1` | Read the fonts from the ROM, not from the asset packs ([fonts.md](../specs/fonts.md)). `GE_FONTS_CHECK=1` compares pack and ROM at the first font load and logs the counts (dev). |
 

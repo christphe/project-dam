@@ -60,11 +60,12 @@ int main(void)
     /* the stack-backed reader */
     labelsSetLanguage("labels/text_en.json", NULL);
     g_fixture = NULL;
-    GE_CHECK(!labelsActive());                          /* no pack has the file: the ROM path */
+    GE_CHECK(labelsActive());                           /* pack mode (GE_ROM_LABELS unset) ... */
+    GE_CHECK(!labelsHasFile());                         /* ... but no pack has the file: placeholders only, no ROM fallback */
     GE_CHECK(labelsGet(0x9840) == NULL);
     g_fixture = kEn;
     g_gen++;                                            /* the stack changed: read again */
-    GE_CHECK(labelsActive());
+    GE_CHECK(labelsHasFile());
     s = labelsGet(0x9840);
     GE_CHECK(s && !strcmp((const char *)s, "Hunting Knife\n"));
     GE_CHECK(labelsGet(0x9841) == NULL);
@@ -86,12 +87,13 @@ int main(void)
         GE_CHECK(g_reads > r);
         GE_CHECK(old && !strcmp((const char *)old, "Hunting Knife\n"));   /* old buffer still alive (ASan/valgrind would catch a free) */
         g_fixture = NULL;
-        g_gen++;                                        /* a mod without the file and no pack: back to the ROM path */
-        GE_CHECK(!labelsActive());
+        g_gen++;                                        /* the file gone from the stack: placeholders */
+        GE_CHECK(!labelsHasFile());
         GE_CHECK(labelsGet(0x9840) == NULL);
+        GE_CHECK(!strcmp((const char *)labelsMissing(0x9840), "[0x9840]"));
         g_fixture = kEn;
         g_gen++;
-        GE_CHECK(labelsActive());
+        GE_CHECK(labelsHasFile());
         GE_CHECK(labelsGet(0x986B) != NULL);
     }
 

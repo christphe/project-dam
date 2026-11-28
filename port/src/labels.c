@@ -205,14 +205,14 @@ static void load(void)
     file = g_file;
     if (!assetRead(file, &buf, &n, NULL) && g_fallback) { file = g_fallback; assetRead(file, &buf, &n, NULL); }
     if (!buf) {
-        sysLogPrintf(LOG_WARNING, "labels: %s is in no asset pack (base pack not written yet?): using the ROM's language banks", g_file);
+        sysLogPrintf(LOG_WARNING, "labels: %s is in no asset pack or mod (base pack not written yet?): every string shows as [0x....] (GE_ROM_LABELS=1 reads the ROM banks)", g_file);
         return;
     }
     if (labelsParse(&g_labels, (const char *)buf, n)) {
         g_ok = 1;
         sysLogPrintf(LOG_NOTE, "labels: %s: %d strings from the asset packs", file, g_labels.count);
     } else {
-        sysLogPrintf(LOG_WARNING, "labels: %s is malformed: using the ROM's language banks", file);
+        sysLogPrintf(LOG_WARNING, "labels: %s is malformed: every string shows as [0x....]", file);
     }
     pkgFree(buf);
 }
@@ -224,14 +224,19 @@ int labelsActive(void)
     gen = assetStackGen();
     if (g_loaded && gen != g_gen) labelsInvalidate();   /* a pack toggled / reordered / rewritten, or another mod */
     if (!g_loaded) { g_gen = gen; load(); }
-    return g_ok;
+    return 1;
 }
 
-unsigned labelsGetBankSlots(int bank) { return labelsActive() ? labelsBankSlots(&g_labels, bank) : 1024; }
+unsigned labelsGetBankSlots(int bank) { return (labelsActive() && g_ok) ? labelsBankSlots(&g_labels, bank) : 1024; }
+
+int labelsHasFile(void)
+{
+    return labelsActive() && g_ok;
+}
 
 const unsigned char *labelsGet(unsigned id)
 {
-    return labelsActive() ? labelsLookup(&g_labels, id) : NULL;
+    return (labelsActive() && g_ok) ? labelsLookup(&g_labels, id) : NULL;
 }
 
 const unsigned char *labelsMissing(unsigned id)
