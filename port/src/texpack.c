@@ -212,6 +212,15 @@ int assetRead(const char *rel, unsigned char **out, unsigned long *len, int *fro
     return 0;
 }
 
+unsigned assetStackGen(void)
+{
+    unsigned g;
+    pthread_mutex_lock(&s_lock);
+    g = s_gen;
+    pthread_mutex_unlock(&s_lock);
+    return g;
+}
+
 int assetHas(const char *rel)
 {
     char path[1400];
