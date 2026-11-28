@@ -48,6 +48,7 @@ state you want to look at. Commands go through [dev.py](dev-py.md).
 | `GE_MENUGOTO=tab,entry[,focus]` | Open the options menu on that page ([options-menu.md](options-menu.md)). |
 | `GE_ROM_LABELS=1` | Read the game's text from the ROM's language banks instead of the asset packs' `labels/text_<lang>.json` (A/B runs; `port/src/labels.c`). |
 | `GE_LABELS_CHECK=1` | Compare every language bank the game loads with the pack's strings and log `labels check:` lines with the counts (same / differ / only ROM / only pack). |
+| `GE_ROM_FONTS=1` | Read the fonts from the ROM, not from the asset packs ([fonts.md](../specs/fonts.md)). `GE_FONTS_CHECK=1` compares pack and ROM at the first font load and logs the counts (dev). |
 
 Every `GE_*` probe, with its file and status: `docs/dev/GE-ENV-PROBES.md`. `python
 tools_pc/gen_env_probes.py` reports the probes it misses and today's file:line of each one.

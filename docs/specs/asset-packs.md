@@ -20,7 +20,7 @@ A pack is a folder `X.passets/` or an uncompressed ustar tar `X.passets` (the
 | `music.json`, `music/` | music (MIDI + SF2): reserved |
 | `sounds.json`, `sounds/` | sounds: reserved |
 | `labels.json` | text labels: reserved |
-| `fonts.json`, `fonts/` | fonts: reserved |
+| `fonts.json`, `fonts/` | fonts: [fonts.md](fonts.md) (keys `small`, `large`, `jp_narrow`, `jp_wide`) |
 
 A `.ptexpack` (the older name) is read as a pack with textures only.
 
@@ -80,6 +80,7 @@ into `<out>/` (`--folder` writes a folder instead of the tar), and by
 | `models/<name>/<name>.gltf` + `.bin` | the object models |
 | `characters/characters.json`, `characters/<name>/`, `characters/animations/` | bodies, heads and animations ([characters.md](characters.md)) |
 | `labels/` | the game's text per language, and the names tables ([text.md](text.md)) |
+| `fonts.json`, `fonts/<key>.png` | the four fonts: 8-bit greyscale atlases (Latin intensities as stored, Japanese level x 85) and their metrics, kerning and code map ([fonts.md](fonts.md)) |
 | `music/track_NN.mid`, `music/instruments.sf2` | the music as Standard MIDI files and its SoundFont ([audio.md](audio.md)) |
 | `sounds/sfx/sfx_NNNN.wav`, `sounds/sfx/sfx.json`, `sounds/report.txt` | the sound effects and their parameters |
 
@@ -87,7 +88,7 @@ Every glTF sits two folders under the root and names its pictures
 `../../textures/<n>.png`. The pack is rewritten when its `exporter_version`
 differs from the running exporter's; it is built in `ge007.passets.tmp/`, packed
 into `ge007.passets.tartmp` and renamed into place, so a killed run leaves no
-half pack. Fonts are not exported yet.
+half pack.
 
 The game's first launch enables the pack (last in the order) only when it
 writes it for the first time; a rewrite after an exporter update keeps the

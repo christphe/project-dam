@@ -186,8 +186,8 @@ or in `0x20`-`0x7E`. The text is plain ASCII:
 |---|---|---|
 | `0x00` | end of string | (not exported) |
 | `0x0A` | line break | `\n` (JSON newline) |
-| `0x20` | space (advance 5 pixels) | space |
-| `0x21`-`0x7E` | one glyph of the current font, ASCII order | the same ASCII character |
+| `0x20` | space (advance 5 pixels, no glyph) | space |
+| `0x21`-`0x7E` | one glyph of the Latin font the caller draws with, ASCII order ([fonts.md](fonts.md)) | the same ASCII character |
 
 There are **no** colour, button, variable or formatting codes in the banks.
 Measured: no `%`, `{` or `}` byte in any bank of any language or region. Colours, outlines, button prompts and numbers are
@@ -208,38 +208,19 @@ or above `0x80` starts a **two-byte glyph code** `b0 b1`:
 - Measured: in bank text, `b1` always has bit 7 set. The game masks it, so
   a decoder must not depend on it. Code built at run time (below) uses a
   second byte without bit 7.
-- From the decompilation: the game draws a narrow index at or above `0x3C7`
-  (US) or `0x3C8` (EU, JP) as glyph 2. Measured: the highest narrow index in
-  any bank is 966 (US `J`) and 967 (EU and JP `J`), so no bank text hits that
+- From the decompilation: the game draws an index (narrow or wide, after
+  the `0x1FFF` mask) at or above `0x3C7` (US) or `0x3C8` (EU, JP) as narrow
+  glyph 2 ([fonts.md](fonts.md)). Measured: the highest narrow index in any
+  bank is 966 (US `J`) and 967 (EU and JP `J`), so no bank text hits that
   limit.
 - Measured: wide glyphs occur only in `LTITLE`, 241 times in each region's
   `J` file (the end-credit cast list).
 
 The glyph indices are **not** a standard character set. There is no table in
-the ROM that maps them to Unicode. The ROM only holds the glyph bitmaps:
-
-| Font | ROM file table basename | US offset | EU offset | JP offset | Size | Glyphs |
-|---|---|---|---|---|---|---|
-| narrow, 16 x 12 cell, drawn 11 wide | `...jfont_chardata` | `0x117940` | `0x1048B0` | `0x118660` | 46 848 | 976 |
-| wide, 16 x 16 cell, drawn 15 wide | `...efont_chardata` | `0x123040` | `0x10FFB0` | `0x123D60` | 6 784 | 106 |
-
-Both are stored raw (not compressed). Look the rows up by the basename
-suffix, because the prefix differs per region: `ge007.u.117940.` /
-`ge007.e.1048B0.` / `ge007.j.118660.jfont_chardata`, and
-`ge007.u.123040.efont_chardata` in all three tables. Measured: the wide font
-is identical in the three ROMs. The narrow font of EU and JP is identical.
-The US narrow font has the same glyph order (checked visually on a rendered
-sheet) with slightly different pixels, and lacks glyph 967.
-
-Bitmap layout, from the decompilation (how the game loads and draws it) and
-confirmed by rendering legible sheets from all three ROMs. Glyphs are stored
-in **pairs**: glyphs `2k` and `2k+1` share one block, which is `0x60` bytes
-(narrow) or `0x80` bytes (wide) at `k * blocksize`. A block is 12 (narrow) or
-16 (wide) rows of 8 bytes. Each byte holds two pixels, the left one in the
-high nibble. Each 4-bit pixel holds both glyphs: **bits 0-1 are the even
-glyph, bits 2-3 the odd glyph**, as a 2-bit intensity (0, 1/3, 2/3, full).
-Measured: narrow glyphs 0 and 15 are blank, as are 967-975 (US) and 968-975
-(JP).
+the ROM that maps them to Unicode. The ROM only holds the glyph bitmaps: the
+narrow font (976 slots, 16 x 12 cells) and the wide font (106 slots, 16 x 16
+cells). Where they are, their bitmap layout, metrics and how they are drawn:
+[fonts.md](fonts.md).
 
 Narrow glyph order, measured visually on the rendered JP sheet (32 glyphs
 per row): 0-255 hold punctuation, full-width digits and Latin letters,

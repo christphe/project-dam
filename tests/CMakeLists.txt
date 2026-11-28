@@ -71,6 +71,10 @@ ge_add_pure_test(test_subdiv test_subdiv.c ${CMAKE_SOURCE_DIR}/port/convert/conv
 add_test(NAME test_export_tex COMMAND test_export_tex)
 set_tests_properties(test_export_tex PROPERTIES TIMEOUT 60)
 
+# The fonts reader (port/src/fonts.c, docs/specs/fonts.md): pure, no core (the test includes the file with FONTS_PURE).
+ge_add_pure_test(test_fonts test_fonts.c)
+target_include_directories(test_fonts PRIVATE "${CMAKE_SOURCE_DIR}/port/include")
+
 # The retail ROM check (port/convert/conv_romcheck.c): pure, no core.
 ge_add_pure_test(test_romcheck test_romcheck.c ${CMAKE_SOURCE_DIR}/port/convert/conv_romcheck.c)
 
