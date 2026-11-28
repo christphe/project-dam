@@ -13,6 +13,6 @@ One line per page. Conventions: [README.md](README.md). Changes: [log.md](log.md
 - [first-launch.md](first-launch.md) — where the ROM goes, the one-time conversion into PC data, the `ge007-convert` CLI.
 - [options-menu.md](options-menu.md) — the fullscreen menu: `menu.json`, how values are bound, defaults, adding a setting.
 - [ini-keys.md](ini-keys.md) — every key with a default, per platform, and where it sits in the menu.
-- [control-styles.md](control-styles.md) — Original, Enhanced and Modern as pure strategies, the N64 bridge, GameDirect, the tests.
+- [control-styles.md](control-styles.md) — the Modern pad style as a pure strategy, the N64 bridge, GameDirect, the tests.
 - [coop.md](coop.md) — co-op for 2 to 4 players: the hooks in the game, device assignment, the rules.
 - [model-subdivision.md](model-subdivision.md) — the converter's head subdivision and LOD rule, the buffers that bound character files, the `modelview` viewer.

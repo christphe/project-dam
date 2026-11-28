@@ -74,10 +74,6 @@ ge_add_pure_test(test_romcheck test_romcheck.c ${CMAKE_SOURCE_DIR}/port/convert/
 set(GE_INPUT_DIR "${CMAKE_SOURCE_DIR}/port/src/input")
 ge_add_pure_test(test_input_modern test_input_modern.c
   ${GE_INPUT_DIR}/input_common.c ${GE_INPUT_DIR}/style_modern.c ${GE_INPUT_DIR}/n64bridge.c)
-ge_add_pure_test(test_input_enhanced test_input_enhanced.c
-  ${GE_INPUT_DIR}/input_common.c ${GE_INPUT_DIR}/style_enhanced.c ${GE_INPUT_DIR}/n64bridge.c)
-ge_add_pure_test(test_input_original test_input_original.c
-  ${GE_INPUT_DIR}/input_common.c ${GE_INPUT_DIR}/style_original.c ${GE_INPUT_DIR}/n64bridge.c)
 
 # The shared mission formats (port/mission, port/levelrec): pure, no core.
 ge_add_pure_test(test_mission_format test_mission_format.c)

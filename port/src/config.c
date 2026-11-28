@@ -234,6 +234,15 @@ static const char *const kRetiredKeys[] = {
     "Input.PadAimSens",        /* project-dam 0.1.0 aim curve, retired */
     "Input.PadAimCurve",       /* project-dam 0.1.0 aim curve, retired */
     "Input.MouseAimMode",      /* the mouse always aims Centered */
+    "Input.AimMode",           /* the aim is always Centered */
+    "Input.AimRange",          /* belonged to the retired Original aim */
+    "Input.AimStyle",
+    "Input.PdMouseAim",
+    "Input.AimLegacyGepd",
+    "Input.AimAbsolute",
+    "Input.AimModeSens",
+    "Input.GepdSens",
+    "Input.SensLink",
 };
 
 static void applyKV(const char *dottedKey, const char *val)

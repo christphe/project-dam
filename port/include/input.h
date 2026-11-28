@@ -69,7 +69,6 @@ int   inputPadButton(int idx, SDL_GameControllerButton b);
 int   inputPadNewPress(char *id, int n);   /* a pad button went down: that pad's id, 1 = yes */
 const char *inputPadNameForId(const char *id);
 int   inputPadCount(void);
-int   inputPadIsModern(int seat);       /* the seat plays with the Modern layout (LB / RB open the wheels) */
 int   inputSlotPadSeat(int slot);   /* pads[] seat of the pad that plays this slot (player), -1 = none */
 int   inputOverlayOwnerSeat(void);  /* the player (0..3) who opened the menu; its pages are edited */
 int   inputOverlayOwnerPad(void);   /* D472: pads[] seat driving the menu, -1 = keyboard + mouse only */
@@ -91,17 +90,6 @@ const char *inputBindingSlot(const char *key, int slot);
 int inputBindingSetSlot(const char *key, int slot, int code);
 int inputBindingResetKey(const char *key);
 
-/* D469: gamepad action table, presets and per-seat rebinding.
- * D518: the preset is per seat -- Input.PadPreset (seat 1; pre-D518 global
- * key) plus Input.PadPreset2/3/4. 0 = Jinx 1.1 (default), 3 = Custom
- * (Input.Pad[N].<Action>).
- * Seat = pads[] index. Sources are indices into the SDL-name table
- * (inputPadSourceName); -1 = none. */
-int  inputPadActionCount(void);
-const char *inputPadActionLabel(int act);
-int  inputPadActionForKey(const char *key);        /* "Input.Pad.Fire" -> action, else -1 */
-int  inputPadSourceCount(void);
-const char *inputPadSourceName(int src);
 int  inputPadSeatPresent(int seat);
 /* Input type and gamepad choice per player (Input.P1Type, Input.Player<N>Pad). */
 int  inputP1Type(void);                            /* Input.P1Type: 0 keyboard + mouse, 1 gamepad, 2 auto */
@@ -111,13 +99,6 @@ const char *inputPadListId(int k);
 const char *inputPadPref(int player);              /* "" = first free */
 void inputPadPrefSet(int player, const char *id);
 int  inputAnyPadHeld(void);                        /* a button of any gamepad is down */
-unsigned inputPadHeldSources(int seat);            /* bit i = source i held */
-int  inputPadPresetStep(int cur, int dir);
-int *inputPadPresetPtr(int seat);                 /* D518: per-seat preset value */
-int *inputControlSchemePtr(int seat);             /* per-player Input.ControlScheme: 0 Enhanced, 1 Original, 2 Modern */
-void inputPadBindingText(int seat, int act, int slot, char *out, int n);
-int  inputPadBindingSet(int seat, int act, int slot, int src);   /* src < 0 clears */
-int  inputPadBindingReset(int act);                /* all seats; returns seats changed */
 
 /* D345(b): 1 while the 1:1 menu pointer owns cursor_h/v_pos (in a menu,
  * abs pointer available, mouse used within the re-assert window). Port
