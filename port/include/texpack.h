@@ -36,6 +36,9 @@ int texpackListPacks(char (*files)[128], char (*names)[64], int max);
 int assetRead(const char *rel, unsigned char **out, unsigned long *len, int *from);
 /* 1 when some pack or the mod has that file. */
 int assetHas(const char *rel);
+/* Changes each time the stack or the mod changes (packs reordered or toggled, a pack rewritten after a ROM change,
+ * another mod): a reader that keeps an asset in memory compares it and reloads. Game thread. */
+unsigned assetStackGen(void);
 
 void texpackRegister(const void *data, int texnum, int bytes);   /* texLoad: texture `texnum` unpacked at `data`, `bytes` long */
 
