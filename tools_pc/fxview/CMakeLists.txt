@@ -4,7 +4,7 @@
 # What the viewer needs to find the sprites in the user's ROM, taken from the repo at configure time so the Switch build needs no
 # repo files at run time: the global image table's ROM address (port/src/romassets_u.s) and the sprite tables' offsets in it
 # (src/game/image_bank.c). The ROM content itself is read at run time and never written anywhere. The textures are not read from the ROM:
-# they come from ge007.ptexpack through ge_assets (ge/fx_tex.cpp).
+# they come from ge007.passets through ge_assets (ge/fx_tex.cpp).
 set(_fx_inc "${CMAKE_CURRENT_BINARY_DIR}/fx_romdata.inc")
 file(READ "${CMAKE_SOURCE_DIR}/port/src/romassets_u.s" _fx_as)
 file(READ "${CMAKE_SOURCE_DIR}/src/game/image_bank.c" _fx_bank)
@@ -65,7 +65,7 @@ endif()
 if(ZLIB_INCLUDE_DIR)
   target_include_directories(fxview SYSTEM PRIVATE "${ZLIB_INCLUDE_DIR}")   # fx_rom.cpp inflates the guards' weapon models
 endif()
-# ge_assets: the textures (ge/fx_tex.cpp: texture resolution over ge007.ptexpack, the PNG codec); ge007_export writes ge007.ptexpack from the ROM when absent.
+# ge_assets: the textures (ge/fx_tex.cpp: texture resolution over ge007.passets, the PNG codec); ge007_export writes ge007.passets from the ROM when absent.
 target_link_libraries(fxview fxview_sea_env ge_render_imgui ge_imgui ge_render ge007_export ge007_convert ge_assets ${ZLIB_LIBRARY} m)   # fxview_sea_env: the levels' environment records
 if(TARGET fxview_sea_pack)   # the sky/water VIEWER variants (Vulkan, deko3d)
   target_link_libraries(fxview fxview_sea_pack)

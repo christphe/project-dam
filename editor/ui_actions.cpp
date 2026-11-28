@@ -410,8 +410,8 @@ void loadPrefs(App &a)
     if (!prefGet(text, "mcp").empty()) a.prefMcp = prefGet(text, "mcp") != "0";
     const int port = atoi(prefGet(text, "mcpport").c_str());
     if (port > 0 && port < 65536) a.prefMcpPort = port;
-    a.doc.texPack = prefGet(text, "texpack");   // "" (an older "none" too) = ge007.ptexpack
-    if (a.doc.texPack == "ge007.ptexpack") a.doc.texPack.clear();
+    a.doc.texPack = prefGet(text, "texpack");   // "" (an older "none" too) = ge007.passets
+    if (a.doc.texPack == "ge007.passets" || a.doc.texPack == "ge007.ptexpack") a.doc.texPack.clear();
 }
 
 void savePrefs(App &a)

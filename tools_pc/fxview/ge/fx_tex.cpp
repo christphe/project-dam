@@ -7,7 +7,7 @@
 extern "C" {
 #include "ge_png.h"
 #include "ge_tex.h"
-#include "export.h"   // ex_ensure_base_pack: writes ge007.ptexpack from the ROM
+#include "export.h"   // ex_ensure_base_asset_pack: writes ge007.passets from the ROM
 }
 
 static GeTexSet* g_set = nullptr;
@@ -16,20 +16,29 @@ static std::string g_note = "no texture pack";
 static bool exists(const std::string& p) { struct stat st; return !p.empty() && stat(p.c_str(), &st) == 0; }
 static std::string dirOf(const std::string& p) { const size_t k = p.find_last_of("/\\"); return k == std::string::npos ? std::string(".") : p.substr(0, k); }
 
+// The base pack of a folder or a path: the pack itself (.passets / the older .ptexpack, a tar or a folder), else the folder's ge007.passets.
+static std::string baseOf(const std::string& p) {
+    if (!exists(p)) return std::string();
+    char b[1100];
+    geTexBaseRoot("", p.c_str(), b, sizeof b);   // the folder holding the pack, or the pack itself
+    return b;
+}
+
 std::string fxTexFindBase(const std::string& arg, const std::string& romPath) {
-    if (!arg.empty()) return exists(arg) ? arg : std::string();
-    if (const char* e = getenv("FXVIEW_PACK")) if (*e && exists(e)) return e;
+    if (!arg.empty()) return baseOf(arg);
+    if (const char* e = getenv("FXVIEW_PACK")) if (*e) { const std::string b = baseOf(e); if (!b.empty()) return b; }
     std::vector<std::string> dirs;
 #ifdef __SWITCH__
-    dirs.push_back("sdmc:/switch/project-dam/texturepacks");
+    dirs.push_back("sdmc:/switch/project-dam/assetpacks");
 #else
-    dirs.push_back("texturepacks");
-    dirs.push_back("../texturepacks");
-    if (!romPath.empty()) dirs.push_back(dirOf(dirOf(romPath)) + "/texturepacks");   // <game>/data/<rom>.z64 -> <game>/texturepacks
+    dirs.push_back("assetpacks");
+    dirs.push_back("../assetpacks");
+    if (!romPath.empty()) dirs.push_back(dirOf(dirOf(romPath)) + "/assetpacks");   // <game>/data/<rom>.z64 -> <game>/assetpacks
 #endif
     for (const std::string& d : dirs) {
-        const std::string p = d + "/ge007.ptexpack";
-        if (exists(p)) return p;
+        char b[1100];
+        geTexBaseRoot(d.c_str(), "", b, sizeof b);   // <d>/ge007.passets, else the older ge007.ptexpack
+        if (b[0]) return b;
     }
     return std::string();
 }
@@ -37,21 +46,21 @@ std::string fxTexFindBase(const std::string& arg, const std::string& romPath) {
 static void logLine(void* u, const char* line) { (void)u; fprintf(stderr, "fxview: pack: %s\n", line); }
 
 bool fxTexEnsureBase(const std::string& romPath, const std::string& packDir, std::string& note) {
-    if (romPath.empty()) { note = "no ROM to write ge007.ptexpack from"; return false; }
-    const int r = ex_ensure_base_pack(romPath.c_str(), packDir.c_str(), logLine, nullptr);
-    if (r < 0) { note = "ge007.ptexpack could not be written from the ROM (see the log)"; return false; }
-    note = r == 1 ? "ge007.ptexpack is current" : "ge007.ptexpack written from the ROM";
+    if (romPath.empty()) { note = "no ROM to write ge007.passets from"; return false; }
+    const int r = ex_ensure_base_asset_pack(romPath.c_str(), packDir.c_str(), nullptr, logLine, nullptr);
+    if (r < 0) { note = "ge007.passets could not be written from the ROM (see the log)"; return false; }
+    note = r == 1 ? "ge007.passets is current" : "ge007.passets written from the ROM";
     return true;
 }
 
 bool fxTexOpen(const std::string& base, const std::string& texPack, const std::string& mod) {
     if (!g_set) g_set = geTexSetNew();
     std::string pack;
-    if (!texPack.empty() && texPack != "ge007" && texPack != "ge007.ptexpack") {
+    if (!texPack.empty() && texPack != "ge007" && texPack != "ge007.passets" && texPack != "ge007.ptexpack") {
         pack = exists(texPack) ? texPack : dirOf(base) + "/" + texPack;
     }
     geTexSetOpen(g_set, mod.c_str(), pack.c_str(), base.c_str());
-    if (!geTexSetPack(g_set)) { g_note = base.empty() ? "no ge007.ptexpack: sprites show as untextured quads" : "cannot read " + base; return false; }
+    if (!geTexSetPack(g_set)) { g_note = base.empty() ? "no ge007.passets: sprites show as untextured quads" : "cannot read " + base; return false; }
     char b[1500];
     const TexPackSrc* p = geTexSetPack(g_set);
     snprintf(b, sizeof b, "texture pack: %s, %d textures%s%s%s", texpackSrcRoot(p), texpackSrcCount(p), geTexSetMod(g_set) ? ", mod " : "",

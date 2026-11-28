@@ -1,4 +1,4 @@
-// The static model export (port/export/, issue #119): <root>/models/models.json + <root>/models/<name>/<name>.gltf, one glTF per model
+// The static model export (port/export/, issue #119): <pack>/models/models.json + <pack>/models/<name>/<name>.gltf (<pack> = ge007.passets, a tar or a folder, read with ge_pkg), one glTF per model
 // number in model units. The editor draws the props from it (and lists every model in the Props browser's "All models").
 // Pure CPU, no GL. Models are read on first use and kept.
 #pragma once

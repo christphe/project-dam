@@ -65,6 +65,36 @@ Assets derived from the game (upscaled textures, reworked models) are not
 redistributed either: a tool builds them on the player's machine from that
 export.
 
+## The base pack layout
+
+`ge007.passets` is written by `ex_export_pack` (`port/export/pack_export.c`):
+by the game's first launch into `assetpacks/`, by `ge007-export <rom> <out>`
+into `<out>/` (`--folder` writes a folder instead of the tar), and by
+`--export-levels <out>`. It is an uncompressed tar, read lazily.
+
+| Path | Content |
+|---|---|
+| `pack.json` | `name`, `author`, `description`, `"base": true`, `region`, `exporter_version` |
+| `textures.json`, `textures/<n>.png` | every texture of the ROM ([texture-packs.md](texture-packs.md)) |
+| `levels/<level>/<level>.gltf` + `.bin` | each level's decor, with its collision and setup files beside it |
+| `models/<name>/<name>.gltf` + `.bin` | the object models |
+| `characters/characters.json`, `characters/<name>/`, `characters/animations/` | bodies, heads and animations ([characters.md](characters.md)) |
+| `labels/` | the game's text per language, and the names tables ([text.md](text.md)) |
+| `music/track_NN.mid`, `music/instruments.sf2` | the music as Standard MIDI files and its SoundFont ([audio.md](audio.md)) |
+| `sounds/sfx/sfx_NNNN.wav`, `sounds/sfx/sfx.json`, `sounds/report.txt` | the sound effects and their parameters |
+
+Every glTF sits two folders under the root and names its pictures
+`../../textures/<n>.png`. The pack is rewritten when its `exporter_version`
+differs from the running exporter's; it is built in `ge007.passets.tmp/`, packed
+into `ge007.passets.tartmp` and renamed into place, so a killed run leaves no
+half pack. Fonts are not exported yet.
+
+The game's first launch enables the pack (last in the order) only when it
+writes it for the first time; a rewrite after an exporter update keeps the
+player's choice. The older `texturepacks/ge007.ptexpack` is removed once the
+new pack is written, and a `ge007.ptexpack` in `Video.AssetPacks` becomes
+`ge007.passets`.
+
 ## The menu
 
 Video > Asset packs: **Pack** lists the enabled packs first, numbered in their

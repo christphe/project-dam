@@ -93,9 +93,9 @@ models are read from it; the textures themselves are not decoded from the ROM (s
 ## The textures
 
 Through `ge_assets` (`port/assets/ge_tex.h`, the resolution the editor and the game use): the mod (`--mod PATH`) over the chosen texture pack (`--texpack NAME|PATH`)
-over `ge007.ptexpack`, by texture number. `ge007.ptexpack` is `--pack`, else `FXVIEW_PACK`, else `texturepacks/ge007.ptexpack` beside the game (PC: `./texturepacks`,
-`../texturepacks`, next to the ROM's `data/` folder; Switch: `sdmc:/switch/project-dam/texturepacks`; `fxview.py` also looks in the checkout's `build-win`, `build-linux`);
-when none is found and a ROM is, it is written once into `--out` with the exporter (`ex_ensure_base_pack`). Every texture fxview shows is a texture-bank number, so all of
+over `ge007.passets`, by texture number. `ge007.passets` (the base asset pack, a tar or a folder; the older `ge007.ptexpack` still works) is `--pack` (the pack itself or a folder holding it), else `FXVIEW_PACK`, else `assetpacks/ge007.passets` beside the game (PC: `./assetpacks`,
+`../assetpacks`, next to the ROM's `data/` folder; Switch: `sdmc:/switch/project-dam/assetpacks`; `fxview.py` also looks in the checkout's `build-win`, `build-linux`);
+when none is found and a ROM is, it is written once into `--out` with the exporter (`ex_ensure_base_asset_pack`, the whole base pack). Every texture fxview shows is a texture-bank number, so all of
 them come from the pack. The log says `texture pack: <root>, 2698 textures`.
 
 ## Hot reload of the effect shaders (PC)

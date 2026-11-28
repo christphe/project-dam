@@ -3,6 +3,8 @@
 extern "C" {
 #include "mission.h"
 #include "export.h"
+#include "ge_pkg.h"
+#include "cJSON.h"
 }
 
 #include <chrono>
@@ -41,19 +43,32 @@ std::string gltfDirFor(const std::string &gameExe)
 
 int exportGltfVersion() { return EX_EXPORTER_VERSION; }
 
+std::string assetPackIn(const std::string &root)
+{
+    if (root.empty()) return "";
+    std::error_code ec;
+    const size_t k = root.size();
+    if (k > 8 && root.compare(k - 8, 8, ".passets") == 0) return fs::exists(fs::path(root), ec) ? root : "";
+    const fs::path p = fs::path(root) / "ge007.passets";
+    return fs::exists(p, ec) ? p.generic_string() : "";
+}
+
 bool gltfCurrent(const std::string &dir, const std::string &level)
 {
-    if (dir.empty() || level.empty()) return false;
-    FILE *f = fopen((fs::path(dir) / level / (level + ".gltf")).string().c_str(), "rb");
-    if (!f) return false;
-    char head[2048];
-    const size_t n = fread(head, 1, sizeof head - 1, f);   // asset.extras comes first in the file
-    fclose(f);
-    head[n] = 0;
-    const char *k = strstr(head, "\"exporter_version\"");
-    if (!k) return false;
-    k = strchr(k, ':');
-    return k && atoi(k + 1) == EX_EXPORTER_VERSION;
+    (void)level;
+    const std::string pack = assetPackIn(dir);
+    if (pack.empty()) return false;
+    uint8_t *buf = nullptr;
+    size_t len = 0;
+    if (!pkgReadFile((pack + "/pack.json").c_str(), &buf, &len)) return false;   // a tar or a folder alike
+    int ver = -1;
+    if (cJSON *j = cJSON_Parse((const char *)buf)) {
+        const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "exporter_version");
+        if (cJSON_IsNumber(v)) ver = (int)v->valuedouble;
+        cJSON_Delete(j);
+    }
+    pkgFree(buf);
+    return ver == EX_EXPORTER_VERSION;
 }
 
 bool exportPresent(const std::string &dir)

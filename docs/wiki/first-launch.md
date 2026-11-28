@@ -47,14 +47,16 @@ a missing file counts as 1). When it differs from the running converter's, boot 
 models step, once. Bump the version whenever a converter change alters model output
 ([model-subdivision.md](model-subdivision.md)).
 
-After the sidecars, the same call makes sure the game's base texture pack exists:
-`$S/../texturepacks/ge007.ptexpack/` (`pack.json`, `textures.json`, `textures/<n>.png`, the format
-of `docs/specs/texture-packs.md`). When its `pack.json` is missing or its `exporter_version` differs
-from the running exporter's (`EX_EXPORTER_VERSION`, `port/export/export.h`), `ex_ensure_base_pack()`
-(`port/export/texpack_export.c`) decodes all 2698 textures from the ROM into
-`ge007.ptexpack.tmp/` and renames it into place, so a killed run leaves no half pack. It takes a few
-seconds and runs once per exporter version. The exporter writes the same pack into every export
-directory (`ge007-export`, `--export-levels`), and the exported glTF files point into it.
+After the sidecars, the same call makes sure the game's base asset pack exists:
+`$S/../assetpacks/ge007.passets`, an uncompressed tar holding the textures, levels, models,
+characters, labels, music and sounds exported from the ROM (layout: `docs/specs/asset-packs.md`,
+"The base pack layout"). When its `pack.json` is missing or its `exporter_version` differs from
+the running exporter's (`EX_EXPORTER_VERSION`, `port/export/export.h`),
+`ex_ensure_base_asset_pack()` (`port/export/pack_export.c`) builds it in `ge007.passets.tmp/`,
+packs it and renames it into place, so a killed run leaves no half pack. It takes a few seconds
+(about 7 on a desktop PC) and runs once per exporter version. A pack written for the first time
+is enabled, last in `Video.AssetPacks`; the older `texturepacks/ge007.ptexpack` is then removed.
+`ge007-export` and `--export-levels` write the same pack.
 
 If the files still cannot be produced, boot stops with a message asking for a retail `.z64` ROM.
 That is deliberate: a missing sidecar would otherwise crash much later, in model loading.
@@ -70,12 +72,13 @@ PC (`videoBootWindowGeometry()`) and on the libnx framebuffer on the Switch. It 
   backgrounds, stage setups), fed by the converter's progress callback (`cv_set_progress`). At
   the end it waits for A (a key or a click on the PC).
 - **Textures:** the same screen with the label "Textures" and a bar of its own, fed by
-  `ex_set_progress`. It closes without waiting for a key.
+  `ex_set_progress` while the base asset pack's textures are written. It closes without waiting
+  for a key.
 - **ROM not found** (`romdata.c`): the expected file name and the folder to copy it to. A ROM
   that was found but refused gets the reason instead.
 - **Conversion failed** (`romconvert.c`): asks for an unmodified retail `.z64`; the log has the
-  details. A base texture pack that cannot be written (folder not writable, no space) only logs
-  a warning and boot goes on: the game itself does not read the pack yet.
+  details. A base asset pack that cannot be written (folder not writable, no space) only logs
+  a warning and boot goes on: the game still reads the ROM.
 
 Messages wait for a press, then the game quits. Every message also goes to the log. On the PC,
 when no window can be opened, a native message box shows it instead. The text uses an embedded

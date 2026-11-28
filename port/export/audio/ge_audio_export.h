@@ -12,6 +12,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -159,6 +160,12 @@ typedef struct {
 
 /* sfx.json for all valid effects; fills stats. 0 on success. */
 int ge_ae_sfx_json(const ge_ae_bank *b, ge_ae_buf *out, ge_ae_sfx_stats *st);
+
+/* The whole audio export as folders (ge_audio_dirs.c): music_root/music/track_NN.mid, instruments_dir/instruments.sf2,
+ * sfx_root/sfx/sfx_NNNN.wav and sfx_root/sfx/sfx.json, with a line per item in `rep` (may be NULL). Returns the number of
+ * errors. */
+int ge_ae_export_dirs(const uint8_t *rom, size_t size, const ge_ae_layout *lay, int ntracks, const char *music_root,
+                      const char *instruments_dir, const char *sfx_root, FILE *rep);
 
 #ifdef __cplusplus
 }

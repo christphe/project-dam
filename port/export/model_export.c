@@ -745,7 +745,7 @@ static int export_model(const ModelEnt *me, const uint8_t *rom, size_t rom_size,
     }
 
     /* ---- textures + materials ---- */
-    mo.pack_depth = 2;   /* <out>/models/<name>/<name>.gltf -> ../../ge007.ptexpack */
+    mo.pack_depth = 2;   /* <out>/models/<name>/<name>.gltf -> ../../textures (the pack root) */
     if (ex_emit_materials(&mo, &x->mc)) FAIL("out of memory");
 
     /* ---- the glTF ---- */

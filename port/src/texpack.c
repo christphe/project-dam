@@ -167,11 +167,32 @@ void texpackInit(void)
         snprintf(s_cfgList, sizeof s_cfgList, "%s", s_cfgLegacy);
     }
     s_cfgLegacy[0] = 0;
+    {   /* the base pack was texturepacks/ge007.ptexpack; it is assetpacks/ge007.passets now */
+        static char files[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
+        const int n = assetPackListParse(s_cfgList, files, ASSETPACK_MAX);
+        const int k = assetPackListFind(files, n, "ge007.ptexpack");
+        if (k >= 0) {
+            snprintf(files[k], ASSETPACK_FILE_LEN, "%s", "ge007.passets");
+            assetPackListFormat(files, n, s_cfgList, sizeof s_cfgList);
+        }
+    }
     snprintf(want, sizeof want, "%s", s_cfgList);
     if (want[0]) texpackSetPacks(want);
 }
 
 const char *texpackPacks(void) { return s_inUse; }
+
+void texpackPackWritten(const char *file, int add)
+{
+    static char files[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
+    char text[ASSETPACK_LIST_LEN];
+    int n = assetPackListParse(s_cfgList, files, ASSETPACK_MAX);
+    const int added = add && assetPackIsFileName(file) && assetPackListFind(files, n, file) < 0 && n < ASSETPACK_MAX;
+    if (added) snprintf(files[n++], ASSETPACK_FILE_LEN, "%s", file);
+    assetPackListFormat(files, n, text, sizeof text);
+    texpackSetPacks(text);   /* reopened either way: a pack in the list may not have existed until now */
+    if (added) configSave();
+}
 
 int texpackListPacks(char (*files)[128], char (*names)[64], int max)
 {

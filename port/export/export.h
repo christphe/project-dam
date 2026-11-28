@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define EX_EXPORTER_VERSION 11  /* written to every glTF (asset.extras.exporter_version); bump on any output change */
+#define EX_EXPORTER_VERSION 12  /* written to every glTF (asset.extras.exporter_version); bump on any output change */
 
 /* ---- textures (tex_decode.c, docs/specs/textures.md) --------------------- */
 
@@ -71,13 +71,16 @@ void ex_set_progress(ExProgressFn fn, void *user);
  * the number of problems (1 when the ROM or the texture table is refused). `log` may be NULL. */
 int ex_export_textures(const char *rom_path, const char *pack_dir, ExLogFn log, void *user);
 
-/* exporter_version written in <pack_dir>/pack.json, or -1 when there is no readable pack.json. */
-int ex_pack_version(const char *pack_dir);
-
-/* Makes sure <pack_dir> holds the base pack of this exporter: nothing to do when its pack.json says
- * EX_EXPORTER_VERSION; else writes the pack beside it (<pack_dir>.tmp) and swaps it in, so an interrupted run
- * leaves no half pack. 1 = already current, 0 = written, -1 = failed (log says why). */
-int ex_ensure_base_pack(const char *rom_path, const char *pack_dir, ExLogFn log, void *user);
+/* ---- the base asset pack, ge007.passets (pack_export.c, docs/specs/asset-packs.md) ----
+ * Writes every kind (textures at the root, levels/, models/, characters/, labels/, music/, sounds/) into <pack_path>.tmp/,
+ * then packs it into an uncompressed tar at pack_path (or renames the folder there when as_folder). Returns the number of
+ * parts that had failures, -1 when no pack could be written. */
+int ex_export_pack(const char *rom_path, const char *pack_path, int as_folder, ExLogFn log, void *user);
+/* The exporter_version in a pack's pack.json (a tar or a folder), -1 when it cannot be read. */
+int ex_pack_version(const char *pack_path);
+/* Writes pack_path when it is missing or from another exporter version, then removes old_texture_pack (the older
+ * texturepacks/ge007.ptexpack; NULL or "" for none). 1 = already current, 0 = written, -1 = failed. */
+int ex_ensure_base_asset_pack(const char *rom_path, const char *pack_path, const char *old_texture_pack, ExLogFn log, void *user);
 
 /* ---- levels (level_export.c, docs/specs/level-decor.md, display-lists.md) */
 

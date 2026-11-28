@@ -274,24 +274,12 @@ int main(int argc, char **argv)
                 fprintf(stderr, "--export-levels: no ge007." GE007_ROMID ".z64 in the data dir, next to the exe or here\n");
                 return 1;
             }
-            extern int ex_export_models(const char *rom_path, const char *out_dir,
-                                        void (*log)(void *user, const char *line), void *user);
-            extern int ex_export_textures(const char *rom_path, const char *pack_dir,
-                                          void (*log)(void *user, const char *line), void *user);
-            char mdir[1100];
-            snprintf(mdir, sizeof(mdir), "%s/ge007.ptexpack", exdir);
-            int failed = ex_export_textures(rom, mdir, exportLevelsLog, NULL);
-            failed += ex_export_levels(rom, exdir, exportLevelsLog, NULL);
-            snprintf(mdir, sizeof(mdir), "%s/models", exdir);
-            failed += ex_export_models(rom, mdir, exportLevelsLog, NULL);
-            extern int ex_export_text(const char *rom_path, const char *out_dir,
+            extern int ex_export_pack(const char *rom_path, const char *pack_path, int as_folder,
                                       void (*log)(void *user, const char *line), void *user);
-            snprintf(mdir, sizeof(mdir), "%s/text", exdir);
-            failed += ex_export_text(rom, mdir, exportLevelsLog, NULL);
-            extern int ex_export_characters(const char *rom_path, const char *out_dir,
-                                            void (*log)(void *user, const char *line), void *user);
-            snprintf(mdir, sizeof(mdir), "%s/characters", exdir);
-            failed += ex_export_characters(rom, mdir, exportLevelsLog, NULL);
+            char pack[1100];
+            snprintf(pack, sizeof(pack), "%s/ge007.passets", exdir);
+            int failed = ex_export_pack(rom, pack, sysArgCheck("--folder"), exportLevelsLog, NULL);
+            if (failed < 0) return 254;
             return failed > 254 ? 254 : failed;
         }
     }

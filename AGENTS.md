@@ -24,6 +24,7 @@
    - **Spec agent** (may read the decomp): writes the behaviour or format as facts in prose in `docs/specs/` (layouts, fields, constants, rules, measured values), never code pasted or paraphrased line by line. `docs/specs/README.md` has the rules.
    - **Implementation agent** (may NOT read the decomp): writes the code from `docs/specs/` only. Its brief lists what it must not open: `src/`, `include/`, `rsp/`, `PR/gbi.h`, libultra, `port/fast3d/` and any tool derived from them. A question the spec does not answer goes back to the spec agent, who amends the spec; the implementation agent never looks it up itself.
    - The lead never pastes decomp code or names decomp functions into an implementation brief. New code does not depend on `src/game`, libultra or fast3d: it reads the exports.
+   - **Wiring is allowed.** An implementation agent that makes the engine read an asset from the asset packs may open `src/game` to find and change the place where the engine asks for that asset (the call site), and keeps the old ROM path behind a `GE_ROM_<KIND>` flag until the kind is validated. Formats, layouts and game logic still come only from `docs/specs/`.
 
 ## Tree hygiene & release gate
 

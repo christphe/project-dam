@@ -539,7 +539,7 @@ def uuid_checks(exe, export, work):
 
 
 def texture_checks(exe, export, work):
-    """textures: the decor's textures, a mod's textures/<n>.png and a .ptexpack texture pack (the mod over the chosen pack; ge007.ptexpack
+    """textures: the decor's textures, a mod's textures/<n>.png and a .passets texture pack (the mod over the chosen pack; ge007.passets
     is the default, a pack that lacks textures of it is refused)."""
     import io
     import shutil
@@ -558,17 +558,17 @@ def texture_checks(exe, export, work):
     shutil.rmtree(moddir, ignore_errors=True)
     src = os.path.join(work, "mine.png")
     open(src, "wb").write(png(16, 16, (200, 20, 20)))
-    packs = os.path.join(export, "texturepacks")   # next to the game's data folder (GE_EDITOR_DATA = <export>/data)
+    packs = os.path.join(export, "assetpacks")   # next to the game's data folder (GE_EDITOR_DATA = <export>/data)
     shutil.rmtree(packs, ignore_errors=True)
     os.makedirs(packs)
     entry = b'{"version": 1, "textures": {"1": {"image": "textures/1.png", "surface": "stone", "impact_sound": "stone", "alpha": "image"}}}'
-    base = os.path.join(packs, "ge007.ptexpack")   # the game's own pack (the synthetic decor uses texture 1)
+    base = os.path.join(packs, "ge007.passets")   # the game's own pack (the synthetic decor uses texture 1)
     os.makedirs(os.path.join(base, "textures"))
-    open(os.path.join(base, "pack.json"), "wb").write(b'{"name": "GoldenEye 007", "base": true, "exporter_version": 11}')
+    open(os.path.join(base, "pack.json"), "wb").write(b'{"name": "GoldenEye 007", "base": true, "exporter_version": 12}')
     open(os.path.join(base, "textures.json"), "wb").write(entry)
     open(os.path.join(base, "textures", "1.png"), "wb").write(png(8, 8, (40, 90, 120)))
-    for fname, files in (("smoke.ptexpack", (("pack.json", b'{"name": "Smoke pack"}'), ("textures.json", entry), ("textures/1.png", png(32, 32, (20, 200, 20))))),
-                         ("lack.ptexpack", (("pack.json", b'{"name": "Lacking pack"}'), ("textures.json", b'{"version": 1, "textures": {}}')))):
+    for fname, files in (("smoke.passets", (("pack.json", b'{"name": "Smoke pack"}'), ("textures.json", entry), ("textures/1.png", png(32, 32, (20, 200, 20))))),
+                         ("lack.passets", (("pack.json", b'{"name": "Lacking pack"}'), ("textures.json", b'{"version": 1, "textures": {}}')))):
         with tarfile.open(os.path.join(packs, fname), "w", format=tarfile.USTAR_FORMAT) as tf:
             for name, data in files:
                 ti = tarfile.TarInfo(name)
@@ -581,10 +581,10 @@ def texture_checks(exe, export, work):
     for want in ("textures", "mod_set_texture", "set_texture_pack"):
         check(want in names, "tools/list has " + want)
     err, d = s.tool("textures")
-    check(not err and d["packs"] and d["packs"][0]["file"] == "ge007.ptexpack" and d["packs"][0]["usable"], "textures lists ge007 first: " + json.dumps(d.get("packs")))
-    check(not err and any(p["file"] == "smoke.ptexpack" and p["name"] == "Smoke pack" and p["usable"] for p in d["packs"]), "textures lists the pack: " + json.dumps(d.get("packs")))
-    check(not err and any(p["file"] == "lack.ptexpack" and not p["usable"] and "incomplete" in p["reason"] for p in d["packs"]), "the incomplete pack is listed, not usable: " + json.dumps(d.get("packs")))
-    check(not err and d["texture_pack"] == "ge007.ptexpack", "ge007 is the default pack")
+    check(not err and d["packs"] and d["packs"][0]["file"] == "ge007.passets" and d["packs"][0]["usable"], "textures lists ge007 first: " + json.dumps(d.get("packs")))
+    check(not err and any(p["file"] == "smoke.passets" and p["name"] == "Smoke pack" and p["usable"] for p in d["packs"]), "textures lists the pack: " + json.dumps(d.get("packs")))
+    check(not err and any(p["file"] == "lack.passets" and not p["usable"] and "incomplete" in p["reason"] for p in d["packs"]), "the incomplete pack is listed, not usable: " + json.dumps(d.get("packs")))
+    check(not err and d["texture_pack"] == "ge007.passets", "ge007 is the default pack")
     lt = {t["texnum"]: t for t in d.get("level_textures", [])}
     if 1 not in lt:
         print("  skip  texture sources: the export has no glTF decor with texture 1 (" + json.dumps(d)[:160] + ")")
@@ -598,21 +598,21 @@ def texture_checks(exe, export, work):
     check(not err and lt.get(1, {}).get("from") == "mod" and lt[1]["w"] == 16 and d["mod_textures"] == [1],
           "mod_set_texture: drawn from the mod: " + json.dumps(d)[:200])
     check(os.path.isfile(os.path.join(moddir, "textures", "1.png")), "the picture is the mod's textures/1.png")
-    err, d = s.tool("set_texture_pack", file="smoke.ptexpack")
+    err, d = s.tool("set_texture_pack", file="smoke.passets")
     lt = {t["texnum"]: t for t in d.get("level_textures", [])} if not err else {}
     check(not err and lt.get(1, {}).get("from") == "mod", "the mod's texture wins over the pack's")
     err, d = s.tool("mod_set_texture", texnum=1, remove=True)
     lt = {t["texnum"]: t for t in d.get("level_textures", [])} if not err else {}
     check(not err and lt.get(1, {}).get("from") == "pack" and lt[1]["w"] == 32, "without the mod's, the pack's (from the tar): " + json.dumps(d)[:200])
-    err, d = s.tool("set_texture_pack", file="nope.ptexpack")
+    err, d = s.tool("set_texture_pack", file="nope.passets")
     check(err, "set_texture_pack refuses a pack that is not there")
-    err, d = s.tool("set_texture_pack", file="lack.ptexpack")
+    err, d = s.tool("set_texture_pack", file="lack.passets")
     check(err, "set_texture_pack refuses a pack that lacks textures of ge007")
     err, d = s.tool("mod_set_texture", texnum=5000, png=src)
     check(err, "mod_set_texture refuses a texture number over 4095")
     err, d = s.tool("set_texture_pack", file="")
     lt = {t["texnum"]: t for t in d.get("level_textures", [])} if not err else {}
-    check(not err and lt.get(1, {}).get("from") == "level" and d["texture_pack"] == "ge007.ptexpack", "ge007 again: the game's own")
+    check(not err and lt.get(1, {}).get("from") == "level" and d["texture_pack"] == "ge007.passets", "ge007 again: the game's own")
     s.close()
     shutil.rmtree(packs, ignore_errors=True)
 

@@ -149,8 +149,8 @@ std::string Doc::modTexturesDir() const
 
 std::string Doc::texturePacksRoot() const
 {
-    const std::string m = modsRoot();   // <game>/mods -> <game>/texturepacks
-    return m.substr(0, m.size() - 4) + "texturepacks";
+    const std::string m = modsRoot();   // <game>/mods -> <game>/assetpacks
+    return m.substr(0, m.size() - 4) + "assetpacks";
 }
 
 std::string Doc::exportPackRoot() const
@@ -160,7 +160,7 @@ std::string Doc::exportPackRoot() const
     std::vector<std::string> roots;
     if (hasLevel) roots = level.gltfRoots();
     else if (!gameExe.empty()) roots.push_back(gltfDirFor(gameExe));
-    for (const std::string &r : roots) if (fs2::exists(fs2::path(r) / "ge007.ptexpack", ec)) return r;
+    for (const std::string &r : roots) if (!assetPackIn(r).empty()) return r;   // gltfRoots() are packs already; the game's folder holds one
     return "";
 }
 

@@ -1,5 +1,5 @@
 // The texture sources the editor resolves a texture through (docs/specs/texture-packs.md): the open mod (partial, merged field by
-// field) over the chosen texture pack (complete). ge007.ptexpack, the game's own pack, is the default and the reference the other
+// field) over the chosen texture pack (complete). ge007.passets, the game's own pack, is the default and the reference the other
 // packs are checked against. A thin C++ face of ge_assets' GeTexSet (port/assets/ge_tex.h), which does the work. Pure CPU, no GL.
 #pragma once
 
@@ -19,7 +19,7 @@ public:
     TexSet &operator=(const TexSet &) = delete;
 
     // Opens the mod (folder or .pmod, "" none) afresh every call, and the pack when its root changed. `packRoot` is the chosen
-    // pack, `baseRoot` ge007.ptexpack (both "" when there is none). A chosen pack that is not complete against the base is refused:
+    // pack, `baseRoot` ge007.passets (both "" when there is none). A chosen pack that is not complete against the base is refused:
     // the base is used instead and note() says why. Without any base or pack, pack() is null (the glTF's own pictures are used).
     void open(const std::string &modRoot, const std::string &packRoot, const std::string &baseRoot);
     const TexPackSrc *mod() const { return geTexSetMod(m_set); }
@@ -39,16 +39,17 @@ private:
 
 // One entry of the pack list.
 struct PackChoice {
-    std::string file;         // "ge007.ptexpack", "hd.ptexpack": what the preference holds
+    std::string file;         // "ge007.passets", "hd.passets": what the preference holds
     std::string path;         // the pack's root
     std::string name, author, description;
-    bool base = false;        // ge007.ptexpack
+    bool base = false;        // ge007.passets
     int missing = 0;          // textures it lacks against ge007; > 0: not selectable
     std::string reason;       // why it is not selectable ("" when it is)
     bool usable() const { return reason.empty(); }
 };
 
-// ge007.ptexpack's root: <texturepacks>/ge007.ptexpack when the game wrote it, else <exportRoot>/ge007.ptexpack; "" when neither exists.
+// ge007.passets' root: <assetpacks>/ge007.passets when the game wrote it, else <exportRoot>/ge007.passets (exportRoot: the folder holding the
+// pack, or the pack itself); the older ge007.ptexpack where there is no .passets; "" when none exists.
 std::string baseTexturePackRoot(const std::string &texturePacksDir, const std::string &exportRoot);
 
 // The packs to choose from: ge007 first (always, even when missing: then not usable), then the other packs of the folder, each checked
