@@ -42,6 +42,10 @@ void setReadout(const char* (*f)(const char* name, double cfg));   /* a note bes
 void setPicture(int (*f)(int style, const unsigned char** texels));   /* the crosshair sprite, for the preview */
 void setTint(void (*f)(int* r, int* g, int* b));   /* the crosshair colour in use, for the preview */
 void setActionHandler(void (*handler)(const char* key));
+/* The asset-pack list (a "packlist" control): one row per pack, the enabled ones first in their order. rows fills up to max rows
+ * and returns how many; act does what was asked of a row (0 toggle, 1 move up, 2 move down) and returns the row the pack is on now. */
+struct PackRow { std::string name, author; bool on = false; };
+void setPackList(int (*rows)(std::vector<PackRow>* out), int (*act)(int row, int what));
 /* The weapon / gadget wheel of the Modern control style, drawn over the game: the item names, the picked one (-1 = none). */
 void drawWheel(float W, float H, int seat, float x0, float y0, float x1, float y1, const char* title, const std::vector<std::string>& names, int sel);
 /* The "press a button" screen of a multiplayer set-up: what each player has so far, whose turn it is. */

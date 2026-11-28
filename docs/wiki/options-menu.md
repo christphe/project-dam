@@ -69,7 +69,7 @@ The schema is written at the top of the file (`_schema`); the essentials:
   `help`, `show`, `disabled`, `disabledTag`, `dev`, `restart`.
 - **Types:** `choice` (buttons side by side), `select` (a list that opens; long lists),
   `toggle`, `slider` (with `options`: one notch per option), `action`, `bind` (a key or mouse
-  button, two slots), `diagram` (the pad layout drawing).
+  button, two slots), `diagram` (the pad layout drawing), `packlist` (the asset packs, drawn by `drawPackList` in `menu_ui.cpp`).
 - **Options** are `{"id", "label", "value", "show"}`. `value` is what the config stores
   (default: the option's position). A bare string is both id and label.
 - **Logic uses ids, never texts.** Expressions, defaults and per-value help compare option ids;
@@ -89,18 +89,17 @@ The `key` decides it:
 |---|---|---|
 | `Video.*`, `Input.*`, `Game.*`, `Audio.*` | `ge007.ini` (`config.c`) | the row table in `optionsoverlay.c` (`rowByKey`) |
 | `Bond.*` | the selected save file (the game's watch settings, per profile) | `watchsettings.c` |
-| `__Name` (value) | computed: `__DisplayMode`, `__Resolution`, `__BondFile`, `__AssetPackSel`, `__AssetPackOn`, `__AssetPackDirty`, `Audio.Device` | `optionsMenuGet` / `optionsMenuSet` |
+| `__Name` (value) | computed: `__DisplayMode`, `__Resolution`, `__BondFile`, `__AssetPackDirty`, `Audio.Device` | `optionsMenuGet` / `optionsMenuSet` |
 | `__Name` (action) | — | `optionsMenuAction` (`__QuitToDesktop`, `__RestartGame`, `__UpdateCheck`, `__AssignDevices`, `__ResetBindings`…) |
 
 Lists only the game knows (resolutions, audio devices, asset packs) are filled at run time with
 `menu::setOptionLabels`. The asset packs are a list the player orders with plain controls:
-`__AssetPackSel` is the highlighted row (the enabled packs first, numbered in their order, then the
-others), `__AssetPackOn` enables or disables it, and the actions `__AssetPackUp` / `__AssetPackDown`
-move it. These edit a pending list in `optionsoverlay.c`; nothing is applied until the action
-`__AssetPackApply` (`texpackSetPacks` once, then `configSave`). It and `__AssetPackDiscard` are disabled
+the `packlist` control is one row per pack (title, author faded under it, a checkbox and up / down arrows); the
+game feeds it through `menu::setPackList` (`optionsMenuAssetPackRows` / `optionsMenuAssetPackAct`). The pad moves
+between rows with Up / Down, picks the checkbox or an arrow with Left / Right, and A does it. The edits go to a
+pending list in `optionsoverlay.c`; nothing is applied until the action `__AssetPackApply` (`texpackSetPacks` once, then `configSave`). It and `__AssetPackDiscard` are disabled
 while the hidden toggle `__AssetPackDirty` (pending differs from `texpackPacks()`) is off. Leaving the
-menu drops pending edits (`optionsMenuAssetPackDiscard`). `menuRefreshAssetPacks` (`menu_game.cpp`)
-rebuilds the labels after each change. The list is
+menu drops pending edits (`optionsMenuAssetPackDiscard`). The list is
 stored in `Video.AssetPacks` (`port/src/texpack.c`, `docs/specs/asset-packs.md`).
 
 ## Defaults and the ini

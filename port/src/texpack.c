@@ -254,7 +254,7 @@ void texpackPackWritten(const char *file, int add)
     if (added) configSave();
 }
 
-int texpackListPacks(char (*files)[128], char (*names)[64], int max)
+int texpackListPacks(char (*files)[128], char (*names)[64], char (*authors)[64], int max)
 {
     static AssetPackInfo info[64];
     int n = assetPackScan(packsDirs(), 2, info, 64);
@@ -263,6 +263,7 @@ int texpackListPacks(char (*files)[128], char (*names)[64], int max)
     for (int i = 0; i < n; i++) {
         snprintf(files[i], 128, "%s", info[i].file);
         snprintf(names[i], 64, "%s", info[i].name);
+        snprintf(authors[i], 64, "%s", info[i].author);
     }
     return n;
 }

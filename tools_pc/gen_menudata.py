@@ -35,7 +35,7 @@ def validate(doc):
                 if cid in ids:
                     raise ValueError("control id used twice: " + cid)
                 ids.add(cid)
-                if c.get("type") not in ("choice", "toggle", "slider", "action", "select", "bind", "diagram"):
+                if c.get("type") not in ("choice", "toggle", "slider", "action", "select", "bind", "diagram", "packlist"):
                     raise ValueError(cid + ": unknown type " + str(c.get("type")))
 
 
