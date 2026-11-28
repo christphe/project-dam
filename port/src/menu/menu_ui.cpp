@@ -329,9 +329,9 @@ float packListH(float u) {
     return h;
 }
 bool packCanMove(int i, int dir) {
-    if (i < 0 || i >= (int)g_packs.size() || !g_packs[i].on) return false;
-    const int j = i + dir;
-    return j >= 0 && j < (int)g_packs.size() && g_packs[j].on;
+    if (i < 0 || i >= (int)g_packs.size()) return false;
+    const int j = i + dir;   /* any pack moves, enabled or not; only the ends of the list stop it */
+    return j >= 0 && j < (int)g_packs.size();
 }
 void packDo(int row, int what) {
     if (!g_packAct) return;

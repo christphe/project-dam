@@ -18,9 +18,10 @@ extern "C" {
 
 void texpackInit(void);                    /* after configLoad: opens the packs Video.AssetPacks lists (an older
                                               Video.TexturePack migrates to it) */
-/* The enabled packs, file names in order separated by ';' ("" none); also stored in Video.AssetPacks. */
+/* Every known pack in the player's order, file names separated by ';', a disabled one prefixed "-" ("" none); also stored in
+ * Video.AssetPacks. Only the enabled ones are opened, in that order. */
 void texpackSetPacks(const char *list);
-const char *texpackPacks(void);            /* the list in use */
+const char *texpackPacks(void);            /* the list in use (the whole list, as above) */
 /* Adds `file` at the end of the list (the lowest priority) when `add` and it is not in it yet (then saves the ini), and opens the
  * packs again: the base pack is written after texpackInit, so it is only readable from then on. */
 void texpackPackWritten(const char *file, int add);

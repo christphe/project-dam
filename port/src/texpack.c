@@ -40,7 +40,7 @@
 #define FMT_IA 3                  /* G_IM_FMT_IA (PR/gbi.h) */
 #define FMT_I 4                   /* G_IM_FMT_I */
 
-static char s_cfgList[ASSETPACK_LIST_LEN];  /* Video.AssetPacks: the enabled packs, in order */
+static char s_cfgList[ASSETPACK_LIST_LEN];  /* Video.AssetPacks: every known pack in order, a disabled one as "-name" */
 static char s_cfgLegacy[TEXPACK_FILE_LEN];  /* Video.TexturePack: the one pack of older versions, migrated by texpackInit */
 static char s_inUse[ASSETPACK_LIST_LEN];
 static AssetStack *s_stack;
@@ -113,12 +113,14 @@ static void picsClear(void)
 
 void texpackSetPacks(const char *list)
 {
-    static char files[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
+    static char all[ASSETPACK_MAX][ASSETPACK_FILE_LEN], files[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
     static AssetPackInfo info[ASSETPACK_MAX * 2];
     static char rootBuf[ASSETPACK_MAX][800];
     const char *roots[ASSETPACK_MAX];
     char text[ASSETPACK_LIST_LEN];
-    const int n = assetPackListParse(list ? list : "", files, ASSETPACK_MAX);
+    int on[ASSETPACK_MAX];
+    const int nAll = assetPackEntriesParse(list ? list : "", all, on, ASSETPACK_MAX);
+    const int n = assetPackEntriesEnabled(all, on, nAll, files, ASSETPACK_MAX);   /* the stack opens only the enabled ones, in order */
     int found = assetPackScan(packsDirs(), 2, info, ASSETPACK_MAX * 2);
     AssetStack *st;
     if (found > ASSETPACK_MAX * 2) found = ASSETPACK_MAX * 2;
@@ -128,7 +130,7 @@ void texpackSetPacks(const char *list)
         snprintf(rootBuf[i], sizeof rootBuf[i], "%s/%s", dir, files[i]);
         roots[i] = rootBuf[i];
     }
-    assetPackListFormat(files, n, text, sizeof text);
+    assetPackEntriesFormat(all, on, nAll, text, sizeof text);
     snprintf(s_cfgList, sizeof s_cfgList, "%s", text);
     st = assetStackOpen(roots, n);
     for (int i = 0; i < n; i++) {
@@ -178,11 +180,12 @@ void texpackInit(void)
     s_cfgLegacy[0] = 0;
     {   /* the base pack was texturepacks/ge007.ptexpack; it is assetpacks/ge007.passets now */
         static char files[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
-        const int n = assetPackListParse(s_cfgList, files, ASSETPACK_MAX);
+        int on[ASSETPACK_MAX];
+        const int n = assetPackEntriesParse(s_cfgList, files, on, ASSETPACK_MAX);
         const int k = assetPackListFind(files, n, "ge007.ptexpack");
         if (k >= 0) {
             snprintf(files[k], ASSETPACK_FILE_LEN, "%s", "ge007.passets");
-            assetPackListFormat(files, n, s_cfgList, sizeof s_cfgList);
+            assetPackEntriesFormat(files, on, n, s_cfgList, sizeof s_cfgList);
         }
     }
     snprintf(want, sizeof want, "%s", s_cfgList);
@@ -246,10 +249,11 @@ void texpackPackWritten(const char *file, int add)
 {
     static char files[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
     char text[ASSETPACK_LIST_LEN];
-    int n = assetPackListParse(s_cfgList, files, ASSETPACK_MAX);
+    int on[ASSETPACK_MAX];
+    int n = assetPackEntriesParse(s_cfgList, files, on, ASSETPACK_MAX);
     const int added = add && assetPackIsFileName(file) && assetPackListFind(files, n, file) < 0 && n < ASSETPACK_MAX;
-    if (added) snprintf(files[n++], ASSETPACK_FILE_LEN, "%s", file);
-    assetPackListFormat(files, n, text, sizeof text);
+    if (added) { snprintf(files[n], ASSETPACK_FILE_LEN, "%s", file); on[n++] = 1; }   /* first write: enabled, last */
+    assetPackEntriesFormat(files, on, n, text, sizeof text);
     texpackSetPacks(text);   /* reopened either way: a pack in the list may not have existed until now */
     if (added) configSave();
 }

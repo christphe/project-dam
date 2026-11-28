@@ -32,8 +32,12 @@ name found in both is taken from `assetpacks/`.
 
 ## The stack
 
-`Video.AssetPacks` holds the enabled packs: their file names, highest priority
-first, separated by `;` (`hd.passets;faces.passets`). An older
+`Video.AssetPacks` lists every known pack in the player's order, highest
+priority first, file names separated by `;`; a disabled pack is prefixed with
+`-` (`ge007.passets;-test.passets`). Only the enabled ones are opened, in that
+order. A value without any `-` means that all its packs are enabled (the older
+form), and a pack file name never starts with `-`. A pack found in the folders
+but absent from the list is appended at the end, disabled. An older
 `Video.TexturePack` (one pack) becomes this list once. A pack named in the list
 but not found keeps its place and is skipped until it is back.
 
@@ -98,12 +102,12 @@ new pack is written, and a `ge007.ptexpack` in `Video.AssetPacks` becomes
 
 ## The menu
 
-Video > Asset packs: one row per pack found, the enabled packs first, numbered in
-their order (1 wins over 2), then the others. A row shows the title (pack.json
+Video > Asset packs: one row per known pack, in the one order (a disabled pack
+keeps its place); the enabled ones are numbered in that order (1 wins over 2). A row shows the title (pack.json
 "name", else the file name) with the author faded under it (no line when there
-is none), a checkbox that enables the pack (it goes last) or disables it, and
-up / down arrows that move it (disabled for a disabled pack and at the ends of
-the enabled ones). With no pack the menu says so. On a pad Up / Down move between
+is none), a checkbox that enables or disables the pack in place, and
+up / down arrows that move it, enabled or not (disabled only at the ends of the
+list). With no pack the menu says so. On a pad Up / Down move between
 rows, Left / Right pick the checkbox or an arrow, A does it. These edits only
 change a pending list, the rows show it, and nothing is applied or saved. **Apply** and **Discard changes** sit side by side on one row under the list. **Apply** (disabled while the pending list equals the one in use) gives
 the list to the readers once, which reload, and saves the config once, also

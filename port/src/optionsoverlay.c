@@ -2675,36 +2675,37 @@ void optionsOverlayBack(void)
 
 int optionsOverlayMouseActive(void) { return s_mouseActive; }   /* D567 */
 
-/* The asset packs as the menu lists them: the enabled ones first, in their order, then the others (by file name). */
+/* The asset packs as the menu lists them: every known pack in the player's order (Video.AssetPacks), enabled or not. A pack
+ * found in the folders but not in the list comes last, disabled; a listed pack that is gone keeps its place. */
 #define PACKS_VIEW_MAX 64
 typedef struct {
-    int n, nOn;
+    int n;
     char files[PACKS_VIEW_MAX][128], names[PACKS_VIEW_MAX][64], authors[PACKS_VIEW_MAX][64];
     int on[PACKS_VIEW_MAX];
 } PacksView;
 static int s_packSel;   /* the pack the last toggle or move acted on */
-/* The edits wait here until Apply: the enabled packs in order (Video.AssetPacks format); s_packPend says it is in use. */
+/* The edits wait here until Apply: the whole list (Video.AssetPacks format); s_packPend says it is in use. */
 static char s_packPendText[ASSETPACK_LIST_LEN];
 static int s_packPend;
 
-static void packsView(PacksView *v)
+static void packsViewOf(PacksView *v, const char *base)
 {
     static char found[PACKS_VIEW_MAX][128], fnames[PACKS_VIEW_MAX][64], fauthors[PACKS_VIEW_MAX][64];
     static char list[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
     static int nf;
+    int lon[ASSETPACK_MAX];
     if (s_packRescan) { nf = texpackListPacks(found, fnames, fauthors, PACKS_VIEW_MAX); s_packRescan = 0; }
-    const int nl = assetPackListParse(s_packPend ? s_packPendText : texpackPacks(), list, ASSETPACK_MAX);
-    v->n = v->nOn = 0;
-    for (int i = 0; i < nl && v->n < PACKS_VIEW_MAX; i++) {   /* enabled, in order; a pack that is gone shows by its file name */
+    const int nl = assetPackEntriesParse(base, list, lon, ASSETPACK_MAX);
+    v->n = 0;
+    for (int i = 0; i < nl && v->n < PACKS_VIEW_MAX; i++) {   /* a pack that is gone shows by its file name */
         const char *name = list[i], *author = "";
         for (int k = 0; k < nf; k++) if (!strcmp(found[k], list[i])) { name = fnames[k]; author = fauthors[k]; break; }
         snprintf(v->files[v->n], 128, "%s", list[i]);
         snprintf(v->names[v->n], 64, "%s", name);
         snprintf(v->authors[v->n], 64, "%s", author);
-        v->on[v->n++] = 1;
-        v->nOn++;
+        v->on[v->n++] = lon[i];
     }
-    for (int k = 0; k < nf && v->n < PACKS_VIEW_MAX; k++) {
+    for (int k = 0; k < nf && v->n < PACKS_VIEW_MAX && v->n < ASSETPACK_MAX; k++) {
         if (assetPackListFind(list, nl, found[k]) >= 0) continue;
         snprintf(v->files[v->n], 128, "%s", found[k]);
         snprintf(v->names[v->n], 64, "%s", fnames[k]);
@@ -2713,30 +2714,33 @@ static void packsView(PacksView *v)
     }
 }
 
-/* The list as text, in the canonical form (parse and format), so two lists compare by string. */
-static void packsCanon(const char *in, char *out, size_t outlen)
+static void packsView(PacksView *v) { packsViewOf(v, s_packPend ? s_packPendText : texpackPacks()); }
+
+static void packsText(const PacksView *v, char *out, size_t outlen)
 {
     static char list[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
-    assetPackListFormat(list, assetPackListParse(in, list, ASSETPACK_MAX), out, outlen);
+    int on[ASSETPACK_MAX], n = 0;
+    for (int i = 0; i < v->n && n < ASSETPACK_MAX; i++) { snprintf(list[n], ASSETPACK_FILE_LEN, "%s", v->files[i]); on[n++] = v->on[i]; }
+    assetPackEntriesFormat(list, on, n, out, outlen);
 }
 
-/* The pending list differs from the one in use: Apply and Discard have something to do. */
+/* The pending list differs from the one in use (both as the menu shows them): Apply and Discard have something to do. */
 static int packsDirty(void)
 {
-    char a[ASSETPACK_LIST_LEN], b[ASSETPACK_LIST_LEN];
+    static PacksView a, b;
+    char ta[ASSETPACK_LIST_LEN], tb[ASSETPACK_LIST_LEN];
     if (!s_packPend) return 0;
-    packsCanon(s_packPendText, a, sizeof a);
-    packsCanon(texpackPacks(), b, sizeof b);
-    return strcmp(a, b) != 0;
+    packsViewOf(&a, s_packPendText);
+    packsViewOf(&b, texpackPacks());
+    packsText(&a, ta, sizeof ta);
+    packsText(&b, tb, sizeof tb);
+    return strcmp(ta, tb) != 0;
 }
 
 /* An edit: only the pending list changes; nothing is applied or saved until Apply. */
 static void packsApply(const PacksView *v)
 {
-    static char list[ASSETPACK_MAX][ASSETPACK_FILE_LEN];
-    int n = 0;
-    for (int i = 0; i < v->n && n < ASSETPACK_MAX; i++) if (v->on[i]) snprintf(list[n++], ASSETPACK_FILE_LEN, "%s", v->files[i]);
-    assetPackListFormat(list, n, s_packPendText, sizeof s_packPendText);
+    packsText(v, s_packPendText, sizeof s_packPendText);
     s_packPend = 1;
 }
 
@@ -2756,27 +2760,26 @@ void optionsMenuAssetPackDiscard(void)
     s_packPend = 0;
 }
 
-/* Enables row `i` (it goes last among the enabled ones) or disables it; the highlight follows the pack. */
+/* Enables or disables row `i`; it keeps its place. */
 static void packsSetEnabled(PacksView *v, int i, int on)
 {
-    char file[128];
     if (v->on[i] == on) return;
-    snprintf(file, sizeof file, "%s", v->files[i]);
     v->on[i] = on;
+    s_packSel = i;
     packsApply(v);
-    packsView(v);
-    for (int k = 0; k < v->n; k++) if (!strcmp(v->files[k], file)) s_packSel = k;
 }
 
-/* Moves the highlighted enabled pack up (-1) or down (+1) in the order. */
+/* Moves the pack at row s_packSel up (-1) or down (+1) in the order, enabled or not. */
 static void packsMove(int dir)
 {
     PacksView v;
     packsView(&v);
     const int i = s_packSel, j = s_packSel + dir;
-    if (i < 0 || i >= v.nOn || j < 0 || j >= v.nOn) return;
+    if (i < 0 || i >= v.n || j < 0 || j >= v.n) return;
     {
         char f[128], nm[64];
+        int o = v.on[i];
+        v.on[i] = v.on[j]; v.on[j] = o;
         memcpy(f, v.files[i], sizeof f); memcpy(v.files[i], v.files[j], sizeof f); memcpy(v.files[j], f, sizeof f);
         memcpy(nm, v.names[i], sizeof nm); memcpy(v.names[i], v.names[j], sizeof nm); memcpy(v.names[j], nm, sizeof nm);
         memcpy(nm, v.authors[i], sizeof nm); memcpy(v.authors[i], v.authors[j], sizeof nm); memcpy(v.authors[j], nm, sizeof nm);
@@ -2857,6 +2860,7 @@ int optionsMenuAssetPackAct(int row, int what)
     PacksView v;
     packsView(&v);
     if (row < 0 || row >= v.n) return row;
+    s_packSel = row;
     if (what == 0) {
         packsSetEnabled(&v, row, !v.on[row]);
         return s_packSel;
