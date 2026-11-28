@@ -636,6 +636,9 @@ int g_inputMouseDirectLook  = 1;    /* WI-1 (GEPD-INPUT-PLAN.md #89): 1 = hipfir
                                       * as aim mode; 0 = legacy stick-curve path
                                       * (MOUSE_TURN_GAIN), kept as an escape hatch. */
 
+#if defined(PLATFORM_SWITCH)
+static int nxDefaultsRev = 0;   /* Input.NxDefaultsRev: Switch default migrations done */
+#endif
 int g_inputAimDevMouse;               /* the device that aimed last: 1 = the mouse (D337) */
 double g_inputHipThetaDegOut;   /* D428: yaw degrees the last inputHipDirectCompute applied */
 void inputSwayFeedTheta(double deg);
