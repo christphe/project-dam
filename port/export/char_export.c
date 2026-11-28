@@ -6,7 +6,7 @@
  * which it builds on) only, plus the converter library's file table, rarezip inflate and ROM check. See export.h.
  *
  * Output layout (out_dir = <export dir>/characters):
- *   <out_dir>/<file name without the trailing Z>/<same>.gltf + .bin     (one per body / head; images point into ../../ge007.ptexpack/textures/)
+ *   <out_dir>/<file name without the trailing Z>/<same>.gltf + .bin     (one per body / head; images point into ../../textures/, the pack's own)
  *   <out_dir>/animations/<name>.gltf + .bin     (one animation on the guard rig, shared by every body)
  *   <out_dir>/characters.json
  * Each body carries idle only (its rest pose); set GE007_EXPORT_ALL_ANIMATIONS=1 in the environment to put every
@@ -1198,7 +1198,7 @@ static int export_char(const CharEnt *ce, const AnimData *ad, const int *sel, co
             if (ids[1] >= 0) add_to(x, -1, ids[1], 1);
         }
         /* the materials are complete now */
-        mo.pack_depth = 2;   /* <out>/characters/<name>/<name>.gltf -> ../../ge007.ptexpack */
+        mo.pack_depth = 2;   /* <out>/characters/<name>/<name>.gltf -> ../../textures (the pack root) */
         if (ex_emit_materials(&mo, &x->mc)) { cv_buf_free(&meshes); FAIL("out of memory"); }
 
         /* skin + animations (bodies) */

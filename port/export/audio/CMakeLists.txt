@@ -17,7 +17,8 @@ add_library(ge_audio_export STATIC
   ge_audio_seq.c
   ge_audio_bank.c
   ge_audio_sf2.c
-  ge_audio_sfx.c)
+  ge_audio_sfx.c
+  ge_audio_dirs.c)
 target_include_directories(ge_audio_export PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(ge_audio_export PUBLIC ZLIB::ZLIB)
 if(NOT WIN32)
