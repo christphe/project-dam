@@ -11,6 +11,7 @@
 
 extern "C" {
 #include "ge_pkg.h"
+#include "ge_assetstack.h"
 #include "ge_texpacks.h"
 }
 
@@ -74,7 +75,7 @@ int main(int argc, char **argv)
     CHECK(near(d.mn[0], -100, 1e-3f) && near(d.mx[0], 300, 1e-3f) && near(d.mx[2], 400, 1e-3f));
     if (d.tex.size() == 1) CHECK(d.tex[0].texnum == 1 && d.tex[0].source == -1 && d.tex[0].origW == 8);
 
-    // texture sources (ge_texpacks.h, texset.h): the game's pack ge007.ptexpack (a folder), a mod folder and a complete hd.ptexpack tar,
+    // texture sources (ge_texpacks.h, texset.h): the game's pack ge007.passets (a folder), a mod folder and a complete hd.passets tar,
     // each with a picture of texture "1" (the glTF's image is textures/1.png): the mod over the chosen pack, any size
     {
         auto solid = [](int w, int h, uint8_t r, uint8_t g, uint8_t b) {
@@ -87,8 +88,8 @@ int main(int argc, char **argv)
             CHECK(f != nullptr);
             if (f) { fputs(text, f); fclose(f); }
         };
-        const std::string base = dir + "/gebase/ge007.ptexpack", mod = dir + "/mymod", packSrc = dir + "/packsrc", packs = dir + "/texturepacks";
-        const std::string pack = packs + "/hd.ptexpack", lack = dir + "/lack.ptexpack";
+        const std::string base = dir + "/gebase/ge007.passets", mod = dir + "/mymod", packSrc = dir + "/packsrc", packs = dir + "/assetpacks";
+        const std::string pack = packs + "/hd.passets", lack = dir + "/lack.passets";
         for (const std::string &p : { base + "/textures", mod + "/textures", packSrc + "/textures", lack, packs }) std::filesystem::create_directories(p, ec);
         const char *oneJson = "{\"version\":1,\"textures\":{\"1\":{\"image\":\"textures/1.png\",\"surface\":\"stone\",\"impact_sound\":\"stone\",\"alpha\":\"image\",\"width\":8,\"height\":8}}}";
         put(base + "/textures.json", oneJson);
@@ -102,12 +103,13 @@ int main(int argc, char **argv)
         char err[256] = "";
         CHECK(pkgWriteDir(packSrc.c_str(), pack.c_str(), err, sizeof err));
 
-        TexPackInfo info[4];
-        CHECK(texpackScan(packs.c_str(), info, 4) == 1);
-        CHECK(!strcmp(info[0].file, "hd.ptexpack") && !strcmp(info[0].name, "HD test") && !strcmp(info[0].author, "tests"));
+        AssetPackInfo info[4];
+        const char *const scanDirs[1] = { packs.c_str() };
+        CHECK(assetPackScan(scanDirs, 1, info, 4) == 1);
+        CHECK(!strcmp(info[0].file, "hd.passets") && !strcmp(info[0].name, "HD test") && !strcmp(info[0].author, "tests"));
 
         const std::vector<PackChoice> list = listTexturePacks(packs, dir + "/gebase");   // ge007 from the export root, then hd
-        CHECK(list.size() == 2 && list[0].base && list[0].usable() && list[0].name == "GoldenEye 007" && list[1].file == "hd.ptexpack" && list[1].usable());
+        CHECK(list.size() == 2 && list[0].base && list[0].usable() && list[0].name == "GoldenEye 007" && list[1].file == "hd.passets" && list[1].usable());
         CHECK(listTexturePacks(packs, "").size() == 2 && !listTexturePacks(packs, "")[0].usable() && !listTexturePacks(packs, "")[1].usable());
         CHECK(baseTexturePackRoot(packs, dir + "/gebase") == base && baseTexturePackRoot(packs, "").empty());
 
@@ -167,6 +169,45 @@ int main(int argc, char **argv)
         CHECK(decorLoad(dir + "/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg) == DECOR_OK);   // no sources at all: the glTF's own, no warning
         if (d.tex.size() == 1) CHECK(d.tex[0].source == -1 && d.tex[0].w == 8 && d.texWarnings.empty());
         CHECK(texpackTexnumOfName("textures/4095.png") == 4095 && texpackTexnumOfName("4096.png") == -1 && texpackTexnumOfName("a1.png") == -1);
+    }
+
+    {   // the asset pack layout: <pack>/levels/<level>/<level>.gltf + .bin, pictures at <pack>/textures/<n>.png ("../../textures/1.png" in the glTF),
+        // the whole pack a tar. The glTF, its .bin and its picture are all read through the package layer.
+        const std::string tree = dir + "/packtree", tar = dir + "/tarpack/ge007.passets";
+        CHECK(synth::writeGltf(tree + "/levels", "lvl", EX_EXPORTER_VERSION));
+        std::filesystem::create_directories(tree + "/textures", ec);
+        std::filesystem::rename(tree + "/levels/lvl/textures/1.png", tree + "/textures/1.png", ec);
+        {
+            FILE *f = fopen((tree + "/levels/lvl/lvl.gltf").c_str(), "rb");
+            std::string text;
+            char buf[4096];
+            size_t n;
+            CHECK(f != nullptr);
+            while (f && (n = fread(buf, 1, sizeof buf, f)) > 0) text.append(buf, n);
+            if (f) fclose(f);
+            const size_t at = text.find("\"textures/1.png\"");
+            CHECK(at != std::string::npos);
+            if (at != std::string::npos) text.replace(at, 16, "\"../../textures/1.png\"");
+            f = fopen((tree + "/levels/lvl/lvl.gltf").c_str(), "wb");
+            if (f) { fwrite(text.data(), 1, text.size(), f); fclose(f); }
+        }
+        const char *packJson = "{\"name\":\"GoldenEye 007\",\"base\":true,\"exporter_version\":12}";
+        FILE *f = fopen((tree + "/pack.json").c_str(), "wb");
+        if (f) { fputs(packJson, f); fclose(f); }
+        f = fopen((tree + "/textures.json").c_str(), "wb");
+        if (f) { fputs("{\"version\":1,\"textures\":{\"1\":{\"image\":\"textures/1.png\",\"surface\":\"stone\",\"width\":8,\"height\":8}}}", f); fclose(f); }
+        std::filesystem::create_directories(dir + "/tarpack", ec);
+        char err[256] = "";
+        CHECK(pkgWriteDir(tree.c_str(), tar.c_str(), err, sizeof err));
+        const std::string inTar = tar + "/levels/lvl/lvl.gltf";
+        CHECK(decorLoad(inTar, EX_EXPORTER_VERSION, d, msg) == DECOR_OK);   // no texture sources: the glTF's own picture, "../../" resolved inside the tar
+        CHECK(d.prims.size() == 4 && d.tex.size() == 1 && d.tex[0].w == 8 && d.tex[0].rgba[0] == 40 && d.tex[0].source == -1);
+        TexSet ts;
+        ts.open("", tar, tar);   // the pack as the base: the picture by its key, from inside the tar
+        CHECK(decorLoad(inTar, EX_EXPORTER_VERSION, d, msg, &ts) == DECOR_OK);
+        CHECK(d.tex.size() == 1 && d.tex[0].key == "1" && d.tex[0].surface == 1 && d.tex[0].path.find("ge007.passets/textures/1.png") != std::string::npos);
+        CHECK(decorLoad(tree + "/levels/lvl/lvl.gltf", EX_EXPORTER_VERSION, d, msg) == DECOR_OK && d.tex.size() == 1);   // the same pack as a folder
+        CHECK(decorLoad(tar + "/levels/nope/nope.gltf", EX_EXPORTER_VERSION, d, msg) == DECOR_MISSING);
     }
 
     std::filesystem::remove_all(dir, ec);

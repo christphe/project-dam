@@ -1,6 +1,7 @@
-/* ge_tex.c -- texture resolution: key -> RGBA + entry, mod over pack over ge007.ptexpack (see ge_tex.h). */
+/* ge_tex.c -- texture resolution: key -> RGBA + entry, mod over pack over ge007.passets (see ge_tex.h). */
 #include "ge_tex.h"
 #include "ge_png.h"
+#include "ge_assetstack.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -89,7 +90,7 @@ int geTexSetOpen(GeTexSet *s, const char *modRoot, const char *packRoot, const c
             TexPackSrc *p = texpackSrcOpen(packRoot);
             if (!p) snprintf(s->note, sizeof s->note, "texture pack %s cannot be read: ge007 is used", packRoot);
             else if (!s->base) {
-                snprintf(s->note, sizeof s->note, "texture pack %s: no ge007.ptexpack to check it against, so it is not used", packRoot);
+                snprintf(s->note, sizeof s->note, "texture pack %s: no ge007.passets to check it against, so it is not used", packRoot);
                 texpackSrcClose(p);
             } else {
                 const int missing = texpackMissing(p, s->base);
@@ -206,23 +207,45 @@ static void slashes(char *p)
     for (; *p; p++) if (*p == '\\') *p = '/';
 }
 
+/* A pack file name: the base pack is ge007.passets, the older ge007.ptexpack still counts. */
+static int isBaseName(const char *f) { return !strcmp(f, "ge007.passets") || !strcmp(f, "ge007.ptexpack"); }
+
+static int endsWith(const char *s, const char *suffix)
+{
+    const size_t n = strlen(s), k = strlen(suffix);
+    return n > k && !strcmp(s + n - k, suffix);
+}
+
+/* The base pack in a folder: <dir>/ge007.passets, else <dir>/ge007.ptexpack. */
+static int baseIn(const char *dir, char *out, size_t outlen)
+{
+    static const char *const names[2] = { "ge007.passets", "ge007.ptexpack" };
+    char p[1100];
+    if (!dir || !dir[0]) return 0;
+    for (int i = 0; i < 2; i++) {
+        snprintf(p, sizeof p, "%s/%s", dir, names[i]);
+        if (existsPath(p)) { snprintf(out, outlen, "%s", p); slashes(out); return 1; }
+    }
+    return 0;
+}
+
 void geTexBaseRoot(const char *packsDir, const char *exportRoot, char *out, size_t outlen)
 {
-    char p[1100];
     out[0] = 0;
-    if (packsDir && packsDir[0]) {
-        snprintf(p, sizeof p, "%s/ge007.ptexpack", packsDir);
-        if (existsPath(p)) { snprintf(out, outlen, "%s", p); slashes(out); return; }
-    }
-    if (exportRoot && exportRoot[0]) {
-        snprintf(p, sizeof p, "%s/ge007.ptexpack", exportRoot);
-        if (existsPath(p)) { snprintf(out, outlen, "%s", p); slashes(out); return; }
+    if (baseIn(packsDir, out, outlen)) return;
+    if (exportRoot && exportRoot[0]) {   /* the folder holding the pack, or the pack itself */
+        if ((endsWith(exportRoot, ".passets") || endsWith(exportRoot, ".ptexpack")) && existsPath(exportRoot)) {
+            snprintf(out, outlen, "%s", exportRoot);
+            slashes(out);
+            return;
+        }
+        baseIn(exportRoot, out, outlen);
     }
 }
 
 void geTexPackPath(const char *pref, const char *packsDir, const char *exportRoot, char *out, size_t outlen)
 {
-    if (!pref || !pref[0] || !strcmp(pref, "ge007.ptexpack")) geTexBaseRoot(packsDir, exportRoot, out, outlen);
+    if (!pref || !pref[0] || isBaseName(pref)) geTexBaseRoot(packsDir, exportRoot, out, outlen);
     else snprintf(out, outlen, "%s/%s", packsDir ? packsDir : "", pref);
 }
 
@@ -231,13 +254,13 @@ int geTexPackList(const char *packsDir, const char *exportRoot, GeTexPackChoice 
     char baseRoot[1024];
     TexPackSrc *base;
     GeTexPackChoice b;
-    TexPackInfo *infos;
+    AssetPackInfo *infos;
     int n = 0, total = 0;
     geTexBaseRoot(packsDir, exportRoot, baseRoot, sizeof baseRoot);
     base = baseRoot[0] ? texpackSrcOpen(baseRoot) : NULL;
 
     memset(&b, 0, sizeof b);
-    copyStr(b.file, sizeof b.file, "ge007.ptexpack");
+    copyStr(b.file, sizeof b.file, "ge007.passets");
     copyStr(b.path, sizeof b.path, baseRoot);
     b.base = 1;
     copyStr(b.name, sizeof b.name, "GoldenEye 007");
@@ -253,13 +276,13 @@ int geTexPackList(const char *packsDir, const char *exportRoot, GeTexPackChoice 
     if (total < max && out) out[total] = b;
     total++;
 
-    infos = (TexPackInfo *)calloc(256, sizeof *infos);
-    if (infos && packsDir) n = texpackScan(packsDir, infos, 256);
+    infos = (AssetPackInfo *)calloc(256, sizeof *infos);
+    if (infos && packsDir && packsDir[0]) n = assetPackScan(&packsDir, 1, infos, 256);
     if (n > 256) n = 256;
     for (int i = 0; i < n; i++) {
         GeTexPackChoice c;
         TexPackSrc *p;
-        if (!strcmp(infos[i].file, "ge007.ptexpack")) continue;   /* the base is listed first */
+        if (isBaseName(infos[i].file)) continue;   /* the base is listed first */
         memset(&c, 0, sizeof c);
         copyStr(c.file, sizeof c.file, infos[i].file);
         snprintf(c.path, sizeof c.path, "%s/%s", packsDir, c.file);

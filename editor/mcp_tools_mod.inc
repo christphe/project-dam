@@ -154,7 +154,7 @@ ToolResult toolModReorder(Doc &d, const cJSON *a)
 ToolResult toolTextures(Doc &d, const cJSON *)
 {
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddStringToObject(o, "texture_pack", d.texPack.empty() ? "ge007.ptexpack" : d.texPack.c_str());
+    cJSON_AddStringToObject(o, "texture_pack", d.texPack.empty() ? "ge007.passets" : d.texPack.c_str());
     cJSON_AddStringToObject(o, "texture_packs_dir", d.texturePacksRoot().c_str());
     if (!d.texSet.note().empty()) cJSON_AddStringToObject(o, "texture_pack_note", d.texSet.note().c_str());
     {
@@ -217,14 +217,14 @@ ToolResult toolModSetTexture(Doc &d, const cJSON *a)
 ToolResult toolSetTexturePack(Doc &d, const cJSON *a)
 {
     const std::string f = argStr(a, "file");
-    if (!f.empty() && f != "ge007.ptexpack") {
+    if (!f.empty() && f != "ge007.passets" && f != "ge007.ptexpack") {
         d.rescanPacks();
         const PackChoice *found = nullptr;
         for (const PackChoice &c : d.packChoices) if (f == c.file) found = &c;
         if (!found) return fail("no texture pack " + f + " in " + d.texturePacksRoot() + " (textures lists them)");
-        if (!found->usable()) return fail("texture pack " + f + " cannot be used: " + found->reason + " (a pack must have every texture of ge007.ptexpack)");
+        if (!found->usable()) return fail("texture pack " + f + " cannot be used: " + found->reason + " (a pack must have every texture of ge007.passets)");
     }
-    d.texPack = f == "ge007.ptexpack" ? "" : f;
+    d.texPack = (f == "ge007.passets" || f == "ge007.ptexpack") ? "" : f;
     d.syncModTextures();
     return toolTextures(d, a);
 }

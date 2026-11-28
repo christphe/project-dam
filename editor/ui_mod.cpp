@@ -310,7 +310,7 @@ void texturePackCombo(App &a)
     static std::string lastKey;
     const std::string key = root + "|" + d.exportPackRoot();
     if (d.packChoices.empty() || key != lastKey) { lastKey = key; d.rescanPacks(); }
-    const std::string chosen = d.texPack.empty() ? "ge007.ptexpack" : d.texPack;
+    const std::string chosen = d.texPack.empty() ? "ge007.passets" : d.texPack;
     std::string cur = chosen;
     for (const PackChoice &p : d.packChoices) if (chosen == p.file) cur = p.name;
     ImGui::TextUnformatted("Texture pack");

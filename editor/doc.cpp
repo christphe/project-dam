@@ -250,11 +250,13 @@ bool Level::load(const std::string &exportDir, std::string &err)
 std::vector<std::string> Level::gltfRoots() const
 {
     namespace fs = std::filesystem;
-    // the glTF export sits in a folder of its own beside the per-level exports (<game dir>/data/exports/gltf/<level>/), or in gltf/ inside one
+    // The static export is the asset pack ge007.passets (a tar or a folder; levels/<level>/<level>.gltf, models/ inside): in a folder of its
+    // own beside the per-level exports (<game dir>/data/exports/gltf/), or in gltf/ inside one. Each root is the pack's path.
     std::vector<std::string> roots;
-    roots.push_back((fs::path(dir).parent_path() / "gltf").string());
-    roots.push_back((fs::path(dir) / "gltf").string());
-    if (!gltfRoot.empty()) roots.push_back(gltfRoot);   // the game cache last: a glTF beside the export folder wins
+    for (const std::string &c : { (fs::path(dir).parent_path() / "gltf").string(), (fs::path(dir) / "gltf").string(), gltfRoot }) {
+        const std::string pack = assetPackIn(c);   // the game cache last: a pack beside the export folder wins
+        if (!pack.empty()) roots.push_back(pack);
+    }
     return roots;
 }
 
@@ -284,7 +286,7 @@ void Level::loadDecor()
     const std::vector<std::string> roots = gltfRoots();
     std::string note = "decor: level.rec (no glTF export)";
     for (const std::string &root : roots) {
-        const std::string path = (fs::path(root) / name / (name + ".gltf")).string();
+        const std::string path = root + "/levels/" + name + "/" + name + ".gltf";
         std::string msg;
         const DecorResult r = decorLoad(path, exportGltfVersion(), decor, msg, texSet);
         if (r == DECOR_MISSING) continue;

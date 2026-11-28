@@ -4,7 +4,7 @@
 // args: --export DIR --body FILE --head FILE --specs 0|1 --hair 0|1 --shot f.png --w n --h n --method FLAT|PN|PHONG|BUTTERFLY|LOOP|HEAD
 //       --passes 1|2 --crease deg --view side|split|sub|orig
 //       --wire 0|1 --edges 0|1 --checker 0|1 --normals 0|1 --light 0|1 --smooth 0|1   (the command line wins over data/modelview.ini)
-//       --game DIR (texturepacks/ and mods/) --mod X.pmod|folder|name --texpack NAME|path   (textures: the mod over the chosen pack, ge007.ptexpack by default)
+//       --game DIR (assetpacks/ and mods/) --mod X.pmod|folder|name --texpack NAME|path   (textures: the mod over the chosen pack, ge007.passets by default)
 #include <windows.h>
 #include <GL/gl.h>
 #include <GL/glext.h>
@@ -509,7 +509,7 @@ static bool charCombo(const char* label, const char* kind, const char* none, std
     return changed;
 }
 // The mod and the texture pack the characters are drawn with: the mod's textures (partial) merged over one complete pack,
-// ge007.ptexpack (the game's own) by default. A pack that lacks textures of ge007 is greyed out and cannot be chosen.
+// ge007.passets (the game's own) by default. A pack that lacks textures of ge007 is greyed out and cannot be chosen.
 static bool textureCombos() {
     static std::vector<MvPackChoice> packs; static std::vector<MvModChoice> mods; static bool wasOpen[2] = { false, false }, first = true;
     bool changed = false;
@@ -740,7 +740,7 @@ int main(int argc, char** argv) {
     }
 
     if (!exportDir.empty() && !mv_export_open(exportDir, g_exportErr)) fprintf(stderr, "export: %s\n", g_exportErr.c_str());
-    mv_tex_init(g_gameDir); mv_tex_use(g_modName, g_packName);   // after the export is open: ge007.ptexpack may sit beside it
+    mv_tex_init(g_gameDir); mv_tex_use(g_modName, g_packName);   // after the export is open: ge007.passets may sit beside it
     if (mv_export_ready()) fprintf(stderr, "export: %s (exporter version %d, %d characters)\n", mv_export_dir().c_str(), mv_export_version(), (int)mv_export_chars().size());
     {   // --model / model= named one file: a head goes to the head slot
         const int b = g_bodyName.empty() ? -1 : mv_export_find(g_bodyName);
