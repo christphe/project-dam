@@ -439,6 +439,9 @@ u8 * langGet(s32 slotID)
         if (s) {
             return (u8 *)s;
         }
+        if ((u32)(slotID & 0x3FF) >= labelsGetBankSlots(slotID >> 10)) {
+            return NULL;   /* an index at or past the bank's slot count has no string */
+        }
         return langGetRom(slotID) ? (u8 *)labelsMissing((unsigned)slotID) : NULL;
     }
     return langGetRom(slotID);
@@ -511,7 +514,7 @@ static void langLabelsCheck(int bank)
     int same = 0, diff = 0, romOnly = 0, packOnly = 0, i;
     static int total[4];
     if (!labelsCheckEnabled() || !labelsActive() || bank < 0 || bank >= 45) return;
-    for (i = 0; i < 1024; i++) {
+    for (i = 0; i < (int)labelsGetBankSlots(bank); i++) {   /* an index at or past the slot count has no string (spec) */
         s32 id = (bank << 10) | i;
         const u8 *rom = langGetRom(id);
         const u8 *pk = labelsGet((unsigned)id);

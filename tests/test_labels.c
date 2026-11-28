@@ -39,6 +39,8 @@ int main(void)
 
     GE_CHECK(labelsParse(&L, kEn, strlen(kEn)));
     GE_CHECK_EQ_INT(L.count, 3);
+    GE_CHECK_EQ_INT(labelsBankSlots(&L, 38), 224);   /* from the banks list, not mistaken for the strings object */
+    GE_CHECK_EQ_INT(labelsBankSlots(&L, 5), 1024);    /* not listed */
     s = labelsLookup(&L, 0x9840);
     GE_CHECK(s && !strcmp((const char *)s, "Hunting Knife\n"));
     s = labelsLookup(&L, 0x986B);

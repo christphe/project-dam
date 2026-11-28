@@ -88,11 +88,19 @@ int labelsParse(Labels *L, const char *json, size_t len)
     memset(L, 0, sizeof *L);
     L->off = (uint32_t *)calloc(LABELS_MAX_IDS, sizeof(uint32_t));
     if (!L->off || !put(L, 0)) { labelsFree(L); return 0; }
-    p = strstr(json, "\"strings\":");
+    {   /* the banks list: {"bank":N,...,"slots":M} before the strings object */
+        const char *b = json, *so = strstr(json, "\"strings\":{");
+        while ((b = strstr(b, "{\"bank\":")) && (!so || b < so)) {
+            int bk = atoi(b + 8);
+            const char *sl = strstr(b, "\"slots\":"), *e = strchr(b, '}');
+            if (sl && e && sl < e && bk >= 0 && bk < 45) L->slots[bk] = (uint16_t)atoi(sl + 8);
+            b += 8;
+        }
+    }
+    /* "strings":{ -- the banks list has "strings":N counts, so the object's brace is part of the key */
+    p = strstr(json, "\"strings\":{");
     if (!p) return 1;
-    p = strchr(p + 10, '{');
-    if (!p) { labelsFree(L); return 0; }
-    p++;
+    p += 11;
     for (;;) {
         unsigned id = 0;
         const char *t;
@@ -123,6 +131,11 @@ int labelsParse(Labels *L, const char *json, size_t len)
         p++;
     }
     return 1;
+}
+
+unsigned labelsBankSlots(const Labels *L, int bank)
+{
+    return (L && bank >= 0 && bank < 45 && L->slots[bank]) ? L->slots[bank] : 1024;
 }
 
 const unsigned char *labelsLookup(const Labels *L, unsigned id)
@@ -210,6 +223,8 @@ int labelsActive(void)
     if (!g_loaded) { snprintf(g_packs, sizeof g_packs, "%s", packs); load(); }
     return g_ok;
 }
+
+unsigned labelsGetBankSlots(int bank) { return labelsActive() ? labelsBankSlots(&g_labels, bank) : 1024; }
 
 const unsigned char *labelsGet(unsigned id)
 {
