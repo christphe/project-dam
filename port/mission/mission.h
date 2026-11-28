@@ -320,7 +320,7 @@ const char *missionLevelNameAt(int i);
 typedef enum CampaignUnlock { CAMPAIGN_UNLOCK_ORDERED, CAMPAIGN_UNLOCK_OPEN } CampaignUnlock;
 
 #define CAMPAIGN_ID_LEN 64
-#define CAMPAIGN_MAX_MISSIONS 20
+#define CAMPAIGN_MAX_MISSIONS 32
 
 typedef struct Campaign {
     int format;

@@ -243,6 +243,15 @@ static void test_campaign(void)
     GE_CHECK(campaignParse("{\"format\":1,\"name\":\"x\",\"missions\":[]}", &c, err, sizeof(err)));
     GE_CHECK(!campaignValidate(&c, err, sizeof(err)));
     campaignFree(&c);
+    /* The full solo campaign (21 missions) must load whole: Cuba comes after Cradle. */
+    for (int n = 21; n <= CAMPAIGN_MAX_MISSIONS + 1; n += CAMPAIGN_MAX_MISSIONS - 20) {
+        char big[2048] = "{\"format\":1,\"id\":\"3f0c9a52-7d41-4b1e-9a0e-2c6f5b8d1e47\",\"name\":\"x\",\"missions\":[";
+        for (int i = 0; i < n; i++) { char t[16]; snprintf(t, sizeof t, "%s\"m%d\"", i ? "," : "", i); strcat(big, t); }
+        strcat(big, "]}");
+        int ok = campaignParse(big, &c, err, sizeof(err)) && campaignValidate(&c, err, sizeof(err));
+        GE_CHECK(n <= CAMPAIGN_MAX_MISSIONS ? ok : !ok);
+        campaignFree(&c);
+    }
 }
 
 /* The record field tables (mission_fields.h): sane, and every type round-trips table -> JSON -> table. */
